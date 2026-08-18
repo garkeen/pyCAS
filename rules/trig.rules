@@ -1,0 +1,7 @@
+# trigonometric identities
+rule sin2_cos2 = sin(?x)^2 + cos(?x)^2 -> 1
+rule sin_neg = sin(-?x) -> -sin(?x)
+rule cos_neg = cos(-?x) -> cos(?x)
+rule sin_add = sin(?a)*cos(?b) + cos(?a)*sin(?b) -> sin(?a+?b)
+rule cos_diff = cos(?a)*cos(?b) + sin(?a)*sin(?b) -> cos(?a-?b)
+rule tan_def = tan(?x) -> sin(?x)/cos(?x)

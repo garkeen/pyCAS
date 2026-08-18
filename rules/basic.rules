@@ -1,0 +1,5 @@
+# structural basics
+rule pow_one = ?x^1 -> ?x
+rule pow_sum_same = ?x^?a * ?x^?b -> ?x^(?a+?b)
+rule zero_plus = 0+?x -> ?x
+rule one_times = 1*?x -> ?x
