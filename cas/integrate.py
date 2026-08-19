@@ -181,16 +181,20 @@ def integrate_rational(P, Q, x):
 
 
 def integrate(t, x):
-    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified)。
-    有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。"""
+    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method)。
+
+    有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。
+    method 供策略通道可解释输出（REPL/step log）。
+    """
     try:
         P, Q = _rat_pair(t, x)
-        return integrate_rational(P, Q, x)
+        term, ok = integrate_rational(P, Q, x)
+        return term, ok, "Hermite reduction + RootOf log part"
     except PolyError:
         res = _trig_tan_half(t, x)
         if res is None:
             raise PolyError("unsupported integrand")
-        return res
+        return res[0], res[1], "t = tan(x/2) substitution -> rational integration"
 
 
 def _trig_check(t, x):

@@ -96,6 +96,26 @@ register(FunctionSpec(
     special={ZERO: ZERO},
     numeric=math.asin,
 ))
+# 双曲函数域（M2 梯队三）：注册即得导数/打印名/奇偶规则/特殊点折叠/数值层，
+# 核心代码零改动（FunctionSpec 红利验收）；无界故不声明 bound。
+register(FunctionSpec(
+    "Sinh", 1, print_name="sinh", parity="odd",
+    deriv=lambda a: T.cosh(a),
+    special={ZERO: ZERO},
+    numeric=math.sinh,
+))
+register(FunctionSpec(
+    "Cosh", 1, print_name="cosh", parity="even",
+    deriv=lambda a: T.sinh(a),
+    special={ZERO: ONE},
+    numeric=math.cosh,
+))
+register(FunctionSpec(
+    "Tanh", 1, print_name="tanh", parity="odd",
+    deriv=lambda a: T.plus(ONE, T.neg(T.pw(T.tanh(a), N(2)))),
+    special={ZERO: ZERO},
+    numeric=math.tanh,
+))
 
 
 def gen_rules(ruleset):

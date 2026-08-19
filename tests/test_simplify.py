@@ -48,6 +48,18 @@ class TestExplicitStack(unittest.TestCase):
             inner = inner.args[0]
         self.assertIs(inner, _S("y"))
 
+    def test_deep_cost_expand_tostr(self):
+        # 递归残留债务清偿：cost/expand/to_str 均已显式栈化
+        from cas.simplify import cost, expand
+        from cas.pprint import to_str
+
+        e = self._deep(3000)
+        self.assertGreater(cost(e), 3000)
+        self.assertIs(expand(e), e)
+        s = to_str(e)
+        self.assertTrue(s.startswith("sin("))
+        self.assertEqual(s.count("sin"), 3000)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

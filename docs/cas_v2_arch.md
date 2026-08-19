@@ -24,6 +24,17 @@
 > 精确除法 div_exact——多变量 together/cancel/RatFunc 约分全线打通；参数化低次求解
 > （solve 对 a·x²+b·x+c 给通用求根公式 + proviso）；显式工作栈落地（simplify/subst
 > 迭代化，recursionlimit=120 下 300 层深表达式安全）。
+> **2026-08 匹配器与展示层收官**：OneIdentity 落地（Plus/Times 模式匹配裸项，单位元
+> 入洞：?a+?b 可匹配 x，类型洞守卫生效，非洞子模式不吸收；mathics 属性同款）；
+> 显式工作栈**全额清偿**（cost/expand/to_str 亦迭代化，核心与展示路径零递归）。
+> **立场裁定**：FullSimplify 式搜索化简**现段不做**——价值前提是大定理库与调校过的
+> ComplexityFunction，现规则库规模无搜索素材；Richardson 定理保证无终止保证，
+> 只能预算硬切。重估条件：规则库百条级且 auto 的 cost 单调接受准则成为可证瓶颈。
+> **2026-08 M2 收官**：双曲函数域（Sinh/Cosh/Tanh 注册 spec 即得导数/打印名/奇偶规则/
+> 特殊点折叠/数值层，零核心改动，FunctionSpec 红利验收）+ hyp.rules（cosh²−sinh²=1、
+> 指数定义双向）；可解释步骤统一（规则步逐条推导；内核算法步只记算法名+验证态入
+> step log，单算法调用不做微观解释，verify 背书即解释；integrate 报所用方法）；
+> REPL 重设计（%N 历史复用按高优先级渲染补括号、:steps/:hist、规则应用当场给可解释反馈）。
 
 > 定位：**交互式、通用、纯符号 CAS**。计算优先；正确性 = **永不静默错**，不是定理证明器。
 > 设计立场：**数据结构、工作流、算法全部自主设计**。参考系统（maxima / mathics-core /
@@ -156,8 +167,8 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 ```
 
 **效率分层**：规则/上下文 = **外壳**（交互层）；规范形+算法 = **内核**（热路径直达，不过规则链）。
-**工程约束**：纯 Python；核心变换路径用**显式工作栈**（simplify/subst 已迭代化，
-不依赖 Python 递归栈；expand/cost/to_str 等展示与分析路径仍递归，已知残留）；预算按节点计。
+**工程约束**：纯 Python；核心变换路径用**显式工作栈**（simplify/subst/cost/expand/to_str
+全部迭代化，核心与展示/分析路径零递归，不依赖 Python 递归栈）；预算按节点计。
 
 ---
 
@@ -171,6 +182,10 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   替换后重构造（自动再规范化）。
 - **AC 头归并匹配**：参数已全序排序 ⇒ 双指针归并；仅多序列洞触发回溯，且设枚举上限。
   [教训：通用 AC 穷举是 NP——排序使常见情形无回溯。]
+- **OneIdentity（✓ 已落地）**：带单位元的 AC 头（Plus→0、Times→1）模式可匹配裸项：
+  `?a+?b` 匹配 `x` 产出两组绑定（x,0)/(0,x)，`?a*?b` 同理（单位元 1）；序列洞可绑空元组；
+  类型洞守卫在单位元绑定上同样生效（`?a::num` 只吸 0）；**非洞子模式不吸收单位元**
+  （2·?u 不匹配裸 x）。[mathics-core attributes.py 同款实据]
 - **匹配与求值解耦**：`quote('e)` 形式可被匹配和替换；规则左侧（pattern 段）天然不求值。
 - **绑定词交互**：洞不得落在绑定变量位；body 内被绑变量是**不透明符号**，外界同名替换不得捕获。
 - **等式即规则（约束消费）**：账本里的等式（如换元 `u = cos x`）注册为**带方向**的替换规则，
@@ -209,7 +224,7 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 |----|------|--------|
 | 幂/根 | 幂律合并；根式幂化 | csign 依赖、根式积分 |
 | exp/log | exp 塔、ln 双向（带条件） | Risch exp/log 子情形 |
-| trig/双曲 | 恒等式规则、exponentialize 算子（转 exp 塔） | 三角积分转 exp 域。✓ 已落地：多角度基规范形（trig_reduce）+ tan(x/2) 代换积分（sin x/cos x 有理式，复用 M1，`[VERIFIED]` 链式验证）；边界：sin(ax+b)/tan/双曲未覆盖 |
+| trig/双曲 | 恒等式规则、exponentialize 算子（转 exp 塔） | 三角积分转 exp 域。✓ 已落地：多角度基规范形（trig_reduce）+ tan(x/2) 代换积分（sin x/cos x 有理式，复用 M1，`[VERIFIED]` 链式验证）+ **双曲域**（Sinh/Cosh/Tanh spec 注册 + hyp.rules，导数/奇偶/特殊点/数值层零核心改动）；边界：sin(ax+b)/tan 积分未覆盖 |
 | 分段/绝对值 | Piecewise 一等头、分段归一；abs = 分段 | 分段积分、定积分分段 |
 
 ### 梯队四：微积分目标层（项目终点）
@@ -263,12 +278,15 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   ⑥ declare/属性消费最小闭环 ✓ **已落地**（integer 区间收紧、符号属性映射）。
   M2.0 收官。此后新增函数域 = 写 spec 条目 + 规则文件，核心代码零改动。
   **结构性债务清偿记录**：多元 gcd ✓（mgcd + div_exact，sympy 差分验证）；
-  显式工作栈 ✓（simplify/subst 迭代化；expand/cost/to_str 仍递归，属展示/分析路径，已知残留）；
+  显式工作栈 ✓✓ **全额清偿**（simplify/subst/cost/expand/to_str 全迭代化，零递归残留）；
+  匹配器 OneIdentity ✓（裸项匹配 + 单位元入洞，mathics 属性同款）；
   系数域抽象部分完成：多变量约分/参数有理式/参数化低次求解已通；
-  **剩余**：Poly 全参数化系数（ℚ(params) 上的 udivmod/gcd/积分）——前置条件 = ℚ(params) 上的因式分解。
+  **剩余**：Poly 全参数化系数（ℚ(params) 上的 udivmod/gcd/积分）——前置条件 = ℚ(params) 上的因式分解；
+  RootOf 复根隔离（实根已由 Sturm 解决，复根仍为共轭类编号）。
 - **M2 初等域 + 教科书积分**：梯队三 + 策略通道可解释积分 + 梯队二基础件（线性系统/线性不等式链）。
   ✓ 已落地：完整多项式算术（resultant/discriminant/Zassenhaus 因式分解/apart 部分分式）+ REPL `:factor` `:apart` +
-  三角层（Chebyshev 多角度基规范形 + t=tan(x/2) 积分复用 M1）。
+  三角层（Chebyshev 多角度基规范形 + t=tan(x/2) 积分复用 M1）+ 双曲域（spec 注册 + hyp.rules）+
+  **策略通道可解释**（integrate 报所用方法并入 step log；规则步逐条、算法步报名+验证态）+ REPL 交互层（%N 历史/:steps）。
 - **M3 定积分**：极限 + 级数 + NL + 分段 + 判敛。
 - **M4 求和/差分**：Gosper、常系数递推。
 - **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）。
@@ -553,6 +571,11 @@ Mathematica / Maple / Maxima / SymPy 一致收敛于同一套三件套：
 现状：管线全通（1/2/3/4/5 均已实现）；三角层已接线（sin²+cos²=1 符号 YES）；
 **化简 = 搜索的形态**（层外混合式：cost 单调 + 方向标签成对规则 + 义务队列）已在 §6 定稿。
 
+**FullSimplify 式搜索不做（2026-08 裁定）**：搜索式化简的价值前提是大定理库 +
+调校过的 ComplexityFunction——当前规则库规模下搜索无素材；Richardson 定理保证超越函数类
+无终止保证，只能预算硬切，投入产出比远低于内核建设。重估条件：规则库百条级且
+auto 的 cost 单调接受准则成为可证瓶颈（如大量合法化简被单调性拦截）。
+
 ---
 
 ## 12. 参考系统教训（2026-08 实据读源版）
@@ -565,7 +588,7 @@ Mathematica / Maple / Maxima / SymPy 一致收敛于同一套三件套：
 | expreduce | `eval.go`：求值 = 哈希比较 fixpoint 循环 + 每项 `EvaledHash` 缓存（命中即跳过）；
   属性（Flat/Orderless/Hold/Listable）按头查询；Trace 是事后表达式 | ① 项 id 记忆化 ✓ 已落地（simplify._MEMO，驻留免费）
   ② 属性 = 按头声明式行为 → 并入 FunctionSpec |
-| mathics-core | `core/attributes.py`：16 属性位集，含 OneIdentity、NumericFunction | 匹配器补 one_identity（f(?x) 匹配裸 x）；numeric_function 供数值层 |
+| mathics-core | `core/attributes.py`：16 属性位集，含 OneIdentity、NumericFunction | OneIdentity ✓ 已落地（match._match_one_id，裸项匹配 + 单位元入洞）；numeric_function 供数值层（已由 spec.numeric 替代） |
 | yacas | `scripts/stdarith.ys`：仅加法归约 ≈40 条声明式规则，带优先级数字与谓词守卫（`_x_IsNumber`）；
   内核小、数学全在脚本库 | ① 环规范化下沉构造器被反证为正确（yacas 为此付出几百条规则）
   ② 规则优先级/排序值得进 DSL（列入 M2.0 备选） |

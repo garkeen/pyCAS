@@ -26,6 +26,7 @@ class Step:
     after: T.Term
     guard: str
     dcost: int
+    note: str = ""   # 自由说明：内核算法步记算法名+验证态（kind=algo），规则步留空
 
 
 @dataclass

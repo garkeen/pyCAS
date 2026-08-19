@@ -29,5 +29,35 @@ class TestMatch(unittest.TestCase):
         self.assertIs(m[0]["u"], plus(x, N(1)))
 
 
+class TestOneIdentity(unittest.TestCase):
+    """OneIdentity：带单位元的 AC 头模式可匹配裸项（mathics 属性同款）。"""
+
+    def test_plus_bare(self):
+        ms = list(matches(plus(T.PV("a"), T.PV("b")), x))
+        got = {(m["a"], m["b"]) for m in ms}
+        self.assertEqual(got, {(T.ZERO, x), (x, T.ZERO)})
+
+    def test_times_bare(self):
+        ms = list(matches(times(T.PV("a"), T.PV("b")), x))
+        got = {(m["a"], m["b"]) for m in ms}
+        self.assertEqual(got, {(T.ONE, x), (x, T.ONE)})
+
+    def test_typed_hole_respected(self):
+        # ?a::num 只能吸收数值单位元，绑定唯一
+        ms = list(matches(plus(T.PV("a", "num"), T.PV("b")), x))
+        self.assertEqual(len(ms), 1)
+        self.assertIs(ms[0]["a"], T.ZERO)
+        self.assertIs(ms[0]["b"], x)
+
+    def test_nonhole_not_absorbed(self):
+        # 非洞子模式不吸收单位元：2*?u 不匹配裸 x
+        self.assertEqual(list(matches(times(N(2), T.PV("u")), x)), [])
+
+    def test_seq_empty(self):
+        ms = list(matches(plus(T.PV("a"), T.PS("r")), x))
+        self.assertTrue(any(m["a"] is x and m["r"] == () for m in ms))
+        self.assertTrue(any(m["a"] is T.ZERO and m["r"] == (x,) for m in ms))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

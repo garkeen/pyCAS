@@ -1,0 +1,7 @@
+# hyperbolic identities
+# 奇偶性规则（sinh_neg/cosh_neg/tanh_neg）由 FunctionSpec 自动生成（origin='spec'）
+rule cosh2_sinh2 = cosh(?x)^2 - sinh(?x)^2 -> 1
+# 指数定义（双向定理：expand 方向转 exp 塔，供 Risch/化简策略消费）
+rule sinh_def = sinh(?x) -> (exp(?x) - exp(-?x))/2 as expand
+rule cosh_def = cosh(?x) -> (exp(?x) + exp(-?x))/2 as expand
+rule tanh_def = tanh(?x) -> sinh(?x)/cosh(?x) as expand

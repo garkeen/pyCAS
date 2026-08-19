@@ -10,49 +10,6 @@ DEFAULT_W = 1
 _MEMO = {}
 
 
-def cost(t):
-    if isinstance(t, Expr):
-        w = WEIGHTS.get(t.head.name, DEFAULT_W)
-        return w + sum(cost(a) for a in t.args)
-    if isinstance(t, T.Bound):
-        return 1 + cost(t.body)
-    return 1
-
-
-def _mul_expand(a, b):
-    if isinstance(a, Expr) and a.head.name == "Plus":
-        return T.plus(*[_mul_expand(x, b) for x in a.args])
-    if isinstance(b, Expr) and b.head.name == "Plus":
-        return T.plus(*[_mul_expand(a, y) for y in b.args])
-    return T.times(a, b)
-
-
-def expand(t):
-    if isinstance(t, Expr):
-        name = t.head.name
-        if name == "Plus":
-            return T.plus(*[expand(a) for a in t.args])
-        if name == "Times":
-            acc = T.ONE
-            for a in t.args:
-                acc = _mul_expand(acc, expand(a))
-            return acc
-        if name == "Power":
-            b, e = t.args
-            if isinstance(e, Int) and e.v >= 2:
-                base = expand(b)
-                acc = base
-                for _ in range(e.v - 1):
-                    acc = _mul_expand(acc, base)
-                return acc
-            if isinstance(e, Int) and e.v == 1:
-                return expand(b)
-            if isinstance(e, Int) and e.v == 0:
-                return T.ONE
-            return t
-    return t
-
-
 def _postorder(t):
     """显式栈后序遍历（不依赖 Python 递归栈，深表达式安全）。"""
     order = []
@@ -65,6 +22,64 @@ def _postorder(t):
         elif isinstance(u, T.Bound):
             stack.append(u.body)
     return order
+
+
+def cost(t):
+    """节点加权总和（显式栈后序，深表达式不触及 Python 递归上限）。"""
+    val = {}
+    for u in reversed(_postorder(t)):
+        if isinstance(u, Expr):
+            val[u] = WEIGHTS.get(u.head.name, DEFAULT_W) + sum(val[a] for a in u.args)
+        elif isinstance(u, T.Bound):
+            val[u] = 1 + val[u.body]
+        else:
+            val[u] = 1
+    return val[t]
+
+
+def _mul_expand(a, b):
+    """乘法对加法分配：构造器 flatten 保证 Plus 参数不含 Plus，分配仅一层。"""
+    as_ = list(a.args) if isinstance(a, Expr) and a.head.name == "Plus" else [a]
+    bs = list(b.args) if isinstance(b, Expr) and b.head.name == "Plus" else [b]
+    if len(as_) == 1 and len(bs) == 1:
+        return T.times(a, b)
+    return T.plus(*[T.times(x, y) for x in as_ for y in bs])
+
+
+def expand(t):
+    """环层全展开（显式栈后序重建：子项先展开，向上只做分配）。"""
+    val = {}
+    for u in reversed(_postorder(t)):
+        if isinstance(u, Expr):
+            name = u.head.name
+            if name == "Plus":
+                val[u] = T.plus(*[val[a] for a in u.args])
+            elif name == "Times":
+                acc = T.ONE
+                for a in u.args:
+                    acc = _mul_expand(acc, val[a])
+                val[u] = acc
+            elif name == "Power":
+                b, e = u.args
+                if isinstance(e, Int) and e.v >= 2:
+                    base = val[b]
+                    acc = base
+                    for _ in range(e.v - 1):
+                        acc = _mul_expand(acc, base)
+                    val[u] = acc
+                elif isinstance(e, Int) and e.v == 1:
+                    val[u] = val[b]
+                elif isinstance(e, Int) and e.v == 0:
+                    val[u] = T.ONE
+                else:
+                    val[u] = u
+            else:
+                val[u] = u
+        elif isinstance(u, T.Bound):
+            val[u] = T.mk_bound(u.hint, val[u.body])
+        else:
+            val[u] = u
+    return val[t]
 
 
 def simplify(t, budget=100000):

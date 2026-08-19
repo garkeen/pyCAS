@@ -67,6 +67,74 @@ class TestSessionFlow(unittest.TestCase):
         self.assertEqual(s.kernel["factor"].fn(s, ""), "usage: :factor <expr>")
 
 
+class TestExplainableSteps(unittest.TestCase):
+    """可解释步骤：规则步逐条推导，算法步只报算法名+验证态（verify 背书即解释）。"""
+
+    def test_kernel_step_logged(self):
+        from cas.session import Session
+
+        s = Session()
+        out = s.integrate("1/(x^2-1)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("Hermite", out)   # 策略通道报所用方法
+        algo = [st for st in s.log if st.rule_id.startswith("kernel:")]
+        self.assertEqual(len(algo), 1)
+        self.assertIn("[algorithm]", s.steps()[-1])
+
+    def test_rule_step_explained(self):
+        from cas.session import Session
+
+        s = Session()
+        s.feed("x + sin(-x)")
+        s.apply("sin_neg")
+        ln = s.steps()[-1]
+        self.assertIn("[rule sin_neg]", ln)
+        self.assertIn("x + sin(-x)", ln)
+        self.assertIn("x - sin(x)", ln)
+
+    def test_replay_skips_kernel_steps(self):
+        from cas.session import Session
+
+        s = Session()
+        s.feed("1/(x^2-1)")
+        s.integrate("1/(x^2-1)")
+        r = s.replay()
+        # 算法步直接恢复输出，不卡死
+        self.assertIn("log", to_str(r))
+
+
+class TestHistoryReuse(unittest.TestCase):
+    """% 历史复用（Mathematica %/%% 同款最小版）。"""
+
+    def test_percent_latest(self):
+        from cas.session import Session
+
+        s = Session()
+        s.feed("x + 1")
+        self.assertEqual(to_str(parse(s.expand_history("% * 2"))), "2*(x + 1)")
+
+    def test_percent_n_parenthesized(self):
+        from cas.session import Session
+
+        s = Session()
+        s.feed("1/(x^2-1)")
+        s.integrate(s.expand_history("%1"))   # REPL 层负责 % 展开
+        # %2 是和式，嵌入乘法必须补括号（不破语义）
+        e = parse(s.expand_history("%2 * 2"))
+        self.assertEqual(len(e.args), 2)   # Times 两因子，而非散开
+
+    def test_missing_history(self):
+        from cas.session import Session
+        from cas.errors import ParseError
+
+        s = Session()
+        with self.assertRaises(ParseError):
+            s.expand_history("% + 1")
+        s.feed("x")
+        with self.assertRaises(ParseError):
+            s.expand_history("%5 + 1")
+
+
 class TestDeclareAndConsume(unittest.TestCase):
     """declare/属性消费闭环：属性入账本，decide 区间通道消费。"""
 

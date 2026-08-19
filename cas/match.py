@@ -19,6 +19,66 @@ def _pred_ok(pat, tgt):
     return fn is not None and fn(tgt)
 
 
+# OneIdentity（mathics-core attributes.py 同款实据）：带单位元的 AC 头允许
+# 模式匹配裸项——?a+?b 可匹配 x（另一洞取 0），?a*?b 可匹配 x（另一洞取 1）。
+# 只有洞（PatVar/PatSeq）与字面单位元可吸收单位元；非洞子模式必须如实匹配。
+_ONE_ID = {}
+
+
+def _one_identity():
+    if not _ONE_ID:
+        _ONE_ID.update({"Plus": T.ZERO, "Times": T.ONE})
+    return _ONE_ID
+
+
+def _bind_identity(p, ident, sub):
+    """模式参数 p 绑定到单位元：PatVar 新绑/一致检查，PatSeq 绑空元组。"""
+    if isinstance(p, T.PatVar):
+        if not _pred_ok(p, ident):
+            return None
+        cur = sub.get(p.name)
+        if cur is None:
+            s2 = dict(sub)
+            s2[p.name] = ident
+            return s2
+        return sub if cur is ident else None
+    if isinstance(p, T.PatSeq):
+        cur = sub.get(p.name)
+        if cur is None:
+            s2 = dict(sub)
+            s2[p.name] = ()
+            return s2
+        return sub if cur == () else None
+    return sub if p is ident else None
+
+
+def _all_identity(pats, ident, sub, st):
+    """剩余模式参数全部吸收单位元。"""
+    if not pats:
+        yield sub
+        return
+    s2 = _bind_identity(pats[0], ident, sub)
+    if s2 is not None:
+        yield from _all_identity(pats[1:], ident, s2, st)
+
+
+def _match_one_id(pats, ident, tgt, sub, st):
+    """OneIdentity 通道：模式参数逐个竞争匹配 tgt，其余吸收单位元。"""
+    st[0] -= 1
+    if st[0] < 0:
+        raise BudgetExceeded()
+    if not pats:
+        return
+    p, rest = pats[0], pats[1:]
+    # p 消费 tgt，其余全部取单位元
+    for s2 in _match(p, tgt, sub, st):
+        yield from _all_identity(rest, ident, s2, st)
+    # p 吸收单位元，tgt 留给后续参数
+    s2 = _bind_identity(p, ident, sub)
+    if s2 is not None:
+        yield from _match_one_id(rest, ident, tgt, s2, st)
+
+
 def _match(pat, tgt, sub, st):
     st[0] -= 1
     if st[0] < 0:
@@ -45,14 +105,15 @@ def _match(pat, tgt, sub, st):
             yield sub
         return
     if k is T.Expr:
-        if not isinstance(tgt, T.Expr):
+        if isinstance(tgt, T.Expr) and tgt.head is pat.head:
+            if pat.head.name in T.AC:
+                yield from _match_orderless(list(pat.args), list(tgt.args), sub, st)
+            else:
+                yield from _match_seq(list(pat.args), list(tgt.args), sub, st)
             return
-        if tgt.head is not pat.head:
-            return
-        if pat.head.name in T.AC:
-            yield from _match_orderless(list(pat.args), list(tgt.args), sub, st)
-        else:
-            yield from _match_seq(list(pat.args), list(tgt.args), sub, st)
+        ident = _one_identity().get(pat.head.name)
+        if ident is not None:
+            yield from _match_one_id(list(pat.args), ident, tgt, sub, st)
         return
     if k is T.Bound:
         if isinstance(tgt, T.Bound):

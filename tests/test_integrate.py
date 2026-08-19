@@ -7,7 +7,7 @@ class TestIntegrate(unittest.TestCase):
     def t(self, s):
         from cas.integrate import integrate
 
-        return integrate(parse(s), parse("x"))
+        return integrate(parse(s), parse("x"))[:2]
 
     def test_verified_cases(self):
         cases = [
@@ -91,7 +91,7 @@ class TestTrigIntegrate(unittest.TestCase):
     def t(self, s):
         from cas.integrate import integrate
 
-        return integrate(parse(s), parse("x"))
+        return integrate(parse(s), parse("x"))[:2]
 
     def test_verified_cases(self):
         cases = [

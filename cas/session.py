@@ -154,6 +154,7 @@ class Session:
         self.budget = budget
         self.locked = None
         self.load_error = None
+        self.history = []   # 产出过的表达式（%N 复用，REPL 交互标配）
         self._sid = 0
         self._oid = 0
         rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
@@ -192,7 +193,33 @@ class Session:
     def feed(self, s):
         self._check_locked()
         self.current = parse(s)
+        self._remember(self.current)
         return self.current
+
+    def _remember(self, t):
+        if isinstance(t, T.Term) and t not in (T.ZERO, T.ONE):
+            self.history.append(t)
+
+    def expand_history(self, line):
+        """%N 引用第 N 个历史产出，裸 % 引用最近一个（Mathematica %/%% 同款最小版）。
+
+        插入位置上下文未知，按最高优先级渲染补括号（多和项嵌入乘法不破语义）。"""
+        import re
+
+        def rep(m):
+            n = m.group(1)
+            if not n:
+                if not self.history:
+                    raise ParseError("no history yet")
+                t = self.history[-1]
+            else:
+                i = int(n)
+                if not (1 <= i <= len(self.history)):
+                    raise ParseError(f"no history %{i} (have {len(self.history)})")
+                t = self.history[i - 1]
+            return to_str(t, prec=99)
+
+        return re.sub(r"%(\d*)", rep, line)
 
     def _guard_eval(self, guard, sub):
         return _eval_guard(guard, sub, self.ctx)
@@ -436,6 +463,10 @@ class Session:
         ]
         self.current = base
         for st in steps:
+            if st.rule_id.startswith("kernel:"):
+                # 内核算法步：不可规则重放，直接恢复其输出（正确性由 verify 背书）
+                self.current = st.after
+                continue
             r = self.rules.rules.get(st.rule_id)
             if r is None:
                 return f"replay stuck at {st.rule_id}"
@@ -558,6 +589,16 @@ class Session:
             out.append(f"{s_}^{k}" if k > 1 else s_)
         return " + ".join(out) if out else "0"
 
+    def _kernel_step(self, algo, result, before=None):
+        """内核算法调用入账：单算法调用不做微观步骤解释（正确性由 verify 背书），
+        只记算法名 + 输入/输出 + 验证态（可解释性的最小诚实单位）。"""
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "kernel:" + algo, (), before, result, "YES", 0,
+            note=f"algorithm={algo}",
+        ))
+        self._remember(result)
+
     def integrate(self, s):
         from cas.integrate import integrate as zz_int
         from cas.pprint import to_str as ps
@@ -566,9 +607,30 @@ class Session:
         x = self._pick_var(t)
         if x is None:
             return "no variable"
-        res, ok = zz_int(t, x)
+        res, ok, method = zz_int(t, x)
+        self._kernel_step(f"integrate[{method}]", res, before=t)
         out = ps(res)
-        return f"{out}   [VERIFIED]" if ok else f"{out}   [UNVERIFIED]"
+        tag = "VERIFIED" if ok else "UNVERIFIED"
+        return f"{out}   [{tag}, method: {method}]"
+
+    def steps(self):
+        """可解释步骤文本：规则步 = 逐条推导（规则名/位置/守卫/前后式/cost 变化）；
+        算法步 = 算法名 + 验证态（单算法调用无微观步骤可讲，verify 背书即解释）。"""
+        if not self.log:
+            return ["(no steps)"]
+        out = []
+        for st in self.log:
+            if st.rule_id.startswith("kernel:"):
+                src = to_str(st.before) + " " if st.before is not None else ""
+                out.append(f"#{st.sid} [algorithm] {src}-> {to_str(st.after)}   ({st.note})")
+            else:
+                at = f" at {st.path}" if st.path else ""
+                out.append(
+                    f"#{st.sid} [rule {st.rule_id}]{at}  "
+                    f"{to_str(st.before)}  ->  {to_str(st.after)}   "
+                    f"(guard={st.guard}, dcost={st.dcost})"
+                )
+        return out
 
     def show(self):
         return to_str(self.current) if self.current is not None else "(empty)"
@@ -579,6 +641,8 @@ class Session:
             ":a": "apply <rule-id> [path]",
             ":u": "undo [n]",
             ":auto": "core simplify",
+            ":steps": "explain the derivation (rules step-by-step; algorithms by name)",
+            ":hist": "produced expressions (%N to reuse, % = latest)",
             ":assume": "assume <fact>",
             ":ans": "answer <oid> <fact>",
             ":obls": "list obligations",
@@ -593,8 +657,10 @@ class Session:
 
 
 def run():
+    """REPL：表达式即当前式；%N 复用历史产出；规则步逐条可解释，
+    算法步报算法名与验证态（单算法调用不做微观解释，verify 背书即解释）。"""
     s = Session()
-    print("pyCAS session. :help for commands; expression to make current.")
+    print("pyCAS session. :help for commands; expression to make current; %N reuses history.")
     if s.load_error:
         print(f"warning: rules load failed: {s.load_error}")
     while True:
@@ -614,8 +680,16 @@ def run():
                 # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
                 parts = line.split(None, 1)
                 name = parts[0][1:]
-                rest = parts[1].strip() if len(parts) > 1 else ""
+                rest = s.expand_history(parts[1].strip()) if len(parts) > 1 else ""
                 print(s.kernel[name].fn(s, rest))
+            elif line == ":steps":
+                for ln in s.steps():
+                    print(ln)
+            elif line == ":hist":
+                for i, h in enumerate(s.history, 1):
+                    print(f"%{i}  {to_str(h)}")
+                if not s.history:
+                    print("(empty)")
             elif line.startswith(":s"):
                 arg = line[2:].strip()
                 path = tuple(int(i) for i in arg.split(".")) if arg else ()
@@ -625,15 +699,21 @@ def run():
                 parts = line[3:].split()
                 rid = parts[0]
                 path = tuple(int(i) for i in parts[1].split(".")) if len(parts) > 1 else None
+                n0 = len(s.log)
                 res = s.apply(rid, path)
                 print(to_str(res) if isinstance(res, T.Term) else res)
+                for ln in s.steps()[n0:]:
+                    print("  " + ln)   # 规则应用当场给可解释反馈
             elif line.startswith(":u"):
                 n = int(line[2:] or 1)
                 print(to_str(s.undo(n)) if s.log else "no steps")
             elif line == ":auto":
+                n0 = len(s.log)
                 print(to_str(s.auto()))
+                for ln in s.steps()[n0:]:
+                    print("  " + ln)
             elif line.startswith(":assume "):
-                print(s.assume(line[8:]))
+                print(s.assume(s.expand_history(line[8:])))
             elif line.startswith(":declare "):
                 parts = line[9:].split()
                 if len(parts) == 2:
@@ -643,7 +723,7 @@ def run():
             elif line.startswith(":ans "):
                 parts = line[5:].split(None, 1)
                 oid = int(parts[0])
-                print(s.answer(oid, parts[1]))
+                print(s.answer(oid, s.expand_history(parts[1])))
             elif line == ":obls":
                 for o in s.obligations:
                     print(f"#{o.oid}  {to_str(o.question)}   affects steps {o.affects}")
@@ -665,7 +745,7 @@ def run():
                 rd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
                 print(f"loaded {loader.load_dir(rd, s.rules)} rules")
             else:
-                s.feed(line)
+                s.feed(s.expand_history(line))
                 print(s.show())
         except (BudgetExceeded, ParseError) as e:
             print(f"error: {e}")

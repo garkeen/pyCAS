@@ -82,7 +82,7 @@ class TestIntegrateOracle(unittest.TestCase):
 
         sx = sympy.Symbol("x")
         for s in self.CASES:
-            res, ok = integrate(parse(s), x)
+            res, ok, _method = integrate(parse(s), x)
             self.assertTrue(ok, s)
             fs = to_str(res)
             if "rootof" in fs:
