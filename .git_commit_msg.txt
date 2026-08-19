@@ -1,0 +1,52 @@
+M3 closure: ODE basics + backward substitution + docs overhaul (arch/manual/api)
+
+ODE foundation (cas/ode.py + :dsolve):
+- four classified problem kinds, each named and logged:
+  direct (y'=f(x)), separable (x/y factor splitting with numeric-sign
+  preservation, power-family explicit inversion, implicit fallback),
+  linear1 (integrating factor exp(int p), solution as (G+C1)*exp(-P)),
+  constcoef2 (characteristic equation: distinct/repeated/complex roots
+  with trig real form e^{ax}(C1 cos bx + C2 sin bx))
+- solution verification by differential back-substitution through
+  equivalent() -> VERIFIED/PROBABLE/UNVERIFIED (honest tri-state)
+- reconstruction guards: linear remainder and homogeneous remainder must
+  rebuild exactly (prevents y^2-class nonlinear terms from being swallowed
+  by zero coefficients)
+- custom _coef: opaque coefficients tolerated (exp(x) etc), wider than
+  ops.coefficient which is Poly-based
+
+Backward substitution (cas/bsub.py + :bsub):
+- bounds solved via principal inverses (spec.inv; sin->arcsin etc,
+  special-point folding gives exact pi-rational bounds)
+- restricted auto-rewrite over transformed integrand (Pythagorean
+  moved forms 1-sin^2 -> cos^2 added to trig.rules as auto rules)
+- sqrt(cos^2)/|cos| shell removal via declarative trig nonnegativity
+  windows (pi-rational bound comparison only; undecidable stays honest)
+- classic cases verified: int_0^1 sqrt(1-x^2) = pi/4 (x=sin t),
+  int_0^1 1/(1+x^2) = pi/4 (x=tan t)
+
+Supporting simplifier semantics:
+- exp addition law in simplify rebuild: exp(a)*exp(b) -> exp(a+b) and
+  Exp(a)^n -> Exp(n*a) (unconditional identities; needed so linear1 ODE
+  verification closes symbolically; mk power-merge would otherwise
+  re-collect e^x*e^x to Exp(x)^2)
+- spec specials: tan(pi/4)=1, atan(1)=pi/4 (+negatives); defint atan
+  expectation updated accordingly
+
+Documentation overhaul:
+- docs/cas_v2_arch.md thoroughly cleaned: 90-line session log condensed
+  into an essential rulings-only revision history (detailed log lives in
+  git); milestones updated (M3 closed, M4 next, remaining structural
+  debts listed); module table (S8) rewritten to match real files;
+  FunctionSpec registry list completed
+- docs/manual.md new: user manual (philosophy, syntax, full command
+  reference grouped by area, workflow examples, rule DSL, transcript
+  DSL, capability boundaries)
+- docs/api.md rewritten from M1-era state to current: all modules,
+  data structures, REPL commands, cross-module call chains
+
+Examples & tests:
+- examples/04_ode_bsub.pycas (replayable derivation, asserted in
+  tests/test_examples.py)
+- tests/test_ode.py (classification x10 + command), tests/test_bsub.py
+- 300 tests green

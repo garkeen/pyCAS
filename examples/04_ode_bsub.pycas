@@ -1,0 +1,6 @@
+# pyCAS transcript: ODE 分类求解 + 定积分反向换元（M3 收尾双通道）
+:dsolve D(y,x) + y = exp(x) y x
+:dsolve D(D(y,x),x) + y = 0 y x
+:dsolve D(y,x) = y^2 y x
+:bsub x=sin(t) sqrt(1-x^2) x 0 1
+:bsub x=tan(t) 1/(1+x^2) x 0 1

@@ -1,25 +1,23 @@
 # pyCAS API 参考（数据结构 + 全部 API）
 
-> 对应架构：`docs/cas_v2_arch.md`。本文档只讲"有什么、怎么用"，设计理由看架构文档。
-> 状态图例：
-> - **live**：有静态调用者（生产代码或测试）
-> - **registered**：动态注册（装饰器入表，管线分发；静态引用为 0 是正常现象）
-> - **facade**：公共 API 面 / 兼容入口（供外部导入）
-> - **future**：为后续里程碑（M3+）预留，尚无消费者
+> 对应架构：`docs/cas_v2_arch.md`；使用教程：`docs/manual.md`。
+> 本文档只讲"有什么、怎么用"。状态与代码同步（M3 收尾）。
 
 ---
 
 ## 0. 模块分层总览
 
 ```
-L7  策略      session.py（积分/求解/化简策略入口）、integrate.py
-L6  会话      session.py · parser.py · pprint.py
-L5  化简      simplify.py（per-head 注册表 + cost）
+L7  策略      integrate.py(策略入口) · istrategy.py(步树) · bsub.py(反向换元) · ode.py
+L6  会话      session.py · parser.py · pprint.py · latex.py
+L5  化简      simplify.py（显式栈重建 + cost）· refine.py（账本驱动）
 L4  上下文    context.py · decide.py · domain.py
-L3  领域      poly.py · factor.py · apart.py · ratfunc.py · algnum.py · matrix.py · solve.py · trig.py · diff.py
+L3  领域      spec.py(注册表) · poly/factor/apart/ratfunc/algnum/sturm ·
+              solve/matrix/ineq/sets/ops · trig · diff · series/limits · integrate
 L2  规则      rules.py · loader.py · rules/*.rules
 L1  匹配      match.py
 L0  项        term.py · errors.py
+横切          evalnum.py（数值求值，仅验证/抽查通道）
 ```
 
 ---
@@ -28,228 +26,207 @@ L0  项        term.py · errors.py
 
 ### 1.1 Term 类族（term.py，L0）
 
-不可变、构造即规范化（AC 头 flatten + 全序 + 常量折叠在构造器内完成），`__eq__` 走内容哈希。
+不可变、**构造即规范化**（mk 是唯一构造入口：AC flatten + 全序 + 常量折叠 +
+环规范化 + 特殊点折叠），等项 = 指针同一（驻留，内容寻址）。
 
 | 类 | 含义 |
 |----|------|
-| `Sym(name)` | 符号变量（x, y…），构造器 `S(name)` |
-| `Const(name)` | 数学常量名（π 等），构造器 `C(name)` |
-| `DB(i)` / `BVal(val)` | 绑定词内部：哑变量编号 / 绑定时的代入值 |
-| `Int(v)` | 任意大整数，构造器 `N(v)` |
-| `Rat(f)` | 精确有理数（Fraction），`N()` 遇小数自动归一 |
-| `Special(name)` | 特殊原子（TRUE/FALSE/UND/INFINITY 等） |
-| `PatVar(name)` | 单参洞 `?x`，构造器 `PV(name)` |
-| `PatSeq(name)` | 序列洞 `??x`，构造器 `PS(name)` |
-| `Expr(head, args)` | 函数应用：head 为 Sym，args 为 Term 元组；构造器 `mk(head, args)` / `fn(name)` |
-| `Bound(hint, body)` | 绑定词节点（∫/Σ/Π/lim/D 的哑变量载体）；构造时 α-规范化改名 |
+| `Sym(name)` | 符号，构造器 `S(name)` |
+| `Const(name)` | 常量（pi/e/i/gamma），构造器 `C(name)` |
+| `Int(v)` / `Rat(f)` | 大整数 / 精确有理数，构造器 `N(v)` |
+| `Special(name)` | TRUE/FALSE/UND/INFINITY/EMPTY_SET |
+| `BVal(val)` | 布尔值（true/false，Piecewise 条件用） |
+| `DB(i)` | de Bruijn 哑变量索引（Bound 内部） |
+| `PatVar(name, pred)` | 单参洞 `?x`（可带类型洞 `::pred`），构造器 `PV` |
+| `PatSeq(name)` | 序列洞 `??x`，构造器 `PS` |
+| `Expr(head, args)` | 函数应用；构造器 `mk(head, args)` / `fn(name)` |
+| `Bound(hint, body)` | 绑定词节点（∫/Σ/Π/lim 哑变量，de Bruijn 体，α 等价） |
 
-**驻留**：`Expr/Bound` 构造时经全局驻留表（`_next_h` 分配句柄，`_intern_expr` 内容寻址），等项 = 同句柄。
+**构造器/工具速查**：
+`S/C/N/PV/PS/mk/fn/plus/times/pw/neg/div/sqrt/exp/sin/cos/tan/eq/lt/le/gt/ge/ne/
+quote/mk_bound/open_bound/subst/instantiate/term_at/replace_at/all_paths/
+free_vars/is_num/num_val/sort_key`。
 
-**构造器速查**：`S/C/N/SP/PV/PS/mk/fn/plus/times/pw/neg/div/sqrt/eq/lt/le/gt/ge/ne/and_/or_/not_/quote/mk_bound/subst/instantiate/term_at/replace_at/all_paths/size/free_vars`。
+关键语义：
+- `mk`：规范化构造（环层：同类项合并/同底整数幂合并/幂归约；`e^a`→Exp(a)；
+  i 幂 mod 4 折叠；Conjugate/Piecewise 走 `register_norm` 注册表）。
+- `subst(t, mapping)`：显式栈替换，**复合项键可命中**（如 {x²: z}），α 躲避。
+- `open_bound(b)`：Bound → (hint 符号, 体)（DB 还原，mk_bound 的逆）。
+- 常量：`ZERO/ONE/MONE/TWO/PI/E/IU/UND/INFINITY/EMPTY_SET/TRUE/FALSE`。
 
-关键语义函数：
-- `quote(t)`：引用（求值免触）
-- `subst(t, mapping)`：替换（α 躲避）
-- `instantiate(t, sub)`：洞模式实例化（按匹配子代入）
-- `term_at(t, path)` / `replace_at(t, path, v)` / `all_paths(t)`：path 寻址（根到子的索引序列，全系统唯一寻址方案）
-- `is_num/num_val/sign_num/sort_key`：数值工具
+### 1.2 T3 三值（decide.py）
 
-### 1.2 Poly（poly.py，L3）
+`T3` 枚举：YES / NO / UNKNOWN / **PROBABLE**（数值采样支持，不进 YES 通道）。
+Kleene 组合 `and3/or3/not3`。
 
-稀疏字典多项式：`monos: {(e0, e1, …): Fraction}`，指数按 `vars_` 顺序。单变量指数元组 `(e,)`。
+### 1.3 Context（context.py，L4）
 
-| 构造 | 说明 |
-|------|------|
-| `Poly(vars_, monos)` | 直接构造 |
-| `Poly.zero/one/const/mono(vars_, …)` | 常量构造器 |
-| `Poly.from_term(t, vars_)` | term → Poly（含变量重排检查） |
-| `Poly._build(t, vars_)` | 内部构造（含除法检测） |
+有序账本 `Entry(fact, kind, origin)`；`check_and_assume(fact, origin, kind)` 为
+统一入账闸门（域检死 → 矛盾锁 → 入账）→ `(T3, why)`；`clone/branch/mark/
+rollback/drop_origin`。
 
-| 方法 | 说明 |
-|------|------|
-| `to_term()` | Poly → term（含负指数/分数指数拒绝） |
-| `is_zero/is_const/const_val` | 判定 |
-| `__add__/__neg__/__sub__/__mul__/__pow__/scalar(f)` | 算术（精确 Fraction） |
-| `deriv(var)` | 偏导 |
-| `degree(var)` / `lc(var)` | 次数 / 首项系数 |
-| `content()` / `primitive()` | 内容 / 本原分解 |
-| `udivmod(o)` | 带余除（Q 上，伪除）→ (q, r) |
-| `is_monic(var)` | 首一判定 |
-
-| 顶层函数 | 说明 |
-|----------|------|
-| `ugcd(a, b)` | 首一 gcd（primitive part + Gauss 引理） |
-| `uresultant(a, b)` | Sylvester 结式 |
-| `udiscriminant(a)` | 判别式 |
-
-### 1.3 RatFunc（ratfunc.py，L3，future）
-
-有理函数互素规范形 `(p, q)`（Poly 对，构造时约分）。
-
-- `from_poly(p)` / `from_const(vars_, f)` / `from_term(t, vars_)`
-- `__add__/__neg__/__sub__/__mul__/__truediv__/__pow__/to_term()`
-- 消费者：M5 Risch 塔（当前仅测试引用）
-
-### 1.4 RootOf（algnum.py，L3）
-
-代数数：`RootOf(m, idx)`——不可约 monic 多项式 m 的第 idx 个根（共轭类编号）。
-`to_term()` → `RootOf(m_term, idx)` term。
-
-### 1.5 T3 三值（decide.py，L4）
-
-`T3` 枚举（YES/NO/UNKNOWN）+ `and3/or3/not3` Kleene 组合、`negate(f)`（含 UNKNOWN→UNKNOWN）。
-
-### 1.6 Context（context.py，L4）
-
-有序账本：条目 `Entry(fact, kind, origin)`；回滚点栈；分支 `Branch(cond, ctx, status)`。
-
-| 方法 | 说明 |
-|------|------|
-| `assume(fact, origin, kind)` | 直入账（不走域闸门；内部用） |
-| `check_and_assume(fact, …)` | **统一入账闸门**：域检死 → 矛盾锁 → 入账，返回 (T3, why) |
-| `clone()` / `branch(*conds)` | 分支原语（clone 共享 entries，marks 不复刻） |
-| `mark()` / `rollback(mi)` / `drop_origin(origin)` | 回滚 / 按来源删除 |
-| `facts()` | 账本条目列表 |
-| `decide(fact)` / `contradicted(fact)` | 查询入口 |
-
-### 1.7 规则引擎（rules.py，L2）
+### 1.4 规则引擎（rules.py，L2）
 
 | 类型 | 字段 |
 |------|------|
-| `Rule` | id, pattern, template, guard, direction, channels, auto, origin |
-| `Step` | sid, rule_id, path, before, after, guard, dcost（step log 一等数据） |
+| `Rule` | id, pattern, template, guard, direction, channels, auto, origin, priority |
+| `Step` | sid, rule_id, path, before, after, guard, dcost, note（step log 一等数据；算法步 note 记 algorithm=...） |
 | `ApplyResult` | ok, guard, term, subst |
 
-`RuleSet`：`add/remove/for_term(t)/ids`，per-head 索引（`root_key`）。
-`apply_rule(rule, expr, path, guard_eval=None, budget=10000)`：匹配 → 守卫 3VL（YES 应用 / NO 跳过 / UNKNOWN 回报）→ 实例化替换。
+`RuleSet`：`add/remove/for_term(t)`（per-head 索引 + priority 排序）。
+`apply_rule(rule, expr, path, guard_eval=None, budget)`：匹配 → 守卫 3VL → 实例化。
 
-### 1.8 Session（session.py，L6）
+### 1.5 FunctionSpec（spec.py，L3 地基）
 
-状态 = current + step log + 义务队列 + 账本 + 规则库（+预算）。方法见 §3。
+```python
+FunctionSpec(name, arity, print_name, parity, deriv, bound, dom,
+             special, numeric, anti, inv)
+```
+消费者：mk（special 折叠）/ diff（deriv）/ decide（bound 公理）/ domain（dom）/
+pprint·latex（print_name）/ evalnum（numeric）/ integrate（anti，含线性复合）/
+solve·bsub（inv 主支逆）/ loader（gen_rules 奇偶规则 origin='spec'）。
+已注册：Sin/Cos/Tan/Atan/Arcsin/Arccos/Exp/Log/Abs/Sinh/Cosh/Tanh。
+`SPECS` 字典 + `get(name)`；纪律：新函数只写 spec + 规则文件。
 
-`Obligation(oid, question, affects, note, pending)`：义务队列（提问工作流）。
+### 1.6 Session（session.py，L6）
 
-### 1.9 Matrix / LinResult（matrix.py，L3）
-
-`Matrix(rows)`（rows = term 列表的列表）：`parse(spec)` / `add/scal/mul/transpose/trace` / `det`（精确分数消元）/ `rank` / `inv` / `solve(b)` → `LinResult(unique, particular, null_basis)` / `show()`。
-
-### 1.10 SolveResult（solve.py，L3）
-
-`solve(f, var, budget)` → SolveResult：status ∈ {solved, identity, contradiction, unsupported} + solutions + provisos。
-
-### 1.11 其他
-
-- `errors.py`：`BudgetExceeded(spent, message)` / `PolyError` / `ParseError` / `SolveError`；matrix.py 另有 `MatrixError`
-- `domain.py`：`Domain` 基类 + `RealDomain/RationalDomain/IntegerDomain/ComplexDomain` 单例（`R/Q/Z/C`）；`dom_condition(t)` 递归提取定义域约束；`domain_of(name)`
+状态 = current + log(Step[]) + obligations + ctx + rules + history + transcript +
+defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同路径）；
+`run()` 启动 REPL。转录：`save_transcript/replay_file/rules_fingerprint`
+（会话规则不计指纹，由转录自重建）。
 
 ---
 
 ## 2. 全部模块 API
 
-### term.py（L0）
-构造器与语义函数见 §1.1。内部：`_fold_ac/_fold_num_only/_fold_bool_ac/_fold_power/_intern_expr/_has_special`（构造即规范化管线）、`_shift/_abstract/_mk_bound_canon`（绑定词 α 机制）、`sort_key`（全序）。
+### 匹配与规则（L1–L2）
+- `match.matches(pat, tgt, sub=None, budget)`：结构 + AC 归并 + 类型洞 + OneIdentity。
+- `loader.parse_rule_line/parse_rules/load_dir`；DSL：
+  `rule id = lhs -> rhs [guard c] [as dir] [channels a,b] [prio N] [auto]`。
 
-### errors.py（L0）
-见 §1.11。
+### 上下文与判定（L4）
+- `decide(fact, ctx)`：管线 semantic → ledger → interval → derive → axiom → UNKNOWN。
+- `equivalent(a, b, ctx=None, budget)`：统一判等（指针 → 归零 → 三角层 →
+  账本/多项式片段 → 采样 PROBABLE → UNKNOWN）。
+- `eval_guard(guard, sub, ctx)` / `contradicted(fact, ctx)` / `satisfiable(cons, ctx)` /
+  `domain_ok(fact, ctx)` / `dom_condition(t)`（domain.py）。
+- `@derive(name, applies)` / `@axiom`：注册式扩展（decide.py）。
 
-### match.py（L1）
-- `matches(pat, tgt, sub=None, budget=10000)`（公开入口；AC 归并 + 有界回溯）
-- 内部：`_match/_match_seq/_match_orderless/_has_holes/_sub_key`
+### 化简（L5）
+- `simplify(t, budget)`：显式栈重建（记忆化 _MEMO；exp 加法定律合并：
+  exp(a)·exp(b)→exp(a+b)、Exp(a)ⁿ→Exp(n·a)，化简层无条件恒等）。
+- `cost(t)` / `expand(t)`（均显式栈）。
+- `refine.refine(t, ctx)` → (新项, changed)：只重写 decide=YES 的结构
+  （|x|、√(x²)、exp(log x)、Piecewise 分支裁剪/选定）。
 
-### rules.py / loader.py（L2）
-见 §1.7。DSL：
-- `parse_rule_line(line, origin='dsl')` / `parse_rules(text, origin='dsl')`
-- `load_dir(path, ruleset)`：读 `rules/*.rules`（热重载）
+### 展示（L6）
+- `parse(s)`；`pprint.to_str(t, prec=0)`（显式栈；O(..)/piecewise/集合头/绑定词渲染）；
+  `latex.to_latex(t)`（\frac/\sqrt/幂/三角/积分/分段/集合）。
 
-DSL 语法：`rule <id> = <pattern> -> <template> [guard <c>] [as <direction>] [channels <a,b>] [auto]`
+### 多项式与代数数（L3）
+- `Poly`：`from_term/to_term/+-*/scalar/deriv/degree/lc/content/primitive/udivmod/is_monic`。
+- 顶层：`ugcd`（单变量）/ **`mgcd`（多元，原始伪除 PRS + 递归 content）** /
+  **`div_exact`**（精确除法）/ `uresultant` / `udiscriminant`。
+- `factor.factor(p)` → (content, [(因子, 重数)])（Zassenhaus）；`squarefree_decomp`。
+- `apart.apart(f, g, x)` → (q, [(num, den, k)])。
+- `RatFunc`：互素规范形（构造时约分，多变量走 mgcd）。
+- `algnum`：`RootOf(m, idx)`、ℚ(α) 算术（qa_*）、`tr_power_sums/tr_eval`（迹）、
+  `real_isolation(m)`（Sturm 实根隔离区间）。
+- `sturm`：`sturm_sequence/real_root_count/isolate_real_roots/squarefree_part`。
 
-### context.py / decide.py / domain.py（L4）
-- 公共：`Context`（§1.6）、`decide(fact, ctx, _depth=0)`、`eval_guard(guard, sub, ctx)`、`negate`、`contradicted`、`satisfiable(constraints, ctx)`、`domain_ok(fact, ctx)`、`equivalent(a, b, ctx=None, budget=100000)`（统一等价入口）
-- **registered**：`@derive(name, applies)` 注册推导族（`_rule_*`，`_derive_layer` 分发）；`@axiom` 注册公理族（`_axiom_*`，`_AXIOM_CHECKS` 分发）
-- **facade**：`decided(fact, ctx)`（decide 的薄包装）
-- 内部：`_facts_lookup/_chain_query/_poly_eq_check/_same/_cmp_numeric/_family_cmp/_contains/_eq_subst`（管线层）
+### 求解与线性代数（L3）
+- `solve(f, var)` → `SolveResult(solutions, provisos, status, note)`：
+  线性/二次（含复根）/有理根/参数低次（proviso）/**主支逆**（spec.inv 驱动，
+  sin/cos/tan/exp/log）。`check_solution(f, sol, var)` 回验。
+- `Matrix`：`parse/add/scale/mul/transpose/trace/det/rank/inv/solve` +
+  谱理论 `charpoly/eigenvalues/eigenvectors`。`LinResult(unique, particular, null_basis)`。
+- `ineq.solve_poly_ineq(term, op, x)` → (区间列表, 字符串)（Sturm 符号表）。
+- `sets`：`finite_set/interval/union_of` + `solve_set(f, var)` / `ineq_set(f, op, var)`
+  （FiniteSet/Interval/Union 头 + EMPTY_SET；隔离根端点诚实拒答）。
+- `ops`：`together/cancel/collect/coefficient/coefficient_list/numerator/denominator`。
 
-### simplify.py（L5）
-- `simplify(t, budget=100000)` / `cost(t)`（加权节点计数）/ `expand(t)`
-- `register(name, fn)`：per-head 化简注册表
-- 内部：`_norm_plus_args/_norm_times_args/_norm_power_args/_mul_expand/_sqrt_fac_fold/_split_coeff`
+### 函数域（L3）
+- `trig.trig_reduce(t, x)` / `trig_equivalent(a, b, x)`：多角度基规范形。
+- `diff.d(t, x)`（读 spec.deriv；D 名词保持）；`diff.verify(F, x, f)` →
+  VERIFIED/FAILED/PROBABLE/UNVERIFIED。
 
-### parser.py / pprint.py（L6）
-- `parse(s)` → Term；`to_str(t, prec=0, hint=None)` → 字符串
-- Parser 类（tokenize/expr/unary/postfix，优先级爬升）
+### 分析（L3）
+- `series.series(t, x, a, n)` → (k0, coeffs)（截断幂级数，支持负阶 Laurent）；
+  `series.leading_term(t, x, a, n)` → (阶, 系数, 尾部)；
+  `series.series_term(t, x, a, n)` → 项形态（截断多项式 + O 项头）。
+- `limits.limit(t, x, a, side=None)`：a 可为数值/±π 类/±Infinity；
+  通道 = 代入 → 消去 → 首阶分析 → log 极点 → exp/atan 支配（Gruntz 一期）→ 洛必达。
+- `ode.dsolve(f, y, x)` → `OdeResult(sol, kind, status, note)`：
+  题型 direct / separable / linear1 / constcoef2（复根三角实形式）；
+  解回代微分回验三态。
 
-### session.py（L6）
-见 §3 REPL。方法：`feed/suggest/apply/auto/assume/answer/undo/replay/verify/solve/mat/mdet/mrank/minv/msolve/factor/apart/integrate/show/commands`。`run()` 启动 REPL。
+### 积分（L3/L7）
+- `integrate(t, x)` → **(term, verified, method)**：顺序 = spec anti 表（含线性复合）
+  → 自动正向换元 `_try_usub`（候选按大小升序、新鲜哑元+回代往返双重验证、
+  每候选微分回验）→ Hermite+RT（有理函数）→ tan(x/2)（三角有理式）。
+- `integrate_rational(P, Q, x)`（M1 算法本体，含 atan 实形式）。
+- `defint(t, x, lo, hi)` → (值|None, 状态, 说明)：Newton-Leibniz + 奇点拆分 +
+  端点单侧极限 + 梯形法交叉核对（矛盾即扣留）；**±∞ 限反常积分判敛**
+  （_defint_improper，双端在 0 拆分）；**Piecewise 分段积分**（_defint_piecewise，
+  条件线性根定分支点 + 中点 decide 选支）。
+- `defint_auto(t, x, lo, hi)`：定积分正向换元自动探测（新限 g(lo)/g(hi) 正向求值，
+  全程不求逆；嵌套深度限 3）。
+- `istrategy.explain(t, x)` → IntStep 树（kind: table/linear/usub/rational/
+  tan-half/failed）；`format_steps(step)`（manualintegrate 同款）。
+- `bsub.bsub_defint(t, x, lo, hi, h, tvar, rules=None)`：反向换元
+  （主支逆解新限 + 受限 auto 重写（毕达哥拉斯移项形）+ 三角非负窗口脱 √/|·|）。
 
-### poly.py / factor.py / apart.py（L3）
-- Poly：§1.2
-- `factor(f, rng=None)` → `(content, [(monic_factor, mult)])`；`squarefree_decomp(f)`；`factor_str(f, rng=None)` → 人类可读串（session.factor 消费）
-- `apart(f, g, x=None)` → `(q, [(num, den, k)])`，Σ num·(g/denᵏ) + q·g == f
-- factor.py 内部 mod-p 工具族：`_mod_sub/_mod_add/_mod_mul/_mod_divmod/_monic/_mod_gcd/_mod_xgcd/_mod_pow`（模算术）、`_ddf/_cz_split/_choose_prime`（DDF + Cantor-Zassenhaus + 素数选择）、`_add_int/_add_mod/_sub_mod/_sym_mod/_int_poly/_trunc/_to_int`（整数/对称化算术）、`_hensel/_hensel_step`（Hensel 提升）、`_l1_norm/_test_pl/_subsets/_is_prime`（组合/界）、`_coeffs/_poly_from_coeffs`（表示转换）
+### 数值与错误（横切/L0）
+- `evalnum.eval_exact(t, env)`（环层精确有理）/ `eval_approx`（spec.numeric）/
+  `sample_agrees`（只产一致/未知，绝不产否证）。仅验证/抽查通道。
+- `errors`：`BudgetExceeded` / `ParseError` / `PolyError`；matrix 另有 `MatrixError`；
+  evalnum 有 `EvalNumError`；series 有 `SeriesError`。
 
-### ratfunc.py（L3，future）
-见 §1.3。
-
-### algnum.py（L3）
-- `uexgcd(a, b)` → (s, t, g)，s·a + t·b = g
-- `inv_mod(a, m)`；`qa_mod/qa_mul/qa_inv/qa_div(a/b, m)`（ℚ(α) 域，mod 不可约 monic）
-- `tr_power_sums(m, upto)`：根幂和 s₁..s_upto（牛顿恒等式）
-- `tr_eval(m, c, t=0)`：**t-偏移迹** Tr(c·βᵗ)，t=0 为普通迹；u=0 项按 v·deg（根数）计入
-- `coefs(p, x)`：降幂系数 [lc, …, const]（含零位）
-- `RootOf`：§1.4
-
-### matrix.py（L3）
-见 §1.9。
-
-### solve.py（L3）
-`solve(f, var, budget=100000)` / `check_solution(f, sol, var, budget=100000)`（tests 消费）。内部：`_linear_split/_quadratic/_poly_solve/_root_term/_sqrt_fr/_sort_sols/_freet/_peval/_sub`。
-
-### trig.py（L3）
-- `trig_reduce(t, x)`：sin/cos 幂积多项式 → ∑(aₙsin nx + bₙcos nx) 规范形；不支持返回 None
-- `trig_equivalent(a, b, x)`：恒等式判定 True/False/None
-- 内部：`_expand/_sin_pow/_cos_pow/_i_pow_inv`（复数 Laurent 系数）、`_cadd/_cmul/_cscale`（复数算术）、`_ladd/_lmul`（Laurent 字典）
-
-### diff.py（L4）
-- `diff(t, x)`（规则式微分器）
-- `verify(F, x, f, budget=100000)`：**积分验证通道**（D(F) 化简与 f 比较，三值）
-
-### integrate.py（L3/L7）
-- `integrate(t, x)` → (result, verified)：有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2)；否则 PolyError
-- `integrate_rational(P, Q, x)`（M1 算法本体）
-- 内部：`_frac`（递归通分）`/_rat_pair`（约分）`/_hermitte_power`（单因子幂递推）`/_log_terms`（线性闭式 + 高次 RootOf）`/_integrate_poly` `/_assemble` `/_verify`（符号精确验证：poly 导数 + 有理项 + 线性 log 组 + RootOf 组迹公式）`/_qa_to_term` `/_trig_check/_trig_sub/_trig_tan_half`
-
-### rules/*.rules（L2）
-- `basic.rules`：`pow_one/pow_sum_same/zero_plus/one_times`
-- `log.rules`：`log_prod/log_sum`（成对方向，guard ?x>0 && ?y>0）、`log_pow`、`exp_log`
-- `trig.rules`：`sin2_cos2/sin_neg/cos_neg/sin_add/cos_diff/tan_def`
-
----
-
-## 3. REPL 命令（session.py `commands()`）
-
-| 命令 | 说明 |
-|------|------|
-| `:s [path]` | 建议：列出该位置可套的规则（3VL 守卫） |
-| `:a <rule-id> [path]` | 手动应用规则（UNKNOWN 守卫 → 建义务 #id） |
-| `:u [n]` | 撤销 n 步 |
-| `:auto` | 核心化简（simplify + auto 规则，cost 单调不增） |
-| `:assume <fact>` | 入账（域闸门 + 矛盾锁） |
-| `:ans <oid> <fact>` | 回答义务 → 重放受影响步骤 |
-| `:obls` / `:log` / `:ctx` | 义务 / step log / 账本 |
-| `:verify <F> <x> <f>` | 积分验证 |
-| `:solve <expr> [var]` | 方程求解 |
-| `:factor <expr>` | Zassenhaus 因式分解（走 factor_str） |
-| `:apart <num> <den>` | 部分分式 |
-| `:integrate <expr>` | 不定积分（[VERIFIED]/[UNVERIFIED]） |
-| `:mat/:mdet/:mrank/:minv/:msolve` | 线性代数 |
-| `:load` | 热重载规则库 |
+### rules/*.rules（L2 定理库）
+- `basic.rules`：pow_sum_same（其余表示归并已进构造器）。
+- `log.rules`：log_prod/log_sum（成对方向 + 域守卫）、log_pow、exp_log。
+- `trig.rules`：sin2_cos2、pyth_sin2/pyth_cos2（auto，反向换元脱根号依赖）、
+  sin_add/cos_diff/tan_def；奇偶规则由 spec 生成（origin='spec'）。
+- `hyp.rules`：cosh2_sinh2、sinh_def/cosh_def/tanh_def（expand 方向）。
+- `power.rules`：sqrt_sq（√(x²)=|x|，auto）、pow_mul/pow_add（正性守卫）。
+- `piecewise.rules`：abs_def（abs 的分段定义）。
 
 ---
 
-## 4. 跨模块调用链速查（谁消费谁）
+## 3. REPL 命令（session.py `commands()` + kernel 注册表）
 
-- 积分主链：`session.integrate` → `integrate.integrate` → `_frac/_rat_pair`(poly/ugcd) → `apart`(factor/squarefree_decomp) → `_hermitte_power`(algnum: qa_mul/qa_inv) → `_log_terms`(algnum: qa_div) → `_verify`(algnum: tr_eval/coefs/tr_power_sums) → 三角分支 `_trig_tan_half`(trig 代换) → diff.verify（外部验证）
-- 因式分解链：`factor` → `squarefree_decomp`(ugcd) → `_zassenhaus`(_choose_prime/_ddf/_cz_split/_hensel/_sym_mod 族)
-- 判定链：`Context.check_and_assume` → `domain_ok`(dom_condition/satisfiable) → `decide`(semantic → ledger(_facts_lookup/_chain_query) → derive(_RULES) → axiom(_AXIOM_CHECKS))
-- 化简链：`simplify` → per-head `register` 表 → `cost`；规则链：`RuleSet.for_term` → `apply_rule`(matches → guard eval_guard) → `instantiate`
-- 规则面：`Session.__init__`/`:load` → `loader.load_dir` → `parse_rules` → `RuleSet.add`（rules/*.rules）
+**交互/规则**：`:s [path]` 建议 · `:a <id> [path]` 应用 · `:u [n]` 撤销 ·
+`:auto` 自动重写 · `:rule/:unrule/:rules` 会话定理 · `:value` 名词→动词 ·
+`:refine` 账本化简 · `:steps/:log` 步骤 · `:hist` 历史（%N）。
+
+**假设**：`:assume <fact>` · `:declare <var> <prop>` · `:ctx` · `:obls` ·
+`:ans <oid> <fact>` · `:defs/:undef` 用户定义（`f(x):=` / `a:=`）。
+
+**转录**：`:save <path>` / `:replay <path>`（指纹校验；examples/*.pycas 为成品）。
+
+**内核**（KernelCmd 注册表，`:help` 查看全部）：
+`:verify` · `:solve` · `:solveset` · `:solveineq` · `:factor` · `:apart` ·
+`:integrate` · `:isteps` · `:dsolve` · `:limit`（±inf）· `:series` ·
+`:defint`（含 ∞ 限/分段/正向换元）· `:bsub x=h(t) <expr> <var> <lo> <hi>` ·
+`:mat/:mdet/:mrank/:minv/:msolve/:charpoly/:eigenvalues/:eigenvectors` ·
+`:together/:collect/:numerator/:denominator/:coefficient` · `:latex` · `:load`。
+
+---
+
+## 4. 跨模块调用链速查
+
+- **不定积分**：`session.integrate` → `integrate.integrate` →（anti 表 | `_try_usub`
+  递归 | `_rat_pair`(mgcd/ugcd) → apart(factor) → Hermite → `_log_terms`(algnum)
+  | `_trig_tan_half`）→ diff.verify 回验。
+- **定积分**：`:defint` → `defint_auto`（正向换元探测）→ `defint`（Piecewise 分支 /
+  ∞ 限分支 / Newton-Leibniz 主管线：`_sing_points`(dom_condition/factor/sturm) +
+  limits.limit 端点极限 + `_numeric_cross`(evalnum)）。`:bsub` → `bsub_defint`
+  （solve 主支逆 → `_auto_rewrite`(rules) → `_resolve_sqrt_trig` → defint）。
+- **ODE**：`:dsolve` → `ode.dsolve`（`_coef` 分类 → direct/separable/`_solve_linear1`
+  (integrate 积分因子)/`_solve_constcoef2`(solve 特征根)）→ `_verify_sol`（diff +
+  equivalent 三态）。
+- **判等**：`equivalent` → 指针 → simplify 归零 → trig_equivalent → decide 片段 →
+  sample_agrees(PROBABLE) → UNKNOWN。
+- **判定**：`check_and_assume` → domain_ok(dom_condition/satisfiable) →
+  decide(semantic → ledger → interval → derive → axiom)。
+- **回放**：`:replay` → `handle` 逐条（与 REPL 同路径）→ `rules_fingerprint` 校验。

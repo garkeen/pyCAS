@@ -108,11 +108,68 @@ def _k_isteps(s, rest):
     return "\n".join(format_steps(explain(t, x)))
 
 
+def _k_dsolve(s, rest):
+    """ODE 分类求解（题型命名入账，解回代微分回验）。"""
+    parts = rest.rsplit(None, 2)
+    if len(parts) < 2 or not parts[1].isidentifier():
+        return "usage: :dsolve <equation with D(y,x)> <y> [x]"
+    eq = s._parse_in(parts[0])
+    y = T.S(parts[1])
+    x = T.S(parts[2]) if len(parts) == 3 and parts[2].isidentifier() else T.S("x")
+    if isinstance(eq, T.Expr) and eq.head.name == "Eq":
+        f = T.plus(eq.args[0], T.neg(eq.args[1]))
+    else:
+        f = eq
+    from cas.ode import dsolve
+
+    r = dsolve(f, y, x)
+    if r.sol is None:
+        return f"unsupported: {r.note}"
+    s._kernel_step(f"dsolve[{r.kind}]", r.sol, before=eq)
+    if isinstance(r.sol, T.Expr) and r.sol.head.name == "Eq":
+        out = to_str(r.sol)
+    else:
+        out = f"{y.name} = {to_str(r.sol)}"
+        s._remember(r.sol)
+    tail = f" ({r.note})" if r.note else ""
+    return f"{out}   [{r.status}, kind: {r.kind}]{tail}"
+
+
 def _k_defint(s, rest):
     parts = rest.rsplit(None, 3)
     if len(parts) != 4 or not parts[1].isidentifier():
         return "usage: :defint <expr> <var> <lo> <hi>"
     return s.mdefint(parts[0], parts[1], parts[2], parts[3])
+
+
+def _k_bsub(s, rest):
+    """定积分反向换元：:bsub x=h(t) <expr> <var> <lo> <hi>（新限主支逆解）。"""
+    parts = rest.split(None, 1)
+    if len(parts) != 2 or "=" not in parts[0]:
+        return "usage: :bsub x=h(t) <expr> <var> <lo> <hi>"
+    eq = parse(parts[0])
+    if not (isinstance(eq, T.Expr) and eq.head.name == "Eq" and isinstance(eq.args[0], T.Sym)):
+        return "usage: :bsub x=h(t) <expr> <var> <lo> <hi>"
+    x = eq.args[0]
+    h = eq.args[1]
+    tvs = T.free_vars(h)
+    if len(tvs) != 1:
+        return "bsub: substitution must contain exactly one new variable"
+    tvar = sorted(tvs, key=lambda v: v.name)[0]
+    r = parts[1].rsplit(None, 3)
+    if len(r) != 4 or not r[1].isidentifier():
+        return "usage: :bsub x=h(t) <expr> <var> <lo> <hi>"
+    t = s._parse_in(r[0])
+    lo = s._parse_bound(r[2])
+    hi = s._parse_bound(r[3])
+    from cas.bsub import bsub_defint
+
+    val, status, note = bsub_defint(t, x, lo, hi, h, tvar, rules=s.rules)
+    if val is None:
+        return f"{status}: {note}"
+    s._kernel_step(f"defint[{note}]", val, before=t)
+    s._remember(val)
+    return f"{to_str(val)}   [{status}, method: {note}]"
 
 
 def _k_msolve(s, rest):
@@ -242,9 +299,11 @@ class Session:
             "apart": KernelCmd("apart <num> <den>", _k_apart),
             "integrate": KernelCmd("integrate <expr>", _k_integrate),
             "isteps": KernelCmd("isteps <expr> [var] (strategy step tree)", _k_isteps),
+            "dsolve": KernelCmd("dsolve <eq with D(y,x)> <y> [x]", _k_dsolve),
             "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
             "series": KernelCmd("series <expr> <var> <point> <order> (Taylor + O term)", _k_series),
             "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
+            "bsub": KernelCmd("backward sub: :bsub x=h(t) <expr> <var> <lo> <hi>", _k_bsub),
             "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
             "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
             "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),

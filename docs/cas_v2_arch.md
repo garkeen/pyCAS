@@ -1,94 +1,23 @@
 # pyCAS v2 架构（自主设计版·定稿）
 
-> **2026-08 地基修订**：环规范化下沉构造器（mk 即规范化，`is ZERO` 判零可靠）；
-> parser `^` 右结合；decide 新增区间传播通道（含等式代入）；ex falso 锁实际生效；
-> Neg 幽灵头清理（负号统一为 Times(-1, ·)）；规则库与文档承诺对齐。
-> **2026-08 地基补强规划**：新增 §5.2 函数内核注册表 FunctionSpec（反硬编码地基）、
-> §11 判等与化简（成熟系统做法 + equivalent 统一管线）、M2.0 地基补强里程碑；
-> 数值求值层与差分测试提升为近期必建。
-> **2026-08 M2.0 规则实处化**：FunctionSpec 落地（cas/spec.py，八函数注册；导数表/打印名/
-> 有界公理/定义域/特殊点折叠/奇偶规则全部改从注册表读取，diff._TABLE 等硬编码退役）；
-> 类型洞 `?x::pred`（num/int/rat/sym/const/expr，yacas 同款）；apply 无参全式搜索；
-> auto 重写循环写 step log（防振荡）；规则优先级 + DSL `prio N`。
-> **2026-08 M2.0 判等收口与验证层**：数值求值层 cas/evalnum.py（环层精确有理 + 超越函数
-> 走 FunctionSpec.numeric + 采样带极点保护，只产 PROBABLE 不产否证）；equivalent 统一管线
-> 接入三角层（sin²+cos²=1 符号 YES）与采样通道（T3.PROBABLE）；sympy 差分测试
-> （仅测试期预言机）；内核命令注册表 KernelCmd（消除 REPL 硬编码）。测试按模块拆分。
-> **2026-08 基础功能补全**：复数域（i 整数幂折叠、纯常数乘积自动展开、Conjugate 规范化、
-> 二次方程复根）；项层结构 API（cas/ops.py：together/cancel/collect/coefficient/numerator/denominator）；
-> 等式即规则落地（auto 消费账本等式，cost 严格下降）；Sturm 实根隔离（cas/sturm.py）+
-> 一元多项式不等式（cas/ineq.py，区间并解集）；RootOf 实根获隔离区间（algnum.real_isolation）；
-> declare/属性消费闭环（integer 区间收紧）；power.rules（sqrt(x²)=|x| auto + 带守卫幂律）。
-> 底层修复：subst 支持复合项替换；比较头参数递归规范化；义务重放改全式搜索；replay 账本清理。
-> **2026-08 结构性债务清偿**：多元 gcd（poly.mgcd，原始伪除 PRS + 递归 content）与
-> 精确除法 div_exact——多变量 together/cancel/RatFunc 约分全线打通；参数化低次求解
-> （solve 对 a·x²+b·x+c 给通用求根公式 + proviso）；显式工作栈落地（simplify/subst
-> 迭代化，recursionlimit=120 下 300 层深表达式安全）。
-> **2026-08 匹配器与展示层收官**：OneIdentity 落地（Plus/Times 模式匹配裸项，单位元
-> 入洞：?a+?b 可匹配 x，类型洞守卫生效，非洞子模式不吸收；mathics 属性同款）；
-> 显式工作栈**全额清偿**（cost/expand/to_str 亦迭代化，核心与展示路径零递归）。
-> **立场裁定**：FullSimplify 式搜索化简**现段不做**——价值前提是大定理库与调校过的
-> ComplexityFunction，现规则库规模无搜索素材；Richardson 定理保证无终止保证，
-> 只能预算硬切。重估条件：规则库百条级且 auto 的 cost 单调接受准则成为可证瓶颈。
-> **2026-08 M2 收官**：双曲函数域（Sinh/Cosh/Tanh 注册 spec 即得导数/打印名/奇偶规则/
-> 特殊点折叠/数值层，零核心改动，FunctionSpec 红利验收）+ hyp.rules（cosh²−sinh²=1、
-> 指数定义双向）；可解释步骤统一（规则步逐条推导；内核算法步只记算法名+验证态入
-> step log，单算法调用不做微观解释，verify 背书即解释；integrate 报所用方法）；
-> REPL 重设计（%N 历史复用按高优先级渲染补括号、:steps/:hist、规则应用当场给可解释反馈）。
-> **2026-08 交互层与谱理论**：用户定义落地（f(x):= 函数/a:= 变量，feed 宏展开到不动点，
-> 递归定义轮数防护；feed 裸符号求值 vs 内核参数位裸符号豁免——变量名作主语优先；
-> 保留头拒定义；:defs/:undef）；Piecewise 一等头（偶数长 (v,c) 语法，mk 剪 false 分支/
-> true 截断/全 false->Undefined，含洞保持名词；逐分支求导；piecewise(v if c) 打印）+ abs 分段定理规则；
-> Arccos 注册 + Arcsin/Arccos 定义域[-1,1]与特殊点补全（顺带修复导数根号内符号既有 bug：
-> x²−1 -> 1−x²）；谱理论（charpoly 排列定义展开——消元除法会留分母故不用 det；
-> eigenvalues 走 solve 低次/参数路径；eigenvectors = (M−vI) 零空间；:charpoly/:eigenvalues/:eigenvectors）；
-> 参数化求解平凡 proviso（数值系数 Ne）过滤。
-> **2026-08 M3 分析层落地**：cas/series.py Taylor 级数引擎（声明式系数表 + 环算术 +
-> 单项式复合；本性奇点/无理点诚实拒答；截断商阶按分子实际最高阶计）；cas/limits.py
-> 三值极限引擎（代入连续性 -> 环层消去 -> 首阶分析 -> 洛必达兑底；单侧/双侧，
-> ±∞ 返回 Infinity 项，振荡不可判返 None；log(非正)/负底分数幂域健全性检查；
-> π 类常数点走代入通道）；定积分 defint（Newton-Leibniz + dom_condition 定奇点拆分，
-> 有理根精确/无理根位置拒答 + 端点单侧极限 + 梯形法数值交叉核对，矛盾即扣留结果；
-> 反序区间自动翻转）；副产品：负判别式二次因子积分实形式（atan 取代 RootOf，
-> √D 完全平方折叠；修正 atan 系数公式 2B−A·pc）+ spec.anti 裸函数原函数表
-> （sin/cos/exp/sinh/cosh，连续原函数对定积分端点友好）+ 分数指数打印必加括号
-> （3^1/2 歧义修复）+ π 类常数底幂不乘开（_norm_times 幂合并互递归修复）。
-> **2026-08 交互可复现与换元/求逆**：转录 DSL（run() 重构为 Session.handle，REPL 与
-> 回放同路径；transcript 只录变更命令；:save/:replay 带规则指纹校验，驻留保证回放产物
-> 指针同一）；eˣsin x 展示工程（:parts 分部方案：人选 u 机器算 dv/v/du，de Bruijn 体经
-> open_bound 还原参与环运算；:solveq 对当前等式线性求解指定未知项，I = A − I -> I = A/2
-> 消循环）；spec.inv 逆函数声明 + 主支逆求解（sin/cos/tan/exp/log，特殊点折叠自动，
-> 周期族通解未建诚实标注）；定积分正向换元自动探测（defint_auto：候选子项 g 使 g' 整除
-> 被积函数 -> u=g(x)，新限 g(lo)/g(hi) 正向求值全程不求逆；负幂拍平 _flatten_inv 助消去；
-> 嵌套换元递归深度限 3；错换元由梯形法交叉核对扣留）；**e^a 规范形 = Exp(a)**（构造器
-> 折叠，e^x 与 exp(x) 指针同一；配套终止性守卫：纯常数乘开仅限含 Plus/i 的底，
-> 防 exp(1)^2 与幂合并互递归）；惰性积分绑定词大小写不敏感；_linear_split 对不含
-> 未知量的复杂常数（eˣ 类）早退作常数；_subst_defs 保指针重建（Bound 不驻留，
-> 不复用则不动点判等失效）。
-> **2026-08 第一批采购清单落地**（对照成熟 CAS 差距盘点，交互感知优先）：
-> ① :rule/:unrule/:rules 内联定理定义（maxima tellsimp 同款，origin='session'，
-> 转录收录回放重建；会话规则不计指纹否则回放被自己的新规则拒死；文件规则拒删）；
-> ② 名词/动词切换（' 前缀名词化已有；:value 全式求值 Quote/惰性 Integrate/D 名词，
-> 不可积保持名词，入账 kernel:value 步）；③ Refine 通道（cas/refine.py，decide 的
-> 第二大消费者：|x|/√(x²) 按账本符号脱壳、exp(log x) 需 x>0、log(exp x) 无条件、
-> Piecewise 分支按账本裁剪/选定；只重写 decide=YES，显式栈后序重建）；
-> ④ Protected 属性补全（_RESERVED 扩至结构头/绑定词头全覆盖；Sqrt 由 parser 直重写
-> 无此头不入清单）；⑤ LaTeX 输出（cas/latex.py 显式栈后序，分式/根式/幂/三角/
-> 积分/分段/比较/逻辑；负整数幂统一 \frac 形态）。副产品：Piecewise 单 true 分支
-> 塌缩为值本身（mk 归一，表示同一）；:value/:refine 属变更命令必入转录（回放重建前提）。
-> **2026-08 第二批采购清单落地**（M3 二期主体）：① 解集一等结构（cas/sets.py：
-> FiniteSet/Interval/Union 头 + EmptySet Special；:solveset 方程给有限集/不等式给区间并；
-> 隔离根端点诚实拒答；pprint/latex 双通道渲染）。② O 项头 + :series（series_term 产
-> 截断多项式+O 项；O 入 Protected）；±∞ 极限（x=±1/u 折叠 + log 极点通道 +
-> exp/atan 支配关系单项，Gruntz 一期）；无穷限反常积分（_defint_improper：半直线奇点 +
-> 无穷端极限判敛，双端在 0 拆分；左端反常段贡献取负——方向 bug 已修；∫1/(1+x²) 全实轴 = π）；
-> 分段积分（_defint_piecewise：条件线性根定分支点 + 中点 decide 选支 + 逐段递归）。③ 积分
-> 策略层对象化（cas/istrategy.py：IntStep 命名步树，manualintegrate 同款；不定积分自动正向
-> 换元 _try_usub：候选按项大小升序优先内层、新鲜哑元+回代往返双重验证、每候选微分回验
-> 未过继续试——伪换元 x³/(x²−1) 泄漏已堵；:isteps 命令展示步树）。④ spec anti 线性复合
-> （∫f(ax+b)=anti/a，∫e^-x/sin 2x 打通）。⑤ examples/*.pycas 验证案例三个（循环分部/
-> 定积分画廊/规则+refine+解集）+ tests/test_examples.py 回放断言（DSL 文本即推导，
-> 驻留保证回放产物指针同一）。
+> **修订史（精要）**：详细逐次日志见 git 历史（M0→M3 收尾）；此处只留影响后续开发的裁定。
+>
+> **地基期**：环规范化下沉构造器（mk 即规范化，`is ZERO` 指针判零可靠）；`^` 右结合；
+> Neg 幽灵头清理；decide 区间传播通道（含等式代入）；ex falso 锁实际生效。
+> **M2.0 反硬编码**：FunctionSpec 注册表落地（消费者全部读表，硬编码表退役，
+> 纪律：新增函数禁止在消费者模块加 if 分支）；数值求值层 + sympy 差分测试（仅测试期预言机）；
+> equivalent 统一判等管线（PROBABLE 采样不产否证）；KernelCmd 注册表消除 REPL 硬编码。
+> **债务清偿**：多元 gcd（mgcd + div_exact）；显式工作栈全额清偿（核心/展示路径零递归）；
+> OneIdentity；subst 复合项替换；义务重放全式搜索。**剩余结构债：ℚ(params) 系数域
+> 全参数化（前置 = ℚ(params) 因式分解）、RootOf 复根隔离。**
+> **立场裁定（长期有效）**：① FullSimplify 式搜索化简不做（价值前提是大定理库 +
+> 调校过的 ComplexityFunction；重估条件 = 规则库百条级且 cost 单调准则成为可证瓶颈）；
+> ② 规则库 = 定理库：表示归并进构造器、定理进规则文件、过程性算法进内核代码 + verify 背书；
+> ③ 数值采样只进验证/抽查通道（标 PROBABLE），永不进 decide 的 YES 通道；
+> ④ 算法步不做微观解释（verify 背书即解释），规则步逐条可解释。
+> **M3 分析层**：级数/极限/定积分三件套 + 正/反向换元 + 反常积分判敛 + 分段积分；
+> ODE 基础四题型；转录 DSL（:save/:replay + 规则指纹）；第一批采购（:rule/:value/:refine/
+> :latex/Protected）；第二批采购（:solveset/:series/:isteps + 自动换元）。
 
 > 定位：**交互式、通用、纯符号 CAS**。计算优先；正确性 = **永不静默错**，不是定理证明器。
 > 设计立场：**数据结构、工作流、算法全部自主设计**。参考系统（maxima / mathics-core /
@@ -289,10 +218,10 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 | 极限 | 首项分析（级数法）、**Gruntz 支配项算法**（exp-log 域完备算法，对标 sympy 701 行）、洛必达/夹逼（带条件策略） | 定积分判敛、级数收敛。✓ 已落地（M3 一期）：三值极限引擎（代入/消去/首阶分析/洛必达兜底）；Gruntz 完备化留待二期 |
 | 级数 | Taylor 展开、幂级数项头、收敛半径 | 极限工具、渐近展开。✓ 已落地（M3 一期）：Taylor 展开引擎（截断幂级数环，供极限首阶分析）；幂级数项头/收敛半径待建 |
 | Σ/Π 求和 | 线性/指标平移/裂项；**Γ/Pochhammer/阶乘算术**（Gosper 前置，对标 sympy ~1100 行）；超几何项 Gosper（对标 222 行） | 差分方程、差分验证 |
-| 常微分方程 | 一阶线性/可分离；常系数线性系统（exp(At) 特征值法）；线性递推（特征方程，见 Σ 行） | 差分验证、dsolve 终点扩展（特征值/特征向量前置已落地） |
+| 常微分方程 | 一阶线性/可分离；常系数线性系统（exp(At) 特征值法）；线性递推（特征方程，见 Σ 行） | 差分验证、dsolve 终点扩展。✓ 基础已落地（cas/ode.py）：四题型分类求解（direct/可分离/一阶线性积分因子/二阶常系数齐次特征方程，复根三角实形式）+ 解回代微分回验（VERIFIED/PROBABLE/UNVERIFIED 三态）；待建：非齐次（待定系数/常数变易）、常系数系统（exp(At)）、高阶 |
 | 差分方程/递推 | 一阶线性差分（= Gosper 核心）、常系数线性递推（特征方程） | 求和闭式、递推化简 |
 | 不定积分 | **策略层**：基本表+换元+分部+恒等式重写（可解释）；**算法层**：有理函数 Hermite+Rothstein-Trager（全算法零启发式）；Risch 子情形分期；**Risch 前置真模块：表达式↔微分域塔转换器**（塔 = 单项列上的多项式/有理函数）+ **塔上导数表**（Dt = D(inner)）--没有它 Risch 无法启动 | 终点能力 |
-| 定积分 | NL 定理（连续性条件）、分段处理、瑕积分判敛（可判定比较片段）、换元换限（单调条件）；**不承诺无初等原函数情形**（∫₀^∞ sinx/x 类需留数/参数微分，远期可选） | 终点能力。✓ 一期已落地：defint（Newton-Leibniz + 奇点拆分 + 端点极限 + 梯形法交叉核对；分段/∞ 限/判敛待二期） |
+| 定积分 | NL 定理（连续性条件）、分段处理、瑕积分判敛（可判定比较片段）、换元换限（单调条件）；**不承诺无初等原函数情形**（∫₀^∞ sinx/x 类需留数/参数微分，远期可选） | 终点能力。✓ 已落地：defint（Newton-Leibniz + 奇点拆分 + 端点极限 + 梯形法交叉核对）+ 正向换元自动探测（defint_auto，新限正向求值不求逆）+ **反向换元（cas/bsub.py：主支逆解新限 + 三角非负窗口脱根号，∫₀¹√(1−x²)=π/4）** + 无穷限反常积分判敛 + Piecewise 分段积分 |
 
 ### 横切能力（跨梯队，随用随建）
 
@@ -341,23 +270,21 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   ✓ 已落地：完整多项式算术（resultant/discriminant/Zassenhaus 因式分解/apart 部分分式）+ REPL `:factor` `:apart` +
   三角层（Chebyshev 多角度基规范形 + t=tan(x/2) 积分复用 M1）+ 双曲域（spec 注册 + hyp.rules）+
   **策略通道可解释**（integrate 报所用方法并入 step log；规则步逐条、算法步报名+验证态）+ REPL 交互层（%N 历史/:steps）。
-- **M3 定积分**：极限 + 级数 + NL + 分段 + 判敛。
-  ✓ 一期已落地：Taylor 级数引擎 + 三值极限引擎 + defint（Newton-Leibniz 主管线，
-  atan 实形式，奇点拆分，梯形法交叉核对，:limit/:defint 命令）+ **正向换元自动探测**
-  （新限正向求值不求逆，嵌套递归）；
-  ✓ 二期已落地：O 项头 + :series、±∞ 极限（log/exp/atan 支配通道，Gruntz 一期）、
-  无穷限反常积分判敛、Piecewise 分段积分、解集一等结构、积分策略步树 + 不定积分
-  自动换元、spec anti 线性复合；
-  三期待建：Gruntz 完备化、收敛判定一般化（级数判敛）、幂级数算术（O 项参与运算）。
-  交互可复现层：转录 DSL（:save/:replay）+ 分部/解方程方案命令（:parts/:solveq）
-  —— eˣsin x 类循环积分可全程人工干预、逐步入账、保存回放。
-  第一批采购清单 ✓：:rule/:unrule/:rules（会话内联定理）、:value（名词→动词）、
-  :refine（账本驱动化简）、:latex（LaTeX 输出）、Protected 内建头拒覆盖。
-  第二批采购清单 ✓：O 项头/:series/±∞ 极限/无穷限反常积分/分段积分（M3 二期）、
-  积分策略步树 :isteps + 不定积分自动换元（manualintegrate 同款）、
-  解集一等结构 :solveset（FiniteSet/Interval/Union）。
-- **M4 求和/差分**：Gosper、常系数递推。
-- **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）。
+- **M3 定积分与分析基础 ✓ 已收官**：
+  一期：Taylor 级数引擎 + 三值极限引擎 + defint（Newton-Leibniz 主管线）+ 正向换元自动探测；
+  二期：O 项头/:series、±∞ 极限（Gruntz 一期支配通道）、无穷限反常积分判敛、
+  Piecewise 分段积分、解集一等结构、积分策略步树 + 不定积分自动换元；
+  收尾：ODE 基础四题型（cas/ode.py）+ 反向换元（cas/bsub.py，三角代换通道）；
+  交互可复现层：转录 DSL（:save/:replay + 指纹）+ 方案命令（:parts/:solveq）+
+  两批采购清单（:rule/:value/:refine/:latex/:solveset/:series/:isteps）；
+  examples/*.pycas 验证案例四个（回放即重建，tests/test_examples.py 断言）。
+  M3 遗留（非阻塞）：Gruntz 完备化、级数判敛一般化、O 项参与幂级数运算。
+- **M4 求和/差分（下一站）**：Γ/Pochhammer/阶乘算术 -> Gosper 不定求和、常系数递推。
+- **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）；
+  前置真模块：表达式↔微分域塔转换器 + 塔上导数表。
+- **ODE 扩展**：非齐次（待定系数法/常数变易法）、常系数系统（exp(At)，特征值前置已就绪）、
+  Laplace 变换通道（远期）。
+- **剩余结构债**：ℚ(params) 系数域全参数化（参数积分/参数 ODE 的前置）；RootOf 复根隔离。
 
 ---
 
@@ -424,7 +351,9 @@ FunctionSpec(
   sin/cos/tan 奇偶规则由 `gen_rules` 自动生成（origin='spec'，auto 通道），trig.rules 手写版退役。
 - **纪律**：新增函数只允许写 spec 注册 + 规则文件；**禁止在任何消费者模块里为新函数加 if 分支**
   （作为代码评审验收标准）。这是"未来实现积分/微分方程不返工"的制度保证。
-- **已注册**：Sin/Cos/Tan/Exp/Log/Abs/Atan/Arcsin（arity/print_name/parity/deriv/bound/dom/special 按需）。
+- **已注册**：Sin/Cos/Tan/Atan/Arcsin/Arccos/Exp/Log/Abs/Sinh/Cosh/Tanh；
+  字段按需：arity/print_name/parity/deriv/bound/dom/special/numeric/anti（原函数表，
+  含线性复合）/inv（主支逆，反向换元与超越方程消费）。
 
 ---
 
@@ -503,27 +432,33 @@ FunctionSpec(
 
 ---
 
-## 8. 重建清单
+## 8. 模块清单（实际文件，与代码同步）
 
 | 文件 | 内容 | 层 |
 |------|------|----|
-| `cas/term.py` | 驻留 Expr / 原子 / quote / 构造即规范化 / 总序 | L0 |
-| `cas/match.py` | 洞模式匹配：结构匹配 / AC 归并+有界回溯 / 3VL 守卫 | L1 |
-| `cas/rules.py` | Rule / RuleSet / apply(rule,path) / per-head 索引 | L2 |
-| `cas/loader.py` | DSL 解析 → RuleSet，热重载 | L2 |
-| `cas/context.py` | 账本 / 回滚点栈 / ex falso 锁 / 等式即规则注册 | L4 |
-| `cas/decide.py` | 谓词族判定表 sign/ord/dom/eq + 3VL 组合 + 域公理 | L4 |
-| `cas/simplify.py` | per-head 化简 / 属性归一 / 规范形注册 / cost | L5 |
-| `cas/arith.py` `cas/poly.py` `cas/ratfunc.py` | 梯队一：精确算术 / 多项式 / 有理函数 | L3 |
-| `cas/solve.py` `cas/linalg.py` `cas/inequal.py` | 梯队二：方程求解 / 线性代数 / 不等式 | L3 |
-| `cas/power.py` `cas/exp_log.py` `cas/trig.py` `cas/piecewise.py` | 梯队三：幂根 / exp-log / 三角 / 分段 | L3 |
-| `cas/diff.py` `cas/limit.py` `cas/series.py` `cas/sum.py` `cas/recurrence.py` | 梯队四：导数 / 极限 / 级数 / 求和 / 差分递推 | L3 |
-| `cas/integrate.py` | 不定/定积分：策略通道（可解释）+ 算法通道（Hermite+RT；Risch 分期）+ verify | L3/L7 |
-| `cas/session.py` | REPL 四通道 / step log / 义务队列 / 重放 / path 导航 | L6 |
-| `cas/parser.py` `cas/pprint.py` | 解析 / 打印 | L6 |
-| `cas/errors.py` | `Undefined`/`Infinity` 原子 / 预算超限协议（不崩溃不静默） | L0 |
-| `rules/*.rules` | 领域规则库（trig/log/sum/strategy…） | L2/L3 |
-| `tests/` | 差分测试（符号 vs 数值抽查）+ 验收回归 | 全线 |
+| `cas/term.py` | 驻留 Expr / 原子 / Bound（de Bruijn）/ 构造即规范化（环层 + register_norm）/ subst / open_bound | L0 |
+| `cas/match.py` | 洞模式匹配：结构 / AC 归并+有界回溯 / 类型洞 / OneIdentity | L1 |
+| `cas/rules.py` `cas/loader.py` | Rule/RuleSet/apply_rule/Step + DSL 解析热重载 | L2 |
+| `cas/context.py` `cas/decide.py` `cas/domain.py` | 账本 + check_and_assume 闸门 / 三值 decide（区间通道+derive+公理）/ 域谓词与 dom_condition | L4 |
+| `cas/simplify.py` `cas/refine.py` | 显式栈重建化简（exp 加法定律合并）/ 账本驱动化简 | L5 |
+| `cas/poly.py` `cas/ratfunc.py` `cas/factor.py` `cas/apart.py` | 多项式（含 mgcd/div_exact）/ 有理函数 / Zassenhaus 因式分解 / 部分分式 | L3 |
+| `cas/algnum.py` `cas/sturm.py` | 代数数 ℚ(α) + RootOf + 幂和迹 / Sturm 实根隔离 | L3 |
+| `cas/solve.py` `cas/matrix.py` `cas/ineq.py` `cas/sets.py` | 方程求解（含参数低次/主支逆）/ 矩阵+谱理论 / 多项式不等式 / 解集一等结构 | L3 |
+| `cas/ops.py` | 项层结构 API：together/cancel/collect/coefficient/numerator/denominator | L3 |
+| `cas/spec.py` | FunctionSpec 注册表（导数/打印名/奇偶/特殊点/有界/定义域/anti/inv/numeric） | L3 地基 |
+| `cas/trig.py` | 三角多角度基规范形（trig_reduce/trig_equivalent） | L3 |
+| `cas/diff.py` | 微分器（读 spec.deriv）+ verify 回验 | L3 |
+| `cas/integrate.py` | 不定积分（spec anti/usub/Hermite+RT/tan 半角）+ 定积分（defint/反常/分段/正向换元） | L3/L7 |
+| `cas/istrategy.py` `cas/bsub.py` | 积分策略步树（IntStep）/ 反向换元（主支逆+符号窗口） | L7 |
+| `cas/series.py` `cas/limits.py` | Taylor 级数引擎（含 O 项）/ 三值极限（含 ±∞ 与支配通道） | L3 |
+| `cas/ode.py` | ODE 四题型分类求解 + 回验 | L3 |
+| `cas/evalnum.py` | 数值求值层（仅验证/抽查通道） | 横切 |
+| `cas/session.py` | REPL/转录 DSL/四通道/义务/KernelCmd 注册表 | L6 |
+| `cas/parser.py` `cas/pprint.py` `cas/latex.py` | 解析 / 打印 / LaTeX | L6 |
+| `cas/errors.py` | 异常协议（预算/解析/多项式，不崩溃不静默） | L0 |
+| `rules/*.rules` | 定理库：basic/log/trig/hyp/power/piecewise | L2/L3 |
+| `examples/*.pycas` | 可回放验证案例（转录 DSL 成品） | L6 |
+| `tests/` | 按模块拆分 + sympy 差分测试 + examples 回放断言 | 全线 |
 
 **建造顺序（按里程碑，对应 §4）**：
 **M0** L0 驻留项+quote -> L1 匹配器 -> L2 规则+apply+step log+预算+DSL -> 导数+verify ->

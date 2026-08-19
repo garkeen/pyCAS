@@ -48,6 +48,7 @@ def get(name):
 
 
 _HALF_PI = T.div(PI, N(2))
+_QUARTER_PI = T.div(PI, N(4))
 
 register(FunctionSpec(
     "Sin", 1, print_name="sin", parity="odd",
@@ -70,7 +71,7 @@ register(FunctionSpec(
 register(FunctionSpec(
     "Tan", 1, print_name="tan", parity="odd",
     deriv=lambda a: T.plus(ONE, T.pw(T.tan(a), N(2))),
-    special={ZERO: ZERO, PI: ZERO},
+    special={ZERO: ZERO, PI: ZERO, _QUARTER_PI: ONE, T.neg(_QUARTER_PI): MONE},
     numeric=math.tan,
     inv="Atan",
 ))
@@ -97,7 +98,7 @@ register(FunctionSpec(
 register(FunctionSpec(
     "Atan", 1, print_name="atan",
     deriv=lambda a: T.div(ONE, T.plus(ONE, T.pw(a, N(2)))),
-    special={ZERO: ZERO},
+    special={ZERO: ZERO, ONE: _QUARTER_PI, MONE: T.neg(_QUARTER_PI)},
     numeric=math.atan,
 ))
 register(FunctionSpec(

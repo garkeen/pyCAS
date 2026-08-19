@@ -104,7 +104,24 @@ def simplify(t, budget=100000):
             if u in val:
                 continue
             if isinstance(u, Expr):
-                val[u] = T.mk(u.head, tuple(val[a] for a in u.args))
+                args = tuple(val[a] for a in u.args)
+                # exp 加法定律：exp(a)*exp(b) -> exp(a+b)（无条件恒等，化简层语义；
+                # 合并后 Exp 因子变少，选重建循环必终止）
+                if u.head.name == "Times":
+                    exps = [a for a in args if isinstance(a, Expr) and a.head.name == "Exp"]
+                    if len(exps) >= 2:
+                        rest = [a for a in args if a not in exps]
+                        merged = T.mk(T.S("Exp"), (T.plus(*[e.args[0] for e in exps]),))
+                        args = tuple(rest) + (merged,)
+                # Exp(a)^n -> Exp(n*a)：mk 幂合并会把 e^x*e^x 收为 Exp^2 形态，
+                # 此处展开回单项指数，使加法定律与判零链完整（整数指数无条件）
+                if (u.head.name == "Power" and len(args) == 2
+                        and isinstance(args[0], Expr) and args[0].head.name == "Exp"
+                        and isinstance(args[1], T.Int)):
+                    args = (T.mk(T.S("Exp"), (T.times(args[1], args[0].args[0]),)),)
+                    val[u] = args[0]
+                    continue
+                val[u] = T.mk(u.head, args)
             elif isinstance(u, T.Bound):
                 val[u] = T.mk_bound(u.hint, val[u.body])
             else:

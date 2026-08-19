@@ -61,5 +61,17 @@ class TestRulesRefineSetsExample(unittest.TestCase):
         self.assertEqual(s.rules.rules["cube_sum"].origin, "session")
 
 
+class TestOdeBsubExample(unittest.TestCase):
+    def test_ode_and_backward_substitution(self):
+        _s, outs = replay_lines("04_ode_bsub.pycas")
+        self.assertIn("[VERIFIED, kind: linear1]", outs[0])
+        self.assertIn("C1*cos(x) + C2*sin(x)", outs[1])
+        self.assertIn("kind: separable", outs[2])
+        self.assertIn("1/4*π", outs[3])                          # 四分之一圆面积
+        self.assertIn("1/4*π", outs[4])                          # atan 换元
+        for o in outs[3:]:
+            self.assertIn("backward substitution", o)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
