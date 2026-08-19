@@ -18,6 +18,8 @@ def _atom_str(a):
     if isinstance(a, Rat):
         return f"{a.f.numerator}/{a.f.denominator}"
     if isinstance(a, Special):
+        if a is T.EMPTY_SET:
+            return "{}"
         return a.name
     if isinstance(a, (PatVar, PatSeq)):
         return repr(a)
@@ -88,6 +90,21 @@ def to_str(t, prec=0, hint=None):
                 for i in range(0, len(u.args), 2)
             ]
             val[u] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
+            continue
+        if name == "FiniteSet":
+            val[u] = ("{" + ", ".join(_wrap(val[a], 0) for a in u.args) + "}", _ATOM_P)
+            continue
+        if name == "Interval" and len(u.args) == 4:
+            lo, hi, lo_o, hi_o = u.args
+            lb = "(" if (isinstance(lo_o, BVal) and lo_o.val) else "["
+            rb = ")" if (isinstance(hi_o, BVal) and hi_o.val) else "]"
+            val[u] = (f"{lb}{_wrap(val[lo], 0)}, {_wrap(val[hi], 0)}{rb}", _ATOM_P)
+            continue
+        if name == "Union":
+            val[u] = (" U ".join(_wrap(val[a], 0) for a in u.args), _ATOM_P)
+            continue
+        if name == "O" and len(u.args) == 1:
+            val[u] = ("O(" + _wrap(val[u.args[0]], 0) + ")", _ATOM_P)
             continue
         if name in _PREC:
             p = _PREC[name]

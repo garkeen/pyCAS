@@ -226,10 +226,78 @@ def integrate_rational(P, Q, x):
     return term, verified
 
 
+_USUB_DEPTH = [0]   # 换元递归深度守卫（模块级，integrate 链共享）
+
+
+def _term_size(t):
+    """节点数（换元候选排序用；显式栈不递归）。"""
+    n = 0
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        n += 1
+        if isinstance(u, T.Expr):
+            stack.extend(u.args)
+        elif isinstance(u, T.Bound):
+            stack.append(u.body)
+    return n
+
+
+def _try_usub(t, x):
+    """自动正向换元：t = h(g(x))·g'(x) -> ∫h(u)du 代回 u=g(x)。
+
+    代回用 g 本身，不需逆函数（与定积分正向换元同源）。探测与 defint_auto 同款：
+    g' 整除 t（负幂拍平助消去）且商仅为 g 的函数。返回
+    (F, ok, g, h, H)；无可行候选返 None。裸符号候选殿后（平凡换元）。
+    """
+    from cas.diff import d
+    from cas.simplify import expand
+
+    cands = []
+    fallback = []
+    for p in T.all_paths(t):
+        try:
+            g = T.term_at(t, p)
+        except IndexError:
+            continue
+        if not isinstance(g, T.Expr) or g is t or g is x or x not in T.free_vars(g):
+            continue
+        (fallback if isinstance(g, Sym) else cands).append(g)
+    # 候选按项大小升序：优先内层自然换元（u=x² 优于 u=eˣ²），全候选仍会试遍
+    cands.sort(key=_term_size)
+    for idx, g in enumerate((cands + fallback)[:24]):
+        gp = d(g, x)
+        # 商先拍平负幂复合底（mk 不对复合底做 t·t⁻¹ 消去），否则整除验证失效
+        q = simplify(_flatten_inv(simplify(T.div(t, gp))))
+        if simplify(expand(T.plus(T.times(gp, q), T.neg(t)))) is not T.ZERO:
+            continue
+        # 每候选新鲜哑元：free_vars 检查与回代往返双重验证“商仅为 g 的函数”
+        # （复用固定哑元会被 g 自身含该符号绕过，产出错误原函数）
+        z = T.S(f"_usub_z{idx}")
+        h = T.subst(q, {g: z})
+        if x in T.free_vars(h):
+            continue
+        if simplify(T.subst(h, {z: g})) is not q:
+            continue
+        try:
+            H, _ok_inner, _m = integrate(h, z)
+        except PolyError:
+            continue
+        F = T.subst(H, {z: g})
+        # 换元是启发式探测：每候选微分回验，未验证继续试下一候选（永不静默错）
+        from cas.diff import verify as _verify
+
+        if _verify(F, x, t) != "VERIFIED":
+            continue
+        return F, True, g, h, H
+    return None
+
+
 def integrate(t, x):
     """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method)。
 
     裸 spec 函数走 anti 表（连续原函数，定积分友好）；
+    正向复合 t = h(g(x))·g'(x) 走自动换元（代回不需逆函数）；
     有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。
     method 供策略通道可解释输出（REPL/step log）。
     """
@@ -239,6 +307,15 @@ def integrate(t, x):
 
         ok = _verify(F0, x, t) == "VERIFIED"
         return F0, ok, "spec antiderivative table"
+    if _USUB_DEPTH[0] < 3:
+        _USUB_DEPTH[0] += 1
+        try:
+            us = _try_usub(t, x)
+        finally:
+            _USUB_DEPTH[0] -= 1
+        if us is not None:
+            F, ok, g, _h, _H = us
+            return F, ok, f"u-substitution u={to_str(g)}"
     try:
         P, Q = _rat_pair(t, x)
         term, ok = integrate_rational(P, Q, x)
@@ -251,15 +328,27 @@ def integrate(t, x):
 
 
 def _spec_antideriv(t, x):
-    """裸 spec 函数（参数恰为 x）-> 简单原函数（声明式 anti 表）。"""
-    from cas import spec as _spec
+    """裸 spec 函数（参数恰为 x）或其线性复合 f(a·x+b) -> 简单原函数。
 
-    if not isinstance(t, T.Expr) or len(t.args) != 1 or t.args[0] is not x:
+    线性复合：d/dx anti(a x+b) = f(a x+b)·a，故 ∫f(a x+b) = anti(a x+b)/a。
+    """
+    from cas import spec as _spec
+    from cas.solve import _linear_split
+
+    if not isinstance(t, T.Expr) or len(t.args) != 1:
         return None
     sp = _spec.get(t.head.name)
     if sp is None or sp.anti is None:
         return None
-    return sp.anti(x)
+    arg = t.args[0]
+    if arg is x:
+        return sp.anti(x)
+    a_, b_ = _linear_split(arg, x)
+    if not T.is_num(a_) or T.num_val(a_) == 0 or not T.is_num(b_):
+        return None
+    if x not in T.free_vars(arg):
+        return None
+    return T.div(sp.anti(arg), T.N(T.num_val(a_)))
 
 
 def _trig_check(t, x):
@@ -319,11 +408,19 @@ def defint(t, x, lo, hi):
     状态：VERIFIED / UNVERIFIED（原函数验证态区分）/ DIVERGES / UNKNOWN / unsupported。
     管线：不定积分 -> dom_condition 定奇点（有理根精确；无理根位置不可判则拒答）
     -> 拆区间 -> 单侧极限求值（发散即 DIVERGES）-> 数值采样交叉核对（永不静默错）。
+    支持：Piecewise 被积函数（分支点拆分 + 中点选支）；±∞ 限反常积分（判敛）。
     """
     from cas.limits import limit as _limit
     from cas.evalnum import eval_approx, EvalNumError
     from cas.simplify import simplify
 
+    if isinstance(t, T.Expr) and t.head.name == "Piecewise" and len(t.args) % 2 == 0:
+        return _defint_piecewise(t, x, lo, hi)
+    if _is_inf(lo) or _is_inf(hi):
+        # 方向健全性：lo 只可 -∞，hi 只可 +∞（反序翻转留给有限限路径）
+        if (_is_inf(lo) and not _is_neg_inf(lo)) or (_is_inf(hi) and not _is_pos_inf(hi)):
+            return None, "unsupported", "invalid infinite bound orientation"
+        return _defint_improper(t, x, lo, hi)
     try:
         lo_f = eval_approx(lo, {})
         hi_f = eval_approx(hi, {})
@@ -394,6 +491,8 @@ def defint_auto(t, x, lo, hi, _depth=0):
 
     if _depth >= 3:
         return defint(t, x, lo, hi)
+    if _is_inf(lo) or _is_inf(hi):
+        return defint(t, x, lo, hi)   # 无穷限直走反常积分管线（新限正向求值不适用）
 
     cands = []
     fallback = []
@@ -405,6 +504,7 @@ def defint_auto(t, x, lo, hi, _depth=0):
         if not isinstance(g, T.Expr) or g is t or g is x or x not in T.free_vars(g):
             continue
         (fallback if isinstance(g, Sym) else cands).append(g)
+    cands.sort(key=_term_size)   # 优先内层自然换元（与 _try_usub 同款序）
     for g in (cands + fallback)[:24]:
         gp = d(g, x)
         # 商：负幂拍平后 mk 同底幂合并完成消去；整除与否由后续“h 不含 x”+
@@ -428,6 +528,182 @@ def _is_inf(v):
     if v is T.INFINITY:
         return True
     return isinstance(v, T.Expr) and T.INFINITY in v.args
+
+
+def _is_pos_inf(v):
+    return v is T.INFINITY
+
+
+def _is_neg_inf(v):
+    # Times 规范序下 Special 排前（Infinity * -1），判定与顺序无关
+    return (isinstance(v, T.Expr) and v.head.name == "Times" and len(v.args) == 2
+            and T.INFINITY in v.args and T.MONE in v.args)
+
+
+def _sing_points_half(t, x, a_f, right):
+    """半直线 (a, +∞)（right=True）或 (-∞, a) 上的奇点（精确有理根）；
+    无理根位置不可判 -> None（诚实拒答）。"""
+    from cas.domain import dom_condition
+    from cas.simplify import expand
+    from cas.factor import factor
+    from cas.sturm import isolate_real_roots
+
+    pts = set()
+    for c in dom_condition(t):
+        if not (isinstance(c, T.Expr) and c.head.name in ("Ne", "Gt", "Ge")):
+            continue
+        b = c.args[0]
+        if x not in T.free_vars(b):
+            continue
+        try:
+            p = Poly.from_term(expand(b), (x,))
+        except PolyError:
+            return None
+        if p.degree(x) <= 0:
+            continue
+        _cst, facs = factor(p)
+        for g, _mult in facs:
+            if g.degree(x) == 1:
+                r = -g.const_val() / g.lc(x)
+                if (right and float(r) > a_f) or ((not right) and float(r) < a_f):
+                    pts.add(r)
+            else:
+                for a_, b_ in isolate_real_roots(g):
+                    if (right and float(b_) > a_f) or ((not right) and float(a_) < a_f):
+                        return None
+    return sorted(pts)
+
+
+def _defint_improper(t, x, lo, hi):
+    """±∞ 限反常积分：原函数 + 无穷端极限（有限即收敛，判敛由此而来）。
+
+    双端无穷在 0 处拆为两个单端反常积分。无穷区间不做梯形法核对
+    （有限截断无普遍意义），状态依原函数验证态，note 明言。
+    """
+    from cas.limits import limit as _limit
+    from cas.evalnum import eval_approx, EvalNumError
+
+    if _is_inf(lo) and _is_inf(hi):
+        v1, s1, n1 = _defint_improper(t, x, lo, N(0))
+        v2, s2, n2 = _defint_improper(t, x, N(0), hi)
+        if v1 is None:
+            return None, s1, "split at 0: " + n1
+        if v2 is None:
+            return None, s2, "split at 0: " + n2
+        st = s1 if s1 == s2 else "UNVERIFIED"
+        return T.plus(v1, v2), st, "improper both ends, split at 0"
+    try:
+        F, ok, _method = integrate(t, x)
+    except PolyError:
+        return None, "unsupported", "no antiderivative method"
+    right = _is_pos_inf(hi)
+    fin = lo if right else hi
+    try:
+        fin_f = eval_approx(fin, {})
+    except EvalNumError:
+        return None, "unsupported", "finite bound not numerically evaluable"
+    splits = _sing_points_half(t, x, fin_f, right)
+    if splits is None:
+        return None, "UNKNOWN", "singularity locations undecidable on half-line"
+    # 段链：finite -> s1 -> ... -> sk -> ∞（方向由 right 决定；左端反常段贡献取负）
+    chain = [fin] + [N(Fr(s)) for s in (splits if right else list(reversed(splits)))]
+    acc = T.ZERO
+    for i in range(len(chain) - 1):
+        a_, b_ = chain[i], chain[i + 1]
+        ll = _limit(F, x, a_, "+" if right else "-")
+        lr = _limit(F, x, b_, "-" if right else "+")
+        if ll is None or lr is None:
+            return None, "UNKNOWN", "endpoint limit undecidable"
+        if _is_inf(ll) or _is_inf(lr):
+            return None, "DIVERGES", f"improper integral diverges at segment {i}"
+        if right:
+            acc = T.plus(acc, lr, T.neg(ll))
+        else:
+            acc = T.plus(acc, ll, T.neg(lr))
+    # 末段：有限端 -> ±∞（右：F(∞)−F(端)；左：F(端)−F(−∞)）
+    last = chain[-1]
+    l0 = _limit(F, x, last, "+" if right else "-")
+    linf = _limit(F, x, T.INFINITY if right else T.neg(T.INFINITY))
+    if l0 is None or linf is None:
+        return None, "UNKNOWN", "limit at infinity undecidable"
+    if _is_inf(l0) or _is_inf(linf):
+        return None, "DIVERGES", "improper integral diverges at infinity"
+    if right:
+        acc = T.plus(acc, linf, T.neg(l0))
+    else:
+        acc = T.plus(acc, l0, T.neg(linf))
+    status = "VERIFIED" if ok else "UNVERIFIED"
+    return simplify(acc), status, "improper integral: antiderivative + limit at infinity"
+
+
+def _defint_piecewise(t, x, lo, hi):
+    """Piecewise 被积函数：条件线性根定分支点，段内中点代入 decide 选支，
+    逐段递归 defint（分支选择只是结构判定，结果仍走符号验证/交叉核对）。"""
+    from cas.context import Context
+    from cas.decide import decide, T3
+    from cas.evalnum import eval_approx, EvalNumError
+    from cas.solve import _linear_split
+
+    try:
+        lo_f = eval_approx(lo, {})
+        hi_f = eval_approx(hi, {})
+    except EvalNumError:
+        return None, "unsupported", "bounds not numerically comparable"
+    if lo_f > hi_f:
+        lo, hi, lo_f, hi_f = hi, lo, hi_f, lo_f
+        flip = True
+    else:
+        flip = False
+    if abs(hi_f - lo_f) < 1e-12:
+        return T.ZERO, "VERIFIED", "empty interval"
+    branches = [(t.args[i], t.args[i + 1]) for i in range(0, len(t.args), 2)]
+    # 分支点：条件化 cmp(expr, 0) 后取 expr 关于 x 的线性根
+    splits = set()
+    for _v, c in branches:
+        if isinstance(c, T.BVal):
+            continue
+        if not (isinstance(c, T.Expr) and c.head.name in ("Lt", "Le", "Gt", "Ge")):
+            return None, "UNKNOWN", "non-comparison condition undecidable"
+        expr = T.plus(c.args[0], T.neg(c.args[1]))
+        expr = simplify(expr)
+        a_, b_ = _linear_split(expr, x)
+        if not T.is_num(a_) or T.num_val(a_) == 0:
+            return None, "UNKNOWN", "nonlinear branch condition undecidable"
+        r = -T.num_val(b_) / T.num_val(a_)
+        if lo_f < float(r) < hi_f:
+            splits.add(r)
+    pts = [lo] + [N(Fr(s)) for s in sorted(splits)] + [hi]
+    pts_f = [lo_f] + [float(s) for s in sorted(splits)] + [hi_f]
+
+    def pick(m):
+        mv = T.N(Fr(m).limit_denominator(10 ** 9))
+        for v, c in branches:
+            if c is T.TRUE or (isinstance(c, T.BVal) and c.val):
+                return v
+            r = decide(T.subst(c, {x: mv}), Context())
+            if r is T3.YES:
+                return v
+            if r is not T3.NO:
+                return None
+        return None
+
+    acc = T.ZERO
+    worst = "VERIFIED"
+    for i in range(len(pts) - 1):
+        mid = (pts_f[i] + pts_f[i + 1]) / 2
+        branch = pick(mid)
+        if branch is None:
+            return None, "UNKNOWN", f"branch undecidable on segment {i}"
+        v, st, _n = defint(branch, x, pts[i], pts[i + 1])
+        if v is None:
+            return None, st, f"segment {i}: " + _n
+        acc = T.plus(acc, v)
+        if st != "VERIFIED":
+            worst = st
+    val = simplify(acc)
+    if flip:
+        val = T.neg(val)
+    return val, worst, "piecewise: branch split + midpoint selection"
 
 
 def _sing_points(t, x, lo_f, hi_f):

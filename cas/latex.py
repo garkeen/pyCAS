@@ -21,6 +21,8 @@ def _atom(u):
     if isinstance(u, Const):
         return {"pi": "\\pi", "e": "e", "i": "i", "gamma": "\\gamma"}.get(u.name, u.name)
     if isinstance(u, Special):
+        if u is T.EMPTY_SET:
+            return "\\varnothing"
         return {"Infinity": "\\infty", "Undefined": "\\text{undefined}"}.get(u.name, u.name)
     if isinstance(u, Sym):
         return u.name.replace("_", "\\_")
@@ -155,6 +157,21 @@ def to_latex(t):
                 for i in range(0, len(u.args), 2)
             )
             val[u] = "\\begin{cases} " + rows + " \\end{cases}"
+            continue
+        if name == "FiniteSet":
+            val[u] = "\\left\\{" + ", ".join(val[a] for a in u.args) + "\\right\\}"
+            continue
+        if name == "Interval" and len(u.args) == 4:
+            lo, hi, lo_o, hi_o = u.args
+            lb = "(" if (isinstance(lo_o, T.BVal) and lo_o.val) else "["
+            rb = ")" if (isinstance(hi_o, T.BVal) and hi_o.val) else "]"
+            val[u] = f"{lb}{val[lo]}, {val[hi]}{rb}"
+            continue
+        if name == "Union":
+            val[u] = " \\cup ".join(val[a] for a in u.args)
+            continue
+        if name == "O" and len(u.args) == 1:
+            val[u] = "O(" + val[u.args[0]] + ")"
             continue
         if name in ("Integrate", "Sum", "Product", "Limit") \
                 and len(u.args) == 1 and isinstance(u.args[0], Bound):

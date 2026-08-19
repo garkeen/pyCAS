@@ -1,0 +1,9 @@
+# pyCAS transcript: 会话定理 + 账本驱动化简 + LaTeX 输出
+:rule cube_sum = ?x^3 + ?y^3 -> (?x+?y)*(?x^2-?x*?y+?y^2)
+a^3 + b^3
+:a cube_sum
+:assume a > 0
+abs(a) + sqrt(a^2) + exp(log(a))
+:refine
+:solveset x^2 = 4 x
+:latex

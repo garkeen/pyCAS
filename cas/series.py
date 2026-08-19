@@ -30,6 +30,32 @@ def series(t, x, a, n=8):
     return _series0(sh, u, n)
 
 
+def series_term(t, x, a, n=8):
+    """Taylor 展开的项形态：截断多项式 + O((x-a)^m)（O 为一等项头，可展示/回放）。
+
+    负阶（极点）展开产出负幂项（Laurent）；O 项阶 = 截断后下一阶。
+    """
+    if T.is_num(a):
+        a = T.num_val(a)
+    if not isinstance(a, Fr):
+        raise SeriesError("expansion point must be numeric")
+    k0, cs = series(t, x, T.N(a), n)
+    h = x if a == 0 else T.plus(x, T.neg(T.N(a)))
+    terms = []
+    for i, c in enumerate(cs):
+        k = k0 + i
+        if c == 0:
+            continue
+        if k == 0:
+            terms.append(T.N(c))
+        elif k == 1:
+            terms.append(T.times(T.N(c), h))
+        else:
+            terms.append(T.times(T.N(c), T.pw(h, T.N(k))))
+    terms.append(T.mk(T.S("O"), (T.pw(h, T.N(k0 + len(cs))),)))
+    return T.plus(*terms)
+
+
 def _series0(t, u, n):
     """在 u=0 展开（内部核心，t 已平移）。"""
     if T.is_num(t):

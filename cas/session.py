@@ -83,6 +83,31 @@ def _k_limit(s, rest):
     return s.mlimit(parts[0], parts[1], parts[2])
 
 
+def _k_series(s, rest):
+    parts = rest.rsplit(None, 3)
+    if len(parts) != 4 or not parts[1].isidentifier():
+        return "usage: :series <expr> <var> <point> <order>"
+    return s.mseries(parts[0], parts[1], parts[2], parts[3])
+
+
+def _k_isteps(s, rest):
+    """积分策略步树（manualintegrate 同款）：推导即数据，不执行计算。"""
+    from cas.istrategy import explain, format_steps
+
+    parts = rest.rsplit(None, 1)
+    if not parts:
+        return "usage: :isteps <expr> [var]"
+    t = s._parse_in(parts[0])
+    if len(parts) == 2 and parts[1].isidentifier():
+        x = T.S(parts[1])
+    else:
+        vs = sorted(T.free_vars(t), key=lambda v: v.name)
+        if len(vs) != 1:
+            return "usage: :isteps <expr> <var> (expr has multiple variables)"
+        x = vs[0]
+    return "\n".join(format_steps(explain(t, x)))
+
+
 def _k_defint(s, rest):
     parts = rest.rsplit(None, 3)
     if len(parts) != 4 or not parts[1].isidentifier():
@@ -159,6 +184,32 @@ def _k_solveineq(s, rest):
     return f"{parts[1]} in {out}"
 
 
+def _k_solveset(s, rest):
+    """解集一等结构：方程 -> FiniteSet，不等式 -> 区间并（solveset 形态）。"""
+    from cas import sets as _sets
+
+    parts = rest.rsplit(None, 1)
+    if len(parts) != 2 or not parts[1].isidentifier():
+        return "usage: :solveset <expr> <var>   (e.g. :solveset x^2 = 1 x / :solveset x^2-1 > 0 x)"
+    f = s._parse_in(parts[0])
+    var = T.S(parts[1])
+    if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge"):
+        if f.args[1] is not T.ZERO:
+            f = T.mk(T.S(f.head.name), (T.plus(f.args[0], T.neg(f.args[1])), T.ZERO))
+        st, note = _sets.ineq_set(f.args[0], f.head.name, var)
+        if st is None:
+            return f"honest refusal: {note}"
+        return f"{parts[1]} in {to_str(st)}"
+    try:
+        st, provisos = _sets.solve_set(f, var)
+    except ValueError as e:
+        return f"unsupported: {e}"
+    out = f"{parts[1]} in {to_str(st)}"
+    if provisos:
+        out += "   [provisos: " + ", ".join(to_str(p) for p in provisos) + "]"
+    return out
+
+
 class Session:
     def __init__(self, budget=100000):
         self.current = None
@@ -190,7 +241,9 @@ class Session:
             "factor": KernelCmd("factor <expr>", _k_factor),
             "apart": KernelCmd("apart <num> <den>", _k_apart),
             "integrate": KernelCmd("integrate <expr>", _k_integrate),
-            "limit": KernelCmd("limit <expr> <var> <point>", _k_limit),
+            "isteps": KernelCmd("isteps <expr> [var] (strategy step tree)", _k_isteps),
+            "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
+            "series": KernelCmd("series <expr> <var> <point> <order> (Taylor + O term)", _k_series),
             "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
             "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
             "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
@@ -206,6 +259,7 @@ class Session:
             "denominator": KernelCmd("denominator <expr>", _k_num_den("denominator")),
             "coefficient": KernelCmd("coefficient <expr> <var> [k]", _k_coefficient),
             "solveineq": KernelCmd("solveineq <expr> <op> 0 <var>", _k_solveineq),
+            "solveset": KernelCmd("solveset <expr> <var> (set-valued solutions)", _k_solveset),
         }
 
     def _check_locked(self):
@@ -225,7 +279,8 @@ class Session:
     _RESERVED = {"Plus", "Times", "Power", "Eq", "Ne", "Lt", "Le", "Gt", "Ge",
                  "And", "Or", "Not", "Bound", "Quote", "D", "Attr", "Piecewise",
                  "Integrate", "Sum", "Product", "Limit", "Conjugate", "RootOf",
-                 "Infinity", "Undefined"}   # Sqrt 由 parser 直重写为 Power，无此头
+                 "Infinity", "Undefined", "FiniteSet", "Interval", "Union", "O"}
+    # Sqrt 由 parser 直重写为 Power，无此头
 
     def _check_def_name(self, name):
         from cas.spec import SPECS
@@ -768,22 +823,50 @@ class Session:
         return f"{out}   [{tag}, method: {method}]"
 
     def mlimit(self, expr_s, var_s, point_s):
-        """:limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）。"""
+        """:limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）；point 可为 ±inf。"""
         from cas.limits import limit
 
         t = self._parse_in(expr_s)
-        r = limit(t, T.S(var_s), parse(point_s))
+        ps = point_s.strip().lower()
+        if ps in ("inf", "+inf", "infinity", "+infinity"):
+            pt = T.INFINITY
+        elif ps in ("-inf", "-infinity"):
+            pt = T.neg(T.INFINITY)
+        else:
+            pt = parse(point_s)
+        r = limit(t, T.S(var_s), pt)
         if r is None:
             return "UNKNOWN"
         self._remember(r)
         return to_str(r)
+
+    def mseries(self, expr_s, var_s, point_s, order_s):
+        """:series 入口：Taylor 展开为截断多项式 + O 项（O 为一等项头）。"""
+        from cas.series import series_term, SeriesError
+
+        t = self._parse_in(expr_s)
+        try:
+            r = series_term(t, T.S(var_s), parse(point_s), int(order_s))
+        except SeriesError as e:
+            return f"honest refusal: {e}"
+        self._remember(r)
+        return to_str(r)
+
+    def _parse_bound(self, s):
+        """限字面量：inf/-inf -> ±Infinity 项，其余按表达式解析。"""
+        ps = s.strip().lower()
+        if ps in ("inf", "+inf", "infinity", "+infinity"):
+            return T.INFINITY
+        if ps in ("-inf", "-infinity"):
+            return T.neg(T.INFINITY)
+        return parse(s)
 
     def mdefint(self, expr_s, var_s, lo_s, hi_s):
         """:defint 入口：自动正向换元探测 + Newton-Leibniz + 奇点拆分 + 数值交叉核对。"""
         from cas.integrate import defint_auto
 
         t = self._parse_in(expr_s)
-        val, status, note = defint_auto(t, T.S(var_s), parse(lo_s), parse(hi_s))
+        val, status, note = defint_auto(t, T.S(var_s), self._parse_bound(lo_s), self._parse_bound(hi_s))
         if val is not None:
             self._kernel_step(f"defint[{note}]", val, before=t)
             return f"{to_str(val)}   [{status}, method: {note}]"

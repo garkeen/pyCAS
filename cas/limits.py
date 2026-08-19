@@ -22,7 +22,14 @@ def limit(t, x, a, side=None):
     返回：数值项 / T.INFINITY（±∞，符号含在 Times(-1, ...) 里）/ None（未知）。
     side: '+' 右极限，'-' 左极限，None 双侧。
     非 Fr 点（如 π、π/2）只走代入通道（连续点判定），不可判则 None。
+    a 可为 ±Infinity：x = ±1/u 折叠为 u->0+（exp(x) 类本性奇点诚实 UNKNOWN）。
     """
+    if a is T.INFINITY or (isinstance(a, Expr) and a.head.name == "Times"
+                           and len(a.args) == 2 and T.INFINITY in a.args
+                           and T.MONE in a.args):
+        u = Sym("_limit_inf_u")
+        rep = T.div(T.MONE, u) if a is not T.INFINITY else T.div(T.ONE, u)
+        return _limit_at_0(T.subst(t, {x: rep}), u)
     if T.is_num(a):
         a = T.num_val(a)
     if not isinstance(a, Fr):
@@ -72,6 +79,14 @@ def _limit_at_0(t, u, depth=0):
             return T.ZERO
         # 极点：u -> 0+ 时 u^k > 0，符号由首系数决定
         return T.INFINITY if ccoef > 0 else T.neg(T.INFINITY)
+    # 通道 3.5：log 极点（log u -> -∞，级数通道不可表示；系数符号定方向）
+    lg = _log_at_0(t, u)
+    if lg is not None:
+        return lg
+    # 通道 3.6：exp/atan 支配关系（Gruntz 一期单项形态）
+    ex = _exp_atan_at_0(t, u)
+    if ex is not None:
+        return ex
     # 通道 4：洛必达兑底（仅 0/0 商形态，预算限次）
     lh = _lhopital(t, u, depth)
     if lh is not None:
@@ -105,6 +120,80 @@ def _is_real_value(v):
         if _spec.get(n) is not None:
             return all(_is_real_value(a) for a in v.args)
     return False
+
+
+def _log_at_0(t, u):
+    """c·Log(u^k) 形态的 log 极点：u->0+ 时 log u -> -∞，方向由 c·k 符号定。
+
+    x->∞ 折叠后 log(x) = log(1/u) = Log(u^-1) 命中此通道（∫1/x 判敛依赖）。
+    仅识别纯 log 项；加和/复合形态诚实返回 None。
+    """
+    from fractions import Fraction as Fr
+
+    coef = Fr(1)
+    core = t
+    if isinstance(core, Expr) and core.head.name == "Times":
+        nums = [a for a in core.args if T.is_num(a)]
+        rest = [a for a in core.args if not T.is_num(a)]
+        if len(rest) != 1:
+            return None
+        for nm in nums:
+            coef *= T.num_val(nm)
+        core = rest[0]
+    if not (isinstance(core, Expr) and core.head.name == "Log"):
+        return None
+    arg = core.args[0]
+    if arg is u:
+        k = 1
+    elif (isinstance(arg, Expr) and arg.head.name == "Power"
+          and arg.args[0] is u and isinstance(arg.args[1], Int)):
+        k = arg.args[1].v
+    else:
+        return None
+    c = coef * k
+    if c == 0:
+        return None
+    # log u -> -∞：c>0 时整体 -∞，c<0 时 +∞
+    return T.neg(T.INFINITY) if c > 0 else T.INFINITY
+
+
+def _exp_atan_at_0(t, u):
+    """exp/atan 支配关系单项：参数趋向 ±∞ 时的已知极限（Gruntz 一期）。
+
+    exp(arg)：arg -> -∞ -> 0；arg -> +∞ -> +∞（∫e^-x 判敛依赖）。
+    atan(arg)：arg -> ±∞ -> ±π/2（∫1/(1+x²) 全实轴依赖）。
+    仅识别 c·f(arg) 单项；arg 的无穷趋向由首阶分析（k<0）判定。
+    """
+    from fractions import Fraction as Fr
+
+    coef = Fr(1)
+    core = t
+    if isinstance(core, Expr) and core.head.name == "Times":
+        nums = [a for a in core.args if T.is_num(a)]
+        rest = [a for a in core.args if not T.is_num(a)]
+        if len(rest) != 1:
+            return None
+        for nm in nums:
+            coef *= T.num_val(nm)
+        core = rest[0]
+    if coef == 0:
+        return None
+    if not (isinstance(core, Expr) and core.head.name in ("Exp", "Atan")):
+        return None
+    try:
+        k, c, _tail = leading_term(core.args[0], u, Fr(0), 6)
+    except Exception:
+        return None
+    if k >= 0:
+        return None
+    if core.head.name == "Exp":
+        if c < 0:
+            return T.ZERO
+        return T.INFINITY if coef > 0 else T.neg(T.INFINITY)
+    # Atan：arg -> +∞ -> π/2；arg -> -∞ -> -π/2
+    half_pi = T.div(T.PI, T.TWO)
+    v = half_pi if c > 0 else T.neg(half_pi)
+    return v if coef > 0 else T.neg(v)
 
 
 def _leading(t, u):

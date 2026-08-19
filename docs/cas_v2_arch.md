@@ -76,6 +76,19 @@
 > 无此头不入清单）；⑤ LaTeX 输出（cas/latex.py 显式栈后序，分式/根式/幂/三角/
 > 积分/分段/比较/逻辑；负整数幂统一 \frac 形态）。副产品：Piecewise 单 true 分支
 > 塌缩为值本身（mk 归一，表示同一）；:value/:refine 属变更命令必入转录（回放重建前提）。
+> **2026-08 第二批采购清单落地**（M3 二期主体）：① 解集一等结构（cas/sets.py：
+> FiniteSet/Interval/Union 头 + EmptySet Special；:solveset 方程给有限集/不等式给区间并；
+> 隔离根端点诚实拒答；pprint/latex 双通道渲染）。② O 项头 + :series（series_term 产
+> 截断多项式+O 项；O 入 Protected）；±∞ 极限（x=±1/u 折叠 + log 极点通道 +
+> exp/atan 支配关系单项，Gruntz 一期）；无穷限反常积分（_defint_improper：半直线奇点 +
+> 无穷端极限判敛，双端在 0 拆分；左端反常段贡献取负——方向 bug 已修；∫1/(1+x²) 全实轴 = π）；
+> 分段积分（_defint_piecewise：条件线性根定分支点 + 中点 decide 选支 + 逐段递归）。③ 积分
+> 策略层对象化（cas/istrategy.py：IntStep 命名步树，manualintegrate 同款；不定积分自动正向
+> 换元 _try_usub：候选按项大小升序优先内层、新鲜哑元+回代往返双重验证、每候选微分回验
+> 未过继续试——伪换元 x³/(x²−1) 泄漏已堵；:isteps 命令展示步树）。④ spec anti 线性复合
+> （∫f(ax+b)=anti/a，∫e^-x/sin 2x 打通）。⑤ examples/*.pycas 验证案例三个（循环分部/
+> 定积分画廊/规则+refine+解集）+ tests/test_examples.py 回放断言（DSL 文本即推导，
+> 驻留保证回放产物指针同一）。
 
 > 定位：**交互式、通用、纯符号 CAS**。计算优先；正确性 = **永不静默错**，不是定理证明器。
 > 设计立场：**数据结构、工作流、算法全部自主设计**。参考系统（maxima / mathics-core /
@@ -332,11 +345,17 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   ✓ 一期已落地：Taylor 级数引擎 + 三值极限引擎 + defint（Newton-Leibniz 主管线，
   atan 实形式，奇点拆分，梯形法交叉核对，:limit/:defint 命令）+ **正向换元自动探测**
   （新限正向求值不求逆，嵌套递归）；
-  二期待建：Gruntz 完备化、∞ 限、分段积分（Piecewise 消费）、收敛判定、幂级数项头。
+  ✓ 二期已落地：O 项头 + :series、±∞ 极限（log/exp/atan 支配通道，Gruntz 一期）、
+  无穷限反常积分判敛、Piecewise 分段积分、解集一等结构、积分策略步树 + 不定积分
+  自动换元、spec anti 线性复合；
+  三期待建：Gruntz 完备化、收敛判定一般化（级数判敛）、幂级数算术（O 项参与运算）。
   交互可复现层：转录 DSL（:save/:replay）+ 分部/解方程方案命令（:parts/:solveq）
   —— eˣsin x 类循环积分可全程人工干预、逐步入账、保存回放。
   第一批采购清单 ✓：:rule/:unrule/:rules（会话内联定理）、:value（名词→动词）、
   :refine（账本驱动化简）、:latex（LaTeX 输出）、Protected 内建头拒覆盖。
+  第二批采购清单 ✓：O 项头/:series/±∞ 极限/无穷限反常积分/分段积分（M3 二期）、
+  积分策略步树 :isteps + 不定积分自动换元（manualintegrate 同款）、
+  解集一等结构 :solveset（FiniteSet/Interval/Union）。
 - **M4 求和/差分**：Gosper、常系数递推。
 - **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）。
 

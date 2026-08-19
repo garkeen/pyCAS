@@ -1,0 +1,9 @@
+# pyCAS transcript: e^x*sin(x) 循环分部完整推导（可 :replay 复现，verify 收尾）
+# 人机分工：人选 u（:parts 两次），机器算 dv/v/du 与消循环（:solveq），微分回验背书。
+I := integrate(exp(x)*sin(x), x)
+I
+:parts sin(x)
+:parts cos(x)
+I = e^x*sin(x) - e^x*cos(x) - I
+:solveq integrate(exp(x)*sin(x), x)
+:verify % x exp(x)*sin(x)

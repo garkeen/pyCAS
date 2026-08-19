@@ -122,10 +122,17 @@ class TestTrigIntegrate(unittest.TestCase):
     def test_unsupported(self):
         from cas.errors import PolyError
 
-        # exp(x) 已入 spec anti 表（裸函数可积）；复合参数仍未支持
-        for s in ("x+sin(x)", "sin(2*x)", "sin(y)"):
+        # exp(x)/sin(2x) 已入 spec anti 表（含线性复合）；和式与异变量仍未支持
+        for s in ("x+sin(x)", "sin(y)"):
             with self.assertRaises(PolyError, msg=s):
                 self.t(s)
+
+    def test_linear_composition(self):
+        # 线性复合 f(a x+b)：∫ = anti(a x+b)/a（微分回验）
+        res, ok = self.t("sin(2*x)")
+        self.assertTrue(ok)
+        res, ok = self.t("exp(-x)")
+        self.assertTrue(ok)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+# pyCAS transcript: 定积分四形态（正向换元 / 嵌套换元 / 无穷限判敛 / 分段积分）
+:defint (e^x+x)*(e^x+1) x 0 1
+:defint 2*x*exp(x^2) x 0 1
+:defint 1/x^2 x 1 inf
+:defint 1/x x 1 inf
+:defint piecewise(x-1, x >= 1, 1-x, true) x 0 2
