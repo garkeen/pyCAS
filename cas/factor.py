@@ -36,15 +36,7 @@ def _trim(a):
 
 
 def _mod_sub(a, b, p):
-    n = max(len(a), len(b))
-    out = [0] * n
-    offa = n - len(a)
-    offb = n - len(b)
-    for i in range(len(a)):
-        out[offa + i] = a[i]
-    for j in range(len(b)):
-        out[offb + j] = (out[offb + j] - b[j]) % p
-    return _trim(out)
+    return _mod_add(a, [(-x) % p for x in b], p)
 
 
 def _mod_add(a, b, p):
@@ -185,17 +177,32 @@ def _cz_split(g, p, d, rng):
             )
 
 
-def _choose_prime(f):
+def _choose_prime(f, rng, n=4):
+    """收集 n 个"合适"素数候选（不整除 lc、mod p 无重根、DDF 分解）。
+
+    返回 [(p, facs)]，facs = mod p 下非平凡不可约因子列表。
+    """
     x = f.vars[0]
     lc_num = abs(f.lc(x).numerator)
+    fp2 = None
     p = 3
-    while True:
-        if lc_num % p != 0:
+    candidates = []
+    while len(candidates) < n:
+        if _is_prime(p) and lc_num % p != 0:
             fp = _modp_poly(f, p)
             fp2 = _modp_poly(f.deriv(x), p)
             if _mod_gcd(fp, fp2, p) == [1]:
-                return p, fp
+                facs = []
+                for d, g in _ddf(fp, p):
+                    facs.extend(_cz_split(g, p, d, rng))
+                facs = [g for g in facs if len(g) > 1]
+                candidates.append((p, facs))
+                if len(facs) < 15:
+                    break
         p += 2
+    if not candidates:
+        raise PolyError("no suitable prime")
+    return candidates
 
 
 def _add_int(a, b):
@@ -223,26 +230,11 @@ def _sub_mod(a, b, m):
 
 
 def _add_mod(a, b, m):
-    n = max(len(a), len(b))
-    out = [0] * n
-    offa = n - len(a)
-    offb = n - len(b)
-    for i in range(len(a)):
-        out[offa + i] = a[i]
-    for j in range(len(b)):
-        out[offb + j] = (out[offb + j] + b[j]) % m
-    return _sym_mod(out, m)
+    return _sym_mod(_add_int(a, b), m)
 
 
 def _sym_mod(a, m):
-    out = []
-    half = m // 2
-    for c in a:
-        v = c % m
-        if v > half:
-            v -= m
-        out.append(v)
-    return _trim(out)
+    return _int_poly(a, m)
 
 
 def _to_int(a, p):
@@ -415,25 +407,7 @@ def _zassenhaus(f, rng):
     n = f.degree(x)
     if n <= 1:
         return [f]
-    candidates = []
-    lc_num = abs(f.lc(x).numerator)
-    fp2 = None
-    p = 3
-    while len(candidates) < 4:
-        if _is_prime(p) and lc_num % p != 0:
-            fp = _modp_poly(f, p)
-            fp2 = _modp_poly(f.deriv(x), p)
-            if _mod_gcd(fp, fp2, p) == [1]:
-                facs = []
-                for d, g in _ddf(fp, p):
-                    facs.extend(_cz_split(g, p, d, rng))
-                facs = [g for g in facs if len(g) > 1]
-                candidates.append((p, facs))
-                if len(facs) < 15:
-                    break
-        p += 2
-    if not candidates:
-        raise PolyError("no suitable prime")
+    candidates = _choose_prime(f, rng, 4)
     p, facs = min(candidates, key=lambda c: len(c[1]))
     facs = [_monic(g, p) for g in facs]
     facs = [g for g in facs if len(g) > 1]

@@ -5,7 +5,7 @@ from fractions import Fraction as Fr
 from cas.errors import PolyError
 from cas.poly import Poly, ugcd
 from cas.apart import apart
-from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums
+from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums, tr_eval, coefs
 from cas import term as T
 from cas.term import S, N
 
@@ -140,21 +140,8 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
         num, den = num * p + den * p.deriv(x).scalar(c), den * p
     for C, p, n in root_logs:
         deg = p.degree(x)
-        cs = [Fr(0)] * (deg + 1)
-        for k, v in p.monos.items():
-            cs[deg - k[0]] = v
-        rmax = max((k[0] for k in C.monos), default=0) + deg - 1
-        s = tr_power_sums(p, rmax)
-        trCb = []
-        for t in range(deg):
-            acc = Fr(0)
-            for k, v in C.monos.items():
-                u = k[0]
-                if u + t == 0:
-                    acc += v * deg
-                else:
-                    acc += v * s[u + t - 1]
-            trCb.append(acc)
+        cs = coefs(p, x)
+        trCb = [tr_eval(p, C, t) for t in range(deg)]
         nco = {}
         for r in range(deg):
             acc = Fr(0)

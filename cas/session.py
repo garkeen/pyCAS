@@ -269,24 +269,14 @@ class Session:
         return None
 
     def factor(self, s):
+        from cas.factor import factor_str
         from cas.poly import Poly
-        from cas.factor import factor as zz_factor
 
         t = parse(s)
         x = self._pick_var(t)
         if x is None:
             return "no variable"
-        f = Poly.from_term(t, (x,))
-        c, facs = zz_factor(f)
-        parts = []
-        if c != 1:
-            parts.append(str(c))
-        for g, m in facs:
-            s_ = str(g)
-            if "+" in s_ or "-" in s_[1:]:
-                s_ = f"({s_})"
-            parts.append(f"{s_}^{m}" if m > 1 else s_)
-        return " * ".join(parts) if parts else str(c)
+        return factor_str(Poly.from_term(t, (x,)))
 
     def apart(self, num_s, den_s):
         from cas.poly import Poly

@@ -62,7 +62,7 @@ def qa_mod(a, m):
 
 
 def qa_mul(a, b, m):
-    return (a * b).udivmod(m)[1]
+    return qa_mod(a * b, m)
 
 
 def qa_inv(a, m):
@@ -97,17 +97,24 @@ def tr_power_sums(m, upto):
     return s
 
 
-def tr_eval(m, c):
-    """迹：把 Q(a) 元素 c（a = m 的根）映射到 Q：Tr(c) = Σ_j c(β_j)。"""
+def tr_eval(m, c, t=0):
+    """迹：把 Q(a) 元素 c（a = m 的根）映射到 Q：Tr(c·β^t) = Σ_j c(β_j)·β_j^t。
+
+    t=0 即普通迹 Tr(c)；t>0 给出幂偏移迹（积分验证用）。
+    """
     x = m.vars[0]
     deg = m.degree(x)
     if deg <= 0:
         return c.const_val()
-    rmax = max((k[0] for k in c.monos), default=0)
+    rmax = max((k[0] for k in c.monos), default=0) + t
     s = tr_power_sums(m, rmax)
     total = Fr(0)
     for k, v in c.monos.items():
-        total += v * s[k[0] - 1]
+        u = k[0] + t
+        if u == 0:
+            total += v * deg
+        else:
+            total += v * s[u - 1]
     return total
 
 
