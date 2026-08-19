@@ -220,8 +220,12 @@ class Session:
 
     # ---------------- 用户定义（交互式 CAS 标配：f(x) := 体 / a := 体） ----------------
 
+    # Protected 属性（mathics attributes.py 同款）：内建头一律拒绝覆盖。
+    # 清单纪律：新增结构头/绑定词头时必须同步加入（代码评审验收点）。
     _RESERVED = {"Plus", "Times", "Power", "Eq", "Ne", "Lt", "Le", "Gt", "Ge",
-                 "And", "Or", "Not", "Bound", "Quote", "D", "Attr", "Piecewise"}
+                 "And", "Or", "Not", "Bound", "Quote", "D", "Attr", "Piecewise",
+                 "Integrate", "Sum", "Product", "Limit", "Conjugate", "RootOf",
+                 "Infinity", "Undefined"}   # Sqrt 由 parser 直重写为 Power，无此头
 
     def _check_def_name(self, name):
         from cas.spec import SPECS
@@ -809,16 +813,24 @@ class Session:
 
     # ---------------- 转录 DSL（计算可复现/可保存/可回放） ----------------
 
+    # 只读命令不入转录；变更类命令（:rule/:value/:refine/:assume 等）必须入录，
+    # 否则回放无法重建推导（转录即 DSL 立场）。
     _NO_RECORD = {":help", ":log", ":steps", ":hist", ":ctx", ":obls", ":defs",
-                  ":q", ":quit", ":save", ":replay"}
+                  ":q", ":quit", ":save", ":replay", ":rules", ":latex"}
 
     def rules_fingerprint(self):
-        """规则集指纹：回放确定性校验用（规则变了回放即失效，永不静默错）。"""
+        """规则集指纹：回放确定性校验用（规则变了回放即失效，永不静默错）。
+
+        只覆盖非会话规则：origin='session' 的 :rule 内联定义由转录自身重建，
+        不计入指纹（否则保存后回放必被自己的新规则拒死）。
+        """
         import hashlib
 
         h = hashlib.sha1()
         for rid in sorted(self.rules.rules):
             r = self.rules.rules[rid]
+            if r.origin == "session":
+                continue
             h.update(f"{rid}|{to_str(r.pattern)}|{to_str(r.template)}|{r.priority}".encode())
         return h.hexdigest()[:12]
 
@@ -881,6 +893,12 @@ class Session:
             ":auto": "core simplify",
             ":parts": "integration by parts on inert integral: :parts <u>",
             ":solveq": "solve current linear equation for unknown: :solveq <term>",
+            ":rule": "define session theorem inline: :rule id = lhs -> rhs [guard ... as ... auto]",
+            ":unrule": "remove a session rule",
+            ":rules": "list all rules (origin/prio/guard/direction)",
+            ":value": "evaluate inert forms (Quote/'integrate/D nouns) in current expr",
+            ":refine": "ledger-driven simplification (abs/sqrt/exp-log by assumptions)",
+            ":latex": "LaTeX output of current expression",
             ":save": "save command transcript (DSL): :save <path>",
             ":replay": "replay a transcript: :replay <path>",
             ":steps": "explain the derivation (rules step-by-step; algorithms by name)",
@@ -920,6 +938,18 @@ class Session:
             return self.save_transcript(line[6:].strip())
         if line.startswith(":replay "):
             return self.replay_file(line[8:].strip())
+        if line.startswith(":rule "):
+            return self.add_rule(line[6:])
+        if line.startswith(":unrule "):
+            return self.unrule(line[8:].strip())
+        if line == ":rules":
+            return self.list_rules()
+        if line == ":value":
+            return self.value()
+        if line == ":refine":
+            return self.mrefine()
+        if line == ":latex":
+            return self.mlatex()
         if line.startswith(":") and line.split(None, 1)[0][1:] in self.kernel:
             # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
             parts = line.split(None, 1)
@@ -1082,6 +1112,129 @@ class Session:
         if not T.is_num(a):
             return f"{to_str(sol)}   [proviso: {to_str(T.mk(T.S('Ne'), (a, T.ZERO)))}]"
         return sol
+
+    # ---------------- 会话规则/名词动词切换/Refine（第一批采购清单） ----------------
+
+    def add_rule(self, text):
+        """:rule 内联定理定义（maxima tellsimp 同款）：语法同规则文件行
+        （rule id = lhs -> rhs [guard ... as ... prio ... auto]），origin='session'。
+        规则库从文件升级为会话参与者；转录自动收录，回放时重建。"""
+        self._check_locked()
+        body = text.strip()
+        if not body.startswith("rule "):
+            body = "rule " + body
+        r = loader.parse_rule_line(body, origin="session")
+        existed = r.id in self.rules.rules
+        self.rules.add(r)
+        return f"{'redefined' if existed else 'defined'}: {r.id}"
+
+    def unrule(self, rid):
+        """删除会话内联规则（文件规则不可删——文件是定理库本体）。"""
+        r = self.rules.rules.get(rid)
+        if r is None:
+            return f"no rule: {rid}"
+        if r.origin != "session":
+            return f"rule {rid} comes from {r.origin}; only session rules can be removed"
+        self.rules.remove(rid)
+        return f"removed: {rid}"
+
+    def list_rules(self):
+        out = []
+        for rid in sorted(self.rules.rules):
+            r = self.rules.rules[rid]
+            g = f" guard {to_str(r.guard)}" if r.guard is not None else ""
+            d = f" as {r.direction}" if r.direction else ""
+            a = " auto" if r.auto else ""
+            out.append(f"{rid:16s} [{r.origin:10s} prio {r.priority:3d}] "
+                       f"{to_str(r.pattern)} -> {to_str(r.template)}{g}{d}{a}")
+        return "\n".join(out) if out else "(no rules)"
+
+    def value(self):
+        """名词 -> 动词：全式求值惰性形式（Quote 脱壳、惰性 Integrate 实算、D 名词微分）。
+
+        求值失败（如不可积）的惰性头保持名词（诚实）。每次求值入账 kernel 步。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.diff import d as dd
+        from cas.integrate import integrate as zz_int
+        from cas.errors import PolyError
+
+        changed = False
+        order = []
+        stack = [self.current]
+        while stack:
+            u = stack.pop()
+            order.append(u)
+            if isinstance(u, T.Expr):
+                stack.extend(u.args)
+            elif isinstance(u, T.Bound):
+                stack.append(u.body)
+        val = {}
+        for u in reversed(order):
+            if isinstance(u, T.Bound):
+                val[u] = T._mk_bound_canon(u.hint, val[u.body])
+                continue
+            if not isinstance(u, T.Expr):
+                val[u] = u
+                continue
+            args = tuple(val[a] for a in u.args)
+            name = u.head.name
+            r = None
+            if name == "Quote":
+                r = args[0]
+            elif name == "Integrate" and len(args) == 1 and isinstance(args[0], T.Bound):
+                x, body = T.open_bound(args[0])
+                try:
+                    r = zz_int(body, x)[0]
+                except PolyError:
+                    r = None   # 不可积：保持名词
+            elif name == "D" and len(args) == 2:
+                r = dd(args[0], args[1])
+            if r is not None:
+                val[u] = r
+                changed = True
+            elif any(a is not b for a, b in zip(args, u.args)):
+                val[u] = T.mk(u.head, args)
+            else:
+                val[u] = u
+        if not changed:
+            return f"{to_str(self.current)}   [no inert form evaluated]"
+        before = self.current
+        self.current = val[self.current]
+        self._kernel_step("value", self.current, before=before)
+        self._remember(self.current)
+        return to_str(self.current)
+
+    def mrefine(self):
+        """:refine：账本驱动化简（decide 的第二大消费者）——只重写 decide=YES 的结构，
+        判不动的保持原样（永不静默错）。"""
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.refine import refine as zz_refine
+
+        r, changed = zz_refine(self.current, self.ctx)
+        if not changed:
+            return f"{to_str(self.current)}   [no refinement: ledger decides nothing more]"
+        before = self.current
+        self.current = r
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:refine", (), before, r, "YES",
+            cost(r) - cost(before), note="ledger-driven simplification",
+        ))
+        self._remember(r)
+        return to_str(r)
+
+    def mlatex(self):
+        """:latex：当前式的 LaTeX 输出（纯展示层）。"""
+        from cas.latex import to_latex
+
+        if self.current is None:
+            return "empty session"
+        return to_latex(self.current)
 
 
 def run():

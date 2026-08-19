@@ -65,6 +65,17 @@
 > 防 exp(1)^2 与幂合并互递归）；惰性积分绑定词大小写不敏感；_linear_split 对不含
 > 未知量的复杂常数（eˣ 类）早退作常数；_subst_defs 保指针重建（Bound 不驻留，
 > 不复用则不动点判等失效）。
+> **2026-08 第一批采购清单落地**（对照成熟 CAS 差距盘点，交互感知优先）：
+> ① :rule/:unrule/:rules 内联定理定义（maxima tellsimp 同款，origin='session'，
+> 转录收录回放重建；会话规则不计指纹否则回放被自己的新规则拒死；文件规则拒删）；
+> ② 名词/动词切换（' 前缀名词化已有；:value 全式求值 Quote/惰性 Integrate/D 名词，
+> 不可积保持名词，入账 kernel:value 步）；③ Refine 通道（cas/refine.py，decide 的
+> 第二大消费者：|x|/√(x²) 按账本符号脱壳、exp(log x) 需 x>0、log(exp x) 无条件、
+> Piecewise 分支按账本裁剪/选定；只重写 decide=YES，显式栈后序重建）；
+> ④ Protected 属性补全（_RESERVED 扩至结构头/绑定词头全覆盖；Sqrt 由 parser 直重写
+> 无此头不入清单）；⑤ LaTeX 输出（cas/latex.py 显式栈后序，分式/根式/幂/三角/
+> 积分/分段/比较/逻辑；负整数幂统一 \frac 形态）。副产品：Piecewise 单 true 分支
+> 塌缩为值本身（mk 归一，表示同一）；:value/:refine 属变更命令必入转录（回放重建前提）。
 
 > 定位：**交互式、通用、纯符号 CAS**。计算优先；正确性 = **永不静默错**，不是定理证明器。
 > 设计立场：**数据结构、工作流、算法全部自主设计**。参考系统（maxima / mathics-core /
@@ -324,6 +335,8 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   二期待建：Gruntz 完备化、∞ 限、分段积分（Piecewise 消费）、收敛判定、幂级数项头。
   交互可复现层：转录 DSL（:save/:replay）+ 分部/解方程方案命令（:parts/:solveq）
   —— eˣsin x 类循环积分可全程人工干预、逐步入账、保存回放。
+  第一批采购清单 ✓：:rule/:unrule/:rules（会话内联定理）、:value（名词→动词）、
+  :refine（账本驱动化简）、:latex（LaTeX 输出）、Protected 内建头拒覆盖。
 - **M4 求和/差分**：Gosper、常系数递推。
 - **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）。
 

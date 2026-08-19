@@ -719,6 +719,9 @@ def _norm_piecewise(args):
             break
     if not out:
         return UND
+    # 单分支且条件为 true：塌缩为值本身（表示同一，无定理内容）
+    if len(out) == 2 and out[1] is TRUE:
+        return out[0]
     if len(out) == len(args) and all(a is b for a, b in zip(out, args)):
         return None
     return _intern_expr(S("Piecewise"), tuple(out))

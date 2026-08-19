@@ -19,7 +19,8 @@ class TestPiecewise(unittest.TestCase):
 
     def test_prune_false_and_true_cutoff(self):
         t = parse("piecewise(1, false, 2, true, 3, x > 1)")
-        self.assertEqual(to_str(t), "piecewise(2 if true)")
+        # false 剪除、true 截断尾部后仅剩单 true 分支 -> 塌缩为值本身
+        self.assertIs(t, T.N(2))
         self.assertIs(parse("piecewise(1, false)"), T.UND)
 
     def test_pattern_stays_noun(self):
