@@ -156,8 +156,10 @@ class Parser:
                         self.next()
                         args.append(self.expr(0))
                 self.expect(")")
-                if v in _BINDERS and len(args) == 2:
-                    return self.postfix(mk(S(v), (T.mk_bound(args[1], args[0]),)))
+                # 绑定词大小写不敏感（integrate/Integrate 都生成绑定形式）
+                bv = v[0].upper() + v[1:] if v else v
+                if bv in _BINDERS and len(args) == 2:
+                    return self.postfix(mk(S(bv), (T.mk_bound(args[1], args[0]),)))
                 if v == "sqrt" and len(args) == 1:
                     return self.postfix(T.sqrt(args[0]))
                 if v == "ln":

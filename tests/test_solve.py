@@ -49,7 +49,7 @@ class TestSolve(unittest.TestCase):
 
     def test_quadratic_surds(self):
         r = self.sols("x^2 - 2")
-        self.assertEqual([to_str(v) for v in r.solutions], ["2^1/2", "-2^1/2"])
+        self.assertEqual([to_str(v) for v in r.solutions], ["2^(1/2)", "-2^(1/2)"])
         for v in r.solutions:
             self.assertEqual(self.check(parse("x^2 - 2"), v, x), "VERIFIED")
 
@@ -72,8 +72,23 @@ class TestSolve(unittest.TestCase):
             self.assertEqual(self.check(parse("x^3 - 6*x^2 + 11*x - 6"), v, x), "VERIFIED")
 
     def test_unsupported(self):
-        r = self.sols("sin(x) - 1")
+        # 超越与多项式混合：无逆函数结构，诚实拒答
+        r = self.sols("sin(x) + x - 2")
         self.assertEqual(r.status, "unsupported")
+
+    def test_inverse_principal(self):
+        # 主支逆解（spec.inv 声明驱动；特殊点折叠自动）
+        r = self.sols("sin(x) - 1")
+        self.assertEqual(to_str(r.solutions[0]), "1/2*π")
+        self.assertIn("principal", r.note)
+        r2 = self.sols("exp(x) - 2")
+        self.assertEqual(to_str(r2.solutions[0]), "log(2)")
+        r3 = self.sols("log(x) - 1")
+        self.assertEqual(to_str(r3.solutions[0]), "exp(1)")
+        r4 = self.sols("cos(x)")
+        self.assertEqual(to_str(r4.solutions[0]), "1/2*π")
+        r5 = self.sols("sin(x) - 1/2")
+        self.assertEqual(to_str(r5.solutions[0]), "arcsin(1/2)")
 
     def test_param_lowdeg(self):
         # 系数域首付款：参数化二次方程通用求根公式

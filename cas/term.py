@@ -398,9 +398,25 @@ def _fold_bool_ac(head, args):
     return sorted(seen)
 
 
+def _folds_numeric(t):
+    """t 是否含数值/i 原子：纯常数乘开折叠的终止性条件。
+
+    π/e/γ 类常数底的幂不乘开（(π-1)^2 乘开后 _norm_times 幂合并会重发
+    Power(π-1, 2) -> 互递归；保持名词形态，语义不变）。
+    """
+    if is_num(t) or t is IU:
+        return True
+    if isinstance(t, Expr):
+        return any(_folds_numeric(a) for a in t.args)
+    return False
+
+
 def _fold_power(b, e):
     if UND in (b, e) or INFINITY in (b, e):
         return UND
+    # e^a 规范形 = Exp(a)：两种写法指针同一（替换/判等/微分回验的前提）
+    if b is E:
+        return mk(S("Exp"), (e,))
     # 虚数单位整数幂：i^n 按 mod 4 折叠（纯符号，无近似）
     if b is IU and isinstance(e, Int):
         r = e.v % 4
@@ -431,8 +447,12 @@ def _fold_power(b, e):
         and not isinstance(b, Special)
         and not (b.head.name == "Power" and isinstance(b.args[1], Rat))
         and all(_pure_numeric(a) for a in b.args)
+        and _folds_numeric(b)
+        # 终止性守卫：底含 Plus 因子（分配后数值折叠）或含 i（iⁿ 按 mod 4 折叠）才乘开；
+        # 纯 Const 底（如 exp(1)、π）乘开会重发同形 Power -> 互递归，保持名词。
+        and any((isinstance(a, Expr) and a.head.name == "Plus") or a is IU for a in b.args)
     ):
-        # 纯常数底的正整数幂（如 (-i)^2、(2i)^3）：乘开折叠，结果仍是纯常数；
+        # 含数值/i 与加法因子的纯常数底正整数幂（如 (1+i)^2）：乘开折叠。
         # 负指数不在此折叠（避免与倒数构造互递归）；有理指数底由上一分支处理。
         acc = ONE
         for _ in range(e.v):
@@ -914,6 +934,27 @@ def mk_bound(var_hint, body, var=None):
         var = S(var_hint) if isinstance(var_hint, str) else var_hint
     hint = var.name if isinstance(var, Sym) else str(var_hint)
     return _mk_bound_canon(hint, _abstract(body, var, 0))
+
+
+def open_bound(b):
+    """Bound -> (hint 符号, 体)：DB(0) 还原为 hint 符号（mk_bound 的逆，
+    供惰性积分的体参与环运算/打印）。嵌套绑定按深度位移。"""
+    var = S(b.hint)
+    return var, _lift(b.body, var, 0)
+
+
+def _lift(t, var, depth):
+    if isinstance(t, DB):
+        return var if t.i == depth else t
+    if isinstance(t, Expr):
+        args = tuple(_lift(a, var, depth) for a in t.args)
+        if all(a is b for a, b in zip(args, t.args)):
+            return t
+        return mk(t.head, args)
+    if isinstance(t, Bound):
+        nb = _lift(t.body, var, depth + 1)
+        return t if nb is t.body else _mk_bound_canon(t.hint, nb)
+    return t
 
 
 def subst(t, mapping):

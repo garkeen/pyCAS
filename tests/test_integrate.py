@@ -122,7 +122,8 @@ class TestTrigIntegrate(unittest.TestCase):
     def test_unsupported(self):
         from cas.errors import PolyError
 
-        for s in ("x+sin(x)", "sin(2*x)", "exp(x)", "sin(y)"):
+        # exp(x) 已入 spec anti 表（裸函数可积）；复合参数仍未支持
+        for s in ("x+sin(x)", "sin(2*x)", "sin(y)"):
             with self.assertRaises(PolyError, msg=s):
                 self.t(s)
 

@@ -14,7 +14,7 @@ from cas.context import Context
 from cas.parser import parse
 from cas.pprint import to_str
 from cas.rules import Rule, RuleSet, Step, apply_rule
-from cas.simplify import simplify, cost
+from cas.simplify import simplify, cost, expand
 from cas.errors import BudgetExceeded, ParseError
 from cas import loader
 from cas import spec as _spec
@@ -40,7 +40,8 @@ class KernelCmd:
 
 
 def _k_verify(s, rest):
-    parts = rest.split()
+    # 从末尾切两次：变量与目标式不含空格时 F 可含空格（% 展开后常见）
+    parts = rest.rsplit(None, 2)
     if len(parts) != 3:
         return "usage: :verify <F> <x> <f>"
     return s.verify(*parts)
@@ -73,6 +74,20 @@ def _k_integrate(s, rest):
     if not rest.strip():
         return "usage: :integrate <expr>"
     return s.integrate(rest.strip())
+
+
+def _k_limit(s, rest):
+    parts = rest.rsplit(None, 2)
+    if len(parts) != 3 or not parts[1].isidentifier():
+        return "usage: :limit <expr> <var> <point>"
+    return s.mlimit(parts[0], parts[1], parts[2])
+
+
+def _k_defint(s, rest):
+    parts = rest.rsplit(None, 3)
+    if len(parts) != 4 or not parts[1].isidentifier():
+        return "usage: :defint <expr> <var> <lo> <hi>"
+    return s.mdefint(parts[0], parts[1], parts[2], parts[3])
 
 
 def _k_msolve(s, rest):
@@ -155,6 +170,7 @@ class Session:
         self.locked = None
         self.load_error = None
         self.history = []   # 产出过的表达式（%N 复用，REPL 交互标配）
+        self.transcript = []  # 命令转录（DSL：可保存/可回放，计算可复现的地基）
         self.defs = {}      # 用户定义：头名/变量名 -> (参数元组, 体)；空参 = 变量
         self._sid = 0
         self._oid = 0
@@ -174,6 +190,8 @@ class Session:
             "factor": KernelCmd("factor <expr>", _k_factor),
             "apart": KernelCmd("apart <num> <den>", _k_apart),
             "integrate": KernelCmd("integrate <expr>", _k_integrate),
+            "limit": KernelCmd("limit <expr> <var> <point>", _k_limit),
+            "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
             "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
             "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
             "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
@@ -242,7 +260,11 @@ class Session:
         return f"no definition: {name_s}"
 
     def _subst_defs(self, t):
-        """单遍定义展开（显式栈后序重建）：函数头按参数代入，变量直接替换。"""
+        """单遍定义展开（显式栈后序重建）：函数头按参数代入，变量直接替换。
+
+        保指针重建：子项无变化时复用原节点（Bound 不驻留，每次重建都生新指针，
+        不复用会导致不动点判等失效）。
+        """
         order = []
         stack = [t]
         while stack:
@@ -256,13 +278,16 @@ class Session:
         for u in reversed(order):
             if isinstance(u, T.Expr):
                 new_args = tuple(val[a] for a in u.args)
-                rebuilt = T.mk(u.head, new_args)
                 d_ = self.defs.get(u.head.name)
                 if d_ is not None and len(d_[0]) == len(new_args):
-                    rebuilt = T.subst(d_[1], dict(zip(d_[0], new_args)))
-                val[u] = rebuilt
+                    val[u] = T.subst(d_[1], dict(zip(d_[0], new_args)))
+                elif all(na is oa for na, oa in zip(new_args, u.args)):
+                    val[u] = u
+                else:
+                    val[u] = T.mk(u.head, new_args)
             elif isinstance(u, T.Bound):
-                val[u] = T.mk_bound(u.hint, val[u.body])
+                nb = val[u.body]
+                val[u] = u if nb is u.body else T.mk_bound(u.hint, nb)
             else:
                 d_ = self.defs.get(u.name, None) if isinstance(u, T.Sym) else None
                 val[u] = d_[1] if d_ is not None and d_[0] == () else u
@@ -738,6 +763,28 @@ class Session:
         tag = "VERIFIED" if ok else "UNVERIFIED"
         return f"{out}   [{tag}, method: {method}]"
 
+    def mlimit(self, expr_s, var_s, point_s):
+        """:limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）。"""
+        from cas.limits import limit
+
+        t = self._parse_in(expr_s)
+        r = limit(t, T.S(var_s), parse(point_s))
+        if r is None:
+            return "UNKNOWN"
+        self._remember(r)
+        return to_str(r)
+
+    def mdefint(self, expr_s, var_s, lo_s, hi_s):
+        """:defint 入口：自动正向换元探测 + Newton-Leibniz + 奇点拆分 + 数值交叉核对。"""
+        from cas.integrate import defint_auto
+
+        t = self._parse_in(expr_s)
+        val, status, note = defint_auto(t, T.S(var_s), parse(lo_s), parse(hi_s))
+        if val is not None:
+            self._kernel_step(f"defint[{note}]", val, before=t)
+            return f"{to_str(val)}   [{status}, method: {note}]"
+        return f"{status}: {note}"
+
     def steps(self):
         """可解释步骤文本：规则步 = 逐条推导（规则名/位置/守卫/前后式/cost 变化）；
         算法步 = 算法名 + 验证态（单算法调用无微观步骤可讲，verify 背书即解释）。"""
@@ -760,12 +807,82 @@ class Session:
     def show(self):
         return to_str(self.current) if self.current is not None else "(empty)"
 
+    # ---------------- 转录 DSL（计算可复现/可保存/可回放） ----------------
+
+    _NO_RECORD = {":help", ":log", ":steps", ":hist", ":ctx", ":obls", ":defs",
+                  ":q", ":quit", ":save", ":replay"}
+
+    def rules_fingerprint(self):
+        """规则集指纹：回放确定性校验用（规则变了回放即失效，永不静默错）。"""
+        import hashlib
+
+        h = hashlib.sha1()
+        for rid in sorted(self.rules.rules):
+            r = self.rules.rules[rid]
+            h.update(f"{rid}|{to_str(r.pattern)}|{to_str(r.template)}|{r.priority}".encode())
+        return h.hexdigest()[:12]
+
+    def handle(self, line):
+        """分发一条命令/表达式，返回输出文本（None = 无输出）。
+
+        REPL 与回放共用同一入口——转录即 DSL，重放转录即重建推导。
+        """
+        line = line.strip()
+        if not line:
+            return None
+        first = line.split(None, 1)[0]
+        try:
+            out = self._dispatch(line)
+        except (BudgetExceeded, ParseError) as e:
+            out = f"error: {e}"
+        except Exception as e:
+            out = f"error: {e.__class__.__name__}: {e}"
+        if first not in self._NO_RECORD:
+            self.transcript.append(line)
+        return out
+
+    def save_transcript(self, path):
+        """保存转录（头部含规则指纹，回放时校验）。"""
+        lines = ["# pyCAS transcript v1", f"# rules: {self.rules_fingerprint()}"]
+        lines.extend(self.transcript)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        return f"saved {len(self.transcript)} commands to {path}"
+
+    def replay_file(self, path):
+        """回放转录文件：跳注释头，逐条走 handle（与 REPL 完全同路径）。"""
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.readlines()
+        cmds = []
+        fp = None
+        for ln in raw:
+            ln = ln.rstrip("\n")
+            if ln.startswith("# rules: "):
+                fp = ln.split(": ", 1)[1].strip()
+            elif not ln.startswith("#"):
+                cmds.append(ln)
+        if fp is not None and fp != self.rules_fingerprint():
+            return (f"refused: rules fingerprint mismatch "
+                    f"(file={fp}, session={self.rules_fingerprint()})")
+        outs = []
+        for c in cmds:
+            if not c.strip():
+                continue
+            o = self.handle(c)
+            if o:
+                outs.append(o)
+        return f"replayed {len(cmds)} commands\n" + "\n".join(outs)
+
     def commands(self):
         out = {
             ":s": "suggest [path]",
             ":a": "apply <rule-id> [path]",
             ":u": "undo [n]",
             ":auto": "core simplify",
+            ":parts": "integration by parts on inert integral: :parts <u>",
+            ":solveq": "solve current linear equation for unknown: :solveq <term>",
+            ":save": "save command transcript (DSL): :save <path>",
+            ":replay": "replay a transcript: :replay <path>",
             ":steps": "explain the derivation (rules step-by-step; algorithms by name)",
             ":hist": "produced expressions (%N to reuse, % = latest)",
             ":defs": "list user definitions (name := expr / f(x) := expr)",
@@ -783,118 +900,207 @@ class Session:
         return out
 
 
+    def _dispatch(self, line):
+        """全部分支返回文本（不打印）：REPL 与回放共用。分支顺序纪律：
+        精确命令 > 内核注册表 > 前缀命令（:steps 被 :s 吞、:save 被 :s 吞的同款 bug 防三次）。"""
+        if line == ":help":
+            return "\n".join(f"{k:12s} {v}" for k, v in self.commands().items())
+        if line == ":steps":
+            return "\n".join(self.steps())
+        if line == ":hist":
+            out = [f"%{i}  {to_str(h)}" for i, h in enumerate(self.history, 1)]
+            return "\n".join(out) if out else "(empty)"
+        if line == ":defs":
+            out = []
+            for nm, (ps_, body) in self.defs.items():
+                sig = f"{nm}({', '.join(p.name for p in ps_)})" if ps_ else nm
+                out.append(f"{sig} := {to_str(body)}")
+            return "\n".join(out) if out else "(none)"
+        if line.startswith(":save "):
+            return self.save_transcript(line[6:].strip())
+        if line.startswith(":replay "):
+            return self.replay_file(line[8:].strip())
+        if line.startswith(":") and line.split(None, 1)[0][1:] in self.kernel:
+            # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
+            parts = line.split(None, 1)
+            name = parts[0][1:]
+            rest = self.expand_history(parts[1].strip()) if len(parts) > 1 else ""
+            return self.kernel[name].fn(self, rest)
+        if line.startswith(":parts "):
+            res = self.iparts(line[7:].strip())
+            return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":solveq "):
+            res = self.solveq(line[8:].strip())
+            return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":s"):
+            arg = line[2:].strip()
+            path = tuple(int(i) for i in arg.split(".")) if arg else ()
+            out = [f"{rid:20s} guard={g:8s} {('dir=' + d) if d else ''}"
+                   for rid, g, d in self.suggest(path)]
+            return "\n".join(out)
+        if line.startswith(":a "):
+            parts = line[3:].split()
+            rid = parts[0]
+            path = tuple(int(i) for i in parts[1].split(".")) if len(parts) > 1 else None
+            n0 = len(self.log)
+            res = self.apply(rid, path)
+            out = [to_str(res) if isinstance(res, T.Term) else res]
+            out += ["  " + ln for ln in self.steps()[n0:]]
+            return "\n".join(out)
+        if line.startswith(":undef "):
+            return self.undef(line[7:].strip())
+        if line.startswith(":u"):
+            n = int(line[2:] or 1)
+            return to_str(self.undo(n)) if self.log else "no steps"
+        if line == ":auto":
+            n0 = len(self.log)
+            out = [to_str(self.auto())]
+            out += ["  " + ln for ln in self.steps()[n0:]]
+            return "\n".join(out)
+        if line.startswith(":assume "):
+            return self.assume(self.expand_history(line[8:]))
+        if line.startswith(":declare "):
+            parts = line[9:].split()
+            if len(parts) == 2:
+                return self.declare(parts[0], parts[1])
+            return "usage: :declare <var> <property>"
+        if line.startswith(":ans "):
+            parts = line[5:].split(None, 1)
+            oid = int(parts[0])
+            return self.answer(oid, self.expand_history(parts[1]))
+        if line == ":obls":
+            out = [f"#{o.oid}  {to_str(o.question)}   affects steps {o.affects}"
+                   for o in self.obligations]
+            return "\n".join(out) if out else "(none)"
+        if line == ":log":
+            out = [f"#{st.sid} {st.rule_id:18s} at {st.path}  {to_str(st.before)}  ->  {to_str(st.after)}"
+                   for st in self.log]
+            return "\n".join(out) if out else "(no steps)"
+        if line == ":ctx":
+            out = [f"[{e.kind}:{e.origin}] {to_str(e.fact)}" for e in self.ctx.entries]
+            return "\n".join(out) if out else "(empty ledger)"
+        if line == ":load":
+            import os
+
+            rd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
+            return f"loaded {loader.load_dir(rd, self.rules)} rules"
+        if ":=" in line:
+            # 用户定义：f(x) := 体（函数）/ a := 体（变量），宏展开语义；右侧支持 % 历史
+            lhs, rhs = line.split(":=", 1)
+            lhs = lhs.strip()
+            rhs = self.expand_history(rhs.strip())
+            if "(" in lhs:
+                return self.define(lhs, rhs)
+            return self.assign(lhs, rhs)
+        self.feed(self.expand_history(line))
+        return self.show()
+
+    # ---------------- 方案命令（人机协作：人选方向，机器算） ----------------
+
+    def iparts(self, u_s):
+        """分部积分（人工干预通道）：用户选 u，内核算 dv = 体/u、v = ∫dv、du，
+        ∫体 -> u·v − ∫v·du。自动搜索当前式中体被 u 整除的惰性积分子项。"""
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.diff import d
+        from cas.integrate import integrate as zz_int
+        from cas.decide import equivalent
+        from cas.errors import PolyError
+
+        u = self._parse_in(u_s)
+        found = None
+        for p in T.all_paths(self.current):
+            try:
+                tgt = T.term_at(self.current, p)
+            except IndexError:
+                continue
+            if not (isinstance(tgt, T.Expr) and tgt.head.name == "Integrate"
+                    and len(tgt.args) == 1 and isinstance(tgt.args[0], T.Bound)):
+                continue
+            b = tgt.args[0]
+            x, body = T.open_bound(b)   # de Bruijn 体还原为自由符号才可参与环运算
+            if not isinstance(x, T.Sym):
+                continue
+            q = simplify(T.div(body, u))
+            if equivalent(T.times(u, q), body) is not T3.YES:
+                continue
+            try:
+                v, _ok, _m = zz_int(q, x)
+            except PolyError:
+                continue
+            du = d(u, x)
+            new_int = T.mk(T.S("Integrate"), (T.mk_bound(x, T.times(v, du)),))
+            found = (p, T.plus(T.times(u, v), T.neg(new_int)))
+            break
+        if found is None:
+            return f"parts: no inert integral subterm with body divisible by {to_str(u)}"
+        p, repl = found
+        before = self.current
+        self.current = T.replace_at(self.current, p, repl)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, f"scheme:parts[u={to_str(u)}]", p, before, self.current, "YES",
+            cost(self.current) - cost(before), note="integration by parts",
+        ))
+        self._remember(self.current)
+        return self.current
+
+    def solveq(self, unknown_s):
+        """把当前等式当线性方程解出指定未知项（未知 → z 提系数）。
+
+        eˣsin x 消循环的关键步：I = A − I -> I = A/2。
+        """
+        self._check_locked()
+        if not (isinstance(self.current, T.Expr) and self.current.head.name == "Eq"):
+            return "solveq: current must be an equation"
+        from cas.solve import _linear_split, _free
+
+        unknown = self._parse_in(unknown_s)
+        z = T.S("_solveq_z")
+        f = T.subst(T.plus(self.current.args[0], T.neg(self.current.args[1])), {unknown: z})
+        f = simplify(expand(f))   # 负号分配/同类项归并（与 solve 同款预处理）
+        if z not in T.free_vars(f):
+            return "solveq: unknown not found in equation"
+        lin = _linear_split(f, z)
+        if lin is None:
+            return "solveq: only linear equations supported"
+        a, b = lin
+        if not (_free(a, z) and _free(b, z)):
+            return "solveq: only linear equations supported"
+        if a is T.ZERO:
+            return "solveq: unknown cancels out"
+        sol = simplify(T.div(T.neg(b), a))
+        before = self.current
+        self.current = sol
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:solveq", (), before, sol, "YES",
+            cost(sol) - cost(before), note=f"solved linear equation for {to_str(unknown)}",
+        ))
+        self._remember(sol)
+        if not T.is_num(a):
+            return f"{to_str(sol)}   [proviso: {to_str(T.mk(T.S('Ne'), (a, T.ZERO)))}]"
+        return sol
+
+
 def run():
-    """REPL：表达式即当前式；%N 复用历史产出；规则步逐条可解释，
-    算法步报算法名与验证态（单算法调用不做微观解释，verify 背书即解释）。"""
+    """REPL：表达式即当前式；%N 复用历史产出；命令转录可保存/回放。
+    分发全部走 Session.handle（与回放同路径）。"""
     s = Session()
     print("pyCAS session. :help for commands; expression to make current; %N reuses history.")
     if s.load_error:
         print(f"warning: rules load failed: {s.load_error}")
     while True:
         try:
-            line = input(">> ").strip()
+            line = input(">> ")
         except EOFError:
             break
-        if not line:
-            continue
-        if line in (":q", ":quit"):
+        if line.strip() in (":q", ":quit"):
             break
-        try:
-            if line == ":help":
-                for k, v in s.commands().items():
-                    print(f"{k:12s} {v}")
-            elif line.startswith(":") and line.split(None, 1)[0][1:] in s.kernel:
-                # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
-                parts = line.split(None, 1)
-                name = parts[0][1:]
-                rest = s.expand_history(parts[1].strip()) if len(parts) > 1 else ""
-                print(s.kernel[name].fn(s, rest))
-            elif line == ":steps":
-                for ln in s.steps():
-                    print(ln)
-            elif line == ":hist":
-                for i, h in enumerate(s.history, 1):
-                    print(f"%{i}  {to_str(h)}")
-                if not s.history:
-                    print("(empty)")
-            elif line.startswith(":s"):
-                arg = line[2:].strip()
-                path = tuple(int(i) for i in arg.split(".")) if arg else ()
-                for rid, g, d in s.suggest(path):
-                    print(f"{rid:20s} guard={g:8s} {('dir=' + d) if d else ''}")
-            elif line.startswith(":a "):
-                parts = line[3:].split()
-                rid = parts[0]
-                path = tuple(int(i) for i in parts[1].split(".")) if len(parts) > 1 else None
-                n0 = len(s.log)
-                res = s.apply(rid, path)
-                print(to_str(res) if isinstance(res, T.Term) else res)
-                for ln in s.steps()[n0:]:
-                    print("  " + ln)   # 规则应用当场给可解释反馈
-            elif line == ":defs":
-                for nm, (ps_, body) in s.defs.items():
-                    sig = f"{nm}({', '.join(p.name for p in ps_)})" if ps_ else nm
-                    print(f"{sig} := {to_str(body)}")
-                if not s.defs:
-                    print("(none)")
-            elif line.startswith(":undef "):
-                print(s.undef(line[7:].strip()))
-            elif line.startswith(":u"):
-                n = int(line[2:] or 1)
-                print(to_str(s.undo(n)) if s.log else "no steps")
-            elif line == ":auto":
-                n0 = len(s.log)
-                print(to_str(s.auto()))
-                for ln in s.steps()[n0:]:
-                    print("  " + ln)
-            elif line.startswith(":assume "):
-                print(s.assume(s.expand_history(line[8:])))
-            elif line.startswith(":declare "):
-                parts = line[9:].split()
-                if len(parts) == 2:
-                    print(s.declare(parts[0], parts[1]))
-                else:
-                    print("usage: :declare <var> <property>")
-            elif line.startswith(":ans "):
-                parts = line[5:].split(None, 1)
-                oid = int(parts[0])
-                print(s.answer(oid, s.expand_history(parts[1])))
-            elif line == ":obls":
-                for o in s.obligations:
-                    print(f"#{o.oid}  {to_str(o.question)}   affects steps {o.affects}")
-                if not s.obligations:
-                    print("(none)")
-            elif line == ":log":
-                for st in s.log:
-                    print(f"#{st.sid} {st.rule_id:18s} at {st.path}  {to_str(st.before)}  ->  {to_str(st.after)}")
-                if not s.log:
-                    print("(no steps)")
-            elif line == ":ctx":
-                for e in s.ctx.entries:
-                    print(f"[{e.kind}:{e.origin}] {to_str(e.fact)}")
-                if not s.ctx.entries:
-                    print("(empty ledger)")
-            elif line == ":load":
-                import os
-
-                rd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
-                print(f"loaded {loader.load_dir(rd, s.rules)} rules")
-            elif ":=" in line:
-                # 用户定义：f(x) := 体（函数）/ a := 体（变量），宏展开语义；右侧支持 % 历史
-                lhs, rhs = line.split(":=", 1)
-                lhs = lhs.strip()
-                rhs = s.expand_history(rhs.strip())
-                if "(" in lhs:
-                    print(s.define(lhs, rhs))
-                else:
-                    print(s.assign(lhs, rhs))
-            else:
-                s.feed(s.expand_history(line))
-                print(s.show())
-        except (BudgetExceeded, ParseError) as e:
-            print(f"error: {e}")
-        except Exception as e:
-            print(f"error: {e.__class__.__name__}: {e}")
+        out = s.handle(line)
+        if out:
+            print(out)
 
 
 if __name__ == "__main__":

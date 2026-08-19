@@ -79,7 +79,8 @@ def to_str(t, prec=0, hint=None):
         if name in ("Integrate", "Sum", "Product", "Limit") and len(u.args) == 1 and isinstance(u.args[0], Bound):
             b = u.args[0]
             sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]
-            val[u] = (f"{sym}[{_wrap(val[b.body], 0)}] d{b.hint}", _ATOM_P)
+            _v, ob = T.open_bound(b)   # DB 索引还原为绑定变量名再渲染
+            val[u] = (f"{sym}[{to_str(ob)}] d{b.hint}", _ATOM_P)
             continue
         if name == "Piecewise" and len(u.args) % 2 == 0:
             parts = [
@@ -148,6 +149,8 @@ def to_str(t, prec=0, hint=None):
                 if T.is_num(b) and (T.num_val(b) < 0 or isinstance(b, Rat)):
                     sb = "(" + sb + ")"
                 se = _wrap(val[e], p + 1)
+                if isinstance(e, Rat):
+                    se = "(" + se + ")"   # 3^1/2 有歧义（^优先于/），分数指数必加括号
                 s = f"{sb}^{se}"
             else:
                 parts = [_wrap(val[a], p + 1) for a in u.args]

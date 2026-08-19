@@ -31,6 +31,8 @@ class FunctionSpec:
     dom: object = None            # callable(term) -> [约束]：dom_condition
     special: dict = field(default_factory=dict)   # {arg 项: 值}：构造即折叠
     numeric: object = None        # callable(*float) -> float：数值求值层（仅验证/抽查通道）
+    anti: object = None           # callable(arg) -> 原函数（裸函数简单积分表，定积分友好）
+    inv: str = None               # 逆函数头名（主支）：f(x)=c -> x=inv(c)，带主支注释
 
 
 SPECS = {}
@@ -53,6 +55,8 @@ register(FunctionSpec(
     bound=(Fr(-1), Fr(1)),
     special={ZERO: ZERO, PI: ZERO, _HALF_PI: ONE},
     numeric=math.sin,
+    anti=lambda a: T.neg(T.cos(a)),
+    inv="Arcsin",
 ))
 register(FunctionSpec(
     "Cos", 1, print_name="cos", parity="even",
@@ -60,18 +64,23 @@ register(FunctionSpec(
     bound=(Fr(-1), Fr(1)),
     special={ZERO: ONE, PI: MONE, _HALF_PI: ZERO},
     numeric=math.cos,
+    anti=lambda a: T.sin(a),
+    inv="Arccos",
 ))
 register(FunctionSpec(
     "Tan", 1, print_name="tan", parity="odd",
     deriv=lambda a: T.plus(ONE, T.pw(T.tan(a), N(2))),
     special={ZERO: ZERO, PI: ZERO},
     numeric=math.tan,
+    inv="Atan",
 ))
 register(FunctionSpec(
     "Exp", 1, print_name="exp",
     deriv=lambda a: T.exp(a),
     special={ZERO: ONE},
     numeric=math.exp,
+    anti=lambda a: T.exp(a),
+    inv="Log",
 ))
 register(FunctionSpec(
     "Log", 1, print_name="log",
@@ -79,6 +88,7 @@ register(FunctionSpec(
     dom=lambda t: [T.mk(S("Gt"), (t.args[0], ZERO))],
     special={ONE: ZERO},
     numeric=math.log,
+    inv="Exp",
 ))
 register(FunctionSpec(
     "Abs", 1, print_name="abs",
@@ -111,12 +121,14 @@ register(FunctionSpec(
     deriv=lambda a: T.cosh(a),
     special={ZERO: ZERO},
     numeric=math.sinh,
+    anti=lambda a: T.cosh(a),
 ))
 register(FunctionSpec(
     "Cosh", 1, print_name="cosh", parity="even",
     deriv=lambda a: T.sinh(a),
     special={ZERO: ONE},
     numeric=math.cosh,
+    anti=lambda a: T.sinh(a),
 ))
 register(FunctionSpec(
     "Tanh", 1, print_name="tanh", parity="odd",

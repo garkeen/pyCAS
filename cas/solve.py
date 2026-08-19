@@ -60,6 +60,8 @@ def _free(t, var):
 
 
 def _linear_split(t, var):
+    if _free(t, var):
+        return T.ZERO, t   # 不含未知量的子式（含 e^x 等复杂常数）整体作常数
     if t is var:
         return T.ONE, T.ZERO
     if isinstance(t, Expr):
@@ -212,6 +214,49 @@ def _poly_solve(p, var):
     return SolveResult(_sort_sols(seen), [], "ok" if not note else "unsupported", note=note)
 
 
+def _inverse_case(lhs, var):
+    """f(var) = c（f 在 spec 声明了逆 inv）：主支逆解。
+
+    sin(x)=c -> arcsin(c) 等；周期族通解未建，诚实标注主支条件。
+    逆函数的特殊点折叠由 mk 自动完成（arcsin(1) -> π/2）。
+    """
+    from cas import spec as _spec
+
+    # 裸函数形态 f(var) = 0（Plus 单项归并后只剩 f 本身）
+    if isinstance(lhs, Expr) and len(lhs.args) == 1 and lhs.args[0] is var:
+        sp = _spec.get(lhs.head.name)
+        if sp is not None and sp.inv is not None:
+            sol = simplify(T.mk(S(sp.inv), (T.ZERO,)))
+            return SolveResult([sol], [], "ok",
+                               note=f"principal branch of {sp.print_name or sp.name}")
+        return None
+
+    if not (isinstance(lhs, Expr) and lhs.head.name == "Plus" and len(lhs.args) == 2):
+        return None
+
+    def _unwrap(t):
+        if isinstance(t, Expr) and t.head.name == "Times" and len(t.args) == 2 and t.args[0] is T.MONE:
+            return -1, t.args[1]
+        return 1, t
+
+    for a, b in ((lhs.args[0], lhs.args[1]), (lhs.args[1], lhs.args[0])):
+        sa, ca = _unwrap(a)
+        sb, cb = _unwrap(b)
+        if not (isinstance(ca, Expr) and len(ca.args) == 1 and ca.args[0] is var):
+            continue
+        sp = _spec.get(ca.head.name)
+        if sp is None or sp.inv is None:
+            continue
+        if not _free(cb, var):
+            continue
+        # lhs = sa·f(var) + sb·cb = 0 -> f(var) = -(sb/sa)·cb
+        rhs = cb if sb != sa else T.neg(cb)
+        sol = simplify(T.mk(S(sp.inv), (rhs,)))
+        return SolveResult([sol], [], "ok",
+                           note=f"principal branch of {sp.print_name or sp.name}")
+    return None
+
+
 def solve(f, var, budget=100000):
     var = T.S(var) if isinstance(var, str) else var
     if isinstance(f, Expr) and f.head.name == "Eq":
@@ -219,6 +264,10 @@ def solve(f, var, budget=100000):
     else:
         lhs = f
     lhs = simplify(expand(lhs), budget)
+
+    inv_r = _inverse_case(lhs, var)
+    if inv_r is not None:
+        return inv_r
 
     lin = _linear_split(lhs, var)
     if lin is not None:

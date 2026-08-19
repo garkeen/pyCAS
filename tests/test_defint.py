@@ -1,0 +1,83 @@
+import unittest
+
+from cas.parser import parse
+from cas.pprint import to_str
+from cas.term import S
+from cas.integrate import defint, integrate
+
+
+x = S("x")
+
+
+def D(expr, lo, hi):
+    return defint(parse(expr), x, parse(lo), parse(hi))
+
+
+class TestDefint(unittest.TestCase):
+    """定积分：Newton-Leibniz + 奇点拆分 + 端点极限 + 数值交叉核对。"""
+
+    def test_basic(self):
+        v, st, _ = D("x^2", "0", "1")
+        self.assertEqual((to_str(v), st), ("1/3", "VERIFIED"))
+        v, st, _ = D("x", "0", "2")
+        self.assertEqual(to_str(v), "2")
+        v, st, _ = D("1/x^2", "1", "2")
+        self.assertEqual(to_str(v), "1/2")
+
+    def test_trig_pi_bounds(self):
+        v, st, _ = D("sin(x)", "0", "pi")
+        self.assertEqual((to_str(v), st), ("2", "VERIFIED"))
+        v, st, _ = D("cos(x)", "0", "pi/2")
+        self.assertEqual(to_str(v), "1")
+
+    def test_atan_real_form(self):
+        # 负判别式二次因子走实形式（atan），不再出 RootOf
+        v, st, _ = D("1/(1+x^2)", "0", "1")
+        self.assertEqual((to_str(v), st), ("atan(1)", "VERIFIED"))
+        F, ok, _ = integrate(parse("1/(x^2+1)"), x)
+        self.assertEqual(to_str(F), "atan(x)")
+
+    def test_reversed_bounds(self):
+        v, st, _ = D("x", "3", "1")
+        self.assertEqual((to_str(v), st), ("-4", "VERIFIED"))
+
+    def test_divergence(self):
+        v, st, note = D("1/x^2", "-1", "1")
+        self.assertIsNone(v)
+        self.assertEqual(st, "DIVERGES")
+
+    def test_interior_singularity_honest(self):
+        # 1/(x-1) 在 (0,2) 内奇异：端点极限不可判 -> 诚实 UNKNOWN（不给错值）
+        v, st, _ = D("1/(x-1)", "0", "2")
+        self.assertIsNone(v)
+        self.assertIn(st, ("UNKNOWN", "DIVERGES"))
+
+    def test_log_integrand(self):
+        v, st, _ = D("(2*x+1)/(x^2+x+1)", "0", "1")
+        self.assertEqual((to_str(v), st), ("log(3)", "VERIFIED"))
+
+    def test_empty_interval(self):
+        import cas.term as T
+
+        v, st, _ = D("x^2", "1", "1")
+        self.assertIs(v, T.ZERO)
+        self.assertEqual(st, "VERIFIED")
+
+
+class TestDefintSession(unittest.TestCase):
+    def test_kernel_commands(self):
+        from cas.session import Session
+
+        s = Session()
+        out = s.kernel["defint"].fn(s, "sin(x) x 0 pi")
+        self.assertIn("2", out)
+        self.assertIn("VERIFIED", out)
+        out = s.kernel["limit"].fn(s, "sin(x)/x x 0")
+        self.assertEqual(out, "1")
+        self.assertEqual(s.kernel["limit"].fn(s, "sin(1/x) x 0"), "UNKNOWN")
+        # 算法步入账
+        self.assertTrue(any(st.rule_id.startswith("kernel:defint") for st in s.log))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

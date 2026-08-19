@@ -69,7 +69,11 @@ def together(t):
     """通分并约分（单变量与多变量均可）。返回规范有理式项。"""
     (p, q), _ = _pair(t)
     if q.is_const():
-        return p.to_term()
+        c = q.const_val()
+        if c == 1:
+            return p.to_term()
+        # 常数分母不可丢：(u^2-2u)/(-u) 约分后分母为 -1，符号并入分子
+        return p.scalar(1 / c).to_term()
     return T.times(p.to_term(), T.pw(q.to_term(), T.MONE))
 
 

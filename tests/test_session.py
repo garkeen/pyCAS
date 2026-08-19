@@ -207,7 +207,7 @@ class TestPowerRules(unittest.TestCase):
         s.assume("x > 0")
         s.assume("y > 0")
         res = s.apply("pow_mul")
-        self.assertEqual(to_str(res), "x^1/2*y^1/2")
+        self.assertEqual(to_str(res), "x^(1/2)*y^(1/2)")
 
 
 class TestReplayRobustness(unittest.TestCase):
