@@ -240,4 +240,4 @@ Sturm 不等式、代数数 ℚ(α)。
 
 **远期路线**：M4 求和/差分（Gosper）→ M5 Risch 分期 → ODE 扩展
 （非齐次/常系数系统）；结构债：ℚ(params) 系数域全参数化、RootOf 复根隔离。
-详见 `docs/cas_v2_arch.md`。
+架构设计见 `docs/cas_v2_arch.md`；修订裁定与调研教训见 `docs/notes.md`。

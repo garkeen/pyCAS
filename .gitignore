@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.git_commit_msg.txt

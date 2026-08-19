@@ -854,7 +854,7 @@ def eval_guard(guard, sub, ctx):
 
 
 def equivalent(a, b, ctx=None, budget=100000):
-    """统一判等管线（§11.2）：指针 -> 环层归零 -> 三角层 -> 账本/多项式片段
+    """统一判等管线（设计调研见 docs/notes.md §2.2）：指针 -> 环层归零 -> 三角层 -> 账本/多项式片段
     -> 数值采样 PROBABLE -> 诚实 UNKNOWN。"""
     from cas.simplify import simplify
     from cas.context import Context

@@ -1,6 +1,7 @@
 # pyCAS API 参考（数据结构 + 全部 API）
 
-> 对应架构：`docs/cas_v2_arch.md`；使用教程：`docs/manual.md`。
+> 对应架构：`docs/cas_v2_arch.md`；使用教程：`docs/manual.md`；
+> 修订裁定/调研/教训：`docs/notes.md`。
 > 本文档只讲"有什么、怎么用"。状态与代码同步（M3 收尾）。
 
 ---
