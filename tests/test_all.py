@@ -753,5 +753,51 @@ class TestApart(unittest.TestCase):
         self.assertEqual(pairs, {("1", "x - 1", 1), ("2", "x - 1", 2)})
 
 
+class TestIntegrate(unittest.TestCase):
+    def t(self, s):
+        from cas.integrate import integrate
+
+        return integrate(parse(s), parse("x"))
+
+    def test_verified_cases(self):
+        cases = [
+            "1", "x", "x^2", "1/(x-1)", "1/(x^2-1)", "x/(x^2-1)", "1/(x^2+1)",
+            "x/(x^2+1)", "1/(x^2+x+1)", "1/(x^3-1)", "x/(x^3-1)", "1/(x^2+1)^2",
+            "1/(x^2*(x+1))", "(x^3+1)/(x^2+1)", "1/(x^4-1)", "x^5/(x^4-1)",
+            "1/(x^2+2*x+2)", "1/(x^3+x)", "1/(x^5-1)", "1/(x^3-2)", "x^2/(x^3-2)",
+            "1/(x^4+x^3+x^2+x+1)", "1/((x^2+1)*(x+1)^3)", "(2*x+1)/(x^2+x+1)",
+        ]
+        for s in cases:
+            res, ok = self.t(s)
+            self.assertTrue(ok, s)
+
+    def test_known_results(self):
+        from cas.pprint import to_str
+
+        res, ok = self.t("x")
+        self.assertEqual(to_str(res), "1/2*x^2")
+        res, ok = self.t("x^2")
+        self.assertEqual(to_str(res), "1/3*x^3")
+        res, ok = self.t("1/(x^2-1)")
+        self.assertEqual(to_str(res), "1/2*log(x - 1) - 1/2*log(x + 1)")
+        res, ok = self.t("1/x")
+        self.assertEqual(to_str(res), "log(x)")
+        res, ok = self.t("1/(x+1)")
+        self.assertEqual(to_str(res), "log(x + 1)")
+        res, ok = self.t("x^2/(x-1)")
+        self.assertEqual(
+            to_str(res), "x + log(x - 1) + 1/2*x^2"
+        )
+
+    def test_linear_power(self):
+        from cas.pprint import to_str
+
+        res, ok = self.t("1/(x-1)^3")
+        self.assertTrue(ok)
+        self.assertEqual(to_str(res), "-1/2/(x - 1)^2")
+        res, ok = self.t("1/(x^2*(x+1))")
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

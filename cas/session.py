@@ -308,6 +308,18 @@ class Session:
             out.append(f"{s_}^{k}" if k > 1 else s_)
         return " + ".join(out) if out else "0"
 
+    def integrate(self, s):
+        from cas.integrate import integrate as zz_int
+        from cas.pprint import to_str as ps
+
+        t = parse(s)
+        x = self._pick_var(t)
+        if x is None:
+            return "no variable"
+        res, ok = zz_int(t, x)
+        out = ps(res)
+        return f"{out}   [VERIFIED]" if ok else f"{out}   [UNVERIFIED]"
+
     def show(self):
         return to_str(self.current) if self.current is not None else "(empty)"
 
@@ -326,6 +338,7 @@ class Session:
             ":solve": "solve <expr> [var]",
             ":factor": "factor <expr>",
             ":apart": "apart <num> <den>",
+            ":integrate": "integrate <expr>",
             ":mat": "show matrix [[a,b],[c,d]]",
             ":mdet": "determinant [[a,b],[c,d]]",
             ":mrank": "rank [[a,b],[c,d]]",
@@ -404,6 +417,8 @@ def run():
                     print(s.apart(args[0], args[1]))
                 else:
                     print("usage: :apart <numerator> <denominator>")
+            elif line.startswith(":integrate "):
+                print(s.integrate(line[11:].strip()))
             elif line.startswith(":mat "):
                 print(s.mat(line[5:].strip()))
             elif line.startswith(":mdet "):
