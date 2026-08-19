@@ -28,6 +28,12 @@ def d(t, x):
         return times(t, plus(times(d(e, x), T.fn("Log")(b)), T.div(times(e, d(b, x)), b)))
     if name == "Quote":
         return T.mk(S("D"), (t, x))
+    if name == "Piecewise" and len(t.args) % 2 == 0:
+        # 结构头（同 Plus/Times 类别）：逐分支求导，条件照抄；边界连续性不判
+        new = []
+        for i in range(0, len(t.args), 2):
+            new.extend([d(t.args[i], x), t.args[i + 1]])
+        return T.mk(S("Piecewise"), tuple(new))
     # 导数表来自 FunctionSpec 注册表（反硬编码：新函数在 spec.py 注册即可）
     sp = _spec.get(name)
     if sp is not None and sp.deriv is not None and len(t.args) == sp.arity == 1:

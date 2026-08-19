@@ -678,6 +678,35 @@ def _norm_conjugate(args):
 register_norm("Conjugate", _norm_conjugate)
 
 
+def _norm_piecewise(args):
+    """Piecewise 表示归并：剪除 false 分支；true 默认分支截断其后分支。
+
+    语法：(v1, c1, v2, c2, ...) 偶数长，条件为 BVal/比较项；
+    全 false -> Undefined；奇数长/含洞保持名词（模式语义）。
+    分段边界连续性不做判定（留给 decide/定积分层）。
+    """
+    if len(args) % 2 == 1:
+        return None
+    if any(isinstance(a, (PatVar, PatSeq)) for a in args):
+        return None
+    out = []
+    for i in range(0, len(args), 2):
+        v, c = args[i], args[i + 1]
+        if c is FALSE:
+            continue
+        out.extend([v, c])
+        if c is TRUE:
+            break
+    if not out:
+        return UND
+    if len(out) == len(args) and all(a is b for a, b in zip(out, args)):
+        return None
+    return _intern_expr(S("Piecewise"), tuple(out))
+
+
+register_norm("Piecewise", _norm_piecewise)
+
+
 _SPEC_MOD = None
 
 

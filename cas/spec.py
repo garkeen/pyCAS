@@ -92,9 +92,17 @@ register(FunctionSpec(
 ))
 register(FunctionSpec(
     "Arcsin", 1, print_name="arcsin",
-    deriv=lambda a: T.div(ONE, T.sqrt(T.plus(T.neg(ONE), T.pw(a, N(2))))),
-    special={ZERO: ZERO},
+    deriv=lambda a: T.div(ONE, T.sqrt(T.plus(ONE, T.neg(T.pw(a, N(2)))))),
+    dom=lambda t: [T.mk(S("Ge"), (t.args[0], MONE)), T.mk(S("Le"), (t.args[0], ONE))],
+    special={ZERO: ZERO, ONE: _HALF_PI, MONE: T.neg(_HALF_PI)},
     numeric=math.asin,
+))
+register(FunctionSpec(
+    "Arccos", 1, print_name="arccos",
+    deriv=lambda a: T.neg(T.div(ONE, T.sqrt(T.plus(ONE, T.neg(T.pw(a, N(2))))))),
+    dom=lambda t: [T.mk(S("Ge"), (t.args[0], MONE)), T.mk(S("Le"), (t.args[0], ONE))],
+    special={ONE: ZERO, ZERO: _HALF_PI, MONE: PI},
+    numeric=math.acos,
 ))
 # 双曲函数域（M2 梯队三）：注册即得导数/打印名/奇偶规则/特殊点折叠/数值层，
 # 核心代码零改动（FunctionSpec 红利验收）；无界故不声明 bound。

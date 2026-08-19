@@ -1,0 +1,3 @@
+# piecewise theorems
+# abs 的分段定义（实数域定理，方向标签 expand；反向合并留给带条件策略）
+rule abs_def = abs(?x) -> piecewise(?x, ?x >= 0, -?x, true) as expand

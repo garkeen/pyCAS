@@ -155,6 +155,7 @@ class Session:
         self.locked = None
         self.load_error = None
         self.history = []   # 产出过的表达式（%N 复用，REPL 交互标配）
+        self.defs = {}      # 用户定义：头名/变量名 -> (参数元组, 体)；空参 = 变量
         self._sid = 0
         self._oid = 0
         rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
@@ -178,6 +179,9 @@ class Session:
             "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
             "minv": KernelCmd("inverse [[a,b],[c,d]]", lambda s, r: s.minv(r.strip())),
             "msolve": KernelCmd("solve system: :msolve [[a,b],[c,d]] [e,f]", _k_msolve),
+            "charpoly": KernelCmd("charpoly [[a,b],[c,d]] = det(lam*I - M)", lambda s, r: s.mcharpoly(r.strip())),
+            "eigenvalues": KernelCmd("eigenvalues [[a,b],[c,d]]", lambda s, r: s.meigenvalues(r.strip())),
+            "eigenvectors": KernelCmd("eigenvectors [[a,b],[c,d]]", lambda s, r: s.meigenvectors(r.strip())),
             "together": KernelCmd("together <expr> (common denominator)", _k_together),
             "collect": KernelCmd("collect <expr> <var>", _k_collect),
             "numerator": KernelCmd("numerator <expr>", _k_num_den("numerator")),
@@ -192,9 +196,92 @@ class Session:
 
     def feed(self, s):
         self._check_locked()
-        self.current = parse(s)
+        self.current = self._expand_defs(parse(s), bare_ok=True)
         self._remember(self.current)
         return self.current
+
+    # ---------------- 用户定义（交互式 CAS 标配：f(x) := 体 / a := 体） ----------------
+
+    _RESERVED = {"Plus", "Times", "Power", "Eq", "Ne", "Lt", "Le", "Gt", "Ge",
+                 "And", "Or", "Not", "Bound", "Quote", "D", "Attr", "Piecewise"}
+
+    def _check_def_name(self, name):
+        from cas.spec import SPECS
+
+        # 裸符号不capitalize（Sym 保持原名），但函数头会首字母大写——
+        # 两种形态都不得与保留头/spec 头冲突
+        cap = name[0].upper() + name[1:] if len(name) > 1 else name
+        if name in self._RESERVED or cap in self._RESERVED or name in SPECS or cap in SPECS:
+            raise ParseError(f"cannot redefine built-in: {name}")
+
+    def define(self, sig_s, body_s):
+        """函数定义 f(x, y) := 体：feed 时对 f(...) 出现做宏展开（参数代入）。"""
+        sig = parse(sig_s)
+        if not (isinstance(sig, T.Expr) and sig.args and all(isinstance(a, T.Sym) for a in sig.args)):
+            raise ParseError("usage: name(x, y) := expr")
+        name = sig.head.name
+        self._check_def_name(name)
+        self.defs[name] = (tuple(sig.args), parse(body_s))
+        return f"defined: {name}({', '.join(a.name for a in sig.args)})"
+
+    def assign(self, name_s, body_s):
+        """变量定义 a := 体：feed 时对同名符号全局代入（宏语义，非方程）。"""
+        v = parse(name_s)
+        if not isinstance(v, T.Sym):
+            raise ParseError("usage: name := expr")
+        self._check_def_name(v.name)
+        self.defs[v.name] = ((), parse(body_s))
+        return f"assigned: {v.name}"
+
+    def undef(self, name_s):
+        v = parse(name_s)
+        nm = v.head.name if isinstance(v, T.Expr) else getattr(v, "name", None)
+        if nm in self.defs:
+            del self.defs[nm]
+            return f"undefined: {nm}"
+        return f"no definition: {name_s}"
+
+    def _subst_defs(self, t):
+        """单遍定义展开（显式栈后序重建）：函数头按参数代入，变量直接替换。"""
+        order = []
+        stack = [t]
+        while stack:
+            u = stack.pop()
+            order.append(u)
+            if isinstance(u, T.Expr):
+                stack.extend(u.args)
+            elif isinstance(u, T.Bound):
+                stack.append(u.body)
+        val = {}
+        for u in reversed(order):
+            if isinstance(u, T.Expr):
+                new_args = tuple(val[a] for a in u.args)
+                rebuilt = T.mk(u.head, new_args)
+                d_ = self.defs.get(u.head.name)
+                if d_ is not None and len(d_[0]) == len(new_args):
+                    rebuilt = T.subst(d_[1], dict(zip(d_[0], new_args)))
+                val[u] = rebuilt
+            elif isinstance(u, T.Bound):
+                val[u] = T.mk_bound(u.hint, val[u.body])
+            else:
+                d_ = self.defs.get(u.name, None) if isinstance(u, T.Sym) else None
+                val[u] = d_[1] if d_ is not None and d_[0] == () else u
+        return val[t]
+
+    def _expand_defs(self, t, bare_ok=False):
+        """定义展开到不动点；轮数上限兼防递归定义死循环（永不静默错）。
+
+        bare_ok=False 时裸符号不展开（内核参数位，变量名作主语优先）；
+        feed 交互输入 bare_ok=True（变量定义求值语义，函数定义仍需调用才展开）。
+        """
+        if not self.defs or (isinstance(t, T.Sym) and not bare_ok):
+            return t
+        for _ in range(20):
+            nxt = self._subst_defs(t)
+            if nxt is t:
+                return t
+            t = nxt
+        raise BudgetExceeded(message="definition expansion too deep (recursive definition?)")
 
     def _remember(self, t):
         if isinstance(t, T.Term) and t not in (T.ZERO, T.ONE):
@@ -220,6 +307,14 @@ class Session:
             return to_str(t, prec=99)
 
         return re.sub(r"%(\d*)", rep, line)
+
+    def _parse_in(self, s):
+        """会话内输入统一入口：解析 + 用户定义展开。
+
+        裸符号豁免：内核参数位裸符号常作主语（如 :integrate f 的积分变量），
+        变量名优先于宏语义。
+        """
+        return self._expand_defs(parse(s), bare_ok=False)
 
     def _guard_eval(self, guard, sub):
         return _eval_guard(guard, sub, self.ctx)
@@ -354,7 +449,7 @@ class Session:
         return self.current
 
     def assume(self, s):
-        f = parse(s)
+        f = self._parse_in(s)
         st, why = self.ctx.check_and_assume(f, origin="user")
         if st is T3.NO:
             if why == "domain":
@@ -401,7 +496,7 @@ class Session:
 
     def answer(self, oid, s):
         self._check_locked()
-        f = parse(s)
+        f = self._parse_in(s)
         obl = next((o for o in self.obligations if o.oid == oid), None)
         if obl is None:
             return f"no obligation #{oid}"
@@ -479,15 +574,15 @@ class Session:
     def verify(self, Fs, xs, fs):
         from cas.diff import verify
 
-        F = parse(Fs)
+        F = self._parse_in(Fs)
         x = parse(xs)
-        f = parse(fs)
+        f = self._parse_in(fs)
         return verify(F, x, f, self.budget)
 
     def solve(self, fs, vs=None):
         from cas.solve import solve
 
-        f = parse(fs)
+        f = self._parse_in(fs)
         if vs:
             var = T.S(vs)
         else:
@@ -552,6 +647,36 @@ class Session:
         )
         return f"infinite: {parts}  + t*({basis})"
 
+    def mcharpoly(self, spec):
+        from cas.matrix import Matrix
+
+        t, lam = Matrix.parse(spec).charpoly()
+        return f"{to_str(t)}   (in {lam.name})"
+
+    def meigenvalues(self, spec):
+        from cas.matrix import Matrix
+
+        r = Matrix.parse(spec).eigenvalues()
+        if r.status == "ok":
+            out = ", ".join(to_str(v) for v in r.solutions) or "(none)"
+            if r.provisos:
+                out += "   [proviso: " + " && ".join(to_str(g) for g in r.provisos) + "]"
+            return out
+        return "unsupported: " + (r.note or r.status)
+
+    def meigenvectors(self, spec):
+        from cas.matrix import Matrix, MatrixError
+
+        try:
+            pairs = Matrix.parse(spec).eigenvectors()
+        except MatrixError as e:
+            return str(e)
+        lines = []
+        for v, basis in pairs:
+            vecs = "; ".join("(" + ", ".join(to_str(c) for c in b) + ")" for b in basis)
+            lines.append(f"lam = {to_str(v)}: {vecs or '(none found)'}")
+        return "\n".join(lines)
+
     def _pick_var(self, t):
         for p in T.all_paths(t):
             v = T.term_at(t, p)
@@ -563,7 +688,7 @@ class Session:
         from cas.factor import factor_str
         from cas.poly import Poly
 
-        t = parse(s)
+        t = self._parse_in(s)
         x = self._pick_var(t)
         if x is None:
             return "no variable"
@@ -573,8 +698,8 @@ class Session:
         from cas.poly import Poly
         from cas.apart import apart as zz_apart
 
-        t1 = parse(num_s)
-        t2 = parse(den_s)
+        t1 = self._parse_in(num_s)
+        t2 = self._parse_in(den_s)
         x = self._pick_var(t1) or self._pick_var(t2)
         if x is None:
             return "no variable"
@@ -603,7 +728,7 @@ class Session:
         from cas.integrate import integrate as zz_int
         from cas.pprint import to_str as ps
 
-        t = parse(s)
+        t = self._parse_in(s)
         x = self._pick_var(t)
         if x is None:
             return "no variable"
@@ -643,6 +768,8 @@ class Session:
             ":auto": "core simplify",
             ":steps": "explain the derivation (rules step-by-step; algorithms by name)",
             ":hist": "produced expressions (%N to reuse, % = latest)",
+            ":defs": "list user definitions (name := expr / f(x) := expr)",
+            ":undef": "remove a definition",
             ":assume": "assume <fact>",
             ":ans": "answer <oid> <fact>",
             ":obls": "list obligations",
@@ -704,6 +831,14 @@ def run():
                 print(to_str(res) if isinstance(res, T.Term) else res)
                 for ln in s.steps()[n0:]:
                     print("  " + ln)   # 规则应用当场给可解释反馈
+            elif line == ":defs":
+                for nm, (ps_, body) in s.defs.items():
+                    sig = f"{nm}({', '.join(p.name for p in ps_)})" if ps_ else nm
+                    print(f"{sig} := {to_str(body)}")
+                if not s.defs:
+                    print("(none)")
+            elif line.startswith(":undef "):
+                print(s.undef(line[7:].strip()))
             elif line.startswith(":u"):
                 n = int(line[2:] or 1)
                 print(to_str(s.undo(n)) if s.log else "no steps")
@@ -744,6 +879,15 @@ def run():
 
                 rd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
                 print(f"loaded {loader.load_dir(rd, s.rules)} rules")
+            elif ":=" in line:
+                # 用户定义：f(x) := 体（函数）/ a := 体（变量），宏展开语义；右侧支持 % 历史
+                lhs, rhs = line.split(":=", 1)
+                lhs = lhs.strip()
+                rhs = s.expand_history(rhs.strip())
+                if "(" in lhs:
+                    print(s.define(lhs, rhs))
+                else:
+                    print(s.assign(lhs, rhs))
             else:
                 s.feed(s.expand_history(line))
                 print(s.show())

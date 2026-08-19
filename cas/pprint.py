@@ -81,6 +81,13 @@ def to_str(t, prec=0, hint=None):
             sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]
             val[u] = (f"{sym}[{_wrap(val[b.body], 0)}] d{b.hint}", _ATOM_P)
             continue
+        if name == "Piecewise" and len(u.args) % 2 == 0:
+            parts = [
+                f"{_wrap(val[u.args[i]], 0)} if {_wrap(val[u.args[i + 1]], 0)}"
+                for i in range(0, len(u.args), 2)
+            ]
+            val[u] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
+            continue
         if name in _PREC:
             p = _PREC[name]
             if name == "Plus":

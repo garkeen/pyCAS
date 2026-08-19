@@ -266,15 +266,16 @@ def _solve_param_lowdeg(lhs, var):
             if c0 is T.ZERO:
                 return SolveResult([], [], "identity")
             return SolveResult([], [], "contradiction")
-        return SolveResult(
-            [T.div(T.neg(c0), c1)], [T.mk(S("Ne"), (c1, T.ZERO))], "ok"
-        )
+        # 数值系数非零时条件平凡恒真，不入 proviso
+        prov = [] if T.is_num(c1) else [T.mk(S("Ne"), (c1, T.ZERO))]
+        return SolveResult([T.div(T.neg(c0), c1)], prov, "ok")
     D = simplify(expand(T.plus(T.pw(c1, N(2)), T.neg(T.times(N(4), c2, c0)))))
     sD = T.sqrt(D)
     two_a = T.times(N(2), c2)
     x1 = T.div(T.plus(T.neg(c1), sD), two_a)
     x2 = T.div(T.plus(T.neg(c1), T.neg(sD)), two_a)
-    return SolveResult([x1, x2], [T.mk(S("Ne"), (c2, T.ZERO))], "ok")
+    prov = [] if T.is_num(c2) else [T.mk(S("Ne"), (c2, T.ZERO))]
+    return SolveResult([x1, x2], prov, "ok")
 
 
 def check_solution(f, sol, var, budget=100000):

@@ -82,5 +82,57 @@ class TestMatrix(unittest.TestCase):
         self.assertEqual(m.rank(), 1)
 
 
+class TestSpectrum(unittest.TestCase):
+    """谱理论：charpoly/eigenvalues/eigenvectors（ODE 常系数系统前置）。"""
+
+    def _M(self, spec):
+        from cas.matrix import Matrix
+
+        return Matrix.parse(spec)
+
+    def test_charpoly(self):
+        t, lam = self._M("[[1,2],[2,1]]").charpoly()
+        self.assertEqual(to_str(t), "lam^2 - 2*lam - 3")
+        self.assertEqual(lam.name, "lam")
+
+    def test_eigenvalues(self):
+        r = self._M("[[1,2],[2,1]]").eigenvalues()
+        self.assertEqual(r.status, "ok")
+        self.assertEqual({to_str(v) for v in r.solutions}, {"-1", "3"})
+        self.assertEqual(r.provisos, [])   # 数值系数无平凡 proviso
+        # 三角阵与旋转阵（复特征值）
+        self.assertEqual(
+            {to_str(v) for v in self._M("[[2,1],[0,3]]").eigenvalues().solutions},
+            {"2", "3"},
+        )
+        self.assertEqual(
+            {to_str(v) for v in self._M("[[0,-1],[1,0]]").eigenvalues().solutions},
+            {"i", "-i"},
+        )
+
+    def test_eigenvectors(self):
+        pairs = self._M("[[1,2],[2,1]]").eigenvectors()
+        got = {to_str(v): [to_str(b[0]) + ":" + to_str(b[1]) for b in basis]
+               for v, basis in pairs}
+        self.assertEqual(got["3"], ["1:1"])
+        self.assertEqual(got["-1"], ["-1:1"])
+
+    def test_3x3(self):
+        r = self._M("[[2,0,0],[0,3,4],[0,4,-3]]").eigenvalues()
+        self.assertEqual({to_str(v) for v in r.solutions}, {"2", "5", "-5"})
+
+    def test_symbolic_charpoly(self):
+        t, _ = self._M("[[a,a],[a,a]]").charpoly()
+        self.assertEqual(to_str(t), "lam^2 - 2*a*lam")
+
+    def test_session_commands(self):
+        from cas.session import Session
+
+        s = Session()
+        self.assertIn("lam^2 - 2*lam - 3", s.kernel["charpoly"].fn(s, "[[1,2],[2,1]]"))
+        self.assertIn("3", s.kernel["eigenvalues"].fn(s, "[[1,2],[2,1]]"))
+        self.assertIn("lam = 3", s.kernel["eigenvectors"].fn(s, "[[1,2],[2,1]]"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

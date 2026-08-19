@@ -209,3 +209,75 @@ class Matrix:
 
     def show(self):
         return "\n".join(_row_str(r) for r in self.rows)
+
+    # ---------------- 谱理论（ODE 常系数系统前置） ----------------
+
+    def charpoly(self, lam=None):
+        """特征多项式 det(lam*I - M) -> (term, lam)。
+
+        用排列定义（Leibniz 公式）而非消元：消元的除法会在元素里留分母，
+        det 的 expand 无法通分清掉；纯乘加展开天然是多项式表示。
+        ODE 尺度的矩阵（n 小）代价可接受。
+        """
+        if self.nrows != self.ncols:
+            raise MatrixError("charpoly needs square")
+        lam = lam if lam is not None else T.S("lam")
+        a = [
+            [
+                _PLUS(lam, T.neg(self.rows[i][j])) if i == j else T.neg(self.rows[i][j])
+                for j in range(self.ncols)
+            ]
+            for i in range(self.nrows)
+        ]
+        n = self.nrows
+
+        def perms(k, used, acc):
+            if k == n:
+                return [acc]
+            out = []
+            for j in range(n):
+                if j in used:
+                    continue
+                out.extend(perms(k + 1, used | {j}, acc + [(k, j)]))
+            return out
+
+        terms = []
+        for p in perms(0, set(), []):
+            prod = T.ONE
+            for i, j in p:
+                prod = _TIMES(prod, a[i][j])
+            inv = sum(1 for x in range(len(p)) for y in range(x + 1, len(p)) if p[x][1] > p[y][1])
+            terms.append(T.neg(prod) if inv % 2 else prod)
+        return simplify(expand(_PLUS(*terms))), lam
+
+    def eigenvalues(self):
+        """特征值：特征多项式走 solve（数值系数低次/有理根；符号系数走参数化路径）。
+
+        返回 SolveResult；高次不可解时诚实 unsupported。
+        """
+        from cas.solve import solve
+
+        term, lam = self.charpoly()
+        return solve(term, lam)
+
+    def eigenvectors(self):
+        """[(特征值, 零空间基向量列表)]：对每个特征值解 (M - v*I) x = 0。
+
+        特征值不可解时抛 MatrixError（诚实拒答）。判零依赖构造器规范形。
+        """
+        r = self.eigenvalues()
+        if r.status != "ok":
+            raise MatrixError("eigenvalues unsupported: " + (r.note or r.status))
+        out = []
+        n = self.nrows
+        for v in r.solutions:
+            shifted = Matrix([
+                [
+                    _PLUS(self.rows[i][j], T.neg(v)) if i == j else self.rows[i][j]
+                    for j in range(self.ncols)
+                ]
+                for i in range(n)
+            ])
+            nr = shifted.solve([T.ZERO] * n)
+            out.append((v, nr.null_basis or []))
+        return out
