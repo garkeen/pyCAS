@@ -164,7 +164,7 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 |----|------|--------|
 | 幂/根 | 幂律合并；根式幂化 | csign 依赖、根式积分 |
 | exp/log | exp 塔、ln 双向（带条件） | Risch exp/log 子情形 |
-| trig/双曲 | 恒等式规则、exponentialize 算子（转 exp 塔） | 三角积分转 exp 域 |
+| trig/双曲 | 恒等式规则、exponentialize 算子（转 exp 塔） | 三角积分转 exp 域。✓ 已落地：多角度基规范形（trig_reduce）+ tan(x/2) 代换积分（sin x/cos x 有理式，复用 M1，`[VERIFIED]` 链式验证）；边界：sin(ax+b)/tan/双曲未覆盖 |
 | 分段/绝对值 | Piecewise 一等头、分段归一；abs = 分段 | 分段积分、定积分分段 |
 
 ### 梯队四：微积分目标层（项目终点）
@@ -201,7 +201,8 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
   合成回 P/Q：有理项 + 线性 log 组 + RootOf 组的迹公式 Σ_r (−1)^r·Tr(C·e_r^{(j)})·x^{n−1−r}）、
   REPL `:integrate`（输出带 [VERIFIED] 标记）。
 - **M2 初等域 + 教科书积分**：梯队三 + 策略通道可解释积分 + 梯队二基础件（线性系统/线性不等式链）。
-  ✓ 已落地：完整多项式算术（resultant/discriminant/Zassenhaus 因式分解/apart 部分分式）+ REPL `:factor` `:apart`。
+  ✓ 已落地：完整多项式算术（resultant/discriminant/Zassenhaus 因式分解/apart 部分分式）+ REPL `:factor` `:apart` +
+  三角层（Chebyshev 多角度基规范形 + t=tan(x/2) 积分复用 M1）。
 - **M3 定积分**：极限 + 级数 + NL + 分段 + 判敛。
 - **M4 求和/差分**：Gosper、常系数递推。
 - **M5 Risch 分期**：exp/log 子情形 -> 三角（经 exp 塔）-> 完整决策程序（远期，含不可初等的证明）。
@@ -254,7 +255,7 @@ rule sum_swap = sum(sum(?f,?k),?l) -> sum(sum(?f,?l),?k)   guard abs-conv(?f)
   | 整数/有理 | 构造即规范化（term.py） | ✓ |
   | 多项式 | 降幂系数数组（poly.py） | ✓ |
   | 有理函数 | 互素规范形（ratfunc.py） | ✓ |
-  | 三角多项式 | Chebyshev/多角度基：sinⁱx·cosʲx 多项式 → ∑(aₙsin nx + bₙcos nx) 唯一线性组合（= ℚ[sin,cos]/⟨sin²+cos²−1⟩ 商环，成员判定可计算——SymPy trigsimp_groebner 同款） | M2 |
+  | 三角多项式 | Chebyshev/多角度基：sinⁱx·cosʲx 多项式 → ∑(aₙsin nx + bₙcos nx) 唯一线性组合（= ℚ[sin,cos]/⟨sin²+cos²−1⟩ 商环，成员判定可计算——SymPy trigsimp_groebner 同款）。✓ 已落地：trig_reduce（复数 Laurent 系数）/trig_equivalent；t=tan(x/2) 代换积分复用 M1（sin x/cos x 有理式） | M2 |
   | exp/log 塔 | Risch 结构定理：塔内元素表示唯一、零等价可判定（Maxima radcan 的基础；配合 §4 塔转换器） | M5 |
   | 分段 | 条件序归并规范化（不相交区间、条件归一）；每支递归回本层 | M3 |
   跨层翻译算子（策略动作，不进规范形；带守卫/义务）：Exponentialize（TrigToExp/ExpToTrig）、

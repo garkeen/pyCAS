@@ -740,6 +740,19 @@ class TestApart(unittest.TestCase):
         ]:
             self.check(num, den)
 
+    def test_content_sign(self):
+        for num, den in [
+            ("2", "2*x"),
+            ("2", "-x^2+1"),
+            ("-2", "x^2-1"),
+            ("1", "-x+1"),
+            ("1", "2*x+2"),
+            ("3*x", "2*x^2-2"),
+            ("1", "6*x^2-5*x-6"),
+            ("-1", "x^3-1"),
+        ]:
+            self.check(num, den)
+
     def test_known_apart(self):
         from cas.apart import apart
 
@@ -797,6 +810,84 @@ class TestIntegrate(unittest.TestCase):
         self.assertEqual(to_str(res), "-1/2/(x - 1)^2")
         res, ok = self.t("1/(x^2*(x+1))")
         self.assertTrue(ok)
+
+
+class TestTrigReduce(unittest.TestCase):
+    def r(self, s):
+        from cas.trig import trig_reduce
+
+        return trig_reduce(parse(s), parse("x"))
+
+    def test_reduce(self):
+        from cas.pprint import to_str
+
+        cases = [
+            ("sin(x)^2 + cos(x)^2", "1"),
+            ("sin(x)^2", "-1/2*cos(2*x) + 1/2"),
+            ("cos(x)^2", "1/2*cos(2*x) + 1/2"),
+            ("sin(x)*cos(x)", "1/2*sin(2*x)"),
+            ("sin(x)^4 + cos(x)^4", "1/4*cos(4*x) + 3/4"),
+            ("sin(x)^3", "3/4*sin(x) - 1/4*sin(3*x)"),
+            ("cos(x)^3", "3/4*cos(x) + 1/4*cos(3*x)"),
+            ("sin(x)^2 - cos(x)^2", "-cos(2*x)"),
+            ("sin(x)^2*cos(x)^2", "-1/8*cos(4*x) + 1/8"),
+        ]
+        for src, want in cases:
+            r = self.r(src)
+            self.assertIsNotNone(r, src)
+            self.assertEqual(to_str(r), want, src)
+
+    def test_equivalent(self):
+        from cas.trig import trig_equivalent
+
+        x = parse("x")
+        self.assertIs(trig_equivalent(parse("sin(x)^2+cos(x)^2"), parse("1"), x), True)
+        self.assertIs(trig_equivalent(parse("sin(x)^4-cos(x)^4"), parse("sin(x)^2-cos(x)^2"), x), True)
+        self.assertIs(trig_equivalent(parse("sin(x)^2"), parse("cos(x)^2"), x), False)
+
+    def test_unsupported(self):
+        for s in ("sin(2*x)", "x+sin(x)", "x*sin(x)", "sin(x)/cos(x)", "1/(1+sin(x))"):
+            self.assertIsNone(self.r(s), s)
+
+
+class TestTrigIntegrate(unittest.TestCase):
+    def t(self, s):
+        from cas.integrate import integrate
+
+        return integrate(parse(s), parse("x"))
+
+    def test_verified_cases(self):
+        cases = [
+            "sin(x)", "cos(x)", "1/(1+sin(x))", "1/(1+cos(x))", "1/cos(x)",
+            "1/sin(x)", "sin(x)^2", "cos(x)^2", "1/(sin(x)^2)", "sin(x)*cos(x)",
+            "1/(2+sin(x))", "sin(x)/(1+cos(x))", "1/(1+sin(x)+cos(x))", "sin(x)^3",
+            "1/(1+cos(x)^2)", "1/(sin(x)*cos(x))", "cos(x)/(1-sin(x))",
+            "1/(sin(x)^2+2*cos(x)^2)", "sin(x)^2*cos(x)^2", "1/(cos(x)^2*sin(x))",
+        ]
+        for s in cases:
+            res, ok = self.t(s)
+            self.assertTrue(ok, s)
+
+    def test_known_results(self):
+        from cas.pprint import to_str
+
+        res, ok = self.t("1/(1+cos(x))")
+        self.assertEqual(to_str(res), "tan(1/2*x)")
+        res, ok = self.t("1/sin(x)")
+        self.assertEqual(to_str(res), "log(tan(1/2*x))")
+        res, ok = self.t("1/(1+sin(x))")
+        self.assertEqual(to_str(res), "-2/(tan(1/2*x) + 1)^1")
+        res, ok = self.t("1/(1+sin(x)+cos(x))")
+        self.assertEqual(to_str(res), "log(tan(1/2*x) + 1)")
+        res, ok = self.t("1/(sin(x)^2)")
+        self.assertEqual(to_str(res), "-1/2/tan(1/2*x)^1 + 1/2*tan(1/2*x)")
+
+    def test_unsupported(self):
+        from cas.errors import PolyError
+
+        for s in ("x+sin(x)", "sin(2*x)", "exp(x)", "sin(y)"):
+            with self.assertRaises(PolyError, msg=s):
+                self.t(s)
 
 
 if __name__ == "__main__":

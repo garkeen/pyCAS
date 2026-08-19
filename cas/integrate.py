@@ -10,26 +10,39 @@ from cas import term as T
 from cas.term import S, N
 
 
-def _rat_pair(t, x):
-    """term 有理函数 -> (P, Q)，约分、Q monic。"""
-    num = Poly.one((x,))
-    den = Poly.one((x,))
-
-    def walk(t):
-        nonlocal num, den
-        if isinstance(t, T.Expr) and t.head.name == "Times":
+def _frac(t, x):
+    """term 有理式 → (P, Q)（递归通分，未约分）。"""
+    if isinstance(t, T.Expr):
+        n = t.head.name
+        if n == "Times":
+            acc = (Poly.one((x,)), Poly.one((x,)))
             for a in t.args:
-                walk(a)
-        elif isinstance(t, T.Expr) and t.head.name == "Power":
+                pa, qa = _frac(a, x)
+                acc = (acc[0] * pa, acc[1] * qa)
+            return acc
+        if n == "Plus":
+            acc = (Poly.zero((x,)), Poly.one((x,)))
+            for a in t.args:
+                pa, qa = _frac(a, x)
+                acc = (acc[0] * qa + pa * acc[1], acc[1] * qa)
+            return acc
+        if n == "Power":
             b, e = t.args
-            if isinstance(e, T.Int) and e.v < 0:
-                den = den * Poly.from_term(b, (x,)) ** (-e.v)
-            else:
-                num = num * Poly.from_term(t, (x,))
-        else:
-            num = num * Poly.from_term(t, (x,))
+            pb, qb = _frac(b, x)
+            if not isinstance(e, T.Int):
+                raise PolyError("non-integer power")
+            if e.v >= 0:
+                return (pb ** e.v, qb ** e.v)
+            return (qb ** (-e.v), pb ** (-e.v))
+        if n == "Neg":
+            p, q = _frac(t.args[0], x)
+            return (-p, q)
+    return Poly.from_term(t, (x,)), Poly.one((x,))
 
-    walk(t)
+
+def _rat_pair(t, x):
+    """term 有理函数 -> (P, Q)，约分。"""
+    num, den = _frac(t, x)
     g = ugcd(num, den)
     if not g.is_zero():
         num = num.udivmod(g)[0]
@@ -77,6 +90,9 @@ def _log_terms(f, p, x):
     ('lin', c, p)：c·ln(p)；('root', C, p, n)：Σ_{j=1..n} C(β_j)·ln(x − β_j)。"""
     n = p.degree(x)
     if n == 1:
+        lc = p.lc(x)
+        if lc != 1:
+            p = p.scalar(Fr(1) / lc)
         return [("lin", f.const_val(), p)]
     fp = p.deriv(x)
     C = qa_div(f, fp, p)
@@ -181,6 +197,63 @@ def integrate_rational(P, Q, x):
 
 
 def integrate(t, x):
-    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified)。"""
-    P, Q = _rat_pair(t, x)
-    return integrate_rational(P, Q, x)
+    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified)。
+    有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。"""
+    try:
+        P, Q = _rat_pair(t, x)
+        return integrate_rational(P, Q, x)
+    except PolyError:
+        res = _trig_tan_half(t, x)
+        if res is None:
+            raise PolyError("unsupported integrand")
+        return res
+
+
+def _trig_check(t, x):
+    """t 是否为 sin x / cos x 的有理式（无裸 x、无其他函数头）。"""
+    if isinstance(t, T.Expr):
+        n = t.head.name
+        if n in ("Sin", "Cos"):
+            return len(t.args) == 1 and t.args[0] is x
+        if n in ("Plus", "Times"):
+            return all(_trig_check(a, x) for a in t.args)
+        if n == "Power":
+            b, e = t.args
+            return isinstance(e, T.Int) and _trig_check(b, x)
+        if n == "Neg":
+            return _trig_check(t.args[0], x)
+        return False
+    if T.is_num(t):
+        return True
+    return False
+
+
+def _trig_sub(t, x, tv):
+    """sin x → 2t/(1+t²)，cos x → (1−t²)/(1+t²)。"""
+    if isinstance(t, T.Expr):
+        n = t.head.name
+        if n == "Sin":
+            return T.div(T.times(N(2), tv), T.plus(N(1), T.pw(tv, N(2))))
+        if n == "Cos":
+            return T.div(T.plus(N(1), T.neg(T.pw(tv, N(2)))), T.plus(N(1), T.pw(tv, N(2))))
+        if n == "Neg":
+            return T.neg(_trig_sub(t.args[0], x, tv))
+        if n in ("Plus", "Times", "Power"):
+            return T.mk(S(n), tuple(_trig_sub(a, x, tv) for a in t.args))
+    return t
+
+
+def _trig_tan_half(t, x):
+    """∫ R(sin x, cos x) dx：t = tan(x/2) 代换 → M1 有理积分 → 代回。"""
+    if not _trig_check(t, x):
+        return None
+    tv = S("t")
+    w = _trig_sub(t, x, tv)
+    w = T.times(w, T.div(N(2), T.plus(N(1), T.pw(tv, N(2)))))
+    try:
+        P, Q = _rat_pair(w, tv)
+    except PolyError:
+        return None
+    G, ok = integrate_rational(P, Q, tv)
+    F = T.subst(G, {tv: T.tan(T.div(x, N(2)))})
+    return F, ok

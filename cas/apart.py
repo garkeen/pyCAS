@@ -64,12 +64,16 @@ def apart(f, g, x=None):
         raise PolyError("division by zero")
     q, r = f.udivmod(g)
     sqf = []
+    ctotal = Fr(1)
     for g0, k0 in squarefree_decomp(g):
-        _, facs = factor(g0)
+        c0, facs = factor(g0)
+        ctotal = ctotal * c0
         for h, _ in facs:
             sqf.append((h, k0))
     out, whole = [], []
     if not r.is_zero():
+        if ctotal != 1:
+            r = r.scalar(Fr(1) / ctotal)
         _split_frac(r, sqf, x, out, whole)
     for w in whole:
         q = q + w
