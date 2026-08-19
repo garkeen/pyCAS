@@ -1,21 +1,35 @@
 from cas import term as T
 from cas.term import PI, E, S, Int, Rat
+from cas import spec as _spec
 
 
 def dom_condition(t, out=None):
+    """递归提取定义域约束（纯结构，不判值）。
+
+    函数头定义域来自 FunctionSpec.dom（如 Log -> arg>0）；
+    Power 约束为结构性通用规则：负整数幂 a^-k -> a≠0；偶分母有理幂 a^(p/q) -> a≥0；
+    负有理幂 a^-e：偶分母 -> a>0（非负且非零），奇分母 -> a≠0。
+    """
     if out is None:
         out = []
     if isinstance(t, T.Expr):
         name = t.head.name
-        if name == "Log":
-            out.append(T.mk(S("Gt"), (t.args[0], T.ZERO)))
-        elif name == "Power":
+        if name == "Power":
             b, e = t.args
             if isinstance(e, Int) and e.v < 0:
                 out.append(T.mk(S("Ne"), (b, T.ZERO)))
             elif isinstance(e, Rat):
-                if e.f.denominator % 2 == 0:
+                if e.f >= 0 and e.f.denominator % 2 == 0:
                     out.append(T.mk(S("Ge"), (b, T.ZERO)))
+                elif e.f < 0:
+                    if e.f.denominator % 2 == 0:
+                        out.append(T.mk(S("Gt"), (b, T.ZERO)))
+                    else:
+                        out.append(T.mk(S("Ne"), (b, T.ZERO)))
+        else:
+            sp = _spec.get(name)
+            if sp is not None and sp.dom is not None:
+                out.extend(sp.dom(t))
         for a in t.args:
             dom_condition(a, out)
     return out

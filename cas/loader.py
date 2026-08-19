@@ -6,7 +6,7 @@ from cas.parser import parse
 from cas.rules import Rule
 
 _HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")
-_KWS = ("guard", "as", "channels", "auto")
+_KWS = ("guard", "as", "channels", "prio", "auto")
 _SEP = "\x00"
 
 
@@ -39,6 +39,7 @@ def parse_rule_line(line, origin="dsl"):
     direction = None
     channels = ("manual", "suggest")
     auto = False
+    priority = 100
     i = 1
     while i < len(parts):
         kw = parts[i]
@@ -51,6 +52,9 @@ def parse_rule_line(line, origin="dsl"):
             i += 2
         elif kw == "channels":
             channels = tuple(c.strip() for c in val.split(",") if c.strip())
+            i += 2
+        elif kw == "prio":
+            priority = int(val)
             i += 2
         elif kw == "auto":
             auto = True
@@ -66,6 +70,7 @@ def parse_rule_line(line, origin="dsl"):
         channels=channels,
         auto=auto,
         origin=origin,
+        priority=priority,
     )
 
 

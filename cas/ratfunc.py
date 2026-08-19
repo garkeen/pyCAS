@@ -1,7 +1,7 @@
 from fractions import Fraction as Fr
 
 from cas.errors import PolyError
-from cas.poly import Poly, ugcd
+from cas.poly import Poly, ugcd, mgcd, div_exact
 from cas import term as T
 from cas.term import Expr, Int
 
@@ -18,9 +18,17 @@ class RatFunc:
             self.p = Poly.zero(p.vars)
             self.q = Poly.one(p.vars)
             return
-        g = ugcd(p, q)
-        p2 = p.udivmod(g)[0] if not g.is_zero() else p
-        q2 = q.udivmod(g)[0] if not g.is_zero() else q
+        if len(p.vars) == 1:
+            g = ugcd(p, q)
+            p2 = p.udivmod(g)[0] if not g.is_zero() else p
+            q2 = q.udivmod(g)[0] if not g.is_zero() else q
+        else:
+            # 多变量：mgcd + 精确除法
+            g = mgcd(p, q)
+            if not g.is_zero() and not g.is_const():
+                p2, q2 = div_exact(p, g), div_exact(q, g)
+            else:
+                p2, q2 = p, q
         lc = q2.lc(q2.vars[0]) if q2.vars else Fr(1)
         self.p = p2.scalar(Fr(1) / lc)
         self.q = q2.scalar(Fr(1) / lc)

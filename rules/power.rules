@@ -1,0 +1,6 @@
+# 幂律条件变换（定理库：带守卫的推导）
+# sqrt(x^2) = |x| 在实数域无条件成立 -> auto
+rule sqrt_sq = (?x^2)^(1/2) -> abs(?x) auto
+# 一般幂律需正性守卫（分支切割安全），方向标签 expand
+rule pow_mul = (?x*?y)^?a -> ?x^?a * ?y^?a guard ?x>0 && ?y>0 as expand
+rule pow_add = ?x^(?a+?b) -> ?x^?a * ?x^?b guard ?x>0 as expand

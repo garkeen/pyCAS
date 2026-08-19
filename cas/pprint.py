@@ -1,5 +1,5 @@
 from cas import term as T
-from cas.term import Expr, Int, Rat, Sym, Const, Bound, PatVar, PatSeq, BVal, Special, DB
+from cas.term import Expr, Int, Rat, Sym, Const, Bound, PatVar, PatSeq, BVal, Special, DB, S
 
 _PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times": 4, "Power": 6}
 
@@ -27,9 +27,14 @@ def _atom_str(a):
 
 
 def _name_of(h):
-    low = {"Sin": "sin", "Cos": "cos", "Tan": "tan", "Exp": "exp", "Log": "log", "Abs": "abs"}
     if isinstance(h, Sym):
-        return low.get(h.name, h.name.lower() if len(h.name) > 1 else h.name.lower())
+        # 打印名来自 FunctionSpec；未注册头回退小写
+        from cas.spec import get as _spec_get
+
+        sp = _spec_get(h.name)
+        if sp is not None and sp.print_name:
+            return sp.print_name
+        return h.name.lower()
     return repr(h)
 
 
@@ -60,16 +65,18 @@ def to_str(t, prec=0, hint=None):
             facs = []
             nums = [a for a in t.args if T.is_num(a)]
             rest = [a for a in t.args if not T.is_num(a)]
-            den = None
+            dens = []
             keep = []
             for a in rest:
+                # 负整数幂因子 -> 分母（b^-k -> /b^k），支持多个
                 if (
-                    den is None
-                    and isinstance(a, Expr)
+                    isinstance(a, Expr)
                     and a.head.name == "Power"
-                    and a.args[1] is T.MONE
+                    and isinstance(a.args[1], T.Int)
+                    and a.args[1].v < 0
                 ):
-                    den = a.args[0]
+                    be = -a.args[1].v
+                    dens.append(a.args[0] if be == 1 else T.mk(S("Power"), (a.args[0], T.N(be))))
                 else:
                     keep.append(a)
             coef = ""
@@ -80,9 +87,7 @@ def to_str(t, prec=0, hint=None):
                 elif v != 1:
                     coef = _atom_str(n)
             for a in keep:
-                sa = to_str(a, p)
-                if isinstance(a, Expr) and a.head.name in ("Plus",):
-                    sa = "(" + sa + ")"
+                sa = to_str(a, p)   # prec 机制已负责子表达式括号（Plus 自动带括号）
                 facs.append(sa)
             body = "*".join(facs) if facs else (coef if coef not in ("", "-") else "1")
             if coef and coef != "-" and facs:
@@ -91,8 +96,10 @@ def to_str(t, prec=0, hint=None):
                 body = "-" + body
             elif coef and not facs:
                 body = coef
-            if den is not None:
-                s = body + "/" + to_str(den, 5)
+            if dens:
+                ds = [to_str(dn, 5) for dn in dens]
+                den_s = ds[0] if len(ds) == 1 else "(" + "*".join(ds) + ")"
+                s = body + "/" + den_s
             else:
                 s = body
         elif name == "Power":

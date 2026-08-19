@@ -10,7 +10,7 @@ _TOKEN = re.compile(
     r"\s*(?:"
     r"(?P<num>\d+\.\d+|\d+)"
     r"|(?P<seq>\?\?[_A-Za-z]\w*)"
-    r"|(?P<pvar>\?[_A-Za-z]\w*)"
+    r"|(?P<pvar>\?[_A-Za-z]\w*(?:::[_A-Za-z]\w*)?)"
     r"|(?P<id>[A-Za-z_]\w*)"
     r"|(?P<op>&&|\|\||==|!=|<=|>=|->|[-+*/^()<>,='])"
     r")"
@@ -94,7 +94,8 @@ class Parser:
             self.next()
             if v == "=":
                 v = "=="
-            right = self.expr(p + 1)
+            # ^ 右结合（2^3^2 = 2^(3^2)）；其余算子左结合
+            right = self.expr(p if v == "^" else p + 1)
             headmap = {
                 "==": "Eq", "!=": "Ne", "<": "Lt", ">": "Gt", "<=": "Le", ">=": "Ge",
                 "+": "Plus", "-": "Plus", "*": "Times", "/": "Times", "^": "Power",
@@ -112,9 +113,10 @@ class Parser:
         if k == "op" and v == "-":
             self.next()
             e = self.unary()
-            while self.peek() == ("op", "^"):
+            # 前缀 - 绑定松于 ^：-x^2 = -(x^2)；^ 链右结合
+            if self.peek() == ("op", "^"):
                 self.next()
-                rhs = self.unary()
+                rhs = self.expr(_PREC["^"])
                 e = mk(S("Power"), (e, rhs))
             return T.neg(e)
         if k == "op" and v == "'":
@@ -134,7 +136,12 @@ class Parser:
             return PS(v[2:])
         if k == "pvar":
             self.next()
-            return PV(v[1:])
+            body = v[1:]
+            # 类型洞 ?x::pred（yacas _x_IsNumber 同款）：谓词在匹配时结构检查
+            if "::" in body:
+                nm, pd = body.split("::", 1)
+                return PV(nm, pd)
+            return PV(body)
         if k == "id":
             self.next()
             if v in _CONSTS:

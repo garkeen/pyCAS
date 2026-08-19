@@ -1,5 +1,30 @@
 # pyCAS v2 架构（自主设计版·定稿）
 
+> **2026-08 地基修订**：环规范化下沉构造器（mk 即规范化，`is ZERO` 判零可靠）；
+> parser `^` 右结合；decide 新增区间传播通道（含等式代入）；ex falso 锁实际生效；
+> Neg 幽灵头清理（负号统一为 Times(-1, ·)）；规则库与文档承诺对齐。
+> **2026-08 地基补强规划**：新增 §5.2 函数内核注册表 FunctionSpec（反硬编码地基）、
+> §11 判等与化简（成熟系统做法 + equivalent 统一管线）、M2.0 地基补强里程碑；
+> 数值求值层与差分测试提升为近期必建。
+> **2026-08 M2.0 规则实处化**：FunctionSpec 落地（cas/spec.py，八函数注册；导数表/打印名/
+> 有界公理/定义域/特殊点折叠/奇偶规则全部改从注册表读取，diff._TABLE 等硬编码退役）；
+> 类型洞 `?x::pred`（num/int/rat/sym/const/expr，yacas 同款）；apply 无参全式搜索；
+> auto 重写循环写 step log（防振荡）；规则优先级 + DSL `prio N`。
+> **2026-08 M2.0 判等收口与验证层**：数值求值层 cas/evalnum.py（环层精确有理 + 超越函数
+> 走 FunctionSpec.numeric + 采样带极点保护，只产 PROBABLE 不产否证）；equivalent 统一管线
+> 接入三角层（sin²+cos²=1 符号 YES）与采样通道（T3.PROBABLE）；sympy 差分测试
+> （仅测试期预言机）；内核命令注册表 KernelCmd（消除 REPL 硬编码）。测试按模块拆分。
+> **2026-08 基础功能补全**：复数域（i 整数幂折叠、纯常数乘积自动展开、Conjugate 规范化、
+> 二次方程复根）；项层结构 API（cas/ops.py：together/cancel/collect/coefficient/numerator/denominator）；
+> 等式即规则落地（auto 消费账本等式，cost 严格下降）；Sturm 实根隔离（cas/sturm.py）+
+> 一元多项式不等式（cas/ineq.py，区间并解集）；RootOf 实根获隔离区间（algnum.real_isolation）；
+> declare/属性消费闭环（integer 区间收紧）；power.rules（sqrt(x²)=|x| auto + 带守卫幂律）。
+> 底层修复：subst 支持复合项替换；比较头参数递归规范化；义务重放改全式搜索；replay 账本清理。
+> **2026-08 结构性债务清偿**：多元 gcd（poly.mgcd，原始伪除 PRS + 递归 content）与
+> 精确除法 div_exact——多变量 together/cancel/RatFunc 约分全线打通；参数化低次求解
+> （solve 对 a·x²+b·x+c 给通用求根公式 + proviso）；显式工作栈落地（simplify/subst
+> 迭代化，recursionlimit=120 下 300 层深表达式安全）。
+
 > 定位：**交互式、通用、纯符号 CAS**。计算优先；正确性 = **永不静默错**，不是定理证明器。
 > 设计立场：**数据结构、工作流、算法全部自主设计**。参考系统（maxima / mathics-core /
 > expreduce / yacas）只提供两类输入：**教训**（什么坑不能踩）与**规模感**（做多大算够）。
@@ -29,11 +54,20 @@
 - `Expr` 不可变 `(head, args)`，构造时进**全局驻留表**（内容寻址）。
   **equal = 指针比较，O(1)**；哈希键免费；匹配/化简结果可按 `项id` 记忆化。
 - 原子：`Sym` / `Int` / `Rat` / 常量（π,e,i,γ——常量自带公理条目入上下文）。
-- **构造即规范化**：AC 头 flatten+全序+常量折叠在构造器内完成，**系统里不存在未规范化对象**。
+- **构造即规范化（mk 是唯一构造入口，系统里不存在未规范化对象）**：
+  AC 头 flatten + 全序 + 常量折叠；**环规范化内建于构造器**：Plus 合并同类项、
+  Times 合并同底整数幂（x·x⁻¹ → 1，**generic 语义**，定义域由 dom_condition 按需提取）、
+  Power 归约（x¹→x、x⁰→1、(xⁱ)ʲ→xⁱʲ，整数指数；非整数指数不合并，分支切割安全）。
+  由此 **`is ZERO` 指针判零对一切经 mk 构造的环表达式可靠**（矩阵消元/求解/验证均依赖它）。
+  每头规范化扩展入口 = `term.register_norm`（mk 对非 AC/Power 头应用）。
+- **模式（含洞）同样经 mk 规范化**：规范化对洞语义保持（目标项同样规范化），
+  规则在规范形上匹配；被构造器吸收的规则（如 x¹→x、0+x→x）不再进规则库。
 - **绑定词（哑变量）一等表示**：`Bound(var, body)` 节点承载 ∫/Σ/Π/lim/D 的哑变量；
   构造时哑变量**规范化改名**（形状相同的哑变量共享同一驻留名 ⇒ ∫f dx 与 ∫f dt 结构相等）；
   替换做 **α 躲避**（自由变量撞绑定时自动换名）。
   [教训：哑变量捕获是符号计算的经典静默错误源，L0 不处理则积分结果必然出错。]
+  [已知行为：驻留键只含 body，**打印用的积分变量名取首次驻留的 hint**，
+  后写的 ∫f dt 可能打印为 ∫f dx（α 等价的代价，语义无影响）。]
 - [教训：四家 equal 全是递归树比较，Maxima 有 equal 判定漏洞修复史——驻留从根上消灭。]
 
 ### 1.2 账本上下文 Context Ledger（L4 数据结构）
@@ -64,8 +98,13 @@
 
 ### 1.5b decide 内部 = 分层管线 + 声明式推导规则（2026 修订）
 
-- 四层管线，命中即返回：`semantic`（数值/同一/多项式恒等）-> `ledger`（事实匹配/取反/反向/传递闭包）
-  -> `derive`（声明式规则注册表）-> `axiom`（常数区间、|sin|≤1 等）。全未命中 -> Unknown。
+- 管线，命中即返回：`semantic`（数值/同一/多项式恒等）-> `ledger`（事实匹配/取反/反向/传递闭包）
+  -> **`interval`（数值区间传播，2026-08 新增）** -> `derive`（声明式规则注册表）-> `axiom`（常数区间、|sin|≤1 等）。全未命中 -> Unknown。
+- **区间通道 `_interval`**：把 `a op b` 归为 `d = a−b`（构造器自动合并）对 0 的区间比较；
+  区间来源：数值原子 / 常数公理界 / 账本数值界直查 / **账本等式代入（常数等式端点非严格，
+  变量等式严格性透明传递）** / Plus 求和 / 数值标量缩放 / 偶次幂与 Abs 非负。
+  只读 term + 账本，不回调 decide（防循环）。由此 `x>2 ⊢ x+1>3`、`x=y, y<3 ⊢ x<3`、
+  闭区间单点即精确值（`x=5 ⊢ x+1>6` NO）。
 - `derive(name, applies, fn)` 注册推导规则；规则内通过 `q(fact)` 递归子查询（depth ≤ 6 防环），
   子查询天然可组合（3VL 拼装）——加新推理 = 加一条规则，不动管线。
 - 已注册族：`cmp-flip`（仅左零翻右、表尾兜底）、`ne-from-ord`、`sign-atom`（走域谓词）、
@@ -85,7 +124,8 @@
 ### 1.5d 域推理层（2026 修订：变换 generic，域按需）
 
 - `dom_condition(t)`（domain.py）：递归提取定义域约束——`Log(a) -> a>0`、
-  负幂 `a^e(e<0) -> a≠0`、偶分母有理指数 `a^e -> a≥0`。纯结构，不判值。
+  负整数幂 `a^-k -> a≠0`、偶分母有理指数 `a^(p/q) -> a≥0`、
+  负有理幂 `a^-e`：偶分母 -> `a>0`，奇分母 -> `a≠0`。纯结构，不判值。
 - `satisfiable(constraints, ctx)`（decide.py）：3VL 可满足性——对每条约束，在其
   他约束+账本下问 `decide(c)`/`decide(¬c)`，证伪才答 NO（"检死"）；无矛盾 → UNKNOWN。
   排自证：c 自身不入临时账本。
@@ -94,7 +134,8 @@
   比 Mathematica 多一层：assume 条件时若条件本身无定义（如 `ln(-x²)≠0`）→ 直接拒绝
   （"domain empty"），讨论域空提前现形。
 - 配套修复：parser 前缀 `-` 绑定松于 `^`（`-x^2 = -(x^2)`，此前误作 `(-x)^2`——
-  对 `ln(-x^2)` 的域判定是致命的）；`_sign_of_term` 增第四态 2（非负，可能零），
+  对 `ln(-x^2)` 的域判定是致命的）；**`^` 为右结合（`2^3^2 = 2^(3^2) = 512`）**；
+  `_sign_of_term` 增第四态 2（非负，可能零），
   sign-times 乘积符号精确化（`-x²>0 → NO`、`x²≤0 → UNKNOWN`、`x*y<0` 保持可判）；
   `cmp-via-eq` 规则（账本 `x=5` → `x<3` 判 NO，常数等式绑定的序结论）；
   parser 统一 `ln` → `Log` 头（与 term 构造器一致，消除双头潜伏不一致）。
@@ -115,13 +156,16 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 ```
 
 **效率分层**：规则/上下文 = **外壳**（交互层）；规范形+算法 = **内核**（热路径直达，不过规则链）。
-**工程约束**：纯 Python，热路径只用原生结构；求值 = **显式工作栈**（不依赖 Python 递归栈）。
+**工程约束**：纯 Python；核心变换路径用**显式工作栈**（simplify/subst 已迭代化，
+不依赖 Python 递归栈；expand/cost/to_str 等展示与分析路径仍递归，已知残留）；预算按节点计。
 
 ---
 
 ## 3. 匹配器（我们的算法）
 
-- 模式 = 项 + 洞：`?x` 单参洞、`??x` 序列洞、洞守卫 `?x :: odd`、备选 `?x|?y`、
+- 模式 = 项 + 洞：`?x` 单参洞、`??x` 序列洞、**类型洞 `?x::pred`（✓ 已落地：num/int/rat/sym/const/expr，
+  匹配时结构检查，无需上下文；语义谓词如正负走 guard/decide。yacas `_x_IsNumber` 同款）**、
+  洞守卫 `?x :: odd`（语义层，待建）、备选 `?x|?y`、
   **同名重复洞**（同名洞必须匹配同一项--驻留后就是指针判等，O(1) 免费实现）。
 - **在驻留规范形上匹配**：双方构造时已规范化 ⇒ "x³ 里认出 x²" 这类**结构出现**天然成立，
   替换后重构造（自动再规范化）。
@@ -156,7 +200,8 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 |----|------|--------|
 | 方程求解 | 线性方程/组；多项式方程（低次根式、高次 RootOf 名词）；消元（resultant）；**多元多项式方程组（Gröbner 基，中期）** | 积分中途解方程（待定系数、Risch 方程）、换元反解、递推特征方程 |
 | 线性代数 | 矩阵/向量项头、行列式（精确分数消元）、线性系统（高斯消元）、秩、**特征值/特征向量（对角化；dsolve 线性系统前置）** | 待定系数法（部分分式）、Risch 的函数域线性系统、方程组 |
-| 不等式 | 一元线性链（全序消解，**可判定**）；[后期] 一元多项式 Sturm 符号表；**解集输出形态（Interval/FiniteSet/Union 一等结构）** | 定义域、收敛区间、decide 表 `ord` 族的求解侧 |
+| 不等式 | 一元线性链（全序消解，**可判定**）；**一元多项式 Sturm 符号表 ✓ 已落地**（cas/ineq.py，
+  精确有理根 + 根隔离区间端点，偶重根不换号，解集 = 区间并）；**解集输出形态（Interval/FiniteSet/Union 一等结构）** | 定义域、收敛区间、decide 表 `ord` 族的求解侧 |
 
 ### 梯队三：初等函数域（被积函数材料）
 
@@ -185,21 +230,42 @@ L0  项        驻留不可变 Expr + 绑定词；构造即规范化；equal = �
 - **equivalent(a, b) 三值**：符号相等判定的**统一公共 API**——指针同构 -> simplify 归零 ->
   decide 片段（poly_eq/账本）-> 诚实 UNKNOWN。现状：等价能力散在四处（simplify 归零、verify 微分、
   decide 片段、驻留指针），各自为政；收拢为一个入口后所有梯队共享（化简目标、验证、条件合并都用它）。
+  详细管线设计见 §11。
 - **步骤保真验证**：step log 已记 before/after，补"每步变换保持等价"的验证通道（新式减旧式化简检 0），
   可解释性的核心——每个 step 都能回答"这步为什么合法"。
 - **判别树**：匹配器性能（已知债务 3），规则库增大时启用。
-- **数值求值层（验证/兜底工具，非计算通道）**：预算栈求值器 + 精确有理近似——check_solution 数值侧、
-  equivalent 常数兜底、定积分判敛抽查。与"纯符号、无浮点"哲学不冲突：工具只做裁决，不进主通道。
+- **数值求值层（✓ 已落地：cas/evalnum.py，验证/抽查工具，非计算通道）**：
+  `eval_exact`（环层精确有理）/ `eval_approx`（超越函数走 FunctionSpec.numeric）/
+  `sample_agrees`（结构化采样 + 极点保护，只产一致/未知，**绝不产否证**）。
+  与"纯符号、无浮点"哲学不冲突：工具只做裁决，不进主通道。
+- **差分测试（✓ 已落地：tests/test_differential.py）**：sympy 仅作测试预言机，
+  对照环层求值/化简保语义/积分回微分/因式分解 factor_list；仅测试期依赖，运行时零依赖。
 
 ### 里程碑（自包含路线）
 
 - **M0 机制基底**：L0–L2、L4–L6 骨架 + 导数 + verify 通道（diff 化简判 0）。
-- **M1 多项式闭环**：梯队一 -> **有理函数不定积分**（Hermite+RT，只用 gcd/带余除/结式，
-  **不需要因式分解**）+ verify。✓ 已落地：代数数最小版（ℚ(α) 域 / RootOf / 幂和迹）、
+- **M1 多项式闭环**：梯队一 -> **有理函数不定积分**（Hermite+RT，只用 gcd/带余除/结式）+ verify。
+  ✓ 已落地：代数数最小版（ℚ(α) 域 / RootOf / 幂和迹）、
   Hermite 单因子幂递推（apart 分解后逐因子降幂）、对数部分（线性闭式 + 高次 RootOf：
   Σ_j C(β_j)·ln(x−β_j)，C = f·inv(p') mod p）、**符号精确验证通道**（D(结果) 逐项
   合成回 P/Q：有理项 + 线性 log 组 + RootOf 组的迹公式 Σ_r (−1)^r·Tr(C·e_r^{(j)})·x^{n−1−r}）、
   REPL `:integrate`（输出带 [VERIFIED] 标记）。
+  [诚实记录：当前 apart 实现依赖 Zassenhaus 因式分解（非纯 CRT 路线）；
+  RootOf 实根已获 Sturm 隔离区间（algnum.real_isolation），复根仍只有共轭类编号；
+  三角路径的 [VERIFIED] 只覆盖 t 域有理积分，半角代回本身未验证。]
+- **M2.0 地基补强（反硬编码 + 判等收口，一切后续函数域的前置）**：
+  ① FunctionSpec 函数内核注册表 ✓ **已落地**（cas/spec.py；奇偶规则自动生成；硬编码表退役）
+  ② 数值求值层 + sympy 差分测试 ✓ **已落地**（cas/evalnum.py + tests/test_differential.py）
+  ③ equivalent() 统一管线 ✓ **已落地**（三角层接线 YES；采样标 PROBABLE 不产否证）
+  ④ 策略化简器形式化 ✓ **已落地**（auto 写 step log、优先级排序、已见集防振荡）；
+  配套：apply 无参全式搜索、类型洞、DSL `prio N`
+  ⑤ 内核命令注册机制 ✓ **已落地**（KernelCmd 注册表，消除 REPL 硬编码）
+  ⑥ declare/属性消费最小闭环 ✓ **已落地**（integer 区间收紧、符号属性映射）。
+  M2.0 收官。此后新增函数域 = 写 spec 条目 + 规则文件，核心代码零改动。
+  **结构性债务清偿记录**：多元 gcd ✓（mgcd + div_exact，sympy 差分验证）；
+  显式工作栈 ✓（simplify/subst 迭代化；expand/cost/to_str 仍递归，属展示/分析路径，已知残留）；
+  系数域抽象部分完成：多变量约分/参数有理式/参数化低次求解已通；
+  **剩余**：Poly 全参数化系数（ℚ(params) 上的 udivmod/gcd/积分）——前置条件 = ℚ(params) 上的因式分解。
 - **M2 初等域 + 教科书积分**：梯队三 + 策略通道可解释积分 + 梯队二基础件（线性系统/线性不等式链）。
   ✓ 已落地：完整多项式算术（resultant/discriminant/Zassenhaus 因式分解/apart 部分分式）+ REPL `:factor` `:apart` +
   三角层（Chebyshev 多角度基规范形 + t=tan(x/2) 积分复用 M1）。
@@ -231,12 +297,48 @@ rule sum_swap = sum(sum(?f,?k),?l) -> sum(sum(?f,?l),?k)   guard abs-conv(?f)
 ### 5.1 两套机制的边界原则（normalizer vs 规则库）
 
 - **normalizer（Python 注册表）= 表示规范形**：凡"同构类"变换（flatten、全序排序、
-  常量折叠、幂合并、`x·x→x²`）必须进 normalizer——驻留项要求"等项 = 指针"，
+  常量折叠、幂合并、`x·x→x²`、同类项合并）必须进 normalizer——驻留项要求"等项 = 指针"，
   一旦同一表示生成两个对象，匹配与相等就崩。此类变换无条件安全、永不 asksign。
+  **环规范化已内建于构造器 mk**（basic.rules 的 pow_one/zero_plus/one_times 因此退役）。
 - **规则库 = 结构变换**：改变数学结构的变换（`sin²+cos²→1`、log 展开）进规则库，
   带守卫/方向/通道。`auto` 通道是两者汇聚点：`auto = normalizer ∪ {auto 规则}`，
   接受准则 = cost 单调不增（预算内 fixpoint）。
-- 判断口诀：**"不改变项语义的表示归并"进 normalizer；"改变项语义（需守卫）的推导"进规则库。**
+- **规则库的身份 = 定理库**（2026-08 澄清）：规则文件里放的是**声明式数学事实与条件推导**
+  （恒等式、带域守卫的展开/合并、换元等式、FunctionSpec 公理派生的定理）——可审计、用户可扩展。
+  **代码逻辑性算法不是规则**：高斯消元、因式分解、Hermite 约化等是过程而非改写规则，
+  留在内核代码（机械算法通道），正确性由 verify 通道背书（因式回乘、积分回微分），
+  不转成规则数据；decide 的 derive 推理规则属元层特例，同样留在代码。
+- 判断口诀：**"不改变项语义的表示归并"进 normalizer；"改变项语义（需守卫）的定理"进规则库；
+  "过程性算法"进内核代码 + verify 背书。**
+
+### 5.2 函数内核注册表 FunctionSpec（反硬编码地基，✓ 2026-08 落地：cas/spec.py）
+
+**问题**：当前每新增一个函数要同时改 N 处——diff 导数表、decide 公理（手写 |sin|≤1）、
+pprint 打印名映射、parser 头名约定、domain 特例、rules 手写奇偶性规则。
+硬编码散落 = 每个新函数域都返工；微分方程需要的 Γ/Pochhammer/Bessel 族不可承受。
+
+**形态**：每个函数头一份声明式注册，消费者全部从注册表读取：
+
+```python
+FunctionSpec(
+    name="Sin", arity=1,
+    parity="odd",            # 自动生成 sin(-x) -> -sin(x)（不手写规则）
+    period=2π,               # 周期：化简/极限/级数消费
+    special={0: 0, π: 0, π/2: 1, ...},   # 特殊点：mk 构造即折叠
+    deriv=("Cos",),          # 导数表：diff 消费（替代 _TABLE）
+    bound=(-1, 1),           # 有界性：decide 公理自动生成（替代手写 axiom）
+    dom=None,                # 定义域：dom_condition 消费
+    to_exp=...,              # 到 exp 塔的翻译算子（策略动作，M2+ 消费）
+)
+```
+
+- **消费者清单**：mk（特殊点折叠）/ loader（奇偶性/周期性规则自动生成）/ diff（导数表）/
+  decide（有界公理）/ dom_condition（定义域）/ pprint（打印名）/ evalnum（数值求值 numeric 字段）。
+  ✓ 已迁移：diff._TABLE / pprint 小写映射 / decide 手写 |sin|≤1 公理 / dom 的 Log 分支全部退役；
+  sin/cos/tan 奇偶规则由 `gen_rules` 自动生成（origin='spec'，auto 通道），trig.rules 手写版退役。
+- **纪律**：新增函数只允许写 spec 注册 + 规则文件；**禁止在任何消费者模块里为新函数加 if 分支**
+  （作为代码评审验收标准）。这是"未来实现积分/微分方程不返工"的制度保证。
+- **已注册**：Sin/Cos/Tan/Exp/Log/Abs/Atan/Arcsin（arity/print_name/parity/deriv/bound/dom/special 按需）。
 
 ---
 
@@ -244,6 +346,8 @@ rule sum_swap = sum(sum(?f,?k),?l) -> sum(sum(?f,?l),?k)   guard abs-conv(?f)
 
 - **核心化简器只放无条件安全规则**（flatten、排序、常量折叠、属性归一）；
   带条件规则只在手动 / 建议 / 策略通道。核心化简**永不提问**。
+  实现分工：环层规范形在构造器 mk 内完成；`simplify` = 自底向上重建（每层经 mk，
+  子项变化自动向上传播）+ 预算；`register_norm` 为后续头（如 Piecewise）的扩展入口。
 - **cost(e) = 加权节点计数**（权重表用户/规则库可调）。
   自动策略**单调下降才接受**（接受准则保证停机）。
   [教训：单调接受准则是化简停机的最简充分条件——借思想不借实现。]
@@ -291,8 +395,9 @@ rule sum_swap = sum(sum(?f,?k),?l) -> sum(sum(?f,?l),?k)   guard abs-conv(?f)
 ### 7.2 细则
 
 - 账本事实种类：不等式、等式（含换元）、属域、符号、属性；全部带 origin。
-- **ex falso 锁**：decide 检出矛盾 → 当前分支冻结，报告**矛盾链**（账本 origin 使矛盾可解释：
-  哪条用户假设 + 哪步推导 + 哪条公理冲突，一目了然）。
+- **ex falso 锁**：decide 检出矛盾 → 会话冻结：后续 feed/apply/auto/answer 一律拒绝，
+  报告**矛盾链**（账本 origin 使矛盾可解释：哪条用户假设 + 哪步推导 + 哪条公理冲突）；
+  undo 撤掉引发矛盾的步后自动解锁。
 
 ### 7.3 分支原语（2026 修订：分类讨论的地基）
 
@@ -401,3 +506,75 @@ def run(e, ctx, sess):
         else:
             push(Kernel(job))    # per-head 内核分发（热路径，不过规则链）
 ```
+
+---
+
+## 11. 判等与化简：成熟系统的做法与 pyCAS 形态（2026-08 新增）
+
+**根本事实（Richardson 定理）**：含 sin/exp/abs 的函数类零等价不可判定——
+**全局规范形不存在也不可能存在**。这不是实现缺陷，是数学定理。
+Mathematica / Maple / Maxima / SymPy 一致收敛于同一套三件套：
+**分层规范形 + 跨层翻译算子 + 层外搜索式化简**，判等 = **多阶段管线 + 诚实 UNKNOWN**。
+
+### 11.1 成熟系统实际做法
+
+| 系统 | 层内规范形 | 跨层/搜索 | 判等 |
+|------|-----------|----------|------|
+| Mathematica | Automatic simplification（环层规范）；Together/Expand 有理函数 | FullSimplify = 变换空间搜索 + ComplexityFunction；TrigToExp/FunctionExpand/PowerExpand 为翻译算子 | Equal：结构化简归零 + Together；PossibleZeroQ 数值启发式；$Assumptions 下 Refine |
+| Maple | automatic simplification | simplify 族按域 | testeq：符号尝试 + 随机数值采样（概率性，官方明言） |
+| Maxima | CRE 规范有理形；radcan（exp-log 塔规范形，基于 Risch 结构定理） | ratsimp/trigsimp 按域 | equal() = ratsimp(a−b)=0；is() 走假设库；判不了 asksign 提问 |
+| SymPy | 构造即规范化（环层） | simplify 编排各域 simplifier；fu 算法（三角） | equals()：符号尝试 + 随机数值采样 |
+
+**共性要点**：
+1. **环层（多项式/有理函数）是唯一全局可判定层**——驻留/CRE/Together 都在解这一层（pyCAS 已对齐）。
+2. **每个超越函数族各有自己的"小规范形"**：三角多项式（商环 ℚ[sin,cos]/⟨sin²+cos²−1⟩，
+   SymPy trigsimp_groebner 同款，pyCAS 多角度基已落地）、exp-log 塔（Risch 结构定理保证表示唯一，
+   Maxima radcan 的理论基础，pyCAS M5）、代数数（minpoly 判等，pyCAS algnum 已落地）。
+3. **层间不做规范形合并，只做带条件的策略性翻译**（Mathematica convert 思想）：
+   Exponentialize/PowerExpand 是策略动作，带守卫/义务，不是化简义务。
+4. **判等是管线不是单一算法**：指针 → 归零 → 层内决策过程 → 翻译重试 → 数值采样 → UNKNOWN。
+5. **数值采样是探测器不是证明**：Maple testeq / SymPy equals 都用，但结论带概率色彩；
+   pyCAS 只允许它进验证/抽查通道（标 PROBABLE），不进 decide 的 YES 通道。
+6. **微分验证是不对称捷径**：验证 D(F)=f 往往比直接判等容易——verify 通道已落地。
+
+### 11.2 pyCAS 形态：equivalent(a, b, ctx) 统一管线
+
+```
+1. 指针同一（驻留免费）                                        -> YES
+2. simplify(a−b) 归零（环层规范形）                            -> YES
+3. 层内决策：多项式恒等（_poly_eq_check）/ 三角多项式多角度基
+   （trig_equivalent，待接入）/ 代数数 minpoly（algnum，积分层在用）  -> YES / NO
+4. 账本片段（decide Eq）+ 翻译算子重试（Exponentialize/PowerExpand，
+   策略动作，带义务）                                          -> YES / NO
+5. 数值采样抽查（✓ 已建）：结构化采样点 + 极点保护 -> PROBABLE（不是 YES，不产否证）
+6. 全部未命中                                                  -> UNKNOWN（拒答，永不静默错）
+```
+
+现状：管线全通（1/2/3/4/5 均已实现）；三角层已接线（sin²+cos²=1 符号 YES）；
+**化简 = 搜索的形态**（层外混合式：cost 单调 + 方向标签成对规则 + 义务队列）已在 §6 定稿。
+
+---
+
+## 12. 参考系统教训（2026-08 实据读源版）
+
+> 此前的"教训"是转述；本次通读本地五份参考源码（maxima / mathics-core / expreduce / yacas / SAINT）
+> 后换为实据结论。立场不变：借思想不搬实现。
+
+| 系统 | 实据（文件级） | 教训 → pyCAS 动作 |
+|------|--------------|------------------|
+| expreduce | `eval.go`：求值 = 哈希比较 fixpoint 循环 + 每项 `EvaledHash` 缓存（命中即跳过）；
+  属性（Flat/Orderless/Hold/Listable）按头查询；Trace 是事后表达式 | ① 项 id 记忆化 ✓ 已落地（simplify._MEMO，驻留免费）
+  ② 属性 = 按头声明式行为 → 并入 FunctionSpec |
+| mathics-core | `core/attributes.py`：16 属性位集，含 OneIdentity、NumericFunction | 匹配器补 one_identity（f(?x) 匹配裸 x）；numeric_function 供数值层 |
+| yacas | `scripts/stdarith.ys`：仅加法归约 ≈40 条声明式规则，带优先级数字与谓词守卫（`_x_IsNumber`）；
+  内核小、数学全在脚本库 | ① 环规范化下沉构造器被反证为正确（yacas 为此付出几百条规则）
+  ② 规则优先级/排序值得进 DSL（列入 M2.0 备选） |
+| SAINT | `slagle.py`：AlgorithmRule（确定性、单结果）vs HeuristicRule（候选列表）分裂；
+  `rules.py` 的 deriv 是 2700 行 if-elif 链（反面教材）；带类型洞 `Symbol('a',[CONST])` | ① 四通道设计获原型印证 ② FunctionSpec 的反面教材
+  ③ 类型洞 = 洞守卫 `?x :: odd` 的前身（已在规划） |
+| maxima | 92MB / 5100 文件（Lisp） | 规模感：通用 CAS 代码量 10⁵ 行级；pyCAS 以"可判定片段 + 拒答"为生存策略 |
+
+**规模感**：yacas 标准规则库数万行脚本；mathics-core 单个 builtin.py 62KB。
+规则数量必然爆炸——这正是"同构类变换进构造器/normalizer、规则库只放结构变换"（§5.1）的生存理由。
+
+

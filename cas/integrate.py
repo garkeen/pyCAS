@@ -34,9 +34,6 @@ def _frac(t, x):
             if e.v >= 0:
                 return (pb ** e.v, qb ** e.v)
             return (qb ** (-e.v), pb ** (-e.v))
-        if n == "Neg":
-            p, q = _frac(t.args[0], x)
-            return (-p, q)
     return Poly.from_term(t, (x,)), Poly.one((x,))
 
 
@@ -207,8 +204,6 @@ def _trig_check(t, x):
         if n == "Power":
             b, e = t.args
             return isinstance(e, T.Int) and _trig_check(b, x)
-        if n == "Neg":
-            return _trig_check(t.args[0], x)
         return False
     if T.is_num(t):
         return True
@@ -223,8 +218,6 @@ def _trig_sub(t, x, tv):
             return T.div(T.times(N(2), tv), T.plus(N(1), T.pw(tv, N(2))))
         if n == "Cos":
             return T.div(T.plus(N(1), T.neg(T.pw(tv, N(2)))), T.plus(N(1), T.pw(tv, N(2))))
-        if n == "Neg":
-            return T.neg(_trig_sub(t.args[0], x, tv))
         if n in ("Plus", "Times", "Power"):
             return T.mk(S(n), tuple(_trig_sub(a, x, tv) for a in t.args))
     return t

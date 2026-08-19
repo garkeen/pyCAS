@@ -105,11 +105,6 @@ def _expand(t, x):
             if isinstance(e, Int) and e.v >= 0 and isinstance(b, Expr) and b.head.name in ("Sin", "Cos") and b.args[0] is x:
                 return _sin_pow(e.v) if b.head.name == "Sin" else _cos_pow(e.v)
             return None
-        if n == "Neg":
-            la = _expand(t.args[0], x)
-            if la is None:
-                return None
-            return {k: _cscale(v, Fr(-1)) for k, v in la.items()}
     return None
 
 

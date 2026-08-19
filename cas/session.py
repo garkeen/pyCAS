@@ -17,6 +17,7 @@ from cas.rules import Rule, RuleSet, Step, apply_rule
 from cas.simplify import simplify, cost
 from cas.errors import BudgetExceeded, ParseError
 from cas import loader
+from cas import spec as _spec
 
 
 @dataclass
@@ -28,6 +29,121 @@ class Obligation:
     pending: list = field(default_factory=list)
 
 
+@dataclass
+class KernelCmd:
+    """内核命令注册条目（机械算法黑盒快捷通道）。
+
+    新增内核算法 = 注册一条 KernelCmd，REPL/帮助表自动可见，不再改分发代码。
+    """
+    help: str
+    fn: object   # (session, rest: str) -> str
+
+
+def _k_verify(s, rest):
+    parts = rest.split()
+    if len(parts) != 3:
+        return "usage: :verify <F> <x> <f>"
+    return s.verify(*parts)
+
+
+def _k_solve(s, rest):
+    if not rest.strip():
+        return "usage: :solve <expr> [var]"
+    # 变量名只可能是末尾单个标识符：只从末尾分一次，避免切碎含空格的表达式
+    parts = rest.rsplit(None, 1)
+    if len(parts) == 2 and parts[1].isidentifier():
+        return s.solve(parts[0], parts[1])
+    return s.solve(rest.strip(), None)
+
+
+def _k_factor(s, rest):
+    if not rest.strip():
+        return "usage: :factor <expr>"
+    return s.factor(rest.strip())
+
+
+def _k_apart(s, rest):
+    args = rest.split()
+    if len(args) != 2:
+        return "usage: :apart <numerator> <denominator>"
+    return s.apart(args[0], args[1])
+
+
+def _k_integrate(s, rest):
+    if not rest.strip():
+        return "usage: :integrate <expr>"
+    return s.integrate(rest.strip())
+
+
+def _k_msolve(s, rest):
+    idx = rest.find("]] ")
+    if idx >= 0:
+        spec = rest[: idx + 2]
+        rhs = rest[idx + 3:].strip()
+        if rhs.startswith("[") and rhs.endswith("]"):
+            return s.msolve(spec, rhs)
+    return "usage: :msolve [[a,b],[c,d]] [e,f]"
+
+
+def _k_together(s, rest):
+    from cas import ops
+    from cas.parser import parse as _parse
+
+    if not rest.strip():
+        return "usage: :together <expr>"
+    return to_str(ops.together(_parse(rest.strip())))
+
+
+def _k_collect(s, rest):
+    from cas import ops
+    from cas.parser import parse as _parse
+
+    parts = rest.rsplit(None, 1)
+    if len(parts) != 2 or not parts[1].isidentifier():
+        return "usage: :collect <expr> <var>"
+    return to_str(ops.collect(_parse(parts[0]), T.S(parts[1])))
+
+
+def _k_num_den(kind):
+    def fn(s, rest):
+        from cas import ops
+        from cas.parser import parse as _parse
+
+        if not rest.strip():
+            return f"usage: :{kind} <expr>"
+        t = _parse(rest.strip())
+        return to_str(ops.numerator(t) if kind == "numerator" else ops.denominator(t))
+    return fn
+
+
+def _k_coefficient(s, rest):
+    from cas import ops
+    from cas.parser import parse as _parse
+
+    parts = rest.split()
+    if len(parts) < 2:
+        return "usage: :coefficient <expr> <var> [k]"
+    k = int(parts[2]) if len(parts) > 2 else 1
+    expr_s = " ".join(parts[:1])
+    return to_str(ops.coefficient(_parse(expr_s), T.S(parts[1]), k))
+
+
+def _k_solveineq(s, rest):
+    from cas.ineq import solve_poly_ineq
+    from cas.parser import parse as _parse
+
+    parts = rest.rsplit(None, 1)
+    if len(parts) != 2 or not parts[1].isidentifier():
+        return "usage: :solveineq <expr> <op> 0 <var>   (e.g. :solveineq x^2-1 > 0 x)"
+    f = _parse(parts[0])
+    if not (isinstance(f, T.Expr) and f.head.name in ("Gt", "Ge", "Lt", "Le")):
+        return "need a comparison like x^2-1 > 0"
+    if f.args[1] is not T.ZERO:
+        return "right side must be 0"
+    _ivs, out = solve_poly_ineq(f.args[0], f.head.name, T.S(parts[1]))
+    return f"{parts[1]} in {out}"
+
+
 class Session:
     def __init__(self, budget=100000):
         self.current = None
@@ -37,16 +153,44 @@ class Session:
         self.rules = RuleSet()
         self.budget = budget
         self.locked = None
+        self.load_error = None
         self._sid = 0
         self._oid = 0
         rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
         if os.path.isdir(rules_dir):
             try:
                 loader.load_dir(rules_dir, self.rules)
-            except Exception:
-                pass
+            except Exception as e:
+                # 不静默吞错：记录并在 REPL 报告（永不静默错原则）
+                self.load_error = f"{e.__class__.__name__}: {e}"
+        # FunctionSpec 自动生成的规则（奇偶性等，origin='spec'）
+        _spec.gen_rules(self.rules)
+        # 内核命令注册表（机械算法快捷通道；新增算法只需注册，不改 REPL）
+        self.kernel = {
+            "verify": KernelCmd("verify <F> <x> <f>", _k_verify),
+            "solve": KernelCmd("solve <expr> [var]", _k_solve),
+            "factor": KernelCmd("factor <expr>", _k_factor),
+            "apart": KernelCmd("apart <num> <den>", _k_apart),
+            "integrate": KernelCmd("integrate <expr>", _k_integrate),
+            "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
+            "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
+            "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
+            "minv": KernelCmd("inverse [[a,b],[c,d]]", lambda s, r: s.minv(r.strip())),
+            "msolve": KernelCmd("solve system: :msolve [[a,b],[c,d]] [e,f]", _k_msolve),
+            "together": KernelCmd("together <expr> (common denominator)", _k_together),
+            "collect": KernelCmd("collect <expr> <var>", _k_collect),
+            "numerator": KernelCmd("numerator <expr>", _k_num_den("numerator")),
+            "denominator": KernelCmd("denominator <expr>", _k_num_den("denominator")),
+            "coefficient": KernelCmd("coefficient <expr> <var> [k]", _k_coefficient),
+            "solveineq": KernelCmd("solveineq <expr> <op> 0 <var>", _k_solveineq),
+        }
+
+    def _check_locked(self):
+        if self.locked:
+            raise ValueError(f"session locked: {self.locked} (ex falso; undo or start over)")
 
     def feed(self, s):
+        self._check_locked()
         self.current = parse(s)
         return self.current
 
@@ -66,11 +210,27 @@ class Session:
                     out.append((r.id, res.guard, p))
         return out
 
-    def apply(self, rid, path=()):
+    def apply(self, rid, path=None):
+        """应用规则。path=None 时自动全式搜索首个匹配位置（规则主路径，
+        不再要求用户手工指定路径）。返回新项；不适用时返回说明字符串。"""
+        self._check_locked()
         r = self.rules.rules.get(rid)
         if r is None:
             return f"no rule {rid}"
-        res = apply_rule(r, self.current, path, self._guard_eval, self.budget)
+        if path is None:
+            if self.current is None:
+                return "empty session"
+            found = None
+            for p in T.all_paths(self.current):
+                res = apply_rule(r, self.current, p, self._guard_eval, self.budget)
+                if res.guard != "NOMATCH":
+                    found = (p, res)
+                    break
+            if found is None:
+                return f"rule {rid} does not match anywhere"
+            path, res = found
+        else:
+            res = apply_rule(r, self.current, path, self._guard_eval, self.budget)
         if res.guard == "NOMATCH":
             return f"rule {rid} does not match at {path}"
         if res.guard == "UNKNOWN":
@@ -83,6 +243,7 @@ class Session:
         return self._commit(r, path, res)
 
     def _commit(self, r, path, res):
+        """提交一次已计算好的规则应用（res 必须是在 self.current 上算出的）。"""
         self._sid += 1
         before = self.current
         self.current = res.term
@@ -95,32 +256,75 @@ class Session:
                 self.locked = f"contradiction after step {self._sid}"
         return self.current
 
+    def _eq_rewrite_step(self):
+        """等式即规则：账本等式双向替换，仅接受 cost 严格下降（防循环）。"""
+        for e in self.ctx.entries:
+            f = e.fact
+            if not (isinstance(f, T.Term) and isinstance(f, T.Expr) and f.head.name == "Eq"):
+                continue
+            u, v = f.args
+            for pat, rep in ((u, v), (v, u)):
+                nxt = T.subst(self.current, {pat: rep})
+                if nxt is self.current:
+                    continue
+                if cost(nxt) < cost(self.current):
+                    self._sid += 1
+                    self.log.append(Step(
+                        self._sid, f"eq[{e.origin}]", (), self.current, nxt, "YES",
+                        cost(nxt) - cost(self.current),
+                    ))
+                    self.current = nxt
+                    return True
+        return False
+
     def auto(self):
+        """自动重写：构造器规范化 + 账本等式 + auto 规则，cost 不增才接受，每步入 step log。
+
+        停机保证：cost 单调不增（等式替换严格下降）+ 已见项集合防振荡 + 轮数上限。
+        """
+        self._check_locked()
         if self.current is None:
             return None
-        cur = self.current
-        auto_rules = [r for r in self.rules.rules.values() if r.auto]
+        auto_rules = sorted(
+            (r for r in self.rules.rules.values() if r.auto),
+            key=lambda r: r.priority,
+        )
+        seen = {self.current._h}
         for _ in range(10):
-            nxt = simplify(cur, self.budget)
+            s0 = simplify(self.current, self.budget)
+            if s0 is not self.current:
+                self._sid += 1
+                self.log.append(Step(
+                    self._sid, "norm", (), self.current, s0, "YES",
+                    cost(s0) - cost(self.current),
+                ))
+                self.current = s0
+                seen.add(s0._h)
+            if self._eq_rewrite_step():
+                seen.add(self.current._h)
+                continue
             changed = False
-            for p in T.all_paths(nxt):
+            for p in T.all_paths(self.current):
                 try:
-                    tgt = T.term_at(nxt, p)
+                    T.term_at(self.current, p)
                 except IndexError:
                     continue
                 for r in auto_rules:
-                    res = apply_rule(r, nxt, p, self._guard_eval, self.budget)
+                    res = apply_rule(r, self.current, p, self._guard_eval, self.budget)
                     if res.guard != "YES":
                         continue
-                    if cost(res.term) <= cost(nxt):
-                        nxt = res.term
+                    if res.term._h in seen:
+                        continue
+                    if cost(res.term) <= cost(self.current):
+                        self._commit(r, p, res)
+                        seen.add(res.term._h)
                         changed = True
                         break
-            if nxt is cur and not changed:
+                if changed:
+                    break
+            if not changed:
                 break
-            cur = nxt
-        self.current = cur
-        return cur
+        return self.current
 
     def assume(self, s):
         f = parse(s)
@@ -132,7 +336,44 @@ class Session:
             return f"CONTRADICTION LOCKED: {self.locked}"
         return f"assumed: {to_str(f)}"
 
+    def declare(self, var_s, prop):
+        """声明变量属性（属性入 ledger，kind='attr'，decide 区间通道消费）。
+
+        符号类属性（positive/negative/nonnegative/nonpositive）映射为不等式事实；
+        离散类属性（integer/even/odd/real）存为 Attr 条目（even/odd 隐含 integer）。
+        """
+        v = T.S(var_s)
+        prop = prop.lower()
+        sign_map = {
+            "positive": T.gt(v, T.ZERO),
+            "negative": T.lt(v, T.ZERO),
+            "nonnegative": T.ge(v, T.ZERO),
+            "nonpositive": T.le(v, T.ZERO),
+        }
+        if prop in sign_map:
+            return self._assume_fact(sign_map[prop])
+        if prop in ("integer", "real", "even", "odd"):
+            props = ["integer", prop] if prop in ("even", "odd") else [prop]
+            for p in props:
+                st, why = self.ctx.check_and_assume(
+                    T.mk(T.S("Attr"), (v, T.S(p))), origin="user", kind="attr"
+                )
+                if st is T3.NO:
+                    return f"declaration rejected ({why}): {var_s} {p}"
+            return f"declared: {var_s} {prop}"
+        return f"unknown property: {prop}"
+
+    def _assume_fact(self, f):
+        st, why = self.ctx.check_and_assume(f, origin="user")
+        if st is T3.NO:
+            if why == "domain":
+                return f"domain empty: {to_str(f)} is not defined on the real line"
+            self.locked = f"contradiction: {to_str(f)} vs ledger"
+            return f"CONTRADICTION LOCKED: {self.locked}"
+        return f"assumed: {to_str(f)}"
+
     def answer(self, oid, s):
+        self._check_locked()
         f = parse(s)
         obl = next((o for o in self.obligations if o.oid == oid), None)
         if obl is None:
@@ -142,17 +383,32 @@ class Session:
             if why == "domain":
                 return f"domain empty: {to_str(f)} is not defined on the real line"
             return f"answer rejected: {to_str(f)} contradicts ledger"
-        self.obligations.remove(obl)
-        if obl.pending:
-            for p in obl.pending:
-                rid = p["rule"]
-                path = p["path"]
-                res = apply_rule(self.rules.rules[rid], self.current, path, self._guard_eval)
-                if res.guard == "YES":
-                    self._commit(self.rules.rules[rid], path, res)
-                elif res.guard == "UNKNOWN":
-                    return f"still not applicable: {res.guard}"
-        return f"answered #{oid}: {to_str(f)}"
+        pending = list(obl.pending)
+        for p in pending:
+            rid = p["rule"]
+            r = self.rules.rules.get(rid)
+            if r is None:
+                obl.pending.remove(p)
+                continue
+            # 重放用全式搜索（旧 path 可能因期间变换失效）
+            found = None
+            for path in T.all_paths(self.current):
+                res = apply_rule(r, self.current, path, self._guard_eval, self.budget)
+                if res.guard != "NOMATCH":
+                    found = (path, res)
+                    break
+            if found is None:
+                obl.pending.remove(p)
+                continue
+            path, res = found
+            if res.guard == "YES":
+                self._commit(r, path, res)
+                obl.pending.remove(p)
+        if not obl.pending:
+            if obl in self.obligations:
+                self.obligations.remove(obl)
+            return f"answered #{oid}: {to_str(f)}"
+        return f"answered #{oid} (assumed); obligation kept: still undecidable"
 
     def undo(self, n=1):
         for _ in range(n):
@@ -161,6 +417,9 @@ class Session:
             st = self.log.pop()
             self.current = st.before
             self.ctx.drop_origin(f"step{st.sid}")
+            # 撤掉引发矛盾锁的那一步 -> 解锁
+            if self.locked and f"step {st.sid}" in self.locked:
+                self.locked = None
         return self.current
 
     def replay(self, from_sid=0):
@@ -170,19 +429,20 @@ class Session:
             base = self.log[0].before if self.log else None
         if base is None:
             return "nothing to replay"
+        # 清旧 step 账本条目（重放会重新入账，防陈旧事实累积）
+        self.ctx.entries = [
+            e for e in self.ctx.entries
+            if not (isinstance(e.origin, str) and e.origin.startswith("step"))
+        ]
         self.current = base
         for st in steps:
             r = self.rules.rules.get(st.rule_id)
             if r is None:
                 return f"replay stuck at {st.rule_id}"
-            res = apply_rule(r, self.current, st.path, self._guard_eval)
+            res = apply_rule(r, self.current, st.path, self._guard_eval, self.budget)
             if res.guard != "YES":
                 return f"replay diverged at step {st.sid} ({res.guard})"
-            self._sid += 1
-            self.current = res.term
-            if r.guard is not None:
-                g = T.instantiate(r.guard, res.subst)
-                self.ctx.assume(g, origin=f"step{self._sid}", kind="guard")
+            self._commit(r, st.path, res)
         return self.current
 
     def verify(self, Fs, xs, fs):
@@ -314,7 +574,7 @@ class Session:
         return to_str(self.current) if self.current is not None else "(empty)"
 
     def commands(self):
-        return {
+        out = {
             ":s": "suggest [path]",
             ":a": "apply <rule-id> [path]",
             ":u": "undo [n]",
@@ -324,24 +584,19 @@ class Session:
             ":obls": "list obligations",
             ":log": "step log",
             ":ctx": "ledger",
-            ":verify": "verify <F> <x> <f>",
-            ":solve": "solve <expr> [var]",
-            ":factor": "factor <expr>",
-            ":apart": "apart <num> <den>",
-            ":integrate": "integrate <expr>",
-            ":mat": "show matrix [[a,b],[c,d]]",
-            ":mdet": "determinant [[a,b],[c,d]]",
-            ":mrank": "rank [[a,b],[c,d]]",
-            ":minv": "inverse [[a,b],[c,d]]",
-            ":msolve": "solve system: :msolve [[a,b],[c,d]] [e,f]",
-            ":load": "reload rules dir",
-            ":q": "quit",
         }
+        for name, c in self.kernel.items():
+            out[":" + name] = c.help
+        out[":load"] = "reload rules dir"
+        out[":q"] = "quit"
+        return out
 
 
 def run():
     s = Session()
     print("pyCAS session. :help for commands; expression to make current.")
+    if s.load_error:
+        print(f"warning: rules load failed: {s.load_error}")
     while True:
         try:
             line = input(">> ").strip()
@@ -354,7 +609,13 @@ def run():
         try:
             if line == ":help":
                 for k, v in s.commands().items():
-                    print(f"{k:10s} {v}")
+                    print(f"{k:12s} {v}")
+            elif line.startswith(":") and line.split(None, 1)[0][1:] in s.kernel:
+                # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
+                parts = line.split(None, 1)
+                name = parts[0][1:]
+                rest = parts[1].strip() if len(parts) > 1 else ""
+                print(s.kernel[name].fn(s, rest))
             elif line.startswith(":s"):
                 arg = line[2:].strip()
                 path = tuple(int(i) for i in arg.split(".")) if arg else ()
@@ -363,8 +624,9 @@ def run():
             elif line.startswith(":a "):
                 parts = line[3:].split()
                 rid = parts[0]
-                path = tuple(int(i) for i in parts[1].split(".")) if len(parts) > 1 else ()
-                print(to_str(s.apply(rid, path)) if s.current is not None else "empty")
+                path = tuple(int(i) for i in parts[1].split(".")) if len(parts) > 1 else None
+                res = s.apply(rid, path)
+                print(to_str(res) if isinstance(res, T.Term) else res)
             elif line.startswith(":u"):
                 n = int(line[2:] or 1)
                 print(to_str(s.undo(n)) if s.log else "no steps")
@@ -372,6 +634,12 @@ def run():
                 print(to_str(s.auto()))
             elif line.startswith(":assume "):
                 print(s.assume(line[8:]))
+            elif line.startswith(":declare "):
+                parts = line[9:].split()
+                if len(parts) == 2:
+                    print(s.declare(parts[0], parts[1]))
+                else:
+                    print("usage: :declare <var> <property>")
             elif line.startswith(":ans "):
                 parts = line[5:].split(None, 1)
                 oid = int(parts[0])
@@ -391,44 +659,6 @@ def run():
                     print(f"[{e.kind}:{e.origin}] {to_str(e.fact)}")
                 if not s.ctx.entries:
                     print("(empty ledger)")
-            elif line.startswith(":verify "):
-                a, b, c = line[8:].split()
-                print(s.verify(a, b, c))
-            elif line.startswith(":solve "):
-                parts = line[7:].split()
-                expr = parts[0]
-                var = parts[1] if len(parts) > 1 else None
-                print(s.solve(expr, var))
-            elif line.startswith(":factor "):
-                print(s.factor(line[8:].strip()))
-            elif line.startswith(":apart "):
-                args = line[7:].split()
-                if len(args) == 2:
-                    print(s.apart(args[0], args[1]))
-                else:
-                    print("usage: :apart <numerator> <denominator>")
-            elif line.startswith(":integrate "):
-                print(s.integrate(line[11:].strip()))
-            elif line.startswith(":mat "):
-                print(s.mat(line[5:].strip()))
-            elif line.startswith(":mdet "):
-                print(s.mdet(line[6:].strip()))
-            elif line.startswith(":mrank "):
-                print(s.mrank(line[7:].strip()))
-            elif line.startswith(":minv "):
-                print(s.minv(line[6:].strip()))
-            elif line.startswith(":msolve "):
-                rest = line[8:].strip()
-                idx = rest.find("]] ")
-                if idx >= 0:
-                    spec = rest[: idx + 2]
-                    rhs = rest[idx + 3 :].strip()
-                    if rhs.startswith("[") and rhs.endswith("]"):
-                        print(s.msolve(spec, rhs))
-                    else:
-                        print("usage: :msolve [[a,b],[c,d]] [e,f]")
-                else:
-                    print("usage: :msolve [[a,b],[c,d]] [e,f]")
             elif line == ":load":
                 import os
 

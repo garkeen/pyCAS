@@ -7,8 +7,6 @@ from cas.simplify import simplify, expand
 
 _PLUS = T.fn("Plus")
 _TIMES = T.fn("Times")
-_NEG = T.fn("Neg")
-_DIV = T.fn("Div")
 
 
 class MatrixError(Exception):

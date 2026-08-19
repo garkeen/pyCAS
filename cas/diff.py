@@ -1,16 +1,6 @@
 from cas import term as T
-from cas.term import S, N, Expr, Sym, Int, plus, times, pw, neg, cos, sin, tan, exp, log, ONE, MONE, TWO
-
-_TABLE = {
-    "Sin": lambda a: cos(a),
-    "Cos": lambda a: neg(sin(a)),
-    "Tan": lambda a: plus(ONE, pw(tan(a), TWO)),
-    "Exp": lambda a: exp(a),
-    "Log": lambda a: pw(a, MONE),
-    "ArcTan": lambda a: T.div(ONE, plus(ONE, pw(a, TWO))),
-    "ArcSin": lambda a: T.div(ONE, T.sqrt(plus(neg(ONE), pw(a, TWO)))),
-    "Sqrt": lambda a: T.div(times(N(T.Fraction(1, 2)), T.sqrt(a)), ONE),
-}
+from cas.term import S, N, Expr, Sym, Int, plus, times, pw, neg, ONE, MONE, TWO
+from cas import spec as _spec
 
 
 def d(t, x):
@@ -38,9 +28,10 @@ def d(t, x):
         return times(t, plus(times(d(e, x), T.fn("Log")(b)), T.div(times(e, d(b, x)), b)))
     if name == "Quote":
         return T.mk(S("D"), (t, x))
-    if name in _TABLE:
-        (a,) = t.args
-        return times(_TABLE[name](a), d(a, x))
+    # 导数表来自 FunctionSpec 注册表（反硬编码：新函数在 spec.py 注册即可）
+    sp = _spec.get(name)
+    if sp is not None and sp.deriv is not None and len(t.args) == sp.arity == 1:
+        return times(sp.deriv(t.args[0]), d(t.args[0], x))
     return T.mk(S("D"), (t, x))
 
 
@@ -52,4 +43,6 @@ def verify(F, x, f, budget=100000):
         return "VERIFIED"
     if r is T3.NO:
         return "FAILED"
+    if r is T3.PROBABLE:
+        return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"

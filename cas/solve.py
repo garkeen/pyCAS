@@ -119,10 +119,14 @@ def _peval(p, var, xv):
 
 def _quadratic(c2, c1, c0):
     D = c1 * c1 - 4 * c2 * c0
-    if D < 0:
-        return [], f"discriminant D={D} < 0 (complex roots; complex domain not implemented)"
-    sD = sqrt_fr(D)
     two = Fr(2) * c2
+    if D < 0:
+        # 复根：(−c1 ± i·√|D|) / 2c2（纯符号，无近似）
+        sD = sqrt_fr(-D)
+        re = T.div(T.neg(_root_term(c1)), _root_term(two))
+        im = T.div(T.times(T.IU, sD), _root_term(two))
+        return [T.plus(re, im), T.plus(re, T.neg(im))], ""
+    sD = sqrt_fr(D)
     x1 = T.div(T.plus(T.neg(_root_term(c1)), sD), _root_term(two))
     if D == 0:
         return [x1], ""
@@ -235,9 +239,42 @@ def solve(f, var, budget=100000):
     try:
         p = Poly.from_term(lhs, (var,))
     except PolyError:
-        return SolveResult([], [], "unsupported", note="not linear or polynomial in " + var.name)
+        return _solve_param_lowdeg(lhs, var)
 
     return _poly_solve(p, var)
+
+
+def _solve_param_lowdeg(lhs, var):
+    """参数化低次路径（系数域首付款）：系数为其余符号的表达式。
+
+    次数 ≤ 1：−c0/c1（条件 c1≠0）；次数 = 2：通用求根公式（条件 c2≠0）。
+    判别式保持符号根式形态——符号域上正负不可判，不做实/复分支（诚实）。
+    """
+    from cas import ops
+
+    try:
+        c3 = ops.coefficient(lhs, var, 3)
+    except PolyError:
+        return SolveResult([], [], "unsupported", note="not polynomial in " + var.name)
+    if c3 is not T.ZERO:
+        return SolveResult([], [], "unsupported", note="degree >= 3 with parameters")
+    c2 = ops.coefficient(lhs, var, 2)
+    c1 = ops.coefficient(lhs, var, 1)
+    c0 = ops.coefficient(lhs, var, 0)
+    if c2 is T.ZERO:
+        if c1 is T.ZERO:
+            if c0 is T.ZERO:
+                return SolveResult([], [], "identity")
+            return SolveResult([], [], "contradiction")
+        return SolveResult(
+            [T.div(T.neg(c0), c1)], [T.mk(S("Ne"), (c1, T.ZERO))], "ok"
+        )
+    D = simplify(expand(T.plus(T.pw(c1, N(2)), T.neg(T.times(N(4), c2, c0)))))
+    sD = T.sqrt(D)
+    two_a = T.times(N(2), c2)
+    x1 = T.div(T.plus(T.neg(c1), sD), two_a)
+    x2 = T.div(T.plus(T.neg(c1), T.neg(sD)), two_a)
+    return SolveResult([x1, x2], [T.mk(S("Ne"), (c2, T.ZERO))], "ok")
 
 
 def check_solution(f, sol, var, budget=100000):

@@ -1,6 +1,23 @@
 from cas import term as T
 from cas.errors import BudgetExceeded
 
+# 类型洞谓词（结构检查，无需上下文；语义谓词如正负走规则 guard/decide）
+_PREDS = {
+    "num": lambda t: T.is_num(t),
+    "int": lambda t: isinstance(t, T.Int),
+    "rat": lambda t: isinstance(t, T.Rat),
+    "sym": lambda t: isinstance(t, T.Sym),
+    "const": lambda t: isinstance(t, T.Const) or T.is_num(t),
+    "expr": lambda t: isinstance(t, T.Expr),
+}
+
+
+def _pred_ok(pat, tgt):
+    if pat.pred is None:
+        return True
+    fn = _PREDS.get(pat.pred)
+    return fn is not None and fn(tgt)
+
 
 def _match(pat, tgt, sub, st):
     st[0] -= 1
@@ -8,6 +25,8 @@ def _match(pat, tgt, sub, st):
         raise BudgetExceeded()
     k = pat.__class__
     if k is T.PatVar:
+        if not _pred_ok(pat, tgt):
+            return
         cur = sub.get(pat.name)
         if cur is None:
             s2 = dict(sub)
@@ -128,6 +147,8 @@ def matches(pat, tgt, sub=None, budget=10000):
     base = dict(sub) if sub else {}
     seen = set()
     if isinstance(pat, T.PatVar):
+        if not _pred_ok(pat, tgt):
+            return
         cur = base.get(pat.name)
         if cur is None or cur is tgt:
             s2 = dict(base)

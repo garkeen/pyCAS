@@ -14,6 +14,7 @@ class Rule:
     channels: tuple = ("manual", "suggest")
     auto: bool = False
     origin: str = "user"
+    priority: int = 100           # 同位多规则时的尝试顺序（小者先，yacas 同款）
 
 
 @dataclass
@@ -67,7 +68,7 @@ class RuleSet:
         else:
             keys.append(t.__class__.__name__ + ":" + repr(t))
         for k in keys:
-            for r in self.index.get(k, ()):
+            for r in sorted(self.index.get(k, ()), key=lambda r: r.priority):
                 if r.id not in seen:
                     seen.add(r.id)
                     yield r

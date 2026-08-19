@@ -127,3 +127,14 @@ def coefs(p, x):
     for k, v in p.monos.items():
         out[n - k[0]] = v
     return out
+
+
+def real_isolation(m):
+    """m 的全部实根隔离区间（Sturm，精确有理端点）。
+
+    补 RootOf 隔离区间债务：实根从此有确定位置（升序，每区间恰一根）；
+    复根仍只有共轭类编号（文档诚实记录）。
+    """
+    from cas.sturm import isolate_real_roots
+
+    return isolate_real_roots(m)

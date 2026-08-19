@@ -71,8 +71,6 @@ class Poly:
                 if isinstance(e, Int) and e.v >= 0:
                     return cls._build(b, vars_) ** e.v
                 raise PolyError("non-integer power")
-            if name in ("Neg",):
-                return cls._build(t.args[0], vars_) * Poly.const(vars_, -1)
         raise PolyError(f"not polynomial: {t!r}")
 
     def to_term(self):
@@ -309,3 +307,215 @@ def udiscriminant(a):
     if (n * (n - 1) // 2) % 2 == 1:
         r = -r
     return r / a.lc(x)
+
+
+# ---------------------------------------------------------------------------
+# 多元 gcd 与精确除法（递归视角：主变量单变量，系数 = 其余变量的多项式）
+# 算法：原始伪除余序列（primitive PRS）；content 递归计算。
+# ---------------------------------------------------------------------------
+
+
+def _rec_view(p):
+    """Poly(vars) -> {主变量指数: Poly(vars[1:])}（单变量时系数为 Poly((), {(): Fr})）。"""
+    if p.is_zero():
+        return {}
+    out = {}
+    for exps, v in p.monos.items():
+        e0, rest = exps[0], exps[1:]
+        sub = out.get(e0)
+        if sub is None:
+            out[e0] = Poly(p.vars[1:], {rest: v})
+        else:
+            sub.monos[rest] = v
+    return out
+
+
+def _from_rec(d, vars_):
+    m = {}
+    for e0, sub in d.items():
+        for rest, v in sub.monos.items():
+            m[(e0,) + rest] = v
+    return Poly(vars_, m)
+
+
+def _rat_gcd_frac(a, b):
+    """有理数 gcd：gcd(分子)/lcm(分母)，取正。"""
+    from math import gcd as _igcd
+
+    if a == 0:
+        return abs(b)
+    if b == 0:
+        return abs(a)
+    n = _igcd(abs(a.numerator), abs(b.numerator))
+    d = a.denominator * b.denominator // _igcd(a.denominator, b.denominator)
+    return Fr(n, d)
+
+
+def _sign_normalize(p):
+    """首项系数取正（规范符号，使 gcd 唯一到符号）。"""
+    if p.is_zero():
+        return p
+    if not p.vars:
+        v = p.const_val()
+        return p if v > 0 else p.scalar(Fr(-1))
+    d = _rec_view(p)
+    lc = d[max(d)]
+    if lc.vars:
+        dd = _rec_view(lc)
+        sgn = dd[max(dd)].const_val()
+    else:
+        sgn = lc.const_val()
+    return p if sgn > 0 else p.scalar(Fr(-1))
+
+
+def _rat_content(p):
+    """Fr 层 content：全体系数的有理数 gcd。"""
+    c = Fr(0)
+    for v in p.monos.values():
+        c = _rat_gcd_frac(c, v)
+    return c
+
+
+def mgcd(a, b):
+    """多元多项式 gcd（ℚ 上，任意变量数）。
+
+    返回规范形（content 归一、符号规范化），约定 mgcd(0, b) = 规范化的 b。
+    单变量基保留有理 content（ugcd 归一会丢，此处补回）。
+    """
+    if a.vars != b.vars:
+        raise PolyError("var mismatch")
+    vs = a.vars
+    if a.is_zero():
+        return _primitive_full(b)[1] if not b.is_zero() else Poly(vs, {})
+    if b.is_zero():
+        return _primitive_full(a)[1]
+    if not vs:
+        g = _rat_gcd_frac(a.const_val(), b.const_val())
+        return Poly(vs, {(): g}) if g else Poly(vs, {})
+    if len(vs) == 1:
+        ra, rb = _rat_content(a), _rat_content(b)
+        pa = Poly(vs, {k: v / ra for k, v in a.monos.items()})
+        pb = Poly(vs, {k: v / rb for k, v in b.monos.items()})
+        g = ugcd(pa, pb)
+        gr = _rat_gcd_frac(ra, rb)
+        return g.scalar(gr) if gr != 1 else g
+    ca, pa = _primitive_full(a)
+    cb, pb = _primitive_full(b)
+    gc = mgcd(ca, cb)
+    g = _prs_gcd(pa, pb)
+    # content 在 vars[1:] 上，提升到全变量空间（不依赖主变量）再相乘；
+    # 不再取原始部分——content gcd 本身就是结果的组成。
+    gcl = Poly(vs, {(0,) + k: v for k, v in gc.monos.items()})
+    return _sign_normalize(gcl * g)
+
+
+def _primitive_full(p):
+    """(content, 原始部分)：content = 系数 gcd（递归），主变量视角。"""
+    vs = p.vars
+    if p.is_zero():
+        return Poly(vs[1:], {}), Poly(vs, {})
+    if not vs:
+        c = p.const_val()
+        return Poly((), {(): c}), Poly((), {(): Fr(1)})
+    coeffs = list(_rec_view(p).values())
+    c = coeffs[0]
+    for cc in coeffs[1:]:
+        c = mgcd(c, cc)
+    if c.is_zero() or (not c.vars and c.const_val() == 0):
+        return Poly(vs[1:], {}), p
+    prim = {}
+    for e0, sub in _rec_view(p).items():
+        prim[e0] = div_exact(sub, c)
+    return c, _sign_normalize(_from_rec(prim, vs))
+
+
+def _prem(A, B):
+    """主变量伪除余数：lc(B)^δ 倍的 A mod B，系数只用 +,-,*。"""
+    vs = A.vars
+    n = max(_rec_view(B))
+    lc = _rec_view(B)[n]
+    R = dict(_rec_view(A))
+    while R and max(R) >= n:
+        m = max(R)
+        t = R[m]
+        # R <- lc*R - t*x^(m-n)*B
+        scaled = {e: c * lc for e, c in R.items()}
+        shifted = {e + (m - n): c * t for e, c in _rec_view(B).items()}
+        merged = dict(scaled)
+        for e, c in shifted.items():
+            merged[e] = merged.get(e, Poly(vs[1:], {})) - c
+        R = {e: c for e, c in merged.items() if not c.is_zero()}
+    return _from_rec(R, vs)
+
+
+def _prs_gcd(a, b):
+    """原始伪除余序列 gcd（输入为主变量原始形）。"""
+    da = max(_rec_view(a)) if not a.is_zero() else -1
+    db = max(_rec_view(b)) if not b.is_zero() else -1
+    if da < db:
+        a, b = b, a
+    r0, r1 = a, b
+    while not r1.is_zero():
+        r = _prem(r0, r1)
+        if r.is_zero():
+            break
+        r0, r1 = r1, _primitive_full(r)[1]
+    return _primitive_full(r1)[1]
+
+
+def div_exact(A, B):
+    """精确除法 A/B（要求 B 整除 A，否则抛 PolyError）。多元递归实现。
+
+    原理：主变量伪除得 lc(B)^k·A = B·Q，整除时余数为 0，
+    Q 的系数再递归精确除以 lc(B)^k（变量数递减，必终止）。
+    """
+    if A.vars != B.vars:
+        raise PolyError("var mismatch")
+    vs = A.vars
+    if A.is_zero():
+        return Poly(vs, {})
+    if B.is_zero():
+        raise PolyError("division by zero")
+    if not vs:
+        bv = B.const_val()
+        if bv == 0:
+            raise PolyError("division by zero")
+        return Poly(vs, {(): A.const_val() / bv})
+    n = max(_rec_view(B)) if not B.is_zero() else -1
+    if n <= 0:
+        # B 在主变量上是常数：逐系数递归除
+        out = {}
+        for e0, sub in _rec_view(A).items():
+            out[e0] = div_exact(sub, _rec_const(B))
+        return _from_rec(out, vs)
+    lc = _rec_view(B)[n]
+    R = dict(_rec_view(A))
+    Q = {}
+    k = 0
+    while R and max(R) >= n:
+        m = max(R)
+        t = R[m]
+        k += 1
+        # Q <- lc*Q + t*x^(m-n)
+        Q = {e: c * lc for e, c in Q.items()}
+        Q[m - n] = Q.get(m - n, Poly(vs[1:], {})) + t
+        # R <- lc*R - t*x^(m-n)*B
+        scaled = {e: c * lc for e, c in R.items()}
+        shifted = {e + (m - n): c * t for e, c in _rec_view(B).items()}
+        merged = dict(scaled)
+        for e, c in shifted.items():
+            merged[e] = merged.get(e, Poly(vs[1:], {})) - c
+        R = {e: c for e, c in merged.items() if not c.is_zero()}
+    if R:
+        raise PolyError("not exact division")
+    lck = lc ** k
+    out = {e0: div_exact(sub, lck) for e0, sub in Q.items()}
+    return _from_rec(out, vs)
+
+
+def _rec_const(B):
+    """B 在主变量上为常数时，取其系数多项式（vars[1:]）。"""
+    d = _rec_view(B)
+    if list(d) != [0]:
+        raise PolyError("not exact division")
+    return d[0]

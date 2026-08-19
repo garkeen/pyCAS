@@ -9,6 +9,7 @@ class T3(Enum):
     YES = "YES"
     NO = "NO"
     UNKNOWN = "UNKNOWN"
+    PROBABLE = "PROBABLE"   # 数值采样支持（探测器，不是证明），不进 YES 通道
 
 
 def and3(a, b):
@@ -122,109 +123,11 @@ def _facts_lookup(fact, ctx):
 
 
 def _chain_query(op, a, b, ctx):
-    lo = {}
-    hi = {}
-    for e in ctx.entries:
-        f = e.fact
-        if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge"):
-            u, v = f.args
-            if T.is_num(u):
-                uu, vv = v, T.num_val(u)
-                if f.head.name in ("Lt", "Le"):
-                    cur = hi.get(uu)
-                    if cur is None or vv < cur[0] or (vv == cur[0] and f.head.name == "Lt" and not cur[1]):
-                        hi[uu] = (vv, f.head.name == "Lt")
-                else:
-                    cur = lo.get(uu)
-                    if cur is None or vv > cur[0] or (vv == cur[0] and f.head.name == "Gt" and not cur[1]):
-                        lo[uu] = (vv, f.head.name == "Gt")
-            elif T.is_num(v):
-                vv = T.num_val(v)
-                if f.head.name in ("Gt", "Ge"):
-                    cur = lo.get(u)
-                    if cur is None or vv > cur[0] or (vv == cur[0] and f.head.name == "Gt" and not cur[1]):
-                        lo[u] = (vv, f.head.name == "Gt")
-                else:
-                    cur = hi.get(u)
-                    if cur is None or vv < cur[0] or (vv == cur[0] and f.head.name == "Lt" and not cur[1]):
-                        hi[u] = (vv, f.head.name == "Lt")
-    if T.is_num(b) and not T.is_num(a):
-        bv = T.num_val(b)
-        l = lo.get(a)
-        h = hi.get(a)
-        if op == "Gt":
-            if l and (l[0] > bv or (l[0] == bv and l[1])):
-                return T3.YES
-            if h and h[0] <= bv:
-                return T3.NO
-        elif op == "Ge":
-            if l and l[0] >= bv:
-                return T3.YES
-            if h and h[0] < bv:
-                return T3.NO
-        elif op == "Lt":
-            if h and (h[0] < bv or (h[0] == bv and h[1])):
-                return T3.YES
-            if l and l[0] >= bv:
-                return T3.NO
-        elif op == "Le":
-            if h and h[0] <= bv:
-                return T3.YES
-            if l and l[0] > bv:
-                return T3.NO
-        elif op == "Eq":
-            if (l and l[0] > bv) or (h and h[0] < bv):
-                return T3.NO
-        elif op == "Ne":
-            if (l and (l[0] > bv or (l[0] == bv and l[1]))) or (
-                h and (h[0] < bv or (h[0] == bv and h[1]))
-            ):
-                return T3.YES
-    elif T.is_num(a) and not T.is_num(b):
-        av = T.num_val(a)
-        l = lo.get(b)
-        h = hi.get(b)
-        if op == "Lt":
-            if l and (l[0] > av or (l[0] == av and l[1])):
-                return T3.YES
-            if h and h[0] <= av:
-                return T3.NO
-        elif op == "Le":
-            if l and l[0] >= av:
-                return T3.YES
-            if h and h[0] < av:
-                return T3.NO
-        elif op == "Gt":
-            if h and (h[0] < av or (h[0] == av and h[1])):
-                return T3.YES
-            if l and l[0] >= av:
-                return T3.NO
-        elif op == "Ge":
-            if h and h[0] <= av:
-                return T3.YES
-            if l and l[0] > av:
-                return T3.NO
-        elif op == "Eq":
-            if (l and l[0] > av) or (h and h[0] < av):
-                return T3.NO
-        elif op == "Ne":
-            if (l and (l[0] > av or (l[0] == av and l[1]))) or (
-                h and (h[0] < av or (h[0] == av and h[1]))
-            ):
-                return T3.YES
+    """序链 BFS：账本不等式建边，传递闭包回答 a<b 型查询。
+
+    数值界推理（x>2 -> x+1>3）与等式代入由 _interval 区间通道负责，此处只走图边。
+    """
     adj = {}
-    eqclass = {}
-
-    def find(x):
-        while x in eqclass:
-            x = eqclass[x]
-        return x
-
-    def union(x, y):
-        rx, ry = find(x), find(y)
-        if rx is not ry:
-            eqclass[rx] = ry
-
     strict = op in ("Lt", "Gt")
     want = (a, b)
     if op in ("Gt", "Ge"):
@@ -237,10 +140,7 @@ def _chain_query(op, a, b, ctx):
             if opf in ("Gt", "Ge"):
                 u, v = v, u
                 opf = "Lt" if opf == "Gt" else "Le"
-            if opf == "Eq":
-                union(u, v)
-            else:
-                adj.setdefault(u, []).append((v, opf == "Lt"))
+            adj.setdefault(u, []).append((v, opf == "Lt"))
     if a is b:
         return T3.YES if op in ("Le", "Ge", "Eq") else T3.NO
     from collections import deque
@@ -259,6 +159,181 @@ def _chain_query(op, a, b, ctx):
             if nxt._h not in seen or (nxt._h, False) in seen and ns:
                 seen.add(key)
                 q.append((nxt, ns))
+    return None
+
+
+def _interval(t, ctx, seen=None, depth=0):
+    """数值区间传播：(lo, hi, lo_strict, hi_strict)，端点可为 None（无界）。
+
+    来源：数值原子 / 常数公理界 / 账本数值界直查 / 账本等式代入（递归） /
+    Plus 求和 / 数值标量 Times 缩放 / 偶次幂与 Abs 非负。
+    只读 term + 账本，不回调 decide（防循环）。无任何信息时返回 None。
+    """
+    from fractions import Fraction as Fr
+
+    if T.is_num(t):
+        v = T.num_val(t)
+        return (v, v, False, False)
+    lb = _CONST_BOUNDS.get(id(t))
+    if lb is not None:
+        return (Fr(lb[0]), Fr(lb[1]), True, True)
+    if depth > 8:
+        return None
+    if seen is None:
+        seen = set()
+    if t._h in seen:
+        return None
+    seen.add(t._h)
+    lo = hi = None
+    los = his = False
+    is_int = False
+
+    def tighten(nlo, nlos, nhi, nhis):
+        nonlocal lo, hi, los, his
+        if nlo is not None and (lo is None or nlo > lo or (nlo == lo and nlos)):
+            lo, los = nlo, nlos
+        if nhi is not None and (hi is None or nhi < hi or (nhi == hi and nhis)):
+            hi, his = nhi, nhis
+
+    for e in ctx.entries:
+        f = e.fact
+        if not isinstance(f, T.Expr):
+            continue
+        n = f.head.name
+        if n == "Attr" and f.args[0] is t and f.args[1].name == "integer":
+            is_int = True
+            continue
+        if n in ("Lt", "Le", "Gt", "Ge"):
+            u, v = f.args
+            if u is t and T.is_num(v):
+                bv = T.num_val(v)
+                if n == "Lt":
+                    tighten(None, False, bv, True)
+                elif n == "Le":
+                    tighten(None, False, bv, False)
+                elif n == "Gt":
+                    tighten(bv, True, None, False)
+                else:
+                    tighten(bv, False, None, False)
+            elif v is t and T.is_num(u):
+                bv = T.num_val(u)
+                if n == "Lt":
+                    tighten(bv, True, None, False)
+                elif n == "Le":
+                    tighten(bv, False, None, False)
+                elif n == "Gt":
+                    tighten(None, False, bv, True)
+                else:
+                    tighten(None, False, bv, False)
+        elif n == "Eq":
+            u, v = f.args
+            o = v if u is t else (u if v is t else None)
+            if o is not None and o is not t:
+                if T.is_num(o):
+                    # 常数等式 x=c：x 恰为 c，端点非严格（避免 x=5 推出 x<5）
+                    bv = T.num_val(o)
+                    tighten(bv, False, bv, False)
+                else:
+                    # 变量等式 x=y：x 与 y 同值，区间与严格性透明传递
+                    iv = _interval(o, ctx, seen, depth + 1)
+                    if iv is not None:
+                        tighten(*iv)
+    if is_int:
+        # 整数属性消费：端点收紧到最近整点（x>2 ∧ x∈Z ⇒ x≥3）
+        if lo is not None:
+            c = lo.numerator // lo.denominator + 1 if los else -((-lo.numerator) // lo.denominator)
+            if c > lo or los:
+                lo, los = c, False
+        if hi is not None:
+            c = -((-hi.numerator) // hi.denominator) - 1 if his else hi.numerator // hi.denominator
+            if c < hi or his:
+                hi, his = c, False
+    if isinstance(t, T.Expr):
+        n = t.head.name
+        if n == "Plus":
+            ivs = [_interval(a, ctx, seen, depth + 1) for a in t.args]
+            if all(iv is not None for iv in ivs):
+                slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
+                shi = sum(iv[1] for iv in ivs) if all(iv[1] is not None for iv in ivs) else None
+                st = any(iv[2] for iv in ivs if iv[0] is not None)
+                sht = any(iv[3] for iv in ivs if iv[1] is not None)
+                tighten(slo, st, shi, sht)
+        elif n == "Times":
+            nums = [a for a in t.args if T.is_num(a)]
+            rest = [a for a in t.args if not T.is_num(a)]
+            if nums and len(rest) == 1:
+                c = Fr(1)
+                for nn in nums:
+                    c *= T.num_val(nn)
+                iv = _interval(rest[0], ctx, seen, depth + 1)
+                if iv is not None:
+                    if c > 0:
+                        tighten(
+                            None if iv[0] is None else c * iv[0], iv[2],
+                            None if iv[1] is None else c * iv[1], iv[3],
+                        )
+                    elif c < 0:
+                        tighten(
+                            None if iv[1] is None else c * iv[1], iv[3],
+                            None if iv[0] is None else c * iv[0], iv[2],
+                        )
+        elif n == "Power" and isinstance(t.args[1], T.Int) and t.args[1].v % 2 == 0:
+            tighten(Fr(0), False, None, False)
+        elif n == "Abs":
+            tighten(Fr(0), False, None, False)
+    if lo is None and hi is None:
+        return None
+    return (lo, hi, los, his)
+
+
+def _cmp_interval(op, a, b, ctx):
+    """把 a op b 归为 d = a - b 对 0 的区间比较（构造器自动合并同类项）。"""
+    d = T.plus(a, T.neg(b))
+    if op in ("Eq", "Ne"):
+        if d is T.ZERO:
+            return T3.YES if op == "Eq" else T3.NO
+        iv = _interval(d, ctx)
+        if iv is not None:
+            lo, hi, _, _ = iv
+            away = (lo is not None and lo > 0) or (hi is not None and hi < 0)
+            if away:
+                return T3.NO if op == "Eq" else T3.YES
+        return None
+    if d is T.ZERO:
+        return T3.YES if op in ("Le", "Ge") else T3.NO
+    iv = _interval(d, ctx)
+    if iv is None:
+        return None
+    lo, hi, los, his = iv
+    if lo is not None and hi is not None and lo == hi and not los and not his:
+        # 闭区间退化为单点 = 精确值，直接裁决
+        if op == "Gt":
+            return T3.YES if lo > 0 else T3.NO
+        if op == "Ge":
+            return T3.YES if lo >= 0 else T3.NO
+        if op == "Lt":
+            return T3.YES if lo < 0 else T3.NO
+        return T3.YES if lo <= 0 else T3.NO
+    if op == "Gt":
+        if (lo is not None and lo > 0) or (lo == 0 and los):
+            return T3.YES
+        if (hi is not None and hi < 0) or (hi == 0 and his):
+            return T3.NO
+    elif op == "Ge":
+        if lo is not None and lo >= 0:
+            return T3.YES
+        if (hi is not None and hi < 0) or (hi == 0 and his):
+            return T3.NO
+    elif op == "Lt":
+        if (hi is not None and hi < 0) or (hi == 0 and his):
+            return T3.YES
+        if (lo is not None and lo > 0) or (lo == 0 and los):
+            return T3.NO
+    else:  # Le
+        if hi is not None and hi <= 0:
+            return T3.YES
+        if (lo is not None and lo > 0) or (lo == 0 and los):
+            return T3.NO
     return None
 
 
@@ -606,18 +681,35 @@ def _axiom_constants(fact, ctx):
 
 
 @axiom
-def _axiom_abs_bounded(fact, ctx):
-    if isinstance(fact, T.Expr) and fact.head.name == "Le":
-        a, b = fact.args
-        if (
-            isinstance(a, T.Expr)
-            and a.head.name == "Abs"
-            and isinstance(a.args[0], T.Expr)
-            and a.args[0].head.name in ("Sin", "Cos")
-            and T.is_num(b)
-            and T.num_val(b) >= 1
-        ):
+def _axiom_spec_bounds(fact, ctx):
+    """有界性公理（由 FunctionSpec.bound 自动生成，不再手写）：
+    f(u) <= c（c ≥ hi）/ f(u) >= c（c ≤ lo）/ |f(u)| <= c（c ≥ max|界|）。"""
+    from cas.spec import SPECS
+
+    if not (isinstance(fact, T.Expr) and fact.head.name in ("Le", "Ge")):
+        return None
+    a, b = fact.args
+    if not T.is_num(b):
+        return None
+    bv = T.num_val(b)
+    u = a
+    wrapped = isinstance(u, T.Expr) and u.head.name == "Abs"
+    if wrapped:
+        u = u.args[0]
+    if not isinstance(u, T.Expr):
+        return None
+    sp = SPECS.get(u.head.name)
+    if sp is None or sp.bound is None or len(u.args) != sp.arity:
+        return None
+    lo, hi = sp.bound
+    if wrapped:
+        if fact.head.name == "Le" and bv >= max(abs(lo), abs(hi)):
             return T3.YES
+        return None
+    if fact.head.name == "Le" and bv >= hi:
+        return T3.YES
+    if fact.head.name == "Ge" and bv <= lo:
+        return T3.YES
     return None
 
 
@@ -638,6 +730,9 @@ def _family_cmp(fact, ctx, depth):
             r = _poly_eq_check(a, b)
             if r is not None:
                 return r
+        r = _cmp_interval(op, a, b, ctx)
+        if r is not None:
+            return r
     else:
         r = _cmp_numeric(op, a, b)
         if r is not None:
@@ -646,6 +741,9 @@ def _family_cmp(fact, ctx, depth):
         if r is not None:
             return r
         r = _facts_lookup(fact, ctx)
+        if r is not None:
+            return r
+        r = _cmp_interval(op, a, b, ctx)
         if r is not None:
             return r
         r = _chain_query(op, a, b, ctx)
@@ -756,6 +854,8 @@ def eval_guard(guard, sub, ctx):
 
 
 def equivalent(a, b, ctx=None, budget=100000):
+    """统一判等管线（§11.2）：指针 -> 环层归零 -> 三角层 -> 账本/多项式片段
+    -> 数值采样 PROBABLE -> 诚实 UNKNOWN。"""
     from cas.simplify import simplify
     from cas.context import Context
 
@@ -766,6 +866,22 @@ def equivalent(a, b, ctx=None, budget=100000):
     r = simplify(T.plus(a, T.neg(b)), budget)
     if r is T.ZERO:
         return T3.YES
+    # 三角层：单变量三角多项式多角度基归零（层内决策过程）
+    vs = sorted(T.free_vars(r), key=lambda s: s.name)
+    if len(vs) == 1:
+        from cas.trig import trig_reduce
+
+        if trig_reduce(r, vs[0]) is T.ZERO:
+            return T3.YES
     if ctx is None:
         ctx = Context()
-    return decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
+    d = decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
+    if d is not T3.UNKNOWN:
+        return d
+    # 数值采样 PROBABLE 通道（探测器，不是证明；否证必须走符号通道）
+    from cas.evalnum import sample_agrees
+
+    allv = sorted(T.free_vars(a) | T.free_vars(b), key=lambda s: s.name)
+    if sample_agrees(a, b, allv):
+        return T3.PROBABLE
+    return T3.UNKNOWN

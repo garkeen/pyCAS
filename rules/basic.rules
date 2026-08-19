@@ -1,5 +1,4 @@
 # structural basics
-rule pow_one = ?x^1 -> ?x
+# 注意：x+0、1*x、x^1、x*x->x^2、x^a*x^b->x^(a+b)（整数 a,b）等表示归并
+# 已由构造器（term.mk）在构造时完成（构造即规范化），此处不再需要对应规则。
 rule pow_sum_same = ?x^?a * ?x^?b -> ?x^(?a+?b)
-rule zero_plus = 0+?x -> ?x
-rule one_times = 1*?x -> ?x
