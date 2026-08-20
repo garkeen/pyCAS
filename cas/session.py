@@ -239,6 +239,8 @@ def _k_coefficient(s, rest):
 def _k_mulfrac(kind):
     def fn(s, rest):
         from cas import ops
+        from cas.domain import dom_condition
+        from cas.decide import decide, T3
         from cas.parser import parse as _parse
 
         parts = rest.rsplit(None, 1)
@@ -246,9 +248,25 @@ def _k_mulfrac(kind):
             return f"usage: :{kind} <expr> <factor>"
         expr = _parse(parts[0])
         fac = _parse(parts[1])
+        # 因子域检查：同乘检查 fac 域，同除检查 1/fac 域（含 fac≠0）。
+        # NO 拒绝（域空，借用项恒无定义）；UNKNOWN 记 proviso（域收紧声明，
+        # generic 不阻塞，事后可作答或验证）；YES 无条件。
+        check = fac if kind == "mulfrac" else T.div(T.ONE, fac)
+        provs = []
+        for c in dom_condition(check):
+            r = decide(c, s.ctx)
+            if r is T3.NO:
+                return (f"domain empty: factor {to_str(fac)} requires "
+                        f"{to_str(c)} (contradicted)")
+            if r is T3.UNKNOWN:
+                if not any(c is p for p in provs):
+                    provs.append(c)
         res = ops.mul_frac(expr, fac) if kind == "mulfrac" else ops.div_frac(expr, fac)
         s._kernel_step(kind, res, before=expr)
-        return to_str(res)
+        out = to_str(res)
+        if provs:
+            out += "   [proviso: " + " && ".join(to_str(c) for c in provs) + "]"
+        return out
     return fn
 
 
