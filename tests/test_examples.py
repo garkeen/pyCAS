@@ -73,5 +73,20 @@ class TestOdeBsubExample(unittest.TestCase):
             self.assertIn("backward substitution", o)
 
 
+class TestTrigHalfAngleExample(unittest.TestCase):
+    def test_half_angle_param_integral(self):
+        s, outs = replay_lines("05_trig_half_angle.pycas")
+        self.assertIn("defined: cos2atan", outs[2])            # 会话定理定义
+        self.assertIn("atan", outs[-1])                        # 参数 atan 闭式
+        self.assertIn("VERIFIED", outs[-1])                    # 符号验证背书
+        self.assertIn("proviso", outs[-1])                     # 判别式符号不定
+        self.assertIn("!= 0", outs[-1])                        # 诚实条件声明
+
+    def test_replay_file_roundtrip(self):
+        s = Session()
+        out = s.handle(":replay " + os.path.join(EXAMPLES, "05_trig_half_angle.pycas"))
+        self.assertIn("replayed 6 commands", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
