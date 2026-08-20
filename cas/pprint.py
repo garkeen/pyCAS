@@ -63,9 +63,13 @@ def _wrap(child, need):
 _ATOM_P = 100   # 非 _PREC 节点自身优先级：永不需要括号（原递归版只有 _PREC 头查 prec）
 
 
-def to_str(t, prec=0, hint=None):
+def to_str(t, prec=0, hint=None, src=False):
     """显式栈后序重建：每节点产出不带外层括号的身串与自身优先级，
-    父层按上下文优先级加括号（与原递归版 prec 机制逐案例等价）。"""
+    父层按上下文优先级加括号（与原递归版 prec 机制逐案例等价）。
+
+    src=True 时输出可解析源码形式（绑定词输出函数形态 integrate(f,x)/sum(f,x)/
+    product(f,x)/limit(f,x,pt)），供 % 历史展开后重新解析。
+    """
     val = {}
     for u in reversed(_postorder(t)):
         if not isinstance(u, Expr):
@@ -81,8 +85,12 @@ def to_str(t, prec=0, hint=None):
         if name in ("Integrate", "Sum", "Product", "Limit") and len(u.args) == 1 and isinstance(u.args[0], Bound):
             b = u.args[0]
             sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]
+            fn = {"Integrate": "integrate", "Sum": "sum", "Product": "product", "Limit": "limit"}[name]
             _v, ob = T.open_bound(b)   # DB 索引还原为绑定变量名再渲染
-            val[u] = (f"{sym}[{to_str(ob)}] d{b.hint}", _ATOM_P)
+            if src:
+                val[u] = (f"{fn}({to_str(ob, src=True)}, {b.hint})", _ATOM_P)
+            else:
+                val[u] = (f"{sym}[{to_str(ob)}] d{b.hint}", _ATOM_P)
             continue
         if name == "Piecewise" and len(u.args) % 2 == 0:
             parts = [

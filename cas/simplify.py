@@ -76,7 +76,7 @@ def expand(t):
             else:
                 val[u] = u
         elif isinstance(u, T.Bound):
-            val[u] = T.mk_bound(u.hint, val[u.body])
+            val[u] = T._mk_bound_canon(u.hint, val[u.body])
         else:
             val[u] = u
     return val[t]
@@ -123,7 +123,8 @@ def simplify(t, budget=100000):
                     continue
                 val[u] = T.mk(u.head, args)
             elif isinstance(u, T.Bound):
-                val[u] = T.mk_bound(u.hint, val[u.body])
+                # 重建已抽象体不得重新 mk_bound（_abstract 会提升体里已有 DB 引用）
+                val[u] = T._mk_bound_canon(u.hint, val[u.body])
             else:
                 val[u] = u
         return val[root]

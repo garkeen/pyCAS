@@ -1031,9 +1031,26 @@ def term_at(t, path):
         if isinstance(t, Expr):
             t = t.args[i]
         elif isinstance(t, Bound):
-            t = t.body
+            # 穿过绑定层时打开体：DB 索引还原为绑定符号，子树脱离绑定上下文
+            # 供规则匹配/求值视为自由符号树（replace_at 放回时 mk_bound 重新抽象）
+            t = _lift(t.body, S(t.hint), 0)
         else:
             raise IndexError(path)
+    return t
+
+
+def _bind_into(t, var, depth=0):
+    """把打开后的体中的自由变量 var 绑回 de Bruijn 索引，不触碰已有 DB 引用。
+
+    与 _abstract 的区别：_abstract 会提升 body 里已有的 DB(i>=depth)（正常 mk_bound
+    场景 body 无 DB 引用）；replace_at 穿过已绑定层时 body 里已有外层 DB 引用，必须保持。
+    """
+    if isinstance(t, Sym):
+        return DB_(depth) if t is var else t
+    if isinstance(t, Expr):
+        return mk(t.head, tuple(_bind_into(a, var, depth) for a in t.args))
+    if isinstance(t, Bound):
+        return _mk_bound_canon(t.hint, _bind_into(t.body, var, depth + 1))
     return t
 
 
@@ -1046,7 +1063,10 @@ def replace_at(t, path, v):
         args[i] = replace_at(args[i], path[1:], v)
         return mk(t.head, tuple(args))
     if isinstance(t, Bound):
-        return mk_bound(t.hint, replace_at(t.body, path[1:], v))
+        # 打开当前层 -> 递归替换 -> 只把当前层变量绑回，外层 DB 引用保持不动
+        var = S(t.hint)
+        inner = replace_at(_lift(t.body, var, 0), path[1:], v)
+        return _mk_bound_canon(t.hint, _bind_into(inner, var, 0))
     raise IndexError(path)
 
 

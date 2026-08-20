@@ -3,13 +3,20 @@
 from fractions import Fraction as Fr
 
 from cas.errors import PolyError
-from cas.poly import Poly, ugcd
+from cas.poly import Poly, SymRat, ugcd
 from cas.apart import apart
 from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums, tr_eval, coefs
 from cas.simplify import simplify
 from cas.pprint import to_str
 from cas import term as T
 from cas.term import S, N, Sym
+
+
+def _coef_term(c):
+    """Fr/SymRat 系数 -> term（N 只收数值；参数系数转有理函数项）。"""
+    if isinstance(c, SymRat):
+        return c.to_term()
+    return N(c)
 
 
 def _frac(t, x):
@@ -55,11 +62,11 @@ def _qa_to_term(c, beta):
         r = k[0]
         b = beta.to_term()
         if r == 0:
-            parts.append(N(v))
+            parts.append(_coef_term(v))
         elif r == 1:
-            parts.append(T.times(N(v), b))
+            parts.append(T.times(_coef_term(v), b))
         else:
-            parts.append(T.times(N(v), T.pw(b, N(r))))
+            parts.append(T.times(_coef_term(v), T.pw(b, N(r))))
     if not parts:
         return N(Fr(0))
     if len(parts) == 1:
@@ -93,7 +100,7 @@ def _log_terms(f, p, x):
         lc = p.lc(x)
         if lc != 1:
             p = p.scalar(Fr(1) / lc)
-        return [("lin", f.const_val(), p)]
+        return [("lin", f.const_val() / lc, p)]
     if n == 2:
         # 实形式（判别式有理可判）：x²+pc·x+q 且 D=4q−pc²>0 时
         # ∫(Ax+B)/p = (A/2)ln(p) + (2B−A·pc)/√D · atan((2x+pc)/√D)
@@ -102,7 +109,14 @@ def _log_terms(f, p, x):
         fm = f.scalar(Fr(1) / lc) if lc != 1 else f
         pc = pm.monos.get((1,), Fr(0))
         qc = pm.monos.get((0,), Fr(0))
-        D = 4 * qc - pc * pc
+        D = 4 * qc - pc * pc   # Fr 或 SymRat
+        if isinstance(D, SymRat):
+            # 参数判别式：p 在 apart 中已判不可约（D 非完全平方）。
+            # atan 形式对 D ≠ 0 符号成立（复对数主值组合），符号验证背书；
+            # D ≡ 0 为重根（平方自由分解已排除），此处防御性拒答。
+            if D.is_zero():
+                raise PolyError("parameter discriminant is identically zero")
+            return [("atan", fm, pm, pc, D)]
         if D > 0:
             return [("atan", fm, pm, pc, D)]
     fp = p.deriv(x)
@@ -119,9 +133,14 @@ def _integrate_poly(p, x):
 
 
 def _exact_sqrt_term(D):
-    """非负有理数 D 的精确平方根项：完全平方折叠为有理数，否则 √D 名词。"""
+    """非负有理数 D 的精确平方根项：完全平方折叠为有理数，否则 √D 名词。
+
+    参数判别式（SymRat）保持 √(参数式) 名词（符号验证仍背书 atan 形式）。
+    """
     import math
 
+    if isinstance(D, SymRat):
+        return T.sqrt(D.to_term())
     f = Fr(D)
     rn = math.isqrt(f.numerator)
     rd = math.isqrt(f.denominator)
@@ -143,14 +162,14 @@ def _assemble(poly_int, rat_terms, lin_logs, root_logs, x):
             B = fm.monos.get((0,), Fr(0))
             sd = _exact_sqrt_term(D)   # 完全平方折叠为有理数，否则保留 √D 名词
             if A != 0:
-                parts.append(T.times(N(A / 2), T.log(pm.to_term())))
+                parts.append(T.times(_coef_term(A / 2), T.log(pm.to_term())))
             k = 2 * B - A * pc
             if k != 0:
-                arg = T.div(T.plus(T.times(N(2), x), N(pc)), sd)
-                parts.append(T.times(N(k), T.pw(sd, T.MONE), T.atan(arg)))
+                arg = T.div(T.plus(T.times(N(2), x), _coef_term(pc)), sd)
+                parts.append(T.times(_coef_term(k), T.pw(sd, T.MONE), T.atan(arg)))
             continue
         c, p = lg[1], lg[2]
-        parts.append(T.times(N(c), T.log(p.to_term())))
+        parts.append(T.times(_coef_term(c), T.log(p.to_term())))
     for C, p, n in root_logs:
         for j in range(1, n + 1):
             beta = RootOf(p, j)
@@ -208,11 +227,12 @@ def integrate_rational(P, Q, x):
     _, terms = apart(r, Q)
     for nn, dd, k in terms:
         if dd.degree(x) == 1:
+            lc = dd.lc(x)
             c = nn.const_val()
             if k == 1:
-                lin_logs.append(("lin", c, dd))
+                lin_logs.append(("lin", c / lc, dd.scalar(Fr(1) / lc)))
             else:
-                rat_terms.append((Poly.const((x,), c / (1 - k)), dd, k - 1))
+                rat_terms.append((Poly.const((x,), c / ((1 - k) * lc)), dd, k - 1))
         else:
             herm, f1, k1 = _hermitte_power(nn, dd, k, x)
             rat_terms.extend(herm)

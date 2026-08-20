@@ -1,6 +1,7 @@
 """第一批采购清单验收：:rule 内联定理 / 名词动词切换 / Refine / Protected / LaTeX。"""
 
 import os
+import re
 import tempfile
 import unittest
 
@@ -171,6 +172,50 @@ class TestLatex(unittest.TestCase):
     def test_constants_and_trig(self):
         self.assertEqual(self.L("pi + e"), "e + \\pi")   # 规范序
         self.assertEqual(self.L("sin(x)^2"), "\\sin\\left(x\\right)^{2}")
+
+    def test_exp_render_as_e_power(self):
+        self.assertEqual(self.L("e^x"), "e^{x}")
+        self.assertEqual(self.L("exp(x) * sin(x)"), "e^{x} \\sin\\left(x\\right)")
+        self.assertEqual(self.L("e^(x+1)"), "e^{x + 1}")
+
+    def test_annotate_latex_matches_to_latex(self):
+        # raw 与 to_latex 逐字节一致；wrapped 的 htmlClass 花括号平衡
+        from cas.latex import annotate_latex
+
+        def balanced(s):
+            depth = 0
+            i = 0
+            while i < len(s):
+                if s[i] == "\\":
+                    i += 2
+                    continue
+                if s[i] == "{":
+                    depth += 1
+                elif s[i] == "}":
+                    depth -= 1
+                    if depth < 0:
+                        return False
+                i += 1
+            return depth == 0
+
+        cases = ["e^x * sin(x)", "(x^2 + 1)/(x - 1)", "sin(x)^2 + cos(x)^2",
+                 "x^3 - 2*x + 1", "1/(x+1)", "-(x+1)", "x < 3 && y > 1",
+                 "sqrt(x)", "int(x, x)", "x^2/2 + x"]
+        for s in cases:
+            t = parse(s)
+            raw, wrapped = annotate_latex(t)
+            self.assertEqual(raw, self.L(s), f"raw mismatch for {s}")
+            self.assertTrue(balanced(wrapped), f"unbalanced for {s}")
+            self.assertIn("\\htmlClass{tn-0}", wrapped, f"no child class for {s}")
+
+    def test_annotate_latex_paths(self):
+        # 每个 tn- 标注的 path 与 server 序列化树一致（深度优先）
+        from cas.latex import annotate_latex
+        from cas.parser import parse as _parse
+        t = _parse("x^2 + y^2")
+        _, wrapped = annotate_latex(t)
+        for p in ["tn-0-0", "tn-0-1", "tn-1-0", "tn-1-1"]:
+            self.assertIn(f"\\htmlClass{{{p}}}", wrapped)
 
     def test_negative_terms(self):
         self.assertEqual(self.L("x - 1"), "x - 1")

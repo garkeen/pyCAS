@@ -105,7 +105,7 @@ x - sin(x)                     # 奇偶规则由 :auto 之外的通道管理；�
 
 **微积分**
 ```
-:integrate 1/(x^2-1)         # 不定积分（报所用方法 + 验证态）
+:integrate 1/(x^2-1)         # 不定积分（报所用方法 + 验证态）；多变量须给变量: :integrate f x
 :isteps 2*x*exp(x^2)         # 积分策略步树（manualintegrate 同款，只分类不计算）
 :defint sin(x) x 0 pi        # 定积分（自动正向换元 + 奇点拆分 + 判敛 + 分段）
 :defint 1/x^2 x 1 inf        # 无穷限反常积分（收敛/发散判定）

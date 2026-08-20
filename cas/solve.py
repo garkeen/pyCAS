@@ -214,10 +214,32 @@ def _poly_solve(p, var):
     return SolveResult(_sort_sols(seen), [], "ok" if not note else "unsupported", note=note)
 
 
+def _affine(a1, var):
+    """a1 是否 var 的仿射式 k*var + b（k 不含 var）-> (k, b) 或 None。"""
+    if a1 is var:
+        return T.ONE, T.ZERO
+    if not isinstance(a1, Expr):
+        return None
+    if a1.head.name == "Times" and var in a1.args:
+        k = T.mk(T.S("Times"), tuple(c for c in a1.args if c is not var))
+        if T.free_vars(k):
+            return None
+        return simplify(k), T.ZERO
+    if a1.head.name == "Plus":
+        rest = [c for c in a1.args if var not in T.free_vars(c)]
+        kpart = [c for c in a1.args if var in T.free_vars(c)]
+        if len(kpart) == 1:
+            kk = _affine(kpart[0], var)
+            if kk is not None:
+                return kk[0], simplify(T.mk(T.S("Plus"), tuple(rest))) if rest else T.ZERO
+    return None
+
+
 def _inverse_case(lhs, var):
     """f(var) = c（f 在 spec 声明了逆 inv）：主支逆解。
 
-    sin(x)=c -> arcsin(c) 等；周期族通解未建，诚实标注主支条件。
+    sin(x)=c -> arcsin(c) 等；tan(x/2)=t -> 2*atan(t)（仿射复合主支逆）。
+    周期族通解未建，诚实标注主支条件。
     逆函数的特殊点折叠由 mk 自动完成（arcsin(1) -> π/2）。
     """
     from cas import spec as _spec
@@ -242,16 +264,22 @@ def _inverse_case(lhs, var):
     for a, b in ((lhs.args[0], lhs.args[1]), (lhs.args[1], lhs.args[0])):
         sa, ca = _unwrap(a)
         sb, cb = _unwrap(b)
-        if not (isinstance(ca, Expr) and len(ca.args) == 1 and ca.args[0] is var):
+        if not (isinstance(ca, Expr) and len(ca.args) == 1):
+            continue
+        af = _affine(ca.args[0], var)
+        if af is None:
             continue
         sp = _spec.get(ca.head.name)
         if sp is None or sp.inv is None:
             continue
         if not _free(cb, var):
             continue
-        # lhs = sa·f(var) + sb·cb = 0 -> f(var) = -(sb/sa)·cb
-        rhs = cb if sb != sa else T.neg(cb)
-        sol = simplify(T.mk(S(sp.inv), (rhs,)))
+        # lhs = sa·f(k·var+b) + sb·cb = 0 -> f(k·var+b) = -(sb/sa)·cb
+        k, b = af
+        rhs = T.div(cb, T.N(sa)) if sb != sa else T.neg(T.div(cb, T.N(sa)))
+        if b is not T.ZERO:
+            rhs = T.plus(rhs, T.neg(b))
+        sol = simplify(T.div(T.mk(S(sp.inv), (rhs,)), k))
         return SolveResult([sol], [], "ok",
                            note=f"principal branch of {sp.print_name or sp.name}")
     return None
@@ -289,7 +317,11 @@ def solve(f, var, budget=100000):
         p = Poly.from_term(lhs, (var,))
     except PolyError:
         return _solve_param_lowdeg(lhs, var)
+    # 系数域 ℚ(params) 走 term 层参数求解（proviso 机制在 _solve_param_lowdeg）
+    from cas.poly import is_param_poly
 
+    if is_param_poly(p):
+        return _solve_param_lowdeg(lhs, var)
     return _poly_solve(p, var)
 
 

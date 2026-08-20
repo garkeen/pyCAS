@@ -14,6 +14,11 @@ class Poly:
         if not self.monos:
             self.monos = {}
 
+    def __eq__(self, o):
+        if not isinstance(o, Poly):
+            return NotImplemented
+        return self.vars == o.vars and self.monos == o.monos
+
     @staticmethod
     def zero(vars_):
         return Poly(vars_, {})
@@ -53,7 +58,8 @@ class Poly:
             for v in vars_:
                 if t is v:
                     return Poly.mono(vars_, t, 1)
-            raise PolyError(f"free symbol {t.name}")
+            # 不在 vars 的符号 = 参数：系数升入 ℚ(params)（SymRat 域）
+            return Poly.const(vars_, _mk_param(t))
         if isinstance(t, Expr):
             name = t.head.name
             if name == "Plus":
@@ -86,7 +92,7 @@ class Poly:
                 elif e != 0:
                     facs.append(T.mk(S("Power"), (v, N(e))))
             if c != 1 or not facs:
-                facs.append(N(c))
+                facs.append(_coef_to_term(c))
             if len(facs) == 1:
                 out.append(facs[0])
             else:
@@ -221,23 +227,40 @@ class Poly:
         return to_str(self.to_term())
 
 
+def is_param_poly(p):
+    """系数域是否为 ℚ(params)（含 SymRat 系数）。"""
+    return any(isinstance(v, SymRat) for v in p.monos.values())
+
+
+def _monic(p):
+    """首一化（域除法，Fr/SymRat 系数通用）。"""
+    if p.is_zero():
+        return p
+    return p.scalar(_rat_inv(p.lc(p.vars[0])))
+
+
 def ugcd(a, b):
+    """域上单变量多项式 gcd（欧几里得，monic 规范）。
+
+    ℚ 与 ℚ(params) 统一：系数域是域（SymRat 有理函数），无 content 概念，
+    欧几里得 + 首一化即完备（原 ℚ 实现中的 primitive 清理仅控制数值膨胀）。
+    """
     if a.vars != b.vars or len(a.vars) != 1:
         raise PolyError("univariate only")
     A, B = a, b
     if A.is_zero() and B.is_zero():
         return Poly.zero(a.vars)
     if A.is_zero():
-        return B.scalar(Fr(1) / B.lc(B.vars[0]))
+        return _monic(B)
     if B.is_zero():
-        return A.scalar(Fr(1) / A.lc(A.vars[0]))
-    _, pa = A.primitive()
-    _, pb = B.primitive()
-    while not pb.is_zero():
-        _, r = pa.udivmod(pb)
-        pa, pb = pb, r
-    c, prim = pa.primitive()
-    return prim.scalar(Fr(1) / prim.lc(prim.vars[0]))
+        return _monic(A)
+    r0, r1 = A, B
+    while not r1.is_zero():
+        _, r = r0.udivmod(r1)
+        r0, r1 = r1, r
+    if r0.is_zero():
+        return Poly.zero(a.vars)
+    return _monic(r0)
 
 
 def uresultant(a, b):
@@ -519,3 +542,174 @@ def _rec_const(B):
     if list(d) != [0]:
         raise PolyError("not exact division")
     return d[0]
+
+
+# ---------------------------------------------------------------------------
+# ℚ(params) 系数域：SymRat（参数有理函数）+ 与 Fr 的混合算术
+# ---------------------------------------------------------------------------
+
+
+class SymRat:
+    """ℚ(params) 有理函数系数：num/den ∈ ℚ[params]（Fr 系数 Poly，约分规范）。
+
+    常数（无参数）结果退化回 Fr，保持 Poly 其余代码对 Fr 的既有假设。
+    """
+
+    __slots__ = ("num", "den")
+
+    def __init__(self, num, den):
+        self.num = num
+        self.den = den
+
+    def __add__(self, o):
+        return _rat_add(self, o)
+
+    def __radd__(self, o):
+        return _rat_add(o, self)
+
+    def __sub__(self, o):
+        return _rat_add(self, _rat_neg(o))
+
+    def __rsub__(self, o):
+        return _rat_add(o, _rat_neg(self))
+
+    def __mul__(self, o):
+        return _rat_mul(self, o)
+
+    def __rmul__(self, o):
+        return _rat_mul(o, self)
+
+    def __truediv__(self, o):
+        return _rat_mul(self, _rat_inv(o))
+
+    def __rtruediv__(self, o):
+        return _rat_mul(o, _rat_inv(self))
+
+    def __neg__(self):
+        return SymRat(self.num.scalar(Fr(-1)), self.den)
+
+    def __eq__(self, o):
+        if isinstance(o, SymRat):
+            return self.num == o.num and self.den == o.den
+        if isinstance(o, (int, Fr)):
+            o = Fr(o)
+            if o == 0:
+                return self.num.is_zero()
+            return (self.num.is_const() and self.den.is_const()
+                    and self.num.const_val() / self.den.const_val() == o)
+        return NotImplemented
+
+    def is_zero(self):
+        return self.num.is_zero()
+
+    def to_term(self):
+        return T.div(self.num.to_term(), self.den.to_term())
+
+
+def _mk_param(sym):
+    """参数符号 -> SymRat（分子=该参数，分母=1）。"""
+    vs = (sym,)
+    return SymRat(Poly(vs, {(1,): Fr(1)}), Poly.one(vs))
+
+
+def _coef_to_term(c):
+    """Fr/SymRat 系数 -> term。"""
+    if isinstance(c, SymRat):
+        return c.to_term()
+    return N(c)
+
+
+def _parts(x):
+    if isinstance(x, SymRat):
+        return x.num, x.den
+    return Poly((), {(): Fr(x)}), Poly.one(())
+
+
+def _extend(p, vs):
+    """Poly 扩展到超集变量空间（p.vars 每变量按名映射到 vs 中的索引）。"""
+    if p.vars == vs:
+        return p
+    if not p.monos:
+        return Poly.zero(vs)
+    if not p.vars:
+        return Poly(vs, {tuple(0 for _ in vs): p.const_val()})
+    idx = [next(i for i, x in enumerate(vs) if x.name == v.name) for v in p.vars]
+    m = {}
+    for k, v in p.monos.items():
+        full = [0] * len(vs)
+        for i, e in zip(idx, k):
+            full[i] = e
+        m[tuple(full)] = v
+    return Poly(vs, m)
+
+
+def _unify_vs(p, q):
+    if p.vars == q.vars:
+        return p, q
+    if not p.vars:
+        return _extend(p, q.vars), q
+    if not q.vars:
+        return p, _extend(q, p.vars)
+    vs = p.vars + tuple(v for v in q.vars if v not in p.vars)
+    return _extend(p, vs), _extend(q, vs)
+
+
+def _mk_rat(num, den):
+    """规范：约分 + 分母符号规范；常数退化回 Fr。"""
+    num, den = _unify_vs(num, den)
+    if num.is_zero():
+        return Fr(0)
+    if num.is_const() and den.is_const():
+        return num.const_val() / den.const_val()
+    g = mgcd(num, den)
+    if not g.is_zero() and not (g.is_const() and abs(g.const_val()) == 1):
+        num = div_exact(num, g)
+        den = div_exact(den, g)
+    s = _sign_normalize(den)
+    if s is not den:
+        num = num.scalar(Fr(-1))
+        den = s
+    return SymRat(num, den)
+
+
+def _rat_neg(x):
+    if isinstance(x, SymRat):
+        return -x
+    return -x
+
+
+def _rat_inv(x):
+    if isinstance(x, SymRat):
+        return _mk_rat(x.den, x.num)
+    if x == 0:
+        raise PolyError("division by zero")
+    return Fr(1) / x
+
+
+def _unify4(na, da, nb, db):
+    """四个 Poly 统一到共同变量空间（两两并集，空 vars 提升）。"""
+    na, nb = _unify_vs(na, nb)
+    vs = na.vars
+    if da.vars != vs:
+        da = _extend(da, vs)
+    if db.vars != vs:
+        db = _extend(db, vs)
+    return na, da, nb, db
+
+
+def _rat_mul(a, b):
+    if isinstance(a, SymRat) or isinstance(b, SymRat):
+        na, da = _parts(a)
+        nb, db = _parts(b)
+        na, da, nb, db = _unify4(na, da, nb, db)
+        return _mk_rat(na * nb, da * db)
+    return a * b
+
+
+def _rat_add(a, b):
+    if isinstance(a, SymRat) or isinstance(b, SymRat):
+        na, da = _parts(a)
+        nb, db = _parts(b)
+        na, da, nb, db = _unify4(na, da, nb, db)
+        return _mk_rat(na * db + nb * da, da * db)
+    return a + b

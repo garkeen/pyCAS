@@ -72,8 +72,19 @@ def _k_apart(s, rest):
 
 def _k_integrate(s, rest):
     if not rest.strip():
-        return "usage: :integrate <expr>"
-    return s.integrate(rest.strip())
+        # 无参数：当前式是惰性积分则求值，否则提示用法
+        if (s.current is not None and isinstance(s.current, T.Expr)
+                and s.current.head.name == "Integrate"):
+            return s.integrate_current()
+        return "usage: :integrate <expr> [var]"
+    parts = rest.rsplit(None, 1)
+    # 当前式是惰性积分且单 token：对当前积分名词求值（∫f dt 的 f 已含换元变量）
+    if (len(parts) == 1 and s.current is not None
+            and isinstance(s.current, T.Expr) and s.current.head.name == "Integrate"):
+        return s.integrate_current()
+    if len(parts) == 2 and parts[1].isidentifier():
+        return s.integrate(parts[0], parts[1])
+    return s.integrate(rest.strip(), None)
 
 
 def _k_limit(s, rest):
@@ -267,6 +278,57 @@ def _k_solveset(s, rest):
     return out
 
 
+def _eval_inert(t, budget):
+    """单树求值惰性头（Quote 脱壳、惰性 Integrate 实算、D 名词微分）-> (新项, changed)。
+
+    求值失败（如不可积）的惰性头保持名词（诚实）。value() 全式遍历用它，
+    value_at() 单点复用——整体操作与子项操作同一套语义。
+    """
+    from cas.diff import d as dd
+    from cas.integrate import integrate as zz_int
+    from cas.errors import PolyError
+
+    changed = False
+    order = []
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        order.append(u)
+        if isinstance(u, T.Expr):
+            stack.extend(u.args)
+        elif isinstance(u, T.Bound):
+            stack.append(u.body)
+    val = {}
+    for u in reversed(order):
+        if isinstance(u, T.Bound):
+            val[u] = T._mk_bound_canon(u.hint, val[u.body])
+            continue
+        if not isinstance(u, T.Expr):
+            val[u] = u
+            continue
+        args = tuple(val[a] for a in u.args)
+        name = u.head.name
+        r = None
+        if name == "Quote":
+            r = args[0]
+        elif name == "Integrate" and len(args) == 1 and isinstance(args[0], T.Bound):
+            x, body = T.open_bound(args[0])
+            try:
+                r = zz_int(body, x)[0]
+            except PolyError:
+                r = None   # 不可积：保持名词
+        elif name == "D" and len(args) == 2:
+            r = dd(args[0], args[1])
+        if r is not None:
+            val[u] = r
+            changed = True
+        elif any(a is not b for a, b in zip(args, u.args)):
+            val[u] = T.mk(u.head, args)
+        else:
+            val[u] = u
+    return val[t], changed
+
+
 class Session:
     def __init__(self, budget=100000):
         self.current = None
@@ -297,7 +359,7 @@ class Session:
             "solve": KernelCmd("solve <expr> [var]", _k_solve),
             "factor": KernelCmd("factor <expr>", _k_factor),
             "apart": KernelCmd("apart <num> <den>", _k_apart),
-            "integrate": KernelCmd("integrate <expr>", _k_integrate),
+            "integrate": KernelCmd("integrate <expr> [var] (var required for multi-variable expr)", _k_integrate),
             "isteps": KernelCmd("isteps <expr> [var] (strategy step tree)", _k_isteps),
             "dsolve": KernelCmd("dsolve <eq with D(y,x)> <y> [x]", _k_dsolve),
             "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
@@ -405,7 +467,7 @@ class Session:
                     val[u] = T.mk(u.head, new_args)
             elif isinstance(u, T.Bound):
                 nb = val[u.body]
-                val[u] = u if nb is u.body else T.mk_bound(u.hint, nb)
+                val[u] = u if nb is u.body else T._mk_bound_canon(u.hint, nb)
             else:
                 d_ = self.defs.get(u.name, None) if isinstance(u, T.Sym) else None
                 val[u] = d_[1] if d_ is not None and d_[0] == () else u
@@ -447,7 +509,7 @@ class Session:
                 if not (1 <= i <= len(self.history)):
                     raise ParseError(f"no history %{i} (have {len(self.history)})")
                 t = self.history[i - 1]
-            return to_str(t, prec=99)
+            return to_str(t, prec=99, src=True)
 
         return re.sub(r"%(\d*)", rep, line)
 
@@ -508,12 +570,17 @@ class Session:
         return self._commit(r, path, res)
 
     def _commit(self, r, path, res):
-        """提交一次已计算好的规则应用（res 必须是在 self.current 上算出的）。"""
+        """提交一次已计算好的规则应用（res 必须是在 self.current 上算出的）。
+
+        提交后 remember 当前式：规则应用也产出可引用表达式（% 指向最近推导结果，
+        而非 feed 时的原始式；Mathematica Out 语义同款）。
+        """
         self._sid += 1
         before = self.current
         self.current = res.term
         st = Step(self._sid, r.id, tuple(path), before, self.current, res.guard, cost(res.term) - cost(before))
         self.log.append(st)
+        self._remember(self.current)
         if r.guard is not None:
             g = T.instantiate(r.guard, res.subst)
             cst, _ = self.ctx.check_and_assume(g, origin=f"step{self._sid}", kind="guard")
@@ -859,22 +926,51 @@ class Session:
 
     def _kernel_step(self, algo, result, before=None):
         """内核算法调用入账：单算法调用不做微观步骤解释（正确性由 verify 背书），
-        只记算法名 + 输入/输出 + 验证态（可解释性的最小诚实单位）。"""
+        只记算法名 + 输入/输出 + 验证态（可解释性的最小诚实单位）。
+        命令结果同时成为当前表达式（公式区展示，可继续交互）。"""
         self._sid += 1
         self.log.append(Step(
             self._sid, "kernel:" + algo, (), before, result, "YES", 0,
             note=f"algorithm={algo}",
         ))
         self._remember(result)
+        self.current = result
 
-    def integrate(self, s):
+    def integrate_current(self):
+        """对当前惰性积分名词求值（∫f dt 的 f 已含换元变量；等价 :value 的积分分支）。
+
+        与 :integrate <expr> 区分：<expr> 指被积式；此处求值 current 本身。
+        """
+        from cas.integrate import integrate as zz_int
+        from cas.pprint import to_str as ps
+
+        if not (isinstance(self.current, T.Expr) and self.current.head.name == "Integrate"
+                and len(self.current.args) == 1 and isinstance(self.current.args[0], T.Bound)):
+            return "integrate: current is not an inert integral"
+        x, body = T.open_bound(self.current.args[0])
+        try:
+            res, ok, method = zz_int(body, x)
+        except Exception as e:
+            return f"integrate: {type(e).__name__}: {e}"
+        self._kernel_step(f"integrate[{method}]", res, before=self.current)
+        tag = "VERIFIED" if ok else "UNVERIFIED"
+        return f"{ps(res)}   [{tag}, method: {method}]"
+
+    def integrate(self, s, var_s=None):
         from cas.integrate import integrate as zz_int
         from cas.pprint import to_str as ps
 
         t = self._parse_in(s)
-        x = self._pick_var(t)
-        if x is None:
-            return "no variable"
+        if var_s:
+            x = T.S(var_s)
+            if x not in T.free_vars(t):
+                return f"integrate: variable {var_s} not in expression"
+        else:
+            vs = sorted(T.free_vars(t), key=lambda v: v.name)
+            if len(vs) != 1:
+                n = str(len(vs)) if vs else "no"
+                return f"integrate: specify the integration variable (expr has {n} free variable)"
+            x = vs[0]
         res, ok, method = zz_int(t, x)
         self._kernel_step(f"integrate[{method}]", res, before=t)
         out = ps(res)
@@ -1034,6 +1130,7 @@ class Session:
             ":u": "undo [n]",
             ":auto": "core simplify",
             ":parts": "integration by parts on inert integral: :parts <u>",
+            ":subst": "substitute new variable: :subst t=g(x) (handles inert integral dx too)",
             ":solveq": "solve current linear equation for unknown: :solveq <term>",
             ":rule": "define session theorem inline: :rule id = lhs -> rhs [guard ... as ... auto]",
             ":unrule": "remove a session rule",
@@ -1100,6 +1197,9 @@ class Session:
             return self.kernel[name].fn(self, rest)
         if line.startswith(":parts "):
             res = self.iparts(line[7:].strip())
+            return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":subst "):
+            res = self.subst(line[7:].strip())
             return to_str(res) if isinstance(res, T.Term) else res
         if line.startswith(":solveq "):
             res = self.solveq(line[8:].strip())
@@ -1168,6 +1268,66 @@ class Session:
         return self.show()
 
     # ---------------- 方案命令（人机协作：人选方向，机器算） ----------------
+
+    def subst(self, eq_s):
+        """换元（手工通道，通用）。
+
+        :subst t=g(x)：把当前式中 g(x) 全部替换为新变量 t（复合键一次替换）；
+        当前式若是惰性积分 Integrate(f, x)，同时把被积式与微分元变换到新变量
+        （dx 随换元变换：t=g(x) 经主支逆解 x=h(t)，新被积式 = f(h(t))·h'(t)）。
+        反向求逆走 solve 通道（spec.inv 驱动，仿射复合主支逆已支持）。
+        正确性由用户后续 :verify 微分回验背书。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.diff import d as _d
+        from cas.solve import solve as _solve
+
+        eq = parse(eq_s)
+        if not (isinstance(eq, T.Expr) and eq.head.name == "Eq"):
+            return "usage: :subst t=g(x)  (e.g. :subst t=tan(x/2))"
+        lhs, rhs = eq.args
+        # 惰性积分：积分变量 x 参与方向判定（free_vars 会跳过被 Bound 绑定的 x）
+        is_integ = (isinstance(self.current, T.Expr) and self.current.head.name == "Integrate"
+                    and len(self.current.args) == 1 and isinstance(self.current.args[0], T.Bound))
+        fv = T.free_vars(self.current)
+        if is_integ:
+            x, body = T.open_bound(self.current.args[0])
+            oldvars = fv | {x}
+        else:
+            oldvars = fv
+        # 方向判定：新变量 = 裸符号 + 不在当前式 + 对侧含当前式变量
+        if isinstance(lhs, T.Sym) and lhs not in fv and (T.free_vars(rhs) & oldvars):
+            newvar, gexpr = lhs, rhs
+        elif isinstance(rhs, T.Sym) and rhs not in fv and (T.free_vars(lhs) & oldvars):
+            newvar, gexpr = rhs, lhs
+        else:
+            return "subst: 等式一边必须是当前式中未出现的新变量（裸符号）"
+        before = self.current
+        # 惰性积分：换元变换被积式与微分元
+        if is_integ:
+            # t = g(x) -> 解 x = h(t)
+            r = _solve(T.plus(gexpr, T.neg(newvar)), x)
+            if r.status != "ok" or not r.solutions:
+                return (f"subst: 无法对 {to_str(gexpr)} 求逆（solve: {r.note or r.status}）；"
+                        "请给出可求逆的换元（spec.inv 主支逆）")
+            ht = r.solutions[0]
+            new_body = T.subst(body, {x: ht})
+            dht = _d(ht, newvar)
+            new_int = T.mk(T.S("Integrate"), (T.mk_bound(newvar, simplify(T.times(new_body, dht))),))
+            repl = new_int
+            note = f"substitution {to_str(gexpr)} = {newvar.name} (dx -> {to_str(dht)} dt)"
+        else:
+            # 普通表达式：把 g(x) 替换为新变量（复合键一次全部替换）
+            repl = T.subst(self.current, {gexpr: newvar})
+            note = f"substitution {to_str(gexpr)} -> {newvar.name}"
+        self.current = repl
+        self._sid += 1
+        self.log.append(Step(self._sid, "scheme:subst", (), before, self.current, "YES",
+                             cost(self.current) - cost(before), note=note))
+        self._remember(self.current)
+        return self.current
 
     def iparts(self, u_s):
         """分部积分（人工干预通道）：用户选 u，内核算 dv = 体/u、v = ∫dv、du，
@@ -1299,55 +1459,135 @@ class Session:
         self._check_locked()
         if self.current is None:
             return "empty session"
-        from cas.diff import d as dd
-        from cas.integrate import integrate as zz_int
-        from cas.errors import PolyError
-
-        changed = False
-        order = []
-        stack = [self.current]
-        while stack:
-            u = stack.pop()
-            order.append(u)
-            if isinstance(u, T.Expr):
-                stack.extend(u.args)
-            elif isinstance(u, T.Bound):
-                stack.append(u.body)
-        val = {}
-        for u in reversed(order):
-            if isinstance(u, T.Bound):
-                val[u] = T._mk_bound_canon(u.hint, val[u.body])
-                continue
-            if not isinstance(u, T.Expr):
-                val[u] = u
-                continue
-            args = tuple(val[a] for a in u.args)
-            name = u.head.name
-            r = None
-            if name == "Quote":
-                r = args[0]
-            elif name == "Integrate" and len(args) == 1 and isinstance(args[0], T.Bound):
-                x, body = T.open_bound(args[0])
-                try:
-                    r = zz_int(body, x)[0]
-                except PolyError:
-                    r = None   # 不可积：保持名词
-            elif name == "D" and len(args) == 2:
-                r = dd(args[0], args[1])
-            if r is not None:
-                val[u] = r
-                changed = True
-            elif any(a is not b for a, b in zip(args, u.args)):
-                val[u] = T.mk(u.head, args)
-            else:
-                val[u] = u
+        r, changed = _eval_inert(self.current, self.budget)
         if not changed:
             return f"{to_str(self.current)}   [no inert form evaluated]"
         before = self.current
-        self.current = val[self.current]
+        self.current = r
         self._kernel_step("value", self.current, before=before)
         self._remember(self.current)
         return to_str(self.current)
+
+    def simplify_at(self, path):
+        """只化简指定路径的子项，其余子树指针不变（子项操作通道）。"""
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        sub = T.term_at(self.current, path)
+        nxt = simplify(sub, self.budget)
+        if nxt is sub:
+            return f"{to_str(sub)}   [no simplification at path {path}]"
+        before = self.current
+        self.current = T.replace_at(self.current, path, nxt)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:simplify_at", tuple(path), before, self.current, "YES",
+            cost(self.current) - cost(before), note=f"simplify at path {tuple(path)}",
+        ))
+        self._remember(self.current)
+        return to_str(self.current)
+
+    def auto_at(self, path):
+        """对指定路径的子项跑自动重写（simplify 不动点 + auto 规则），其余不动。"""
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        sub = T.term_at(self.current, path)
+        auto_rules = sorted(
+            (r for r in self.rules.rules.values() if r.auto),
+            key=lambda r: r.priority,
+        )
+        seen = {sub._h}
+        for _ in range(10):
+            s0 = simplify(sub, self.budget)
+            if s0 is not sub:
+                sub = s0
+                seen.add(sub._h)
+            changed = False
+            for p in T.all_paths(sub):
+                for r in auto_rules:
+                    res = apply_rule(r, sub, p, self._guard_eval, self.budget)
+                    if res.guard == "YES" and res.term._h not in seen \
+                            and cost(res.term) <= cost(sub):
+                        sub = res.term
+                        seen.add(sub._h)
+                        changed = True
+                        break
+                if changed:
+                    break
+            if not changed:
+                break
+        if sub is T.term_at(self.current, path):
+            return f"{to_str(sub)}   [no auto-rewrite at path {path}]"
+        before = self.current
+        self.current = T.replace_at(self.current, path, sub)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:auto_at", tuple(path), before, self.current, "YES",
+            cost(self.current) - cost(before), note=f"auto at path {tuple(path)}",
+        ))
+        self._remember(self.current)
+        return to_str(self.current)
+
+    def value_at(self, path):
+        """只求值指定路径子项中的惰性头（Quote/Integrate/D），其余不动。"""
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        sub = T.term_at(self.current, path)
+        r, changed = _eval_inert(sub, self.budget)
+        if not changed:
+            return f"{to_str(sub)}   [no inert form at path {path}]"
+        before = self.current
+        self.current = T.replace_at(self.current, path, r)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:value_at", tuple(path), before, self.current, "YES",
+            cost(self.current) - cost(before),
+            note=f"evaluate inert forms at path {tuple(path)}",
+        ))
+        self._remember(self.current)
+        return to_str(self.current)
+
+    def integrate_at(self, path):
+        """对指定路径子项做积分并原地替换，其余不动。
+
+        子项是惰性 Integrate 名词时求值该积分（点选积分号即算它），
+        否则对其做不定积分。两个语义都经既有内核算法 + 验证。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.integrate import integrate as zz_int
+        from cas.errors import PolyError
+
+        sub = T.term_at(self.current, path)
+        if isinstance(sub, T.Expr) and sub.head.name == "Integrate" \
+                and len(sub.args) == 1 and isinstance(sub.args[0], T.Bound):
+            x, body = T.open_bound(sub.args[0])
+            try:
+                res, ok, method = zz_int(body, x)
+            except PolyError:
+                return f"unsupported integrand at path {path}"
+            note = f"evaluate Integrate at path {tuple(path)}"
+        else:
+            x = self._pick_var(sub)
+            if x is None:
+                return "no variable in subterm"
+            try:
+                res, ok, method = zz_int(sub, x)
+            except PolyError:
+                return f"unsupported integrand at path {path}"
+            note = f"algorithm=integrate[{method}] at path {tuple(path)}"
+        before = self.current
+        self.current = T.replace_at(self.current, path, res)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "kernel:integrate_at", tuple(path), before, self.current, "YES",
+            cost(self.current) - cost(before), note=note,
+        ))
+        self._remember(self.current)
+        return f"{to_str(res)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: {method}]"
 
     def mrefine(self):
         """:refine：账本驱动化简（decide 的第二大消费者）——只重写 decide=YES 的结构，

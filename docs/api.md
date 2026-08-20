@@ -207,7 +207,7 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 
 **内核**（KernelCmd 注册表，`:help` 查看全部）：
 `:verify` · `:solve` · `:solveset` · `:solveineq` · `:factor` · `:apart` ·
-`:integrate` · `:isteps` · `:dsolve` · `:limit`（±inf）· `:series` ·
+`:integrate <expr> [var]`（多变量必填 var） · `:isteps <expr> [var]` · `:dsolve` · `:limit`（±inf）· `:series` ·
 `:defint`（含 ∞ 限/分段/正向换元）· `:bsub x=h(t) <expr> <var> <lo> <hi>` ·
 `:mat/:mdet/:mrank/:minv/:msolve/:charpoly/:eigenvalues/:eigenvectors` ·
 `:together/:collect/:numerator/:denominator/:coefficient` · `:latex` · `:load`。
@@ -231,3 +231,17 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 - **判定**：`check_and_assume` → domain_ok(dom_condition/satisfiable) →
   decide(semantic → ledger → interval → derive → axiom)。
 - **回放**：`:replay` → `handle` 逐条（与 REPL 同路径）→ `rules_fingerprint` 校验。
+
+---
+
+## 5. 子项操作通道（session.py，path 寻址一等公民）
+
+`value()` 求值循环抽为模块级 `_eval_inert(t, budget)`（单树求值惰性头，
+整体/子项共用同一语义）。会话方法（均记录 step log）：
+
+| 方法 | 语义 |
+|------|------|
+| `simplify_at(path)` | 只化简指定子项，其余子树指针不变 |
+| `auto_at(path)` | 子项上跑 simplify 不动点 + auto 规则（cost 不增 + 已见集） |
+| `value_at(path)` | 只求值该路径惰性头（Quote/Integrate/D） |
+| `integrate_at(path)` | 子项是 Integrate 名词 → 求值该积分；否则对其做不定积分 |
