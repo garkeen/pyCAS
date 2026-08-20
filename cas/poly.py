@@ -42,7 +42,7 @@ class Poly:
                 idx = i
                 break
         if idx is None:
-            raise PolyError(f"unknown var {var.name}")
+            raise PolyError(f"unknown var {var!r}")
         return Poly(vars_, {tuple(e if i == idx else 0 for i in range(len(vars_))): Fr(1)})
 
     @classmethod
@@ -61,6 +61,10 @@ class Poly:
             # 不在 vars 的符号 = 参数：系数升入 ℚ(params)（SymRat 域）
             return Poly.const(vars_, _mk_param(t))
         if isinstance(t, Expr):
+            # 复合项作原子变量（如 Log(x) 当生成元）：驻留 is 比较
+            for v in vars_:
+                if t is v:
+                    return Poly.mono(vars_, t, 1)
             name = t.head.name
             if name == "Plus":
                 acc = Poly.zero(vars_)

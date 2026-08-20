@@ -906,10 +906,17 @@ class Session:
 
     def apart(self, num_s, den_s):
         from cas.poly import Poly
-        from cas.apart import apart as zz_apart
+        from cas.apart import apart as zz_apart, apart_term, find_atom
+        from cas.pprint import to_str as ps
 
         t1 = self._parse_in(num_s)
         t2 = self._parse_in(den_s)
+        atom = find_atom(t1, t2)
+        if atom is not None:
+            # 复合项作原子变量（如 Log(x)）：多项式除法推广到非多项式头
+            res = apart_term(t1, t2, atom)
+            self._kernel_step("apart[composite-atom]", res, before=T.div(t1, t2))
+            return ps(res)
         x = self._pick_var(t1) or self._pick_var(t2)
         if x is None:
             return "no variable"

@@ -203,3 +203,63 @@ def apart(f, g, x=None):
     for w in whole:
         q = q + w
     return q, out
+
+
+# ---------------------------------------------------------------------------
+# 复合项作原子变量的推广：把 Log(x)/Sin(x)/Exp(x) 等非多项式头复合项当
+# 生成元，表达式看作 ℚ[其余符号][atom] 的元素做多项式除法。
+# 数学本质与字面变量 apart 同（多项式长除法 + 因式分解），只是"变量"是复合项。
+# ---------------------------------------------------------------------------
+
+_POLY_HEADS = ("Plus", "Times", "Power")
+
+
+def _collect_atoms(t, out):
+    """收集非多项式头复合项（Log/Sin/Cos/Exp/Abs/...）作为原子变量候选。"""
+    from cas import term as T
+
+    if isinstance(t, T.Expr):
+        n = t.head.name
+        if n in _POLY_HEADS:
+            for a in t.args:
+                _collect_atoms(a, out)
+        elif n in ("Lt", "Le", "Gt", "Ge", "Eq", "Ne", "And", "Or", "Not"):
+            return   # 比较/逻辑头不是数值表达式
+        else:
+            if not any(a is t for a in out):
+                out.append(t)
+
+
+def find_atom(*terms):
+    """自动选原子：唯一复合项 → 用之；多个/无 → None（回退字面变量路径）。"""
+    atoms = []
+    for t in terms:
+        _collect_atoms(t, atoms)
+    return atoms[0] if len(atoms) == 1 else None
+
+
+def apart_term(num, den, atom):
+    """复合项作原子变量的 apart：num/den 视作 ℚ[其余符号][atom] 上分式。
+
+    atom 是驻留复合项（如 Log(x)）。返回 apart 结果的 term。
+    """
+    from cas import term as T
+    from cas.term import S
+
+    f = Poly.from_term(num, (atom,))
+    g = Poly.from_term(den, (atom,))
+    q, terms = apart(f, g)
+    parts = []
+    if not q.is_zero():
+        parts.append(q.to_term())
+    for nn, dd, k in terms:
+        d = dd.to_term()
+        if k == 1:
+            parts.append(T.div(nn.to_term(), d))
+        else:
+            parts.append(T.div(nn.to_term(), T.pw(d, T.N(k))))
+    if not parts:
+        return T.ZERO
+    if len(parts) == 1:
+        return parts[0]
+    return T.mk(S("Plus"), tuple(parts))
