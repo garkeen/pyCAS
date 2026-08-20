@@ -83,15 +83,83 @@ def cancel(t):
 
 
 def numerator(t):
-    """分子（通分约分后）。"""
-    (p, _), _ = _pair(t)
-    return p.to_term()
+    """分子（通分约分后；Poly 域外回退 term 层不约分原始分子）。"""
+    try:
+        (p, _), _ = _pair(t)
+        return p.to_term()
+    except PolyError:
+        return num_den(t)[0]
 
 
 def denominator(t):
-    """分母（通分约分后，首一）。常数分母返回 1。"""
-    (_, q), _ = _pair(t)
-    return q.to_term()
+    """分母（通分约分后，首一；Poly 域外回退 term 层不约分原始分母）。"""
+    try:
+        (_, q), _ = _pair(t)
+        return q.to_term()
+    except PolyError:
+        return num_den(t)[1]
+
+
+def num_den(t):
+    """term 层分子分母提取（不进 Poly、不约分）。
+
+    把 Power 负指数因子的底移到分母，正指数留分子；Plus 通分。
+    支持非多项式头（Log/Cos/Exp 等）——变形 1/cos(x) -> (1, cos(x))，
+    (1+x^2)/(1+x^4) -> (1+x^2, 1+x^4)。原始分子分母，不做约分
+    （约分走 :together/:numerator 的 Poly 路径）。
+    """
+    if T.is_num(t):
+        f = T.num_val(t)
+        if f.denominator == 1:
+            return t, T.ONE
+        return T.N(f.numerator), T.N(f.denominator)
+    if isinstance(t, Expr):
+        n = t.head.name
+        if n == "Times":
+            pn, pd = T.ONE, T.ONE
+            for a in t.args:
+                an, ad = num_den(a)
+                pn = T.times(pn, an)
+                pd = T.times(pd, ad)
+            return pn, pd
+        if n == "Power":
+            b, e = t.args
+            if isinstance(e, T.Int):
+                if e.v > 0:
+                    return T.pw(b, e), T.ONE
+                if e.v < 0:
+                    return T.ONE, T.pw(b, T.N(-e.v))
+            return t, T.ONE
+        if n == "Plus":
+            pn, pd = T.ZERO, T.ONE
+            for a in t.args:
+                an, ad = num_den(a)
+                pn = T.plus(T.times(pn, ad), T.times(an, pd))
+                pd = T.times(pd, ad)
+            return pn, pd
+        return t, T.ONE
+    return t, T.ONE
+
+
+def mul_frac(t, k):
+    """分子分母同乘 k（凑形原语；k!=0 走义务队列，generic 语义）。
+
+    num/den -> (num*k)/(den*k)，分子分母分别展开（保持分式形，不展平分式）。
+    mk 规范形会合并同底幂，故同乘 cos 凑 sec² 会被化简回原形
+    （cos·cos^(-2) -> cos^(-1)）——反化简凑形需 hold 机制（远期）。
+    上下同除 x² 类（分子分母不同底）能保留。
+    """
+    n, d = num_den(t)
+    kn, kd = num_den(k)
+    # 同乘 k = kn/kd：分子分母各乘 kn 除 kd
+    new_n = expand(T.div(T.times(n, kn), kd))
+    new_d = expand(T.div(T.times(d, kn), kd))
+    return T.div(new_n, new_d)
+
+
+def div_frac(t, k):
+    """分子分母同除 k（k!=0）。= mul_frac(t, 1/k)。"""
+    return mul_frac(t, T.pw(k, T.MONE))
 
 
 def _poly_with(t, x):

@@ -236,6 +236,22 @@ def _k_coefficient(s, rest):
     return to_str(ops.coefficient(_parse(expr_s), T.S(parts[1]), k))
 
 
+def _k_mulfrac(kind):
+    def fn(s, rest):
+        from cas import ops
+        from cas.parser import parse as _parse
+
+        parts = rest.rsplit(None, 1)
+        if len(parts) != 2:
+            return f"usage: :{kind} <expr> <factor>"
+        expr = _parse(parts[0])
+        fac = _parse(parts[1])
+        res = ops.mul_frac(expr, fac) if kind == "mulfrac" else ops.div_frac(expr, fac)
+        s._kernel_step(kind, res, before=expr)
+        return to_str(res)
+    return fn
+
+
 def _k_solveineq(s, rest):
     from cas.ineq import solve_poly_ineq
     from cas.parser import parse as _parse
@@ -378,6 +394,8 @@ class Session:
             "collect": KernelCmd("collect <expr> <var>", _k_collect),
             "numerator": KernelCmd("numerator <expr>", _k_num_den("numerator")),
             "denominator": KernelCmd("denominator <expr>", _k_num_den("denominator")),
+            "mulfrac": KernelCmd("mulfrac <expr> <factor> (multiply num&den)", _k_mulfrac("mulfrac")),
+            "divfrac": KernelCmd("divfrac <expr> <factor> (divide num&den)", _k_mulfrac("divfrac")),
             "coefficient": KernelCmd("coefficient <expr> <var> [k]", _k_coefficient),
             "solveineq": KernelCmd("solveineq <expr> <op> 0 <var>", _k_solveineq),
             "solveset": KernelCmd("solveset <expr> <var> (set-valued solutions)", _k_solveset),
