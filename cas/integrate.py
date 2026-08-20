@@ -91,6 +91,24 @@ def _hermitte_power(a, p, k, x):
     return terms, a, k
 
 
+def _classify_discriminant(D):
+    """参数判别式（SymRat）符号分类：pos / neg / unknown。
+
+    decide 区间通道判 D>0 / D<0（平方和+常数等结构显然情形可判；
+    自由符号一般情形诚实返回 unknown）。
+    """
+    from cas.decide import decide, T3
+    from cas.context import Context
+
+    ctx = Context()
+    Dt = D.to_term()
+    if decide(T.mk(S("Gt"), (Dt, T.ZERO)), ctx) is T3.YES:
+        return "pos"
+    if decide(T.mk(S("Lt"), (Dt, T.ZERO)), ctx) is T3.YES:
+        return "neg"
+    return "unknown"
+
+
 def _log_terms(f, p, x):
     """∫ f/p（p 不可约，deg f < deg p）→ 对数/反正切项列表：
     ('lin', c, p)：c·ln(p)；('atan', f, p, pc, D)：二次负判别式实形式；
@@ -111,14 +129,18 @@ def _log_terms(f, p, x):
         qc = pm.monos.get((0,), Fr(0))
         D = 4 * qc - pc * pc   # Fr 或 SymRat
         if isinstance(D, SymRat):
-            # 参数判别式：p 在 apart 中已判不可约（D 非完全平方）。
-            # atan 形式对 D ≠ 0 符号成立（复对数主值组合），符号验证背书；
-            # D ≡ 0 为重根（平方自由分解已排除），此处防御性拒答。
+            # 参数判别式：符号分类（pos/neg/unknown）。
+            # pos (D>0 恒正)  → atan 实形式（√D 实）
+            # neg (D<0 恒负)  → ln 差实形式（√(-D) 实，避免复 atan）
+            # unknown (符号不定) → atan 通用形式 + proviso [D≠0]
+            # （atan 公式对 D≠0 任何符号成立：复对数主值组合，符号验证背书）
+            # D ≡ 0 为重根（平方自由分解已排除），防御性拒答。
             if D.is_zero():
                 raise PolyError("parameter discriminant is identically zero")
-            return [("atan", fm, pm, pc, D)]
+            sign = _classify_discriminant(D)
+            return [("atan", fm, pm, pc, D, sign)]
         if D > 0:
-            return [("atan", fm, pm, pc, D)]
+            return [("atan", fm, pm, pc, D, "pos")]
     fp = p.deriv(x)
     C = qa_div(f, fp, p)
     return [("root", C, p, n)]
@@ -157,16 +179,32 @@ def _assemble(poly_int, rat_terms, lin_logs, root_logs, x):
         parts.append(T.div(u.to_term(), T.pw(p.to_term(), N(kk))))
     for lg in lin_logs:
         if lg[0] == "atan":
-            _lg, fm, pm, pc, D = lg
+            _lg, fm, pm, pc, D, sign = lg
             A = fm.monos.get((1,), Fr(0))
             B = fm.monos.get((0,), Fr(0))
-            sd = _exact_sqrt_term(D)   # 完全平方折叠为有理数，否则保留 √D 名词
-            if A != 0:
-                parts.append(T.times(_coef_term(A / 2), T.log(pm.to_term())))
-            k = 2 * B - A * pc
-            if k != 0:
-                arg = T.div(T.plus(T.times(N(2), x), _coef_term(pc)), sd)
-                parts.append(T.times(_coef_term(k), T.pw(sd, T.MONE), T.atan(arg)))
+            if sign == "neg":
+                # D<0 恒负：ln 差实形式 √(-D) 实（避免复 atan）
+                # ∫(Ax+B)/p = (A/2)ln(p) + (2B-A·pc)/(2√(-D))·[ln(2x+pc-√(-D)) - ln(2x+pc+√(-D))]
+                sd = _exact_sqrt_term(-D)   # √(-D) 名词
+                if A != 0:
+                    parts.append(T.times(_coef_term(A / 2), T.log(pm.to_term())))
+                k = 2 * B - A * pc
+                if k != 0:
+                    w = T.plus(T.times(N(2), x), _coef_term(pc))
+                    half_k = k / 2
+                    parts.append(T.times(_coef_term(half_k), T.pw(sd, T.MONE),
+                                        T.log(T.plus(w, T.neg(sd)))))
+                    parts.append(T.times(_coef_term(-half_k), T.pw(sd, T.MONE),
+                                        T.log(T.plus(w, sd))))
+            else:
+                # pos (D>0) / unknown (符号不定)：atan 通用形式
+                sd = _exact_sqrt_term(D)   # 完全平方折叠为有理数，否则保留 √D 名词
+                if A != 0:
+                    parts.append(T.times(_coef_term(A / 2), T.log(pm.to_term())))
+                k = 2 * B - A * pc
+                if k != 0:
+                    arg = T.div(T.plus(T.times(N(2), x), _coef_term(pc)), sd)
+                    parts.append(T.times(_coef_term(k), T.pw(sd, T.MONE), T.atan(arg)))
             continue
         c, p = lg[1], lg[2]
         parts.append(T.times(_coef_term(c), T.log(p.to_term())))
@@ -193,9 +231,9 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
         num, den = num * d2 + n2 * den, den * d2
     for lg in lin_logs:
         if lg[0] == "atan":
-            # d(atan 实形式) = f/p 恒等（代数验证：√D 系数恰消去），
-            # 贡献与 f/p 通分同形
-            _tg, fm, pm, _pc, _D = lg
+            # d(atan 实形式 / ln 差实形式) = f/p 恒等（代数验证：√D 或 √(-D)
+            # 系数恰消去），贡献与 f/p 通分同形——sign 不影响验证等式。
+            _tg, fm, pm, _pc, _D, _sign = lg
             num, den = num * pm + fm * den, den * pm
             continue
         c, p = lg[1], lg[2]
@@ -218,7 +256,7 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
 
 
 def integrate_rational(P, Q, x):
-    """∫ P/Q dx → (term, verified)。P, Q 单变量，Q 非零。"""
+    """∫ P/Q dx → (term, verified, provisos)。P, Q 单变量，Q 非零。"""
     q_poly, r = P.udivmod(Q)
     poly_int = _integrate_poly(q_poly, x)
     rat_terms = []
@@ -243,7 +281,16 @@ def integrate_rational(P, Q, x):
                     root_logs.append((lg[1], lg[2], lg[3]))
     term = _assemble(poly_int, rat_terms, lin_logs, root_logs, x)
     verified = _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x)
-    return term, verified
+    # 参数判别式符号不定（unknown）的 atan 项：atan 公式仅在 D≠0 成立，
+    # 平方自由分解已排除重根，但 D 作为参数式可能取 0 → 输出 proviso [D≠0]。
+    provisos = []
+    for lg in lin_logs:
+        if lg[0] == "atan" and lg[5] == "unknown":
+            Dt = lg[4].to_term()
+            prov = T.mk(S("Ne"), (Dt, T.ZERO))
+            if prov not in provisos:
+                provisos.append(prov)
+    return term, verified, provisos
 
 
 _USUB_DEPTH = [0]   # 换元递归深度守卫（模块级，integrate 链共享）
@@ -300,7 +347,7 @@ def _try_usub(t, x):
         if simplify(T.subst(h, {z: g})) is not q:
             continue
         try:
-            H, _ok_inner, _m = integrate(h, z)
+            H, _ok_inner, _m, _prov = integrate(h, z)
         except PolyError:
             continue
         F = T.subst(H, {z: g})
@@ -314,19 +361,19 @@ def _try_usub(t, x):
 
 
 def integrate(t, x):
-    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method)。
+    """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method, provisos)。
 
     裸 spec 函数走 anti 表（连续原函数，定积分友好）；
     正向复合 t = h(g(x))·g'(x) 走自动换元（代回不需逆函数）；
     有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。
-    method 供策略通道可解释输出（REPL/step log）。
+    method 供策略通道可解释输出（REPL/step log）；provisos 为参数情形的条件声明。
     """
     F0 = _spec_antideriv(t, x)
     if F0 is not None:
         from cas.diff import verify as _verify
 
         ok = _verify(F0, x, t) == "VERIFIED"
-        return F0, ok, "spec antiderivative table"
+        return F0, ok, "spec antiderivative table", []
     if _USUB_DEPTH[0] < 3:
         _USUB_DEPTH[0] += 1
         try:
@@ -335,16 +382,16 @@ def integrate(t, x):
             _USUB_DEPTH[0] -= 1
         if us is not None:
             F, ok, g, _h, _H = us
-            return F, ok, f"u-substitution u={to_str(g)}"
+            return F, ok, f"u-substitution u={to_str(g)}", []
     try:
         P, Q = _rat_pair(t, x)
-        term, ok = integrate_rational(P, Q, x)
-        return term, ok, "Hermite reduction + RootOf log part"
+        term, ok, provisos = integrate_rational(P, Q, x)
+        return term, ok, "Hermite reduction + RootOf log part", provisos
     except PolyError:
         res = _trig_tan_half(t, x)
         if res is None:
             raise PolyError("unsupported integrand")
-        return res[0], res[1], "t = tan(x/2) substitution -> rational integration"
+        return res[0], res[1], "t = tan(x/2) substitution -> rational integration", res[2]
 
 
 def _spec_antideriv(t, x):
@@ -412,9 +459,9 @@ def _trig_tan_half(t, x):
         P, Q = _rat_pair(w, tv)
     except PolyError:
         return None
-    G, ok = integrate_rational(P, Q, tv)
+    G, ok, provisos = integrate_rational(P, Q, tv)
     F = T.subst(G, {tv: T.tan(T.div(x, N(2)))})
-    return F, ok
+    return F, ok, provisos
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +501,7 @@ def defint(t, x, lo, hi):
         lo_f, hi_f = hi_f, lo_f
         sign = -1
     try:
-        F, ok, _method = integrate(t, x)
+        F, ok, _method, _prov = integrate(t, x)
     except PolyError:
         return None, "unsupported", "no antiderivative method"
     splits = _sing_points(t, x, lo_f, hi_f)
@@ -613,7 +660,7 @@ def _defint_improper(t, x, lo, hi):
         st = s1 if s1 == s2 else "UNVERIFIED"
         return T.plus(v1, v2), st, "improper both ends, split at 0"
     try:
-        F, ok, _method = integrate(t, x)
+        F, ok, _method, _prov = integrate(t, x)
     except PolyError:
         return None, "unsupported", "no antiderivative method"
     right = _is_pos_inf(hi)

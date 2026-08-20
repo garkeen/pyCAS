@@ -157,7 +157,7 @@ class TestIndefiniteUSub(_Base):
         for expr, frag in (("2*x*exp(x^2)", "u-substitution u=x^2"),
                            ("cos(x)*exp(sin(x))", "u-substitution u=sin(x)"),
                            ("x/(x^2+1)", "u-substitution u=x^2")):   # 候选按大小升序，u=x² 先命中
-            _F, ok, method = integrate(parse(expr), self.x)
+            _F, ok, method, _prov = integrate(parse(expr), self.x)
             self.assertTrue(ok, expr)
             self.assertEqual(method, frag, expr)
 
@@ -166,7 +166,7 @@ class TestIndefiniteUSub(_Base):
         # 验证态取 integrate 内层回验（Poly 层等价，比 equivalent 管线更硬）
         from cas.integrate import integrate
 
-        F, ok, _m = integrate(parse("x^3/(x^2-1)"), self.x)
+        F, ok, _m, _prov = integrate(parse("x^3/(x^2-1)"), self.x)
         self.assertTrue(ok)
 
 

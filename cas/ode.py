@@ -155,8 +155,8 @@ def _solve_linear1(A, B, Cc, y, x, f, dy, dy2):
     if not (_free_of(p, y) and _free_of(q, y)):
         return None
     try:
-        P, _ok1, m1 = zz_int(p, x)
-        G, _ok2, m2 = zz_int(simplify(T.times(q, T.exp(P))), x)
+        P, _ok1, m1, _prov1 = zz_int(p, x)
+        G, _ok2, m2, _prov2 = zz_int(simplify(T.times(q, T.exp(P))), x)
     except PolyError:
         return None
     # IF = exp(P)：解写为 (G + C1)·exp(−P)，避免 C1/exp(P) 形态
@@ -184,8 +184,8 @@ def _solve_separable(A, B, y, x, f, dy, dy2):
     if not (_free_of(ky, x) and _free_of(fx, y)):
         return None
     try:
-        K, _o1, _m1 = zz_int(ky, y)
-        F, _o2, _m2 = zz_int(fx, x)
+        K, _o1, _m1, _p1 = zz_int(ky, y)
+        F, _o2, _m2, _p2 = zz_int(fx, x)
     except PolyError:
         return None
     rhs = T.plus(F, C1)
@@ -275,7 +275,7 @@ def dsolve(f, y, x):
         from cas.integrate import integrate as zz_int
 
         try:
-            F, ok, _m = zz_int(simplify(T.div(T.neg(B), A)), x)
+            F, ok, _m, _prov = zz_int(simplify(T.div(T.neg(B), A)), x)
         except PolyError:
             return OdeResult(None, "unsupported", "-", "direct: integrand not integrable")
         sol = T.plus(F, C1)

@@ -949,12 +949,15 @@ class Session:
             return "integrate: current is not an inert integral"
         x, body = T.open_bound(self.current.args[0])
         try:
-            res, ok, method = zz_int(body, x)
+            res, ok, method, provisos = zz_int(body, x)
         except Exception as e:
             return f"integrate: {type(e).__name__}: {e}"
         self._kernel_step(f"integrate[{method}]", res, before=self.current)
         tag = "VERIFIED" if ok else "UNVERIFIED"
-        return f"{ps(res)}   [{tag}, method: {method}]"
+        out = f"{ps(res)}   [{tag}, method: {method}]"
+        if provisos:
+            out += "   [proviso: " + " && ".join(to_str(g) for g in provisos) + "]"
+        return out
 
     def integrate(self, s, var_s=None):
         from cas.integrate import integrate as zz_int
@@ -971,11 +974,14 @@ class Session:
                 n = str(len(vs)) if vs else "no"
                 return f"integrate: specify the integration variable (expr has {n} free variable)"
             x = vs[0]
-        res, ok, method = zz_int(t, x)
+        res, ok, method, provisos = zz_int(t, x)
         self._kernel_step(f"integrate[{method}]", res, before=t)
         out = ps(res)
         tag = "VERIFIED" if ok else "UNVERIFIED"
-        return f"{out}   [{tag}, method: {method}]"
+        out = f"{out}   [{tag}, method: {method}]"
+        if provisos:
+            out += "   [proviso: " + " && ".join(to_str(g) for g in provisos) + "]"
+        return out
 
     def mlimit(self, expr_s, var_s, point_s):
         """:limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）；point 可为 ±inf。"""
@@ -1358,7 +1364,7 @@ class Session:
             if equivalent(T.times(u, q), body) is not T3.YES:
                 continue
             try:
-                v, _ok, _m = zz_int(q, x)
+                v, _ok, _m, _prov = zz_int(q, x)
             except PolyError:
                 continue
             du = d(u, x)
@@ -1566,7 +1572,7 @@ class Session:
                 and len(sub.args) == 1 and isinstance(sub.args[0], T.Bound):
             x, body = T.open_bound(sub.args[0])
             try:
-                res, ok, method = zz_int(body, x)
+                res, ok, method, provisos = zz_int(body, x)
             except PolyError:
                 return f"unsupported integrand at path {path}"
             note = f"evaluate Integrate at path {tuple(path)}"
@@ -1575,7 +1581,7 @@ class Session:
             if x is None:
                 return "no variable in subterm"
             try:
-                res, ok, method = zz_int(sub, x)
+                res, ok, method, provisos = zz_int(sub, x)
             except PolyError:
                 return f"unsupported integrand at path {path}"
             note = f"algorithm=integrate[{method}] at path {tuple(path)}"
@@ -1587,7 +1593,10 @@ class Session:
             cost(self.current) - cost(before), note=note,
         ))
         self._remember(self.current)
-        return f"{to_str(res)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: {method}]"
+        out = f"{to_str(res)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: {method}]"
+        if provisos:
+            out += "   [proviso: " + " && ".join(to_str(g) for g in provisos) + "]"
+        return out
 
     def mrefine(self):
         """:refine：账本驱动化简（decide 的第二大消费者）——只重写 decide=YES 的结构，

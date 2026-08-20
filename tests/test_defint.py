@@ -34,7 +34,7 @@ class TestDefint(unittest.TestCase):
         # 负判别式二次因子走实形式（atan），不再出 RootOf；atan(1) 特殊点折叠为 π/4
         v, st, _ = D("1/(1+x^2)", "0", "1")
         self.assertEqual((to_str(v), st), ("1/4*π", "VERIFIED"))
-        F, ok, _ = integrate(parse("1/(x^2+1)"), x)
+        F, ok, _, _prov = integrate(parse("1/(x^2+1)"), x)
         self.assertEqual(to_str(F), "atan(x)")
 
     def test_reversed_bounds(self):

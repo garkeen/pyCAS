@@ -18,6 +18,8 @@ def _poly_sqrt(p):
         return p
     if not p.vars:
         c = p.const_val()
+        if c < 0:
+            return None
         a = isqrt(c.numerator)
         b = isqrt(c.denominator)
         if a * a == c.numerator and b * b == c.denominator:
