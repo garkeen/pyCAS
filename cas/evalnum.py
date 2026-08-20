@@ -112,17 +112,50 @@ _POINTS = (
 )
 
 
-def sample_agrees(a, b, vars_, tol=1e-8, min_points=4, max_checks=16):
+def _env_satisfies(c, env):
+    """数值检查 env 是否满足域约束 c（Gt/Ge/Lt/Le/Ne，歧义返回 None）。"""
+    if isinstance(c, Expr) and c.head.name in ("Gt", "Ge", "Lt", "Le", "Ne"):
+        try:
+            v = eval_approx(c.args[0], env)
+        except (EvalNumError, OverflowError):
+            return None
+        op = c.head.name
+        if op == "Gt":
+            return v > 0
+        if op == "Ge":
+            return v >= 0
+        if op == "Lt":
+            return v < 0
+        if op == "Le":
+            return v <= 0
+        return v != 0
+    return None
+
+
+def sample_agrees(a, b, vars_, tol=1e-8, min_points=4, max_checks=16, dom=None):
     """采样一致性：a、b 在足够多采样点数值一致 -> True；否则 None（未知）。
 
     极点保护：任一侧求值失败或绝对值过大（疑似极点）的点跳过。
-    只产出 True/None——采样是探测器不是证明，否证必须走符号通道。
+    dom 给定时（公共定义域约束列表），只在与所有约束相容的点采样——
+    避免在 a/b 定义域边界或外部误判。只产出 True/None——采样是探测器
+    不是证明，否证必须走符号通道。
     """
     agree = 0
     checked = 0
+    excluded = 0
     combos = itertools.product(_POINTS, repeat=len(vars_)) if vars_ else [()]
     for combo in combos:
         env = dict(zip(vars_, combo))
+        if dom:
+            ok = True
+            for c in dom:
+                r = _env_satisfies(c, env)
+                if r is False:
+                    ok = False
+                    break
+            if not ok:
+                excluded += 1
+                continue
         try:
             va = eval_approx(a, env)
             vb = eval_approx(b, env)

@@ -115,6 +115,18 @@ def _auto_rewrite(w, rules, budget=40):
     return w
 
 
+def _contains_imag(t):
+    """term 是否含虚数单位 i（主支解带复根即无实原像）。"""
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if u is T.IU:
+            return True
+        if isinstance(u, Expr):
+            stack.extend(u.args)
+    return False
+
+
 def bsub_defint(t, x, lo, hi, h, tvar, rules=None):
     """∫_lo^hi t dx 经 x = h(tvar) -> (值项 | None, 状态, 说明)。
 
@@ -128,14 +140,23 @@ def bsub_defint(t, x, lo, hi, h, tvar, rules=None):
     def new_bound(c):
         r = solve(T.plus(h, T.neg(c)), tvar)
         if r.status != "ok" or not r.solutions:
-            return None
-        return simplify(r.solutions[0])
+            return None, "unsolved"
+        sol = simplify(r.solutions[0])
+        if _contains_imag(sol):
+            # 主支逆无实原像：如 x=t² 在 x<0——换元值域不覆盖该限界。
+            # 认清问题（域/满射），而非错误归因到限界不可比。
+            return None, "no real preimage"
+        return simplify(sol), None
 
-    tlo = new_bound(lo)
-    thi = new_bound(hi)
+    tlo, tnote = new_bound(lo)
+    thi, _ = new_bound(hi)
     if tlo is None or thi is None:
-        return None, "unsupported", ("cannot solve substitution bounds via principal "
-                                     "inverse (need spec.inv coverage)")
+        why = ("principal inverse has no real preimage (substitution x="
+               f"{to_str(h)} does not cover the endpoint domain)")
+        if tnote == "unsolved" or (tlo is None and thi is None and tnote is None):
+            why = ("cannot solve substitution bounds via principal inverse "
+                   "(need spec.inv coverage)")
+        return None, "unsupported", why
     w = simplify(T.times(T.subst(t, {x: h}), dd(h, tvar)))
     if rules is not None:
         w = simplify(_auto_rewrite(w, rules))

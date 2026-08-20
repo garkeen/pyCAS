@@ -879,9 +879,13 @@ def equivalent(a, b, ctx=None, budget=100000):
     if d is not T3.UNKNOWN:
         return d
     # 数值采样 PROBABLE 通道（探测器，不是证明；否证必须走符号通道）
+    # 域感知：公共定义域（dom_condition(a) ∪ dom_condition(b)）内采样，
+    # 避免在定义域边界/外部误判（域外点不参与）。
     from cas.evalnum import sample_agrees
+    from cas.domain import dom_condition
 
     allv = sorted(T.free_vars(a) | T.free_vars(b), key=lambda s: s.name)
-    if sample_agrees(a, b, allv):
+    dom = list(dom_condition(a)) + list(dom_condition(b))
+    if sample_agrees(a, b, allv, dom=dom):
         return T3.PROBABLE
     return T3.UNKNOWN
