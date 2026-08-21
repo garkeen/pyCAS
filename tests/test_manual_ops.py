@@ -323,6 +323,53 @@ class TestLoopExtraction(unittest.TestCase):
         self.assertIn("already an equation", out)
 
 
+class TestVerificationCoverage(unittest.TestCase):
+    """验证覆盖审计：所有问题->答案型计算都必须带证书检查输出。"""
+
+    def test_factor_multiply_back(self):
+        s = Session()
+        out = s.handle("!factor x^4-1")
+        self.assertIn("(x + 1)", out)
+        self.assertIn("[VERIFIED, method: Zassenhaus]", out)
+
+    def test_solve_substitution_check(self):
+        s = Session()
+        out = s.handle("!solve x^2 - 5*x + 6 = 0 x")
+        self.assertIn("x = 2, 3", out)
+        self.assertIn("[VERIFIED]", out)
+
+    def test_minv_identity_check(self):
+        s = Session()
+        out = s.handle("!minv [[1,2],[3,4]]")
+        self.assertIn("[VERIFIED, M*M^-1 = I]", out)
+
+    def test_msolve_substitution_check(self):
+        s = Session()
+        out = s.handle("!msolve [[1,2],[3,4]] [5,11]")
+        self.assertIn("[VERIFIED, M*x = b]", out)
+
+    def test_eigenvalues_charpoly_check(self):
+        s = Session()
+        out = s.handle("!eigenvalues [[1,2],[3,4]]")
+        self.assertIn("[VERIFIED, charpoly(lambda) = 0]", out)
+
+    def test_limit_numeric_probe(self):
+        s = Session()
+        self.assertIn("[PROBABLE, numeric probe]",
+                      s.handle("!limit sin(x)/x x 0"))
+        self.assertIn("[PROBABLE, numeric probe]",
+                      s.handle("!limit 1/x x inf"))
+        # 发散（±Infinity）无廉价证书：裸输出
+        self.assertEqual(s.handle("!limit exp(x) x inf"), "Infinity")
+
+    def test_series_coeff_crosscheck(self):
+        s = Session()
+        out = s.handle("!series exp(x) x 0 4")
+        self.assertIn("[VERIFIED, coeff check", out)
+        out = s.handle("!series sin(x) x 0 5")
+        self.assertIn("[VERIFIED, coeff check", out)
+
+
 class TestGuardObligations(unittest.TestCase):
     """守卫条件显式在案：域闸门 UNKNOWN 接义务队列，可作答回滚。"""
 

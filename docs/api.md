@@ -186,6 +186,21 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 ### 数值与错误（横切/L0）
 - `evalnum.eval_exact(t, env)`（环层精确有理）/ `eval_approx`（spec.numeric）/
   `sample_agrees`（只产一致/未知，绝不产否证）。仅验证/抽查通道。
+- **验证关系表（问题->答案型计算的证书检查，! 输出统一携带标注）**：
+
+| 计算 | 验证关系 | 标注 |
+|------|---------|------|
+| 不定积分 | D(F) = f（微分回验） | [VERIFIED, method] |
+| 定积分 | 端点极限 + 数值交叉核对 | [VERIFIED, method] |
+| 求和 | ΔS = f（差分回验） | [VERIFIED, method: Faulhaber/Gosper] |
+| ODE | 解代回方程 + equivalent 三态 | [VERIFIED, kind] |
+| 方程求解 | 解代回（check_solution，已接入管线） | [VERIFIED]/[UNVERIFIED (n/m failed)] |
+| 因式分解 | 乘回展开归零比对 | [VERIFIED, method: Zassenhaus] |
+| 矩阵逆 | M·M⁻¹ = I | [VERIFIED, M*M^-1 = I] |
+| 线性方程组 | M·x = b 代回 | [VERIFIED, M*x = b] |
+| 特征值 | charpoly(λᵢ) = 0 代回 | [VERIFIED, charpoly(lambda) = 0] |
+| 极限 | 数值收敛趋势探针（双侧误差随 d 缩小；±inf 大样本） | [PROBABLE, numeric probe] / 裸输出(发散) |
+| Taylor 级数 | 前 3 系数 vs diff 引擎 f^(k)(a)/k! 交叉核对 | [VERIFIED, coeff check k <= N] |
 - `errors`：`BudgetExceeded` / `ParseError` / `PolyError`；matrix 另有 `MatrixError`；
   evalnum 有 `EvalNumError`；series 有 `SeriesError`。
 

@@ -87,7 +87,7 @@ class TestLimitsAtInfinity(_Base):
 
     def test_limit_command(self):
         s = Session()
-        self.assertEqual(s.handle("!limit 1/x x inf"), "0")
+        self.assertEqual(s.handle("!limit 1/x x inf"), "0   [PROBABLE, numeric probe]")
         self.assertEqual(s.handle("!limit x x -inf"), "-Infinity")
 
 

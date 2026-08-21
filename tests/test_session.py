@@ -63,7 +63,7 @@ class TestSessionFlow(unittest.TestCase):
         self.assertIn("2", out)
         self.assertIn("3", out)
         # 无变量时末尾数字不被误当变量
-        self.assertEqual(s.solver["solve"].fn(s, "2*x - 4"), "x = 2")
+        self.assertEqual(s.solver["solve"].fn(s, "2*x - 4"), "x = 2   [VERIFIED]")
         self.assertEqual(s.solver["factor"].fn(s, ""), "usage: !factor <expr>")
 
 

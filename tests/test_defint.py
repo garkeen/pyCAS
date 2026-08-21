@@ -73,7 +73,7 @@ class TestDefintSession(unittest.TestCase):
         self.assertIn("2", out)
         self.assertIn("VERIFIED", out)
         out = s.solver["limit"].fn(s, "sin(x)/x x 0")
-        self.assertEqual(out, "1")
+        self.assertEqual(out, "1   [PROBABLE, numeric probe]")
         self.assertEqual(s.solver["limit"].fn(s, "sin(1/x) x 0"), "UNKNOWN")
         # 算法步入账
         self.assertTrue(any(st.rule_id.startswith("kernel:defint") for st in s.log))
