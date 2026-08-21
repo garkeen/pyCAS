@@ -81,7 +81,12 @@ class RatFunc:
         return self + (-o)
 
     def __mul__(self, o):
+        if isinstance(o, (int, Fr)):
+            return RatFunc(self.p.scalar(Fr(o)), self.q)
         return RatFunc(self.p * o.p, self.q * o.q)
+
+    def __rmul__(self, o):
+        return self * o
 
     def __truediv__(self, o):
         return RatFunc(self.p * o.q, self.q * o.p)
@@ -93,6 +98,27 @@ class RatFunc:
         for _ in range(n):
             base = base * self
         return base
+
+    def deriv(self, x):
+        return RatFunc(self.p.deriv(x) * self.q - self.p * self.q.deriv(x),
+                       self.q * self.q)
+
+    def is_zero(self):
+        return self.p.is_zero()
+
+    def is_const(self):
+        return self.p.is_const() and self.q.is_const()
+
+    def const_val(self):
+        return self.p.const_val() / self.q.const_val()
+
+    @staticmethod
+    def zero(vars_):
+        return RatFunc(Poly.zero(vars_), Poly.one(vars_))
+
+    @staticmethod
+    def one(vars_):
+        return RatFunc(Poly.one(vars_), Poly.one(vars_))
 
     def to_term(self):
         if self.q.is_const() and self.q.const_val() == 1:

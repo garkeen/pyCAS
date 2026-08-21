@@ -230,12 +230,76 @@ class TestRischExpIntegrate(unittest.TestCase):
         self._dcheck("exp(x)*exp(-x)", r)
 
     def test_multilayer_unsupported(self):
-        # 双层 exp 塔：递归塔 pending M5.2（诚实拒答，不误判）
+        # 双层 exp 塔：递归塔 pending M5.2b（诚实拒答，不误判）
         from cas.risch import RischUnsupported
 
         with self.assertRaises(RischUnsupported) as cm:
             self._integrate("exp(x) + exp(x^2)")
         self.assertIn("M5.2", str(cm.exception))
+
+
+class TestRischPrimitive(unittest.TestCase):
+    """M5.2a：primitive 层积分（limited_integrate 循环 + Hermite/residue）。
+
+    正确性证据 = 已知闭式逐项比对 + D(result) 数值采样交叉核对。
+    """
+
+    SAMPLES = [Fr(3, 2), Fr(5, 2), Fr(7, 3)]
+
+    def _integrate(self, s):
+        from cas.risch import integrate_exp_tower
+
+        return integrate_exp_tower(parse(s), x)[0]
+
+    def _dcheck(self, s, result):
+        from cas.diff import d
+
+        got = d(result, x)
+        want = parse(s)
+        for xv in self.SAMPLES:
+            gv = eval_approx(got, {x: xv})
+            wv = eval_approx(want, {x: xv})
+            self.assertAlmostEqual(gv, wv, delta=max(1e-9, abs(wv) * 1e-9),
+                                   msg=f"D-check {s} at x={xv}")
+
+    def test_basic_log(self):
+        r = self._integrate("log(x)")
+        self.assertEqual(to_str(simplify(r)), "x*log(x) - x")
+        self._dcheck("log(x)", r)
+
+    def test_poly_times_log(self):
+        r = self._integrate("x*log(x)")
+        self.assertEqual(to_str(simplify(r)), "1/2*log(x)*x^2 - 1/4*x^2")
+        self._dcheck("x*log(x)", r)
+
+    def test_degree_raise(self):
+        # ∫log(x)/x = log(x)^2/2：升次（primitive 特有，exp 无此概念）
+        r = self._integrate("log(x)/x")
+        self.assertEqual(to_str(simplify(r)), "1/2*log(x)^2")
+        self._dcheck("log(x)/x", r)
+        r2 = self._integrate("(log(x)+1)/x")
+        self.assertEqual(to_str(simplify(r2)), "log(x) + 1/2*log(x)^2")
+        self._dcheck("(log(x)+1)/x", r2)
+
+    def test_log_squared(self):
+        r = self._integrate("log(x)^2")
+        self.assertEqual(to_str(simplify(r)),
+                         "-2*x*log(x) + x*log(x)^2 + 2*x")
+        self._dcheck("log(x)^2", r)
+
+    def test_nested_log(self):
+        # ∫dx/(x*log(x)) = log(log(x))：真分式 residue 出塔内 θ 的对数
+        r = self._integrate("1/(x*log(x))")
+        self.assertEqual(to_str(simplify(r)), "log(log(x))")
+        self._dcheck("1/(x*log(x))", r)
+
+    def test_li_nonelementary(self):
+        # ∫dx/log(x)：residue 无常数根 -> 不可初等证明（sympy risch 同判）
+        from cas.risch import RischNonElementary
+
+        with self.assertRaises(RischNonElementary) as cm:
+            self._integrate("1/log(x)")
+        self.assertIn("not elementary", str(cm.exception))
 
 
 if __name__ == "__main__":

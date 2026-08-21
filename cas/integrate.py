@@ -255,8 +255,13 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
     return (num * Q).monos == (P * den).monos
 
 
-def integrate_rational(P, Q, x):
-    """∫ P/Q dx → (term, verified, provisos)。P, Q 单变量，Q 非零。"""
+def integrate_rational(P, Q, x, structured=False):
+    """∫ P/Q dx → (term, verified, provisos)。P, Q 单变量，Q 非零。
+
+    structured=True 时额外返回 (rat_term, extra_term)：
+    rat_term = 纯有理部分（poly + 有理式项），extra_term = log/atan/
+    RootOf 对数项之和（M5.2 primitive 层逐阶剥离用）。
+    """
     q_poly, r = P.udivmod(Q)
     poly_int = _integrate_poly(q_poly, x)
     rat_terms = []
@@ -290,6 +295,15 @@ def integrate_rational(P, Q, x):
             prov = T.mk(S("Ne"), (Dt, T.ZERO))
             if prov not in provisos:
                 provisos.append(prov)
+    if structured:
+        rp = []
+        if not poly_int.is_zero():
+            rp.append(poly_int.to_term())
+        for u, p, kk in rat_terms:
+            rp.append(T.div(u.to_term(), T.pw(p.to_term(), N(kk))))
+        rat_term = T.mk(S("Plus"), tuple(rp)) if len(rp) > 1 else (rp[0] if rp else T.ZERO)
+        extra = _assemble(Poly.zero((x,)), [], lin_logs, root_logs, x)
+        return term, verified, provisos, rat_term, extra
     return term, verified, provisos
 
 
