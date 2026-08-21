@@ -125,7 +125,7 @@ latex/refine 零递归）；预算按节点计。
 ## 4. 领域地图（四梯队，按依赖排序）
 
 > 地图由**目标驱动**（积分/ODE 终点），每个域标注谁消费它；梯队 = 建造依赖顺序。
-> 当前完成状态：M0–M3 已收官 + 后 M3 批次（ℚ(params) 全参数化、真 hold、变形/域 proviso）；✓ = 已落地。
+> 当前完成状态：M0–M3 已收官 + 后 M3 批次（ℚ(params) 全参数化、真 hold、变形/域 proviso）+ M4 求和（Faulhaber + Gosper）；✓ = 已落地。
 
 ### 梯队一：算术与多项式代数 ✓
 | 域 | 内容 |
@@ -156,7 +156,7 @@ latex/refine 零递归）；预算按节点计。
 | 导数 D | 微分器（读 spec.deriv）+ verify 回验通道 | ✓ |
 | 极限 | 三值引擎（代入/消去/首阶/洛必达）+ ±∞ + log/exp/atan 支配通道（Gruntz 一期） | ✓（Gruntz 完备化待建） |
 | 级数 | Taylor 引擎（截断幂级数 + O 项头 + series_term） | ✓（幂级数算术/收敛半径待建） |
-| Σ/Π 求和 | Γ/Pochhammer → Gosper、常系数递推 | M4 |
+| Σ/Π 求和 | Faulhaber 幂和 + Gosper 有理函数不定/定界求和（常系数递推待建） | ✓（部分） |
 | ODE | 四题型分类（direct/可分离/一阶线性/二阶常系数齐次）+ 回代回验 | ✓（非齐次/系统/高阶待建） |
 | 不定积分 | spec anti 表（含线性复合）→ 自动正向换元 → Hermite+RT → tan(x/2)；策略步树 istrategy | ✓（Risch 分期 = M5） |
 | 定积分 | Newton-Leibniz + 奇点拆分 + 端点极限 + 交叉核对；正向换元（不求逆）+ 反向换元（主支逆+符号窗口）+ 反常判敛 + Piecewise 分段 | ✓ |
