@@ -80,7 +80,7 @@ class TestOdeCommand(unittest.TestCase):
         from cas.session import Session
 
         s = Session()
-        out = s.handle(":dsolve D(D(y,x),x) + y = 0 y x")
+        out = s.handle("!dsolve D(D(y,x),x) + y = 0 y x")
         self.assertIn("C1*cos(x) + C2*sin(x)", out)
         self.assertIn("[VERIFIED, kind: constcoef2]", out)
         # 题型入账（可解释步骤）

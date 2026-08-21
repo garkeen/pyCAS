@@ -28,6 +28,15 @@
   bsub 主支逆无实原像诚实报告（x=t² 识别 surjectivity 域问题，不再误报边界不可比）；
   equivalent 公共域采样（sample_agrees 域过滤，sqrt(x)²~x → PROBABLE）；
   quote 真 hold（parser 跳 mk 规范化保留反化简形 + 域约束；subst/instantiate 走 raw 路径）。
+- **M4 求和/差分（一期）**：`cas/summation.py`——Bernoulli 数 + Faulhaber 幂和
+  （Σk^p 闭式）、不定求和（差分原函数 S(x)-S(x-1)=f(x)）、定界求和
+  （Newton-Leibniz 离散版 S(hi)-S(lo-1)）、差分回验；Gosper 算法（简化 z 多项式
+  →完整 normal form 分解 P/Q=(a/b)(c(k+1)/c(k))，z=f/c 有理函数）+ 线性方程组
+  求解；`_eval_inert` 接 Sum 名词、:sum 命令（后改 !sum）。覆盖：多项式 + 有理函数
+  裂项求和（1/(k(k+1))、1/(k(k+2))），诚实拒答调和类（1/k、1/k²）。
+- **手动/自动语法分层**：`:` 前缀 = 手动操作（逐步可控每步入账）；`!` 前缀 = 自动求解
+  （算法黑盒 verify 背书）。kernel 注册表拆分（self.kernel 手动 / self.solver 自动），
+  不兼容旧 `:integrate` 等（直接改；step log 内部 `kernel:xxx` 标识不变）。
 - **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
 
 ### 1.2 立场裁定（长期有效，改动需重新论证）

@@ -6,4 +6,4 @@ I
 :parts cos(x)
 I = e^x*sin(x) - e^x*cos(x) - I
 :solveq integrate(exp(x)*sin(x), x)
-:verify % x exp(x)*sin(x)
+!verify % x exp(x)*sin(x)

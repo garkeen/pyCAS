@@ -36,12 +36,12 @@ class TestSets(_Base):
 
     def test_solveset_command(self):
         s = Session()
-        self.assertEqual(s.handle(":solveset x^2 = 1 x"), "x in {-1, 1}")
-        self.assertIn("provisos: a != 0", s.handle(":solveset a*x + b = 0 x"))
-        self.assertEqual(s.handle(":solveset x^2 - 1 <= 0 x"), "x in [-1, 1]")
-        self.assertEqual(s.handle(":solveset x^2 - 2*x + 1 < 0 x"), "x in {}")
+        self.assertEqual(s.handle("!solveset x^2 = 1 x"), "x in {-1, 1}")
+        self.assertIn("provisos: a != 0", s.handle("!solveset a*x + b = 0 x"))
+        self.assertEqual(s.handle("!solveset x^2 - 1 <= 0 x"), "x in [-1, 1]")
+        self.assertEqual(s.handle("!solveset x^2 - 2*x + 1 < 0 x"), "x in {}")
         # 无理根端点诚实拒答
-        self.assertIn("honest refusal", s.handle(":solveset x^2 - 2 > 0 x"))
+        self.assertIn("honest refusal", s.handle("!solveset x^2 - 2 > 0 x"))
 
 
 class TestSeriesAndO(_Base):
@@ -57,8 +57,8 @@ class TestSeriesAndO(_Base):
 
     def test_series_command_and_refusal(self):
         s = Session()
-        self.assertIn("O(x", s.handle(":series exp(x) x 0 4"))
-        self.assertIn("honest refusal", s.handle(":series exp(1/x) x 0 4"))
+        self.assertIn("O(x", s.handle("!series exp(x) x 0 4"))
+        self.assertIn("honest refusal", s.handle("!series exp(1/x) x 0 4"))
 
     def test_o_protected(self):
         s = Session()
@@ -87,8 +87,8 @@ class TestLimitsAtInfinity(_Base):
 
     def test_limit_command(self):
         s = Session()
-        self.assertEqual(s.handle(":limit 1/x x inf"), "0")
-        self.assertEqual(s.handle(":limit x x -inf"), "-Infinity")
+        self.assertEqual(s.handle("!limit 1/x x inf"), "0")
+        self.assertEqual(s.handle("!limit x x -inf"), "-Infinity")
 
 
 class TestImproperIntegral(_Base):

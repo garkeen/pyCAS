@@ -112,9 +112,9 @@ class TestGosper(unittest.TestCase):
     def test_session_gosper(self):
         from cas.session import Session
         s = Session()
-        out = s.handle(":sum 1/(k*(k+1)) k")
+        out = s.handle("!sum 1/(k*(k+1)) k")
         self.assertIn("VERIFIED", out)
-        out = s.handle(":sum 1/(k*(k+1)) k 1 10")
+        out = s.handle("!sum 1/(k*(k+1)) k 1 10")
         self.assertIn("10/11", out)
 
 
@@ -122,14 +122,14 @@ class TestSessionSum(unittest.TestCase):
     def test_sum_command(self):
         from cas.session import Session
         s = Session()
-        out = s.handle(":sum k^2 k 1 10")
+        out = s.handle("!sum k^2 k 1 10")
         self.assertIn("385", out)
         self.assertIn("VERIFIED", out)
 
     def test_sum_indef(self):
         from cas.session import Session
         s = Session()
-        out = s.handle(":sum k^3 k")
+        out = s.handle("!sum k^3 k")
         self.assertIn("VERIFIED", out)
 
     def test_sum_noun_value(self):
@@ -142,7 +142,7 @@ class TestSessionSum(unittest.TestCase):
     def test_sum_unsupported(self):
         from cas.session import Session
         s = Session()
-        out = s.handle(":sum 1/k k")
+        out = s.handle("!sum 1/k k")
         self.assertIn("unsupported", out)
 
 

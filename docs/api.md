@@ -209,12 +209,18 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 
 **转录**：`:save <path>` / `:replay <path>`（指纹校验；examples/*.pycas 为成品）。
 
-**内核**（KernelCmd 注册表，`:help` 查看全部）：
-`:verify` · `:solve` · `:solveset` · `:solveineq` · `:factor` · `:apart` ·
-`:integrate <expr> [var]`（多变量必填 var） · `:isteps <expr> [var]` · `:dsolve` · `:limit`（±inf）· `:series` ·
-`:defint`（含 ∞ 限/分段/正向换元）· `:bsub x=h(t) <expr> <var> <lo> <hi>` ·
-`:mat/:mdet/:mrank/:minv/:msolve/:charpoly/:eigenvalues/:eigenvectors` ·
-`:together/:collect/:numerator/:denominator/:coefficient` · `:latex` · `:load`。
+**手动（: 前缀，逐步可控）**：`:s [path]` 建议 · `:a <id> [path]` 应用 ·
+`:u [n]` 撤销 · `:auto` 自动重写 · `:rule/:unrule/:rules` 会话定理 ·
+`:value` 名词→动词 · `:refine` 账本化简 · `:apart <num> <den>` ·
+`:together/:collect/:numerator/:denominator/:coefficient` · `:isteps <expr> [var]` ·
+`:bsub x=h(t) <expr> <var> <lo> <hi>` · `:subst x=h(t)` · `:parts <u>` ·
+`:solveq <term>` · `:mulfrac/:divfrac <factor>` · `:latex` · `:steps/:log/:hist/:defs`。
+
+**自动（! 前缀，算法黑盒 + verify 背书）**：
+`!verify` · `!solve` · `!solveset` · `!solveineq` · `!factor` ·
+`!integrate <expr> [var]`（多变量必填 var） · `!dsolve` · `!limit`（±inf）· `!series` ·
+`!defint`（含 ∞ 限/分段/正向换元）· `!sum <expr> <var> [lo hi]`（Faulhaber+Gosper）·
+`!mat/:mdet/:mrank/:minv/:msolve/:charpoly/:eigenvalues/:eigenvectors` · `:load`。
 
 ---
 
@@ -223,11 +229,11 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 - **不定积分**：`session.integrate` → `integrate.integrate` →（anti 表 | `_try_usub`
   递归 | `_rat_pair`(mgcd/ugcd) → apart(factor) → Hermite → `_log_terms`(algnum)
   | `_trig_tan_half`）→ diff.verify 回验。
-- **定积分**：`:defint` → `defint_auto`（正向换元探测）→ `defint`（Piecewise 分支 /
+- **定积分**：`!defint` → `defint_auto`（正向换元探测）→ `defint`（Piecewise 分支 /
   ∞ 限分支 / Newton-Leibniz 主管线：`_sing_points`(dom_condition/factor/sturm) +
   limits.limit 端点极限 + `_numeric_cross`(evalnum)）。`:bsub` → `bsub_defint`
   （solve 主支逆 → `_auto_rewrite`(rules) → `_resolve_sqrt_trig` → defint）。
-- **ODE**：`:dsolve` → `ode.dsolve`（`_coef` 分类 → direct/separable/`_solve_linear1`
+- **ODE**：`!dsolve` → `ode.dsolve`（`_coef` 分类 → direct/separable/`_solve_linear1`
   (integrate 积分因子)/`_solve_constcoef2`(solve 特征根)）→ `_verify_sol`（diff +
   equivalent 三态）。
 - **判等**：`equivalent` → 指针 → simplify 归零 → trig_equivalent → decide 片段 →

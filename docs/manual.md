@@ -57,15 +57,21 @@ mk 规范化**——保留反化简形（`'cos(x)/cos(x)^2` 不被合并）、�
 
 ## 3. REPL 快速上手
 
-直接输入表达式即成为"当前式"；命令以 `:` 开头。
+输入分三层，语法即语义：
+
+| 语法 | 层 | 语义 |
+|---|---|---|
+| 无前缀 | **表达式** | 输入数学表达式成为当前式 |
+| `:` | **手动操作** | 逐步可控，每步入账 step log，可 `:u` 撤销，可 `:steps` 解释 |
+| `!` | **自动求解** | 算法黑盒直出，verify 背书，step log 只记算法名+验证态 |
 
 ```
 >> x + sin(-x)
-x - sin(x)                     # 奇偶规则由 :auto 之外的通道管理；此处仅构造归一
->> :a sin_neg                  # 建议并应用规则（无参时全式搜索匹配位置）
->> :auto                       # 自动重写（cost 单调不增，步步入账）
->> :steps                      # 查看推导步骤（规则步逐条解释；算法步报名+验证态）
->> :u                          # 撤销上一步（可 :u 3）
+x - sin(x)                     # 表达式 → 当前式
+>> :a sin_neg                  # 手动：建议并应用规则
+>> !limit sin(x)/x x 0         # 自动：算法直出 → 1
+>> :steps                      # 查看推导步骤（: 手动每步可解释）
+>> :u                          # 手动：撤销上一步（可 :u 3）
 ```
 
 ### 3.1 化简与规则
@@ -93,55 +99,70 @@ x - sin(x)                     # 奇偶规则由 :auto 之外的通道管理；�
 矛盾即锁：`:assume a>0` 后 `:assume a<0` → 会话冻结并报告矛盾链；
 撤销引发矛盾的步可解锁。
 
-### 3.3 内核命令（机械算法通道）
+### 3.3 自动求解（! 前缀，算法黑盒直出 + verify 背书）
 
 **代数**
 ```
-:factor x^4-1                # Zassenhaus 因式分解
-:apart <num> <den>           # 部分分式
-:solve x^2 - 5*x + 6 = 0 x   # 方程（低次/有理根/参数低次/主支逆）
-:solveset x^2 = 1 x          # 解集一等结构：x in {-1, 1}；不等式给区间并
-:solveineq x^2-1 > 0 x       # 一元多项式不等式（Sturm）
-:together / :collect / :numerator / :denominator / :coefficient
+!factor x^4-1                # Zassenhaus 因式分解
+!solve x^2 - 5*x + 6 = 0 x   # 方程（低次/有理根/参数低次/主支逆）
+!solveset x^2 = 1 x          # 解集一等结构：x in {-1, 1}；不等式给区间并
+!solveineq x^2-1 > 0 x       # 一元多项式不等式（Sturm）
 ```
 
 **微积分**
 ```
-:integrate 1/(x^2-1)         # 不定积分（报所用方法 + 验证态）；多变量须给变量: :integrate f x
-:isteps 2*x*exp(x^2)         # 积分策略步树（manualintegrate 同款，只分类不计算）
-:defint sin(x) x 0 pi        # 定积分（自动正向换元 + 奇点拆分 + 判敛 + 分段）
-:defint 1/x^2 x 1 inf        # 无穷限反常积分（收敛/发散判定）
-:bsub x=sin(t) sqrt(1-x^2) x 0 1   # 反向换元（三角代换，新限主支逆解）
-:limit sin(x)/x x 0          # 极限（point 可为 inf/-inf）
-:series exp(x) x 0 4         # Taylor 展开 + O 项
-:verify F x f                # 微分回验：D(F) == f ?
+!integrate 1/(x^2-1)         # 不定积分（报所用方法 + 验证态）；多变量须给变量: !integrate f x
+!defint sin(x) x 0 pi        # 定积分（自动正向换元 + 奇点拆分 + 判敛 + 分段）
+!defint 1/x^2 x 1 inf        # 无穷限反常积分（收敛/发散判定）
+!limit sin(x)/x x 0          # 极限（point 可为 inf/-inf）
+!series exp(x) x 0 4         # Taylor 展开 + O 项
+!verify F x f                # 微分回验：D(F) == f ?
 ```
 
 **求和/差分**
 ```
-:sum k^2 k                   # 不定求和（Faulhaber 幂和，差分回验）
-:sum k^2 k 1 10              # 定界求和（S(hi) - S(lo-1)，数值/符号上界均可）
-:sum 1/(k*(k+1)) k           # Gosper 裂项求和（有理函数超几何项）
-:sum 1/(k*(k+2)) k 1 10      # 完整 normal form 裂项（z 有理函数）
+!sum k^2 k                   # 不定求和（Faulhaber 幂和，差分回验）
+!sum k^2 k 1 10              # 定界求和（S(hi) - S(lo-1)，数值/符号上界均可）
+!sum 1/(k*(k+1)) k           # Gosper 裂项求和（有理函数超几何项）
+!sum 1/(k*(k+2)) k 1 10      # 完整 normal form 裂项（z 有理函数）
 ```
 
 **线性代数**
 ```
-:mat [[1,2],[3,4]]           # 显示矩阵
-:mdet / :mrank / :minv / :msolve [[a,b],[c,d]] [e,f]
-:charpoly / :eigenvalues / :eigenvectors
+!mat [[1,2],[3,4]]           # 显示矩阵
+!mdet / !mrank / !minv / !msolve [[a,b],[c,d]] [e,f]
+!charpoly / !eigenvalues / !eigenvectors
 ```
 
 **ODE**
 ```
-:dsolve D(y,x) + y = exp(x) y x      # 一阶线性（积分因子）
-:dsolve D(y,x) = x*y y x             # 可分离/线性自动分类
-:dsolve D(D(y,x),x) + y = 0 y x      # 二阶常系数齐次（特征方程，复根三角实形式）
+!dsolve D(y,x) + y = exp(x) y x      # 一阶线性（积分因子）
+!dsolve D(y,x) = x*y y x             # 可分离/线性自动分类
+!dsolve D(D(y,x),x) + y = 0 y x      # 二阶常系数齐次（特征方程，复根三角实形式）
 ```
 导数写作 `D(y,x)`、`D(D(y,x),x)`；解含积分常数 `C1`、`C2`；
 每个解都回代微分回验（`[VERIFIED, kind: ...]` 标注题型与验证态）。
 
-### 3.4 输出
+### 3.4 手动结构操作（: 前缀，逐步可控）
+
+**结构变换**
+```
+:subst x=h(t)                     # 正向替换（term 层）
+:bsub x=sin(t) sqrt(1-x^2) x 0 1  # 反向换元（三角代换，新限主支逆解）
+:parts sin(x)                     # 分部积分（选 u，机器算 dv/du/v）
+:solveq integrate(exp(x)*sin(x), x)  # 复合未知项线性求解（循环分部）
+:mulfrac cos(x)                   # 分子分母同乘（凑形）
+:divfrac x^2                      # 分子分母同除
+:apart 1 (x^2-1)                  # 部分分式
+:together / :collect <var> / :numerator / :denominator / :coefficient <var> [k]
+```
+
+**策略步树（只分类不计算）**
+```
+:isteps 2*x*exp(x^2)             # 积分策略步树（manualintegrate 同款）
+```
+
+### 3.5 输出
 
 ```
 :latex                       # 当前式的 LaTeX
@@ -163,19 +184,19 @@ x - sin(x)                     # 奇偶规则由 :auto 之外的通道管理；�
 >> :parts cos(x)                         # 再次分部，I 重新出现
 >> I = e^x*sin(x) - e^x*cos(x) - I       # 写出循环方程
 >> :solveq integrate(exp(x)*sin(x), x)   # 对复合未知项线性求解 → I = .../2
->> :verify % x exp(x)*sin(x)             # VERIFIED
+>> !verify % x exp(x)*sin(x)             # VERIFIED
 ```
 
 ### 4.2 定积分画廊
 
 ```
->> :defint (e^x+x)*(e^x+1) x 0 1    # 正向换元 u=e^x+x（新限正向求值，不求逆）
+>> !defint (e^x+x)*(e^x+1) x 0 1    # 正向换元 u=e^x+x（新限正向求值，不求逆）
 1/2*(exp(1) + 1)^2 - 1/2   [VERIFIED, method: u-substitution u=x + exp(x)]
 >> :bsub x=sin(t) sqrt(1-x^2) x 0 1 # 反向换元（√(cos²t) 经符号窗口脱壳）
 1/4*π   [VERIFIED, method: backward substitution x=sin(t): ...]
->> :defint 1/x x 1 inf               # 判敛
+>> !defint 1/x x 1 inf               # 判敛
 DIVERGES: improper integral diverges at infinity
->> :defint piecewise(x-1, x >= 1, 1-x, true) x 0 2   # 分段积分
+>> !defint piecewise(x-1, x >= 1, 1-x, true) x 0 2   # 分段积分
 1   [VERIFIED, method: piecewise: branch split + midpoint selection]
 ```
 
@@ -188,7 +209,7 @@ DIVERGES: improper integral diverges at infinity
 >> :assume a > 0
 >> abs(a) + sqrt(a^2) + exp(log(a))
 >> :refine                # 3*a
->> :solveset x^2 = 4 x    # x in {-2, 2}
+>> !solveset x^2 = 4 x    # x in {-2, 2}
 >> :latex                 # LaTeX 输出
 ```
 

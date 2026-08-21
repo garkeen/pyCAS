@@ -56,15 +56,15 @@ class TestSessionFlow(unittest.TestCase):
         from cas.session import Session
 
         s = Session()
-        self.assertIn("solve", s.kernel)
-        self.assertIn(":integrate", s.commands())
+        self.assertIn("solve", s.solver)
+        self.assertIn("!integrate", s.commands())
         # 含空格表达式 + 末尾变量名（rsplit 不切碎表达式）
-        out = s.kernel["solve"].fn(s, "x^2 - 5*x + 6 = 0 x")
+        out = s.solver["solve"].fn(s, "x^2 - 5*x + 6 = 0 x")
         self.assertIn("2", out)
         self.assertIn("3", out)
         # 无变量时末尾数字不被误当变量
-        self.assertEqual(s.kernel["solve"].fn(s, "2*x - 4"), "x = 2")
-        self.assertEqual(s.kernel["factor"].fn(s, ""), "usage: :factor <expr>")
+        self.assertEqual(s.solver["solve"].fn(s, "2*x - 4"), "x = 2")
+        self.assertEqual(s.solver["factor"].fn(s, ""), "usage: !factor <expr>")
 
 
 class TestExplainableSteps(unittest.TestCase):

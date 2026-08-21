@@ -65,13 +65,13 @@ class TestPartsShowcase(unittest.TestCase):
         ":parts cos(x)",
         "I = e^x*sin(x) - e^x*cos(x) - I",
         ":solveq integrate(exp(x)*sin(x), x)",
-        ":verify % x exp(x)*sin(x)",
+        "!verify % x exp(x)*sin(x)",
     ]
 
     def test_full_derivation(self):
         s = Session()
         outs = [s.handle(line) for line in self.SCRIPT]
-        self.assertIn("VERIFIED", outs[-1])   # :verify 的输出（微分回验）
+        self.assertIn("VERIFIED", outs[-1])   # !verify 的输出（微分回验）
         # 每一步都入账且可解释（本剧本全是方案步：分部两次 + 线性求解）
         kinds = [st.rule_id for st in s.log]
         self.assertTrue(any(k.startswith("scheme:parts") for k in kinds))
@@ -101,7 +101,7 @@ class TestDefintUSub(unittest.TestCase):
 
     def test_user_example(self):
         s = Session()
-        out = s.handle(":defint (e^x+x)*(e^x+1) x 0 1")
+        out = s.handle("!defint (e^x+x)*(e^x+1) x 0 1")
         self.assertIn("u-substitution u=x + exp(x)", out)
         # 值 = 1/2*((e+1)^2 - 1) = e + e^2/2，数值核对
         from cas.evalnum import eval_approx
@@ -112,13 +112,13 @@ class TestDefintUSub(unittest.TestCase):
 
     def test_nested_substitution(self):
         s = Session()
-        out = s.handle(":defint 2*x*exp(x^2) x 0 1")
+        out = s.handle("!defint 2*x*exp(x^2) x 0 1")
         self.assertIn("u-substitution", out)
         self.assertIn("VERIFIED", out)
 
     def test_plain_fallback(self):
         s = Session()
-        out = s.handle(":defint x^2 x 0 1")
+        out = s.handle("!defint x^2 x 0 1")
         self.assertIn("1/3", out)
         self.assertNotIn("u-substitution", out)
 

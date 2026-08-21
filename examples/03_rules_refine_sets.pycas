@@ -5,5 +5,5 @@ a^3 + b^3
 :assume a > 0
 abs(a) + sqrt(a^2) + exp(log(a))
 :refine
-:solveset x^2 = 4 x
+!solveset x^2 = 4 x
 :latex

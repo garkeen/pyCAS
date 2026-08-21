@@ -43,13 +43,13 @@ def _k_verify(s, rest):
     # 从末尾切两次：变量与目标式不含空格时 F 可含空格（% 展开后常见）
     parts = rest.rsplit(None, 2)
     if len(parts) != 3:
-        return "usage: :verify <F> <x> <f>"
+        return "usage: !verify <F> <x> <f>"
     return s.verify(*parts)
 
 
 def _k_solve(s, rest):
     if not rest.strip():
-        return "usage: :solve <expr> [var]"
+        return "usage: !solve <expr> [var]"
     # 变量名只可能是末尾单个标识符：只从末尾分一次，避免切碎含空格的表达式
     parts = rest.rsplit(None, 1)
     if len(parts) == 2 and parts[1].isidentifier():
@@ -59,7 +59,7 @@ def _k_solve(s, rest):
 
 def _k_factor(s, rest):
     if not rest.strip():
-        return "usage: :factor <expr>"
+        return "usage: !factor <expr>"
     return s.factor(rest.strip())
 
 
@@ -76,7 +76,7 @@ def _k_integrate(s, rest):
         if (s.current is not None and isinstance(s.current, T.Expr)
                 and s.current.head.name == "Integrate"):
             return s.integrate_current()
-        return "usage: :integrate <expr> [var]"
+        return "usage: !integrate <expr> [var]"
     parts = rest.rsplit(None, 1)
     # 当前式是惰性积分且单 token：对当前积分名词求值（∫f dt 的 f 已含换元变量）
     if (len(parts) == 1 and s.current is not None
@@ -90,14 +90,14 @@ def _k_integrate(s, rest):
 def _k_limit(s, rest):
     parts = rest.rsplit(None, 2)
     if len(parts) != 3 or not parts[1].isidentifier():
-        return "usage: :limit <expr> <var> <point>"
+        return "usage: !limit <expr> <var> <point>"
     return s.mlimit(parts[0], parts[1], parts[2])
 
 
 def _k_series(s, rest):
     parts = rest.rsplit(None, 3)
     if len(parts) != 4 or not parts[1].isidentifier():
-        return "usage: :series <expr> <var> <point> <order>"
+        return "usage: !series <expr> <var> <point> <order>"
     return s.mseries(parts[0], parts[1], parts[2], parts[3])
 
 
@@ -123,7 +123,7 @@ def _k_dsolve(s, rest):
     """ODE 分类求解（题型命名入账，解回代微分回验）。"""
     parts = rest.rsplit(None, 2)
     if len(parts) < 2 or not parts[1].isidentifier():
-        return "usage: :dsolve <equation with D(y,x)> <y> [x]"
+        return "usage: !dsolve <equation with D(y,x)> <y> [x]"
     eq = s._parse_in(parts[0])
     y = T.S(parts[1])
     x = T.S(parts[2]) if len(parts) == 3 and parts[2].isidentifier() else T.S("x")
@@ -149,7 +149,7 @@ def _k_dsolve(s, rest):
 def _k_defint(s, rest):
     parts = rest.rsplit(None, 3)
     if len(parts) != 4 or not parts[1].isidentifier():
-        return "usage: :defint <expr> <var> <lo> <hi>"
+        return "usage: !defint <expr> <var> <lo> <hi>"
     return s.mdefint(parts[0], parts[1], parts[2], parts[3])
 
 
@@ -161,7 +161,7 @@ def _k_sum(s, rest):
         if (s.current is not None and isinstance(s.current, T.Expr)
                 and s.current.head.name == "Sum"):
             return s.value()
-        return "usage: :sum <expr> <var> [<lo> <hi>]"
+        return "usage: !sum <expr> <var> [<lo> <hi>]"
     # 定界：expr var lo hi（从右 rsplit 3 次，含空格的 expr 保留在 parts[0]）
     parts4 = rest.rsplit(None, 3)
     if len(parts4) == 4 and parts4[1].isidentifier():
@@ -193,7 +193,7 @@ def _k_sum(s, rest):
         s._kernel_step("sum[indef]", r, before=before)
         s._remember(r)
         return f"{to_str(r)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: Faulhaber power sum]"
-    return "usage: :sum <expr> <var> [<lo> <hi>]"
+    return "usage: !sum <expr> <var> [<lo> <hi>]"
 
 
 def _k_bsub(s, rest):
@@ -233,7 +233,7 @@ def _k_msolve(s, rest):
         rhs = rest[idx + 3:].strip()
         if rhs.startswith("[") and rhs.endswith("]"):
             return s.msolve(spec, rhs)
-    return "usage: :msolve [[a,b],[c,d]] [e,f]"
+    return "usage: !msolve [[a,b],[c,d]] [e,f]"
 
 
 def _k_together(s, rest):
@@ -319,7 +319,7 @@ def _k_solveineq(s, rest):
 
     parts = rest.rsplit(None, 1)
     if len(parts) != 2 or not parts[1].isidentifier():
-        return "usage: :solveineq <expr> <op> 0 <var>   (e.g. :solveineq x^2-1 > 0 x)"
+        return "usage: !solveineq <expr> <op> 0 <var>   (e.g. !solveineq x^2-1 > 0 x)"
     f = _parse(parts[0])
     if not (isinstance(f, T.Expr) and f.head.name in ("Gt", "Ge", "Lt", "Le")):
         return "need a comparison like x^2-1 > 0"
@@ -335,7 +335,7 @@ def _k_solveset(s, rest):
 
     parts = rest.rsplit(None, 1)
     if len(parts) != 2 or not parts[1].isidentifier():
-        return "usage: :solveset <expr> <var>   (e.g. :solveset x^2 = 1 x / :solveset x^2-1 > 0 x)"
+        return "usage: !solveset <expr> <var>   (e.g. !solveset x^2 = 1 x / !solveset x^2-1 > 0 x)"
     f = s._parse_in(parts[0])
     var = T.S(parts[1])
     if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge"):
@@ -434,28 +434,11 @@ class Session:
                 self.load_error = f"{e.__class__.__name__}: {e}"
         # FunctionSpec 自动生成的规则（奇偶性等，origin='spec'）
         _spec.gen_rules(self.rules)
-        # 内核命令注册表（机械算法快捷通道；新增算法只需注册，不改 REPL）
+        # 手动算法命令（: 前缀；用户主动触发，结果入账可撤销）
         self.kernel = {
-            "verify": KernelCmd("verify <F> <x> <f>", _k_verify),
-            "solve": KernelCmd("solve <expr> [var]", _k_solve),
-            "factor": KernelCmd("factor <expr>", _k_factor),
             "apart": KernelCmd("apart <num> <den>", _k_apart),
-            "integrate": KernelCmd("integrate <expr> [var] (var required for multi-variable expr)", _k_integrate),
             "isteps": KernelCmd("isteps <expr> [var] (strategy step tree)", _k_isteps),
-            "dsolve": KernelCmd("dsolve <eq with D(y,x)> <y> [x]", _k_dsolve),
-            "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
-            "series": KernelCmd("series <expr> <var> <point> <order> (Taylor + O term)", _k_series),
-            "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
-            "sum": KernelCmd("sum <expr> <var> [<lo> <hi>] (Faulhaber power sum + diff verify)", _k_sum),
             "bsub": KernelCmd("backward sub: :bsub x=h(t) <expr> <var> <lo> <hi>", _k_bsub),
-            "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
-            "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
-            "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
-            "minv": KernelCmd("inverse [[a,b],[c,d]]", lambda s, r: s.minv(r.strip())),
-            "msolve": KernelCmd("solve system: :msolve [[a,b],[c,d]] [e,f]", _k_msolve),
-            "charpoly": KernelCmd("charpoly [[a,b],[c,d]] = det(lam*I - M)", lambda s, r: s.mcharpoly(r.strip())),
-            "eigenvalues": KernelCmd("eigenvalues [[a,b],[c,d]]", lambda s, r: s.meigenvalues(r.strip())),
-            "eigenvectors": KernelCmd("eigenvectors [[a,b],[c,d]]", lambda s, r: s.meigenvectors(r.strip())),
             "together": KernelCmd("together <expr> (common denominator)", _k_together),
             "collect": KernelCmd("collect <expr> <var>", _k_collect),
             "numerator": KernelCmd("numerator <expr>", _k_num_den("numerator")),
@@ -463,6 +446,26 @@ class Session:
             "mulfrac": KernelCmd("mulfrac <expr> <factor> (multiply num&den)", _k_mulfrac("mulfrac")),
             "divfrac": KernelCmd("divfrac <expr> <factor> (divide num&den)", _k_mulfrac("divfrac")),
             "coefficient": KernelCmd("coefficient <expr> <var> [k]", _k_coefficient),
+        }
+        # 自动求解命令（! 前缀；算法黑盒直出，verify 背书）
+        self.solver = {
+            "verify": KernelCmd("verify <F> <x> <f>", _k_verify),
+            "solve": KernelCmd("solve <expr> [var]", _k_solve),
+            "factor": KernelCmd("factor <expr>", _k_factor),
+            "integrate": KernelCmd("integrate <expr> [var] (var required for multi-variable expr)", _k_integrate),
+            "dsolve": KernelCmd("dsolve <eq with D(y,x)> <y> [x]", _k_dsolve),
+            "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
+            "series": KernelCmd("series <expr> <var> <point> <order> (Taylor + O term)", _k_series),
+            "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
+            "sum": KernelCmd("sum <expr> <var> [<lo> <hi>] (Faulhaber power sum + diff verify)", _k_sum),
+            "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
+            "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
+            "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
+            "minv": KernelCmd("inverse [[a,b],[c,d]]", lambda s, r: s.minv(r.strip())),
+            "msolve": KernelCmd("solve system: !msolve [[a,b],[c,d]] [e,f]", _k_msolve),
+            "charpoly": KernelCmd("charpoly [[a,b],[c,d]] = det(lam*I - M)", lambda s, r: s.mcharpoly(r.strip())),
+            "eigenvalues": KernelCmd("eigenvalues [[a,b],[c,d]]", lambda s, r: s.meigenvalues(r.strip())),
+            "eigenvectors": KernelCmd("eigenvectors [[a,b],[c,d]]", lambda s, r: s.meigenvectors(r.strip())),
             "solveineq": KernelCmd("solveineq <expr> <op> 0 <var>", _k_solveineq),
             "solveset": KernelCmd("solveset <expr> <var> (set-valued solutions)", _k_solveset),
         }
@@ -600,7 +603,7 @@ class Session:
     def _parse_in(self, s):
         """会话内输入统一入口：解析 + 用户定义展开。
 
-        裸符号豁免：内核参数位裸符号常作主语（如 :integrate f 的积分变量），
+        裸符号豁免：内核参数位裸符号常作主语（如 !integrate f 的积分变量），
         变量名优先于宏语义。
         """
         return self._expand_defs(parse(s), bare_ok=False)
@@ -1030,7 +1033,7 @@ class Session:
     def integrate_current(self):
         """对当前惰性积分名词求值（∫f dt 的 f 已含换元变量；等价 :value 的积分分支）。
 
-        与 :integrate <expr> 区分：<expr> 指被积式；此处求值 current 本身。
+        与 !integrate <expr> 区分：<expr> 指被积式；此处求值 current 本身。
         """
         from cas.integrate import integrate as zz_int
         from cas.pprint import to_str as ps
@@ -1075,7 +1078,7 @@ class Session:
         return out
 
     def mlimit(self, expr_s, var_s, point_s):
-        """:limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）；point 可为 ±inf。"""
+        """!limit 入口：三值诚实（UNKNOWN 直接显示，永不静默错）；point 可为 ±inf。"""
         from cas.limits import limit
 
         t = self._parse_in(expr_s)
@@ -1093,7 +1096,7 @@ class Session:
         return to_str(r)
 
     def mseries(self, expr_s, var_s, point_s, order_s):
-        """:series 入口：Taylor 展开为截断多项式 + O 项（O 为一等项头）。"""
+        """!series 入口：Taylor 展开为截断多项式 + O 项（O 为一等项头）。"""
         from cas.series import series_term, SeriesError
 
         t = self._parse_in(expr_s)
@@ -1114,7 +1117,7 @@ class Session:
         return parse(s)
 
     def mdefint(self, expr_s, var_s, lo_s, hi_s):
-        """:defint 入口：自动正向换元探测 + Newton-Leibniz + 奇点拆分 + 数值交叉核对。"""
+        """!defint 入口：自动正向换元探测 + Newton-Leibniz + 奇点拆分 + 数值交叉核对。"""
         from cas.integrate import defint_auto
 
         t = self._parse_in(expr_s)
@@ -1249,6 +1252,8 @@ class Session:
         }
         for name, c in self.kernel.items():
             out[":" + name] = c.help
+        for name, c in self.solver.items():
+            out["!" + name] = c.help
         out[":load"] = "reload rules dir"
         out[":q"] = "quit"
         return out
@@ -1286,8 +1291,14 @@ class Session:
             return self.mrefine()
         if line == ":latex":
             return self.mlatex()
+        # ! 前缀：自动求解（算法黑盒直出，verify 背书）
+        if line.startswith("!") and line.split(None, 1)[0][1:] in self.solver:
+            parts = line.split(None, 1)
+            name = parts[0][1:]
+            rest = self.expand_history(parts[1].strip()) if len(parts) > 1 else ""
+            return self.solver[name].fn(self, rest)
         if line.startswith(":") and line.split(None, 1)[0][1:] in self.kernel:
-            # 内核命令注册表分发（先于前缀匹配，避免 :solve 被 :s 吞掉）
+            # 手动算法命令分发（: 前缀；先于前缀匹配，避免 :apart 被 :a 吞掉）
             parts = line.split(None, 1)
             name = parts[0][1:]
             rest = self.expand_history(parts[1].strip()) if len(parts) > 1 else ""
@@ -1373,7 +1384,7 @@ class Session:
         当前式若是惰性积分 Integrate(f, x)，同时把被积式与微分元变换到新变量
         （dx 随换元变换：t=g(x) 经主支逆解 x=h(t)，新被积式 = f(h(t))·h'(t)）。
         反向求逆走 solve 通道（spec.inv 驱动，仿射复合主支逆已支持）。
-        正确性由用户后续 :verify 微分回验背书。
+        正确性由用户后续 !verify 微分回验背书。
         """
         self._check_locked()
         if self.current is None:

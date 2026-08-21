@@ -19,7 +19,7 @@ integrate(1/(a+b*cos(x)), x)
 # 应用到 cos(2·atan(t)) 子项（path 全式搜索）
 :auto
 # 化简：合并嵌套有理式 → ∫ 2/((a-b)·t²+(a+b)) dt
-:integrate
+!integrate
 # 求值参数有理积分：Hermite 分解 + atan 闭式
 #   4·atan(2t/√D)/((a-b)·√D)，D = (4a+4b)/(a-b)
 #   [VERIFIED, method: Hermite reduction + RootOf log part]

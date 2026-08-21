@@ -129,9 +129,9 @@ class TestSpectrum(unittest.TestCase):
         from cas.session import Session
 
         s = Session()
-        self.assertIn("lam^2 - 2*lam - 3", s.kernel["charpoly"].fn(s, "[[1,2],[2,1]]"))
-        self.assertIn("3", s.kernel["eigenvalues"].fn(s, "[[1,2],[2,1]]"))
-        self.assertIn("lam = 3", s.kernel["eigenvectors"].fn(s, "[[1,2],[2,1]]"))
+        self.assertIn("lam^2 - 2*lam - 3", s.solver["charpoly"].fn(s, "[[1,2],[2,1]]"))
+        self.assertIn("3", s.solver["eigenvalues"].fn(s, "[[1,2],[2,1]]"))
+        self.assertIn("lam = 3", s.solver["eigenvectors"].fn(s, "[[1,2],[2,1]]"))
 
 
 if __name__ == "__main__":
