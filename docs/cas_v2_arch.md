@@ -181,8 +181,9 @@ latex/refine 零递归）；预算按节点计。
   → M5.2 primitive/log + 参数化 log deriv + 递归塔 → M5.2.5 ℚ(i) Gaussian
   rational 系数域 → M5.3 三角经复指数（trigs2explogs 同款，FriCAS 实据印证）。
   终点 = 超越函数范围内完整 Risch 决策程序，含不可初等证明（e^{-x²}、li(x)、
-  Si(x) 类带证明拒答——sympy 全缺）。接线裁定：Risch 为 integrate 管线判定
-  终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层失败证据链）。
+   Si(x) 类带证明拒答——sympy 全缺）。接线裁定：Risch 为 **!integrate 黑盒
+   通道**判定终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层
+   失败证据链）；可解释步骤链由 M6 通道②承担（见 M6 定位裁定）。
   FriCAS 对照实据：顶层 trigs2explogs 前置重写 + lfintegrate 五类 kernel 分派；
   剩余差距 = 代数函数积分（M7a）与代数闭常数域（按需扩张实践等价）。
 - **ODE 扩展**：非齐次（待定系数/常数变易）、常系数系统（exp(At)，特征值前置已就绪）。
@@ -192,27 +193,42 @@ latex/refine 零递归）；预算按节点计。
 
 ### M6 规则启发式搜索积分引擎（SAINT/Rubi 路线）
 
-> 定位裁定：**广度引擎**，与 Risch（判定权威）分工——Risch 对塔内问题
-> 决策完备 + 不可积证明；M6 覆盖特殊函数形态 + 每步可解释。两者输出统一
-> 走 D-check/证书背书，失败语义链共享（每层失败留机器可读原因，拒答本身
-> 可解释）。六系统调研实证：无一家"先跑完整 Risch"，成熟形态全是
-> 便宜优先阶梯 + 启发式中层 + 算法按需的混合体；纯规则库路线由
-> expreduce（Rubi 快照）与 Mathematica 反推实证可行。
+> **定位裁定（三通道产品结构）**：积分有三条执行通道，产出物不同——
+> ① 完全手动（`:usub`/`:parts` 战术命令，用户驱动，已有 ✓）；
+> ② **自动化手动**（`:isteps`：系统自动搜出一条由手动战术组成的路径，
+> 每步与 `:tactic` 同构、可重放可中途接管——现仅 61 行展示雏形，
+> **M6 主战场**）；③ 完全黑盒（`!integrate`：内核直出 + verify 背书，
+> 已有 + M5 增强）。SAINT/Rubi 天然属于通道②——Slagle 目标即模拟数学家
+> 解题，Rubi ShowStep 输出人类可读步骤。黑盒通道不需要 M6：Risch 不可
+> 解释是本质属性而非缺陷（价值 = 快 + 塔内完备 + 证明）；可解释性由
+> 通道②承担。"黑盒结果允许，目标是可解释步骤链"由此完整落地。
+>
+> 与 Risch 分工：M6 = 广度引擎（规则覆盖面 + 每步可解释）；
+> Risch = 黑盒通道判定权威（塔内完备 + 不可初等证明）。同一问题三解，
+> 混合工作流：`:isteps` 出策略树 → `:replay` 全自动重放或中途接管；
+> `!integrate` 直出答案作手动继续起点。六系统调研实证：SAINT/Rubi/
+> manualintegrate 均为"人类步骤模拟"路线，与算法内核互补而非竞争。
 
-- **M6.0 架构裁定**：pyCAS L2 改写规则（lhs→rhs+guard）vs 积分专用目标制导
-  变换（∫f → ∫f' + 证书结构；Rubi DownValues 按特异性排序 = 决策树 ≠ 裸搜索）
-  ——裁定复用 L2 还是建专用层。
-- **M6.1 SAINT 核心循环**：算法规则层（确定性归约：CommonIntegral/Linearity/
-  LinearSubstitution/HalfAngleIdentity…）+ 启发式规则层（搜索边：三角代换/
-  一般代换/分部/二次消去…）+ goal 树 + 已见集合 + 深度限制。
-  参考实现：本地 `pyCAS/SAINT`（Slagle 论文 Python 复刻，slagle.py 规则编号
-  与论文对应）；验收 = Slagle 论文原题集。
-- **M6.2 Rubi 精选翻译**：按章节树分期（1 代数/binomial products → 2 exp →
-  3 log → 4-5 trig/反三角 → 6-7 双曲 → 8 特殊函数）；conditions → guard 3VL
-  映射；**每条入库自动 D-check 验证**（规则库本身不得成为静默错源）；
-  Rubi ShowStep ↔ pyCAS step log 同构（可解释性是架构原生优势）。
+- **M6.0 步树升级裁定**：IntStep 从展示结构（explain 只读树）升级为
+  **可执行/可重放的战术序列**——每步 = 战术单元（lhs 匹配 + 变换 +
+  note 文本 + D-check 证书），与 `:usub`/`:parts` 手动命令同构；
+  step log 接线、预算控制、已见集合防循环。附带裁定：Rubi 规则翻译
+  目标形态 = 战术单元（非黑盒变换函数）；L2 规则层复用边界
+  （Rubi DownValues 按特异性排序 = 决策树 ≠ 裸 lhs→rhs 改写）。
+- **M6.1 SAINT 核心循环**：goal tree 搜索——终结检查（anti 表命中/
+  有理检测/塔检测）+ 变换生成（usub/分部/三角代换/规则库匹配，有序
+  展开）+ 已见集合 + 深度限制。Slagle 论文的 algorithm rules vs
+  heuristic rules 二分对应"终结检查 vs 变换生成"。
+  参考实现：本地 `pyCAS/SAINT`（Slagle 论文 Python 复刻，slagle.py
+  规则编号与论文对应）；验收 = Slagle 论文原题集 + 每题步骤链可重放。
+- **M6.2 Rubi 精选翻译（战术库扩充）**：按章节树分期（1 代数/binomial
+  products → 2 exp → 3 log → 4-5 trig/反三角 → 6-7 双曲 → 8 特殊函数）；
+  conditions → guard 3VL 映射；**每条入库自动 D-check 验证**（规则库
+  本身不得成为静默错源）；ShowStep ↔ step log/note 同构。
   参考实据：expreduce `resources/rubi/` 全章节 .m 快照。
-- **M6.3 整合**：!integrate 策略通道接入 + 失败语义链统一输出。
+- **M6.3 混合工作流整合**：`:isteps` 步骤链 → `:replay` 重放接线；
+  中途接管（重放暂停 → 手动继续）；失败语义链统一（搜索穷尽时各分支
+  失败原因机器可读汇总——拒答本身可解释）。
 
 ### M7 远期扩展候选（启动前需重新论证价值密度）
 

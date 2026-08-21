@@ -103,6 +103,17 @@
   expreduce calculus.m / mathics calculus.py 实测；Mathematica/Maple 文献）：
   无一家"先跑完整 Risch"——便宜优先阶梯 + 启发式中层 + 算法按需的混合体；
   纯规则库路线由 expreduce（Rubi 快照零算法内核）与 Mathematica 反推实证。
+  **定位修正（用户裁定，两轮纠偏）**：初版草案把 M6 当成 !integrate 黑盒
+  管线的一层（先排尾端"兜底"、又改排"主力层"）——两个版本都是错误框架，
+  根因 = 忽略项目三通道产品结构：①完全手动（:usub/:parts 已有）②自动化
+  手动（:isteps 自动生成手动可解释步骤——61 行展示雏形，M6 主战场）
+  ③完全黑盒（!integrate + Risch）。SAINT/Rubi 天然属于通道②（Slagle 目标
+  即模拟数学家解题、Rubi ShowStep 即人类可读步骤）；黑盒通道不需要 M6，
+  Risch 不可解释是本质属性而非缺陷。教训：**设计积分管线前先问"产出物
+  是什么"（用户的步骤/系统生成的可重放步骤链/答案+证书），通道决定架构，
+  不是算法排序决定架构**。M6.0 裁定问题随之改写：IntStep 从展示结构升级
+  为可执行/可重放战术序列（与 :tactic 同构），Rubi 规则翻译目标形态 =
+  战术单元而非黑盒变换函数。
   **经验来源纪律（本轮教训）**：建议必须标注来源层级——管线实证（maxima
   diffdiv=usub、第三阶段分部递归、expand 重试限 4 层；sympy risch 前置快筛
   vs maxima 末位兜底、manualintegrate 结构 handler）与文献/Rubi 内容补充
