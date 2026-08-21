@@ -51,6 +51,10 @@ free_vars/is_num/num_val/sort_key`。
 关键语义：
 - `mk`：规范化构造（环层：同类项合并/同底整数幂合并/幂归约；`e^a`→Exp(a)；
   i 幂 mod 4 折叠；Conjugate/Piecewise 走 `register_norm` 注册表）。
+- `quote(a)` / `'expr`：**真 hold**——parser 的 quote 分支跳过 mk 规范化（走
+  `_intern_expr` 纯驻留），保留原始结构与域约束（反化简形 `'cos(x)/cos(x)^2`、
+  借用形 `'ln(x-k)/ln(x-k)` 保 `x-k>0`）；`subst`/`instantiate` 遇 Quote 走 raw
+  路径（`_subst_raw`/`_instantiate_raw` 保 held 结构）；`:value` 脱壳 release。
 - `subst(t, mapping)`：显式栈替换，**复合项键可命中**（如 {x²: z}），α 躲避。
 - `open_bound(b)`：Bound → (hint 符号, 体)（DB 还原，mk_bound 的逆）。
 - 常量：`ZERO/ONE/MONE/TWO/PI/E/IU/UND/INFINITY/EMPTY_SET/TRUE/FALSE`。
@@ -243,5 +247,5 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 |------|------|
 | `simplify_at(path)` | 只化简指定子项，其余子树指针不变 |
 | `auto_at(path)` | 子项上跑 simplify 不动点 + auto 规则（cost 不增 + 已见集） |
-| `value_at(path)` | 只求值该路径惰性头（Quote/Integrate/D） |
+| `value_at(path)` | 只求值该路径惰性头（Quote 脱壳 release / Integrate 实算 / D 名词微分） |
 | `integrate_at(path)` | 子项是 Integrate 名词 → 求值该积分；否则对其做不定积分 |

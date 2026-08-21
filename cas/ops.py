@@ -146,7 +146,7 @@ def mul_frac(t, k):
 
     num/den -> (num*k)/(den*k)，分子分母分别展开（保持分式形，不展平分式）。
     mk 规范形会合并同底幂，故同乘 cos 凑 sec² 会被化简回原形
-    （cos·cos^(-2) -> cos^(-1)）——反化简凑形需 hold 机制（远期）。
+    （cos·cos^(-2) -> cos^(-1)）——反化简凑形用 ' 前缀 hold（'cos(x)/cos(x)^2 保结构 + 域约束）。
     上下同除 x² 类（分子分母不同底）能保留。
     """
     n, d = num_den(t)

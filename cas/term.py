@@ -961,8 +961,44 @@ def _lift(t, var, depth):
     return t
 
 
+def _subst_raw(t, mapping):
+    """原始结构替换（不规范化，保 held 形）：用于 Quote 内部。
+
+    与 subst 同构但重建走 _intern_expr——Times/Power 不合并同底幂，
+    保持 held 项的原始结构。Quote 内部含 ?x 替换时用此。
+    """
+    if not mapping:
+        return t
+    order = []
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        order.append(u)
+        if isinstance(u, Expr):
+            if u in mapping:
+                continue
+            stack.extend(u.args)
+        elif isinstance(u, Bound):
+            stack.append(u.body)
+    val = {}
+    for u in reversed(order):
+        hit = mapping.get(u)
+        if hit is not None:
+            val[u] = hit
+        elif isinstance(u, Expr):
+            val[u] = _intern_expr(u.head, tuple(val[a] for a in u.args))
+        elif isinstance(u, Bound):
+            val[u] = _mk_bound_canon(u.hint, val[u.body])
+        else:
+            val[u] = u
+    return val[t]
+
+
 def subst(t, mapping):
-    """替换（显式工作栈后序重建，深表达式不触及 Python 递归上限）。"""
+    """替换（显式工作栈后序重建，深表达式不触及 Python 递归上限）。
+
+    Quote 内部走 _subst_raw（保 held 结构，不合并同底幂/同类项）。
+    """
     if not mapping:
         return t
     # 显式栈后序遍历；Bound 的 body 必须始终下行（内部自由变量需替换且防捕获）
@@ -974,6 +1010,8 @@ def subst(t, mapping):
         if isinstance(u, Expr):
             if u in mapping:
                 continue  # 命中替换表的子树不再下行
+            if isinstance(u.head, Sym) and u.head.name == "Quote":
+                continue  # quote 内部不走 mk 重建（保 held 结构，单独 raw subst）
             stack.extend(u.args)
         elif isinstance(u, Bound):
             stack.append(u.body)
@@ -983,12 +1021,43 @@ def subst(t, mapping):
         if hit is not None:
             val[u] = hit
         elif isinstance(u, Expr):
-            val[u] = mk(u.head, tuple(val[a] for a in u.args))
+            if isinstance(u.head, Sym) and u.head.name == "Quote":
+                # quote 内部保 held 结构：raw subst（_intern_expr 重建，不规范化）
+                val[u] = _intern_expr(u.head, tuple(_subst_raw(a, mapping) for a in u.args))
+            else:
+                val[u] = mk(u.head, tuple(val[a] for a in u.args))
         elif isinstance(u, Bound):
             val[u] = _mk_bound_canon(u.hint, val[u.body])
         else:
             val[u] = u
     return val[t]
+
+
+def _instantiate_raw(t, sub):
+    """原始结构实例化（不规范化，保 held 形）：用于 Quote 内部。
+
+    与 instantiate 同构但重建走 _intern_expr——Times/Power 不合并，
+    保持 held 项的原始结构。规则 RHS 的 Quote 内含 ?x 实例化时用此。
+    """
+    if isinstance(t, PatVar):
+        return sub.get(t.name, t)
+    if isinstance(t, PatSeq):
+        raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
+    if isinstance(t, Expr):
+        out = []
+        for a in t.args:
+            if isinstance(a, PatSeq):
+                seq = sub.get(a.name)
+                if seq is None:
+                    out.append(a)
+                else:
+                    out.extend(seq)
+            else:
+                out.append(_instantiate_raw(a, sub))
+        return _intern_expr(t.head, tuple(out))
+    if isinstance(t, Bound):
+        return _mk_bound_canon(t.hint, _instantiate_raw(t.body, sub))
+    return t
 
 
 def instantiate(t, sub):
@@ -997,6 +1066,9 @@ def instantiate(t, sub):
     if isinstance(t, PatSeq):
         raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
     if isinstance(t, Expr):
+        if isinstance(t.head, Sym) and t.head.name == "Quote":
+            # quote 内部保 held 结构：raw instantiate（_intern_expr 重建，不规范化）
+            return _intern_expr(t.head, tuple(_instantiate_raw(a, sub) for a in t.args))
         out = []
         for a in t.args:
             if isinstance(a, PatSeq):

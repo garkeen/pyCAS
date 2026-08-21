@@ -115,7 +115,7 @@ latex/refine 零递归）；预算按节点计。
 - **AC 头归并匹配**：参数已全序排序 ⇒ 双指针归并；仅多序列洞触发回溯，设枚举上限。
 - **OneIdentity**：带单位元的 AC 头（Plus→0、Times→1）模式可匹配裸项（`?a+?b` 匹配 `x`）；
   序列洞可绑空元组；类型洞守卫在单位元绑定上同样生效；**非洞子模式不吸收单位元**。
-- **匹配与求值解耦**：quote 形式可被匹配和替换；规则左侧天然不求值。
+- **匹配与求值解耦**：quote 形式可被匹配和替换；规则左侧天然不求值。quote（`'expr`）是**真 hold**：parser 的 quote 分支跳过 mk 规范化（走 `_intern_expr` 纯驻留），保留原始结构与域约束（反化简形 `'cos(x)/cos(x)^2`、借用形 `'ln(x-k)/ln(x-k)` 保 `x-k>0` 域约束）；`subst`/`instantiate` 遇 Quote 走 raw 路径（`_subst_raw`/`_instantiate_raw` 保 held 结构）；`:value` 脱壳 release，之后走规范形。held 项是数据公民（可构造/显示/匹配/域检查），不参与自动 mk 合并——与 Mathematica `HoldForm` 同地位。
 - **绑定词交互**：洞不得落在绑定变量位；body 内被绑变量不透明，外界替换不得捕获。
 - **等式即规则**：账本等式在 auto 中作双向替换消费（cost 严格下降才接受）。
 - **守卫 = 3VL**：Yes 应用 / No 跳过 / Unknown：自动通道跳过、建议通道呈现并记义务。

@@ -43,13 +43,15 @@ python -m pytest tests/  # 运行全部测试（300+ 用例）
 函数      sin cos tan atan arcsin arccos exp log abs sinh cosh tanh
           sqrt(x) = x^(1/2)；piecewise(v1, c1, v2, c2, ...)
 绑定词    integrate(f, x)   —— 惰性积分（名词形式，可被 :parts/:value 操作）
-引用      'expr             —— 名词化（不求值保留结构）
+引用      'expr             —— 真 hold（跳过 mk 规范化，保留反化简形与域约束）
 历史      %  %N             —— 最近/第 N 个历史产出（嵌入乘法自动补括号）
 ```
 
 构造即规范化：输入在构造时即归一（合并同类项、同底幂合并、特殊点折叠如
 `sin(0)=0`、`i^2=-1`、`e^a` 与 `exp(a)` 同一）。因此 `x/x = 1` 在构造时成立
-（generic 语义，定义域条件可用规则义务化处理）。
+（generic 语义，定义域条件可用规则义务化处理）。**例外：`'expr`（quote）跳过
+mk 规范化**——保留反化简形（`'cos(x)/cos(x)^2` 不被合并）、借用形与域约束
+（`'ln(x-k)/ln(x-k)` 保 `x-k>0`，不被消成 1 丢域）；`:value` 脱壳 release。
 
 ---
 
@@ -77,7 +79,7 @@ x - sin(x)                     # 奇偶规则由 :auto 之外的通道管理；�
 | `:unrule id` | 删除会话规则（文件规则不可删） |
 | `:rules` | 列出全部规则（origin/prio/guard/方向） |
 | `:refine` | 账本驱动化简（如假设 x>0 时 abs(x)+sqrt(x^2)+exp(log(x)) → 3x） |
-| `:value` | 名词→动词：求值当前式中的 `'`引用/惰性积分/D 名词 |
+| `:value` | 名词→动词：脱壳 release（`'expr` 走规范形）/ 惰性积分实算 / D 名词微分 |
 
 ### 3.2 假设与推理
 
