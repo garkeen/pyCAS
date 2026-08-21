@@ -72,8 +72,25 @@ def _lmul(a, b):
     return {k: v for k, v in out.items() if v != (Fr(0), Fr(0))}
 
 
+def _freq(u, x):
+    """arg 的整数频率：x -> 1；k*x（k 为 >=1 的整数值系数，任意排序）-> k。"""
+    if u is x:
+        return 1
+    if isinstance(u, Expr) and u.head.name == "Times" and len(u.args) == 2:
+        for a, b in ((u.args[0], u.args[1]), (u.args[1], u.args[0])):
+            if b is x and is_num(a):
+                f = num_val(a)
+                if f.denominator == 1 and f >= 1:
+                    return int(f)
+    return None
+
+
 def _expand(t, x):
-    """term → Laurent 系数 dict（sin/cos 幂积多项式）；非此形态返回 None。"""
+    """term → Laurent 系数 dict（sin/cos 幂积多项式）；非此形态返回 None。
+
+    Sin/Cos 接受整数频率参数（cos(2*x) 等）——多角度基输出须可再归约
+    （规范形幂等性），否则 equivalent 的三角层对谐波形态失明。
+    """
     if t is x:
         return None
     if is_num(t):
@@ -82,8 +99,13 @@ def _expand(t, x):
         return None
     if isinstance(t, Expr):
         n = t.head.name
-        if n in ("Sin", "Cos") and len(t.args) == 1 and t.args[0] is x:
-            return _sin_pow(1) if n == "Sin" else _cos_pow(1)
+        if n in ("Sin", "Cos") and len(t.args) == 1:
+            m = _freq(t.args[0], x)
+            if m is None:
+                return None
+            if n == "Sin":
+                return {m: (Fr(0), Fr(-1, 2)), -m: (Fr(0), Fr(1, 2))}
+            return {m: (Fr(1, 2), Fr(0)), -m: (Fr(1, 2), Fr(0))}
         if n == "Plus":
             acc = None
             for a in t.args:
@@ -102,8 +124,12 @@ def _expand(t, x):
             return acc
         if n == "Power":
             b, e = t.args
-            if isinstance(e, Int) and e.v >= 0 and isinstance(b, Expr) and b.head.name in ("Sin", "Cos") and b.args[0] is x:
-                return _sin_pow(e.v) if b.head.name == "Sin" else _cos_pow(e.v)
+            if isinstance(e, Int) and e.v >= 0 and isinstance(b, Expr) and b.head.name in ("Sin", "Cos"):
+                m = _freq(b.args[0], x)
+                if m is None:
+                    return None
+                base = _sin_pow(e.v) if b.head.name == "Sin" else _cos_pow(e.v)
+                return {k * m: v for k, v in base.items()}
             return None
     return None
 

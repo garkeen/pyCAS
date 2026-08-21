@@ -374,6 +374,25 @@ def integrate(t, x):
 
         ok = _verify(F0, x, t) == "VERIFIED"
         return F0, ok, "spec antiderivative table", []
+    # 三角多项式：多角度基线性化后逐项积分（连续原函数，无 tan-half 分支切）。
+    # sin^2 -> (1-cos(2x))/2 类；线性组合经 spec anti 表（含线性复合）逐项原函数。
+    tl = _trig_linear_integrand(t, x)
+    if tl is not None:
+        terms_ = []
+        for c, g in tl:
+            if g is T.ONE:
+                G = x
+            else:
+                G = _spec_antideriv(g, x)
+                if G is None:
+                    break
+            terms_.append(T.times(c, G))
+        else:
+            from cas.diff import verify as _verify
+
+            F0 = simplify(T.mk(S("Plus"), tuple(terms_)))
+            ok = _verify(F0, x, t) == "VERIFIED"
+            return F0, ok, "trig poly: multi-angle linearization + termwise table", []
     if _USUB_DEPTH[0] < 3:
         _USUB_DEPTH[0] += 1
         try:
@@ -394,6 +413,49 @@ def integrate(t, x):
         return res[0], res[1], "t = tan(x/2) substitution -> rational integration", res[2]
 
 
+def _trig_linear_integrand(t, x):
+    """三角多项式判定 + 线性化：t 经 trig_reduce 化为 Σ c·f(kx)
+    （f ∈ {Sin, Cos, 1}）时返回 [(c, f-term)]，否则 None。
+
+    消费 spec anti 表逐项积分得连续原函数——替代 tan-half 在多项式
+    情形的分支切问题（sin^2 的 tan-half 原函数在 x=(2k+1)pi 跳变，
+    跨越区间的 NL 代限值错误）。
+    """
+    from cas.trig import trig_reduce
+
+    try:
+        rt = trig_reduce(t, x)
+    except Exception:
+        return None
+    if rt is None:
+        return None
+
+    def parts(u, acc):
+        if isinstance(u, T.Expr) and u.head.name == "Plus":
+            return all(parts(a, acc) for a in u.args)
+        if T.is_num(u):
+            acc.append((u, T.ONE))
+            return True
+        if isinstance(u, T.Expr) and u.head.name in ("Sin", "Cos") \
+                and len(u.args) == 1:
+            acc.append((T.ONE, u))
+            return True
+        if isinstance(u, T.Expr) and u.head.name == "Times" and len(u.args) == 2:
+            a_, b_ = u.args
+            if T.is_num(b_):
+                a_, b_ = b_, a_
+            if T.is_num(a_) and isinstance(b_, T.Expr) \
+                    and b_.head.name in ("Sin", "Cos") and len(b_.args) == 1:
+                acc.append((a_, b_))
+                return True
+        return False
+
+    acc = []
+    if not parts(rt, acc):
+        return None
+    return acc
+
+
 def _spec_antideriv(t, x):
     """裸 spec 函数（参数恰为 x）或其线性复合 f(a·x+b) -> 简单原函数。
 
@@ -410,7 +472,10 @@ def _spec_antideriv(t, x):
     arg = t.args[0]
     if arg is x:
         return sp.anti(x)
-    a_, b_ = _linear_split(arg, x)
+    split = _linear_split(arg, x)
+    if split is None:
+        return None   # 非线性复合（如 exp(-x^2)）：spec 线性反导表不覆盖
+    a_, b_ = split
     if not T.is_num(a_) or T.num_val(a_) == 0 or not T.is_num(b_):
         return None
     if x not in T.free_vars(arg):
@@ -469,7 +534,136 @@ def _trig_tan_half(t, x):
 # ---------------------------------------------------------------------------
 
 
-def defint(t, x, lo, hi):
+def _parity_normalize(t):
+    """按 spec.parity 声明折叠函数参数负号：f(-x) -> f(x)（even）/ -f(x)（odd）。
+
+    奇偶规则在 auto 通道，普通 simplify 不应用；对称性预检需要显式的
+    声明式消费（读 spec 注册表，非函数清单硬编码）。
+    """
+    from cas import spec as _spec
+
+    if not isinstance(t, T.Expr):
+        return t
+    args = tuple(_parity_normalize(a) for a in t.args)
+    tt = t if all(a is b for a, b in zip(args, t.args)) else T.mk(t.head, args)
+    sp = _spec.get(t.head.name)
+    if sp is not None and sp.parity and len(args) == 1:
+        u = args[0]
+        if isinstance(u, T.Expr) and u.head.name == "Times" and T.MONE in u.args:
+            rest = T.mk(T.S("Times"), tuple(a for a in u.args if a is not T.MONE))
+            inner = T.mk(t.head, (rest,))
+            return T.neg(inner) if sp.parity == "odd" else inner
+    return tt
+
+
+def _defint_reflect(t, x, lo, hi, lo_f, hi_f):
+    """反射对称（任意区间，关于中点 m=(lo+hi)/2）：phi(x) = lo+hi-x。
+
+    f(phi(x)) == -f(x)（关于 m 奇）-> I = 0；
+    f(phi(x)) == f(x)（关于 m 偶）-> I = 2*∫_start^m（内层 _no_sym：
+    常数等函数关于任意中点都偶，无旗标会无限折半直至空区间截断出错值）。
+    [-a,a] 只是 lo+hi=0 的实例；关系判定走 equivalent 管线且要求严格 YES
+    （采样 PROBABLE 不触发——对称归零是强断言）。返回 None = 不适用。
+    """
+    from cas.decide import equivalent, T3
+
+    phi = simplify(T.plus(T.plus(lo, hi), T.neg(x)))
+    refl = _parity_normalize(simplify(T.subst(t, {x: phi})))
+    if equivalent(refl, T.neg(t)) is T3.YES:
+        return T.ZERO, "VERIFIED", "odd about interval midpoint (reflection)"
+    if equivalent(refl, t) is T3.YES:
+        mid = simplify(T.div(T.plus(lo, hi), N(2)))
+        start = lo if hi_f >= lo_f else hi
+        v, st, note = defint(t, x, start, mid, _no_sym=True)
+        if v is None:
+            return None
+        val = simplify(T.times(N(2), v))
+        if hi_f < lo_f:
+            val = T.neg(val)
+        return val, st, "even about interval midpoint: 2*" + note
+    return None
+
+
+def _period_candidates(t):
+    """周期候选：t 中出现的 spec.period 函数头（去重，声明原样）。"""
+    from cas import spec as _spec
+
+    out = []
+    for p in T.all_paths(t):
+        u = T.term_at(t, p)
+        if isinstance(u, T.Expr) and len(u.args) == 1:
+            sp = _spec.get(u.head.name)
+            if sp is not None and sp.period is not None \
+                    and all(h != u.head.name for h, _ in out):
+                out.append((u.head.name, sp.period))
+    return out
+
+
+def _absorb_shift(t, P):
+    """周期偏移吸收：h(w+P) -> h(w)（h 声明周期恰为 P）。
+
+    声明即定理（spec.period 与 deriv/anti 同信任级）：h 的参数顶层加法
+    边缘含 +P 时可剥离——仅限参数顶层（Sin((x+P)^2) 不吸收，平方内偏移
+    不可消）。其余结构原样重建；成败由调用方指针比对裁决（残余 +P 必然
+    不等）。非周期因子（裸 x 等）因此自然拒绝折叠。
+    """
+    from cas import spec as _spec
+
+    if not isinstance(t, T.Expr):
+        return t
+    sp = _spec.get(t.head.name)
+    if sp is not None and sp.period is not None and len(t.args) == 1 \
+            and str(sp.period) == str(P):
+        u = t.args[0]
+        if isinstance(u, T.Expr) and u.head.name == "Plus":
+            args = list(u.args)
+            for i, a in enumerate(args):
+                if a is P:
+                    del args[i]
+                    w = T.mk(T.S("Plus"), tuple(args)) if len(args) > 1 else args[0]
+                    return T.mk(t.head, (w,))
+        return t   # 参数顶层无 +P：原样保留（残余由指针比对裁决）
+    return T.mk(t.head, tuple(_absorb_shift(a, P) for a in t.args))
+
+
+def _defint_period_fold(t, x, lo, hi, lo_f, hi_f):
+    """周期折叠：spec.period 声明供候选、偏移吸收做结构证明。
+
+    f(x+P) 经逐头吸收后指针还原 f(x)（驻留 O(1) 比对）且区间长为
+    P 的正整数倍 n 时，I = n*∫_start^{start+P}（直接折到单周期，
+    单周期内部照常走 NL+交叉核对，无递归风险）。
+    返回 None = 不适用。
+    """
+    from cas.evalnum import eval_approx
+
+    span = abs(hi_f - lo_f)
+    for _head, P in _period_candidates(t):
+        shifted = T.subst(t, {x: T.plus(x, P)})
+        if _absorb_shift(shifted, P) is not t:
+            continue
+        try:
+            pf = eval_approx(P, {})
+        except Exception:
+            continue
+        if pf is None or pf <= 0:
+            continue
+        n = int(round(span / pf))
+        if n < 2 or abs(span - n * pf) > 1e-9 * max(1.0, span):
+            continue
+        start = lo if hi_f >= lo_f else hi
+        # 折到单周期（内层 span=P -> 不再触发折叠，无递归）
+        end = simplify(T.plus(start, P))
+        v, st, note = defint(t, x, start, end)
+        if v is None:
+            return None
+        val = simplify(T.times(N(n), v))
+        if hi_f < lo_f:
+            val = T.neg(val)
+        return val, st, f"period fold ({n} periods): " + note
+    return None
+
+
+def defint(t, x, lo, hi, _no_sym=False):
     """∫_lo^hi t dx -> (值项 | None, 状态, 方法/原因说明)。
 
     状态：VERIFIED / UNVERIFIED（原函数验证态区分）/ DIVERGES / UNKNOWN / unsupported。
@@ -495,6 +689,16 @@ def defint(t, x, lo, hi):
         return None, "unsupported", "bounds not numerically comparable"
     if abs(hi_f - lo_f) < 1e-12:
         return T.ZERO, "VERIFIED", "empty interval"
+    # 区间自同构对称预检（通用框架，非特判清单；[-a,a] 只是中点反射的实例）：
+    # 反射 phi=lo+hi-x 的奇/偶关系 + spec.period 周期折叠。关系判定全部走
+    # equivalent 管线（严格 YES），声明只供候选不充当证明。
+    if not _no_sym:
+        sym = _defint_reflect(t, x, lo, hi, lo_f, hi_f)
+        if sym is not None:
+            return sym
+        fold = _defint_period_fold(t, x, lo, hi, lo_f, hi_f)
+        if fold is not None:
+            return fold
     sign = 1
     if hi_f < lo_f:
         lo, hi = hi, lo
@@ -503,6 +707,9 @@ def defint(t, x, lo, hi):
     try:
         F, ok, _method, _prov = integrate(t, x)
     except PolyError:
+        return None, "unsupported", "no antiderivative method"
+    if F is None:
+        # 无初等原函数（如 exp(-x^2)）：诚实拒答，绝不解包崩溃（永不静默错）
         return None, "unsupported", "no antiderivative method"
     splits = _sing_points(t, x, lo_f, hi_f)
     if splits is None:
@@ -662,6 +869,9 @@ def _defint_improper(t, x, lo, hi):
     try:
         F, ok, _method, _prov = integrate(t, x)
     except PolyError:
+        return None, "unsupported", "no antiderivative method"
+    if F is None:
+        # 无初等原函数（如 exp(-x^2)）：诚实拒答，绝不解包崩溃（永不静默错）
         return None, "unsupported", "no antiderivative method"
     right = _is_pos_inf(hi)
     fin = lo if right else hi

@@ -34,6 +34,7 @@ class FunctionSpec:
     anti: object = None           # callable(arg) -> 原函数（裸函数简单积分表，定积分友好）
     inv: str = None               # 逆函数头名（主支）：f(x)=c -> x=inv(c)，带主支注释
     injective: bool = None        # 全域单射性声明（:apply_both 诚实分级用；None = 未声明）
+    period: object = None         # 实周期声明（term，如 2*pi）：定积分周期折叠的候选源
 
 
 SPECS = {}
@@ -60,6 +61,7 @@ register(FunctionSpec(
     anti=lambda a: T.neg(T.cos(a)),
     inv="Arcsin",
     injective=False,
+    period=T.times(N(2), T.PI),
 ))
 register(FunctionSpec(
     "Cos", 1, print_name="cos", parity="even",
@@ -70,6 +72,7 @@ register(FunctionSpec(
     anti=lambda a: T.sin(a),
     inv="Arccos",
     injective=False,
+    period=T.times(N(2), T.PI),
 ))
 register(FunctionSpec(
     "Tan", 1, print_name="tan", parity="odd",
@@ -78,6 +81,7 @@ register(FunctionSpec(
     numeric=math.tan,
     inv="Atan",
     injective=False,
+    period=T.PI,
 ))
 register(FunctionSpec(
     "Exp", 1, print_name="exp",
@@ -96,6 +100,8 @@ register(FunctionSpec(
     numeric=math.log,
     inv="Exp",
     injective=True,
+    # 分部积分标准结果：d[a*log(a) - a] = log(a)
+    anti=lambda a: T.plus(T.times(a, T.log(a)), T.neg(a)),
 ))
 register(FunctionSpec(
     "Abs", 1, print_name="abs",
@@ -108,6 +114,9 @@ register(FunctionSpec(
     special={ZERO: ZERO, ONE: _QUARTER_PI, MONE: T.neg(_QUARTER_PI)},
     numeric=math.atan,
     injective=True,
+    # 分部积分标准结果：d[a*atan(a) - ln(1+a^2)/2] = atan(a)
+    anti=lambda a: T.plus(T.times(a, T.atan(a)),
+                          T.neg(T.div(T.log(T.plus(ONE, T.pw(a, N(2)))), N(2)))),
 ))
 register(FunctionSpec(
     "Arcsin", 1, print_name="arcsin",

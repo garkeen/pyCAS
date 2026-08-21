@@ -79,5 +79,39 @@ class TestDefintSession(unittest.TestCase):
         self.assertTrue(any(st.rule_id.startswith("kernel:defint") for st in s.log))
 
 
+class TestDefintSymmetryAndBoundaries(unittest.TestCase):
+    """对称性预检 + 无原函数边界 + spec anti 补全（Log/Atan）。"""
+
+    def test_no_antiderivative_honest_refusal(self):
+        # exp(-x^2) 无初等原函数：诚实拒答（此前 _linear_split None 解包崩溃）
+        from cas.session import Session
+
+        s = Session()
+        out = s.handle("!defint exp(-x^2) x 0 1")
+        self.assertIn("unsupported", out)
+        self.assertIn("no antiderivative", out)
+
+    def test_log_anti_and_improper_endpoint(self):
+        # Log anti 表项（分部积分标准结果）+ 端点瑕点单侧极限
+        from cas.session import Session
+
+        s = Session()
+        self.assertIn("[VERIFIED, method: spec antiderivative table]",
+                      s.handle("!integrate ln(x)"))
+        out = s.handle("!defint ln(x) x 0 1")
+        self.assertIn("-1", out)
+        self.assertIn("VERIFIED", out)
+
+    def test_odd_symmetry(self):
+        v, st, note = D("x^5", "-3", "3")
+        self.assertIs(v, parse("0"))
+        self.assertEqual((st, note), ("VERIFIED", "odd about interval midpoint (reflection)"))
+
+    def test_even_symmetry(self):
+        v, st, note = D("cos(x)^2", "-1", "1")
+        self.assertEqual(st, "VERIFIED")
+        self.assertTrue(note.startswith("even about interval midpoint"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

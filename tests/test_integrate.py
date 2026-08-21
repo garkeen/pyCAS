@@ -83,7 +83,8 @@ class TestTrigReduce(unittest.TestCase):
         self.assertIs(trig_equivalent(parse("sin(x)^2"), parse("cos(x)^2"), x), False)
 
     def test_unsupported(self):
-        for s in ("sin(2*x)", "x+sin(x)", "x*sin(x)", "sin(x)/cos(x)", "1/(1+sin(x))"):
+        # sin(2*x) 为合法单谐波（整数频率支持后可归约），不再列入
+        for s in ("x+sin(x)", "x*sin(x)", "sin(x)/cos(x)", "1/(1+sin(x))"):
             self.assertIsNone(self.r(s), s)
 
 
