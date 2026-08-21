@@ -90,25 +90,27 @@ class TestTrigHalfAngleExample(unittest.TestCase):
 
 class TestSecManualSubstitutionExample(unittest.TestCase):
     def test_manual_sin_substitution(self):
-        """∫sec x 手动全程：:set 绑定体内手术 -> :usub 精确微分 -> 实算 -> 规则回代。"""
+        """∫sec x 手动全程：:set 绑定体内手术 -> 代换入账 -> :usub 精确微分
+        -> 实算 -> 账本等式背书回代。"""
         s, outs = replay_lines("06_sec_manual_substitution.pycas")
         self.assertIn("[PROBABLE]", outs[2])                   # :set 手术闸门放行
         self.assertIn("proviso: -sin(x)^2 + 1 != 0", outs[2])  # 换入项域约束记账
-        self.assertIn("(-t^2 + 1)^-1", outs[3])                # 精确微分路线：∫dt/(1-t^2)
-        self.assertIn("log(t + 1)", outs[4])                   # 有理积分实算
+        self.assertIn("(-t^2 + 1)^-1", outs[4])                # 精确微分路线：∫dt/(1-t^2)
+        self.assertIn("log(t + 1)", outs[5])                   # 有理积分实算
+        self.assertIn("log(sin(x) - 1)", outs[6])              # 账本背书回代（VERIFIED 无标注）
         self.assertEqual(outs[-1], "PROBABLE")                 # 微分回验诚实背书
-        # 推导全程入账：手术/换元/回代规则步逐条可解释
+        # 推导全程入账：手术/换元步逐条可解释；回代经 rsub 闸门（账本 Eq 消费）
         kinds = [st.rule_id for st in s.log]
         self.assertIn("scheme:set", kinds)
         self.assertIn("scheme:usub", kinds)
-        self.assertEqual(sum(1 for k in kinds if k == "backsub"), 2)
+        self.assertIn("scheme:rsub", kinds)
         usub_note = next(st.note for st in s.log if st.rule_id == "scheme:usub")
         self.assertIn("exact differential", usub_note)         # 未走逆函数路线
 
     def test_replay_file_roundtrip(self):
         s = Session()
         out = s.handle(":replay " + os.path.join(EXAMPLES, "06_sec_manual_substitution.pycas"))
-        self.assertIn("replayed 9 commands", out)
+        self.assertIn("replayed 8 commands", out)
 
 
 if __name__ == "__main__":

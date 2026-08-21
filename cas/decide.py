@@ -768,13 +768,16 @@ def _contains(t, pat):
 
 
 def _eq_subst(fact, ctx, depth):
+    """账本等式代入归一：把账本中的 Eq(u,v) 双向代入查询事实后重判。
+
+    不限数值侧：符号等式（如换元定义 t = sin(x)）同样背书查询
+    （decide 相对账本的含义即"在假设下判定"；_MAX_DEPTH 防连锁循环）。
+    """
     a, b = fact.args
     for e in ctx.entries:
         f = e.fact
         if isinstance(f, T.Expr) and f.head.name == "Eq" and f is not fact:
             u, v = f.args
-            if not (T.is_num(u) or T.is_num(v)):
-                continue
             if not (_contains(a, u) or _contains(a, v) or _contains(b, u) or _contains(b, v)):
                 continue
             for pat, rep in ((u, v), (v, u)):

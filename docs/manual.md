@@ -295,7 +295,7 @@ rule <id> = <lhs> -> <rhs> [guard <条件>] [as <方向>] [channels a,b] [prio N
 | `03_rules_refine_sets.pycas` | 会话定理 + refine + 解集 + LaTeX |
 | `04_ode_bsub.pycas` | ODE 分类求解 + 反向换元 |
 | `05_trig_half_angle.pycas` | ∫1/(a+b·cos x) tan 半角代换 + 参数 proviso |
-| `06_sec_manual_substitution.pycas` | ∫sec x 手动 sin-代换全程（:set 绑定体内手术 + :usub 精确微分 + 规则回代） |
+| `06_sec_manual_substitution.pycas` | ∫sec x 手动 sin-代换全程（:set 绑定体内手术 + :usub 精确微分 + 账本背书回代） |
 
 `#` 开头的行是注释，回放时跳过——案例文件本身就是可读的推导文档。
 

@@ -61,9 +61,14 @@
   全命令域审计结论：separate/extract/complete_square/expand 域安全
   （分母保留 / 因子已在 terms 中 / 多项式全纯）；set/rsub 补 _new_domain_conditions
   （公共域采样只在重叠域比对，换入更窄定义域的项须显式记账；恒真约束与
-  old 已携带约束跳过）；extract 验证放宽到 PROBABLE（构造 = 分配律逆，结构可靠，
+  old 已携带约束跳过）；  extract 验证放宽到 PROBABLE（构造 = 分配律逆，结构可靠，
   超越因子采样最高 PROBABLE）；usub/lhop 的经典条件（g'!=0、G'!=0）由
   verify 背书链承担（docstring + manual 标注）。
+- **decide 账本等式代入归一（符号等式背书）**：_eq_subst 原只允许数值侧账本等式
+  （t=5 类）代入查询，符号等式（换元定义 t=sin(x)）被跳过——回代只能走会话规则
+  权宜。修正：解除数值侧限制，Eq(u,v) 双向代入 + _MAX_DEPTH 防连锁
+  （decide 相对账本的含义即"在假设下判定"，代入假设等式保真）。
+  examples/06 回代改为 :rsub 直接过闸门（账本 Eq 消费，VERIFIED）。
 - **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
 
 ### 1.2 立场裁定（长期有效，改动需重新论证）
@@ -88,9 +93,7 @@
 - 三角积分路径的 [VERIFIED] 只覆盖 t 域有理积分，半角代回本身未单独验证。
 - 主支逆求解不给周期族通解（诚实标注 principal branch）。
 - 绑定词打印变量名取首次驻留的 hint（α 等价代价，语义无影响）。
-- decide/equivalent 的账本通道不消费 Eq 事实做归一代入（"等式即规则"目前只在
-  session auto 的 cost 严格下降通道生效）——换元回代需声明会话规则
-  （examples/06 的 backsub 模式）；decide 账本等式代入归一待建。
+- usub/lhop 的经典条件（g'!=0、G'!=0）由 verify 背书链承担（docstring + manual 标注）。
 
 ---
 
