@@ -122,6 +122,25 @@
   验收：log 族全对含升次 log(x)/x = log(x)²/2、嵌套 1/(x·log(x)) =
   log(log(x))、1/log(x) -> NOT ELEMENTARY (proved)（li(x) 类证明性拒答，
   sympy risch 同判）。445 tests。
+- **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
+  塔上 + 工作队列循环处理嵌套依赖；代数依赖守卫：exp base 含既有塔变量
+  => 拒绝）；_risch_rec 统一层积分入口 + _integrate_in_K 递归下降 +
+  _limited_integrate（sympy limited_integrate 同构）。**架构关键**：内部
+  全程塔符号空间、出口统一回写——低层积分结果若回写成原始 term，外层
+  无法区分"塔变量 l"与"新 log 成分"（驻留形态冲突）。
+  **死循环根因（重要）**：_derive_ut 的 K 层导数用 a.deriv(x)——把塔
+  变量当常数（D(l)=1/x 算成 0），limited 循环残差不降次永不终止。单层时
+  K=Q(x) 下 d/dx 与塔上导数等价，故 M5.1/M5.2a 全绿未暴露——**域推广时
+  所有"恰好够用"的简化都要重审**。修复 = 塔上导数（derivation 链式法则）。
+  **工作方式教训（用户两次纠偏）**：(1) 跑未验证脚本必须设超时（bash
+  timeout 参数 + 脚本内 watchdog/循环上限），死循环卡住整个会话；
+  (2) 设计算法前先查参考源码——limited_integrate 的"低层积分结果结构化
+  表示"问题 sympy 用多项式对全程传递解决（frac_in），我自行发明的 term
+  结构分析（塔符号空间转换）绕了远路。
+  验收：log(log(x)) -> NOT ELEMENTARY (proved)（下层 li(x) 证明自然传播
+  到整体——递归架构的组合语义）；log(log(x))/x = log·log(log) − log
+  [VERIFIED]；log(x)*log(log(x)) -> proved（证明消息精确指向 l^-1 残差）；
+  exp(x)+exp(x^2) 双层判定。445 tests。
 - **路线图重排：M6 = 规则启发式搜索（SAINT/Rubi），原 M6 四候选顺移 M7**。
   动机 = 六参考系统积分管线源码调研（sympy integrals.py / maxima sin.lisp /
   expreduce calculus.m / mathics calculus.py 实测；Mathematica/Maple 文献）：
