@@ -153,6 +153,49 @@ def _k_defint(s, rest):
     return s.mdefint(parts[0], parts[1], parts[2], parts[3])
 
 
+def _k_sum(s, rest):
+    """求和/差分（Faulhaber 幂和 + 不定/定界求和，差分回验）。"""
+    from cas import summation
+
+    if not rest.strip():
+        if (s.current is not None and isinstance(s.current, T.Expr)
+                and s.current.head.name == "Sum"):
+            return s.value()
+        return "usage: :sum <expr> <var> [<lo> <hi>]"
+    # 定界：expr var lo hi（从右 rsplit 3 次，含空格的 expr 保留在 parts[0]）
+    parts4 = rest.rsplit(None, 3)
+    if len(parts4) == 4 and parts4[1].isidentifier():
+        f = s._parse_in(parts4[0])
+        x = T.S(parts4[1])
+        lo = s._parse_in(parts4[2])
+        hi = s._parse_in(parts4[3])
+        S = summation.indef_sum(f, x)
+        if S is None:
+            return f"unsupported: {to_str(f)} not summable (polynomial terms only)"
+        r = summation.finite_sum(f, x, lo, hi)
+        ok = summation.verify_indef(S, f, x)
+        before = s.current
+        s.current = r
+        s._kernel_step("sum[finite]", r, before=before)
+        s._remember(r)
+        return f"{to_str(r)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: Faulhaber power sum]"
+    # 不定：expr var
+    parts2 = rest.rsplit(None, 1)
+    if len(parts2) == 2 and parts2[1].isidentifier():
+        f = s._parse_in(parts2[0])
+        x = T.S(parts2[1])
+        r = summation.indef_sum(f, x)
+        if r is None:
+            return f"unsupported: {to_str(f)} not summable (polynomial terms only)"
+        ok = summation.verify_indef(r, f, x)
+        before = s.current
+        s.current = r
+        s._kernel_step("sum[indef]", r, before=before)
+        s._remember(r)
+        return f"{to_str(r)}   [{'VERIFIED' if ok else 'UNVERIFIED'}, method: Faulhaber power sum]"
+    return "usage: :sum <expr> <var> [<lo> <hi>]"
+
+
 def _k_bsub(s, rest):
     """定积分反向换元：:bsub x=h(t) <expr> <var> <lo> <hi>（新限主支逆解）。"""
     parts = rest.split(None, 1)
@@ -351,6 +394,10 @@ def _eval_inert(t, budget):
                 r = zz_int(body, x)[0]
             except PolyError:
                 r = None   # 不可积：保持名词
+        elif name == "Sum" and len(args) == 1 and isinstance(args[0], T.Bound):
+            from cas import summation
+            x, body = T.open_bound(args[0])
+            r = summation.indef_sum(body, x)
         elif name == "D" and len(args) == 2:
             r = dd(args[0], args[1])
         if r is not None:
@@ -399,6 +446,7 @@ class Session:
             "limit": KernelCmd("limit <expr> <var> <point> (point may be +/-inf)", _k_limit),
             "series": KernelCmd("series <expr> <var> <point> <order> (Taylor + O term)", _k_series),
             "defint": KernelCmd("defint <expr> <var> <lo> <hi>", _k_defint),
+            "sum": KernelCmd("sum <expr> <var> [<lo> <hi>] (Faulhaber power sum + diff verify)", _k_sum),
             "bsub": KernelCmd("backward sub: :bsub x=h(t) <expr> <var> <lo> <hi>", _k_bsub),
             "mat": KernelCmd("show matrix [[a,b],[c,d]]", lambda s, r: s.mat(r.strip())),
             "mdet": KernelCmd("determinant [[a,b],[c,d]]", lambda s, r: s.mdet(r.strip())),
