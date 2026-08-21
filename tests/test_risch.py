@@ -146,5 +146,67 @@ class TestDerivationDifferential(unittest.TestCase):
         self._check("(exp(x) + 1)/(exp(x) - 1)")
 
 
+class TestRischExpIntegrate(unittest.TestCase):
+    """M5.1a：exp 单项式积分（Hermite 推广 + residue_reduce）。
+
+    正确性证据 = 双通道：(1) 已知闭式逐项比对；(2) D(result) 与
+    被积函数数值采样交叉核对（独立微分引擎）。
+    """
+
+    SAMPLES = [Fr(1, 3), Fr(1, 2), Fr(5, 2), Fr(11, 4)]
+
+    def _integrate(self, s):
+        from cas.risch import integrate_exp_tower
+
+        return integrate_exp_tower(parse(s), x)[0]
+
+    def _dcheck(self, s, result):
+        from cas.diff import d
+
+        # 验证关系：D(F) == f（F=结果，f=被积函数）——数值采样交叉核对
+        got = d(result, x)
+        want = parse(s)
+        for xv in self.SAMPLES:
+            gv = eval_approx(got, {x: xv})
+            wv = eval_approx(want, {x: xv})
+            self.assertAlmostEqual(gv, wv, delta=max(1e-9, abs(wv) * 1e-9),
+                                   msg=f"D-check {s} at x={xv}")
+
+    def test_log_form(self):
+        r = self._integrate("1/(exp(x)+1)")
+        self.assertEqual(to_str(simplify(r)), "x - log(exp(x) + 1)")
+        self._dcheck("1/(exp(x)+1)", r)
+
+    def test_log_form_scaled(self):
+        r = self._integrate("1/(2*exp(x)+3)")
+        self.assertEqual(to_str(simplify(r)), "1/3*x - 1/3*log(exp(x) + 3/2)")
+        self._dcheck("1/(2*exp(x)+3)", r)
+
+    def test_pure_log(self):
+        r = self._integrate("exp(x)/(exp(x)+1)")
+        self.assertEqual(to_str(simplify(r)), "log(exp(x) + 1)")
+        self._dcheck("exp(x)/(exp(x)+1)", r)
+
+    def test_hermite_double_pole(self):
+        # 重因子：Hermite 推广剥出有理部分 + residue 对数部分
+        r = self._integrate("1/(exp(x)+1)^2")
+        self.assertEqual(to_str(simplify(r)),
+                         "x + (exp(x) + 1)^-1 - log(exp(x) + 1)")
+        self._dcheck("1/(exp(x)+1)^2", r)
+
+    def test_hermite_rational_part_only(self):
+        r = self._integrate("exp(x)/(exp(x)+1)^2")
+        self.assertEqual(to_str(simplify(r)), "-1/(exp(x) + 1)")
+        self._dcheck("exp(x)/(exp(x)+1)^2", r)
+
+    def test_poly_part_pending(self):
+        # e^(-x^2)：多项式部分 t -> M5.1b RDE（届时给不可初等证明）
+        from cas.risch import RischUnsupported
+
+        with self.assertRaises(RischUnsupported) as cm:
+            self._integrate("exp(-x^2)")
+        self.assertIn("M5.1b", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

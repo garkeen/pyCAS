@@ -380,3 +380,629 @@ def tower_to_term_pair(a, d, de):
     if not subs:
         return val
     return T.subst(val, subs)
+
+
+# ---------------------------------------------------------------------------
+# M5.1a：exp 单项式积分（K[t] 视图，t = exp(eta)，Dt = eta'*t）
+#
+# 表示：K[t] 多项式 = 系数 list [c_0..c_n]（c_i: Poly((x,))，升序）；
+#       K(t) 分式 = (A, d)（A: K[t]，d: K[t]）。
+# eta' = wn/wd 的分式系数用"全局分母 wd"技巧保持多项式系数：
+#   D(Σ a_k t^k) = (1/wd)·Σ (wd*a_k' + k*wn*a_k) t^k
+# 整除性推导（Hermite 核心步）：u ≡ -(e-1)^{-1} r wd inv(P~) (mod p)
+#   => wd*a + (e-1)*u*P~ ≡ wd*(a-r) ≡ 0 (mod p)。
+# ---------------------------------------------------------------------------
+
+def _univar(p, ti):
+    """Poly(all_vars) -> K[t_i] 系数 list（升序，K = 其余变量上的 Poly）。"""
+    sub = tuple(v for v in p.vars if v is not ti)
+    j = p.vars.index(ti)
+    out = [Poly.zero(sub)]
+    for k, c in p.monos.items():
+        e = k[j]
+        while len(out) <= e:
+            out.append(Poly.zero(sub))
+        nk = tuple(x for i, x in enumerate(k) if i != j)
+        out[e] = out[e] + Poly(sub, {nk: c})
+    return out
+
+
+def _from_univar(coeffs, all_vars, ti):
+    """系数 list -> Poly(all_vars)。"""
+    j = all_vars.index(ti)
+    m = {}
+    for e, c in enumerate(coeffs):
+        for k, v in c.monos.items():
+            nk = list(k)
+            nk.insert(j, e)
+            m[tuple(nk)] = v
+    return Poly(all_vars, m)
+
+
+def _u_add(a, b, zero):
+    n = max(len(a), len(b))
+    out = []
+    for i in range(n):
+        ca = a[i] if i < len(a) else zero
+        cb = b[i] if i < len(b) else zero
+        out.append(ca + cb)
+    return _u_trim(out)
+
+
+def _u_trim(cs):
+    while cs and cs[-1].is_zero():
+        cs.pop()
+    return cs
+
+
+def _u_neg(a, neg):
+    return [neg(c) for c in a]
+
+
+def _u_mul(a, b, zero):
+    if not a or not b:
+        return []
+    out = [zero for _ in range(len(a) + len(b) - 1)]
+    for i, ca in enumerate(a):
+        if ca.is_zero():
+            continue
+        for j, cb in enumerate(b):
+            if cb.is_zero():
+                continue
+            out[i + j] = out[i + j] + ca * cb
+    return _u_trim(out)
+
+
+def _u_divmod(a, b, zero):
+    """K[t] 除法（b 非零）。返回 (q, r) 系数 list。"""
+    from cas.poly import ugcd
+
+    _ = ugcd
+    # 域上除法：b 的首系数必须是可逆元——K = Q(x) 是域 ✓
+    r = [c for c in a]
+    db = len(b) - 1
+    lb = b[db]
+    if len(r) - 1 < db:
+        return [], _u_trim(r)
+    q = [zero for _ in range(len(r) - db)]
+    while len(r) - 1 >= db and not _u_is_zero(r):
+        shift = len(r) - 1 - db
+        lc = r[-1]
+        c = lc.udivmod(lb)[0]
+        q[shift] = c
+        for i in range(db + 1):
+            r[shift + i] = r[shift + i] - c * b[i]
+        _u_trim(r)
+    return _u_trim(q), _u_trim(r)
+
+
+def _u_is_zero(cs):
+    return not cs or all(c.is_zero() for c in cs)
+
+
+def _u_gcd(a, b, zero):
+    """K[t] gcd（欧几里得 + monic）。"""
+    A, B = _u_trim([c for c in a]), _u_trim([c for c in b])
+    while not _u_is_zero(B):
+        _, r = _u_divmod(A, B, zero)
+        A, B = B, r
+    if _u_is_zero(A):
+        return []
+    # monic 化（首系数须为 K 常数——gcd 是域元素倍）
+    lc = A[-1]
+    if not lc.is_const():
+        raise RischUnsupported("non-constant leading coefficient in K[t] gcd")
+    s = Fr(1) / lc.const_val()
+    return [c.scalar(s) for c in A]
+
+
+def _u_inv_mod(a, m, zero):
+    """a 的逆 mod m（gcd(a,m)=1）。扩展欧几里得：s*a + t*m = g -> s/g。
+
+    初始化 s0=0（对应 r0=m）、s1=1（对应 r1=a）；结束时 s0*a ≡ g (mod m)。
+    """
+    r0, r1 = [c for c in m], _u_trim([c for c in a])
+    s0, s1 = [zero], [Poly.one(zero.vars)]
+    while not _u_is_zero(r1):
+        q, r = _u_divmod(r0, r1, zero)
+        qs = _u_mul(q, s1, zero)
+        s_new = _u_add(s0, _u_neg(qs, lambda c: c.scalar(Fr(-1))), zero)
+        s0, s1 = s1, s_new
+        r0, r1 = r1, r
+    # r0 = gcd；互素时为常数，s0*a ≡ gcd (mod m)
+    if len(r0) > 1:
+        raise RischUnsupported("non-invertible factor in K[t]")
+    if _u_is_zero(r0):
+        raise RischUnsupported("zero gcd in inverse")
+    g = r0[0]
+    if not g.is_const():
+        raise RischUnsupported("non-constant gcd in inverse")
+    s = Fr(1) / g.const_val()
+    out = [c.scalar(s) for c in s0]
+    _, rem = _u_divmod(out, m, zero)
+    return rem
+
+
+def _u_deriv_x(coeffs):
+    """K 层求导：逐系数 d/dx。"""
+    x = coeffs[0].vars[0] if coeffs and coeffs[0].vars else T.S("x")
+    return [c.deriv(x) for c in coeffs]
+
+
+def _derive_ut(coeffs, de, j):
+    """塔上 D 作用于 Σ a_k t_j^k -> (coeffs', wd)。
+
+    D = Σ_k (D_K a_k + k*w*t-factor) —— exp case: Dt = (wn/wd)*t，
+    返回统一分母 wd 的分子系数。
+    """
+    wn, wd = de.ws[j]
+    out = []
+    for k, a in enumerate(coeffs):
+        da = a.deriv(a.vars[0]) if not a.is_zero() else a
+        term = da.scalar(wd) if wd != 1 else da
+        if k > 0 and not a.is_zero():
+            term = term + a * wn.scalar(Fr(k))
+        out.append(term)
+    return _u_trim(out), wd
+
+
+def _exp_w(de, j):
+    """第 j 层（exp）的 eta' = (wn, wd)。"""
+    return de.ws[j]
+
+
+# ---------------------------------------------------------------------------
+# Hermite 推广（逐因子逐层，FriCAS normalHermiteIntegrate 同数学）
+# ---------------------------------------------------------------------------
+
+def _hermite_factor(a, p, e, de, j, zero):
+    """∫ a/p^e -> (u/p^{e-1} 贡献, 新 (a', p^{e-1}))。
+
+    u ≡ -(e-1)^{-1}*(a mod p)*wd*inv(D(p) mod p) (mod p)；
+    v = (wd*a + (e-1)*u*P~)/p/wd - D(u)/wd，整除性已证。
+    """
+    wn, wd = de.ws[j]
+    Pm = _derive_ut(p, de, j)[0]          # D(p) 的分子（分母 wd）
+    r = _u_divmod(a, p, zero)[1]
+    pm1 = _u_inv_mod(Pm, p, zero)
+    coef = Fr(-1) / (e - 1)
+    u = _u_mul(_u_mul(r, pm1, zero), [wd], zero)
+    u = [c.scalar(coef) for c in u]
+    _, u = _u_divmod(u, p, zero)
+    # N = wd*a + (e-1)*u*P~ （整除 p）
+    N_ = _u_add([c.scalar(wd) for c in a],
+                _u_mul([c.scalar(Fr(e - 1)) for c in u], Pm, zero), zero)
+    M, rem = _u_divmod(N_, p, zero)
+    if not _u_is_zero(rem):
+        raise RischUnsupported("hermite divisibility failed")
+    # v = M/wd - D(u)/wd = (M - Du_num)/wd
+    Du, _dw = _derive_ut(u, de, j)
+    v = _u_add(M, _u_neg(Du, lambda c: c.scalar(Fr(-1))), zero)
+    # 剩余 a' = v/(wd*p^{e-1})？不——v 已是剩余分子（分母 wd*p^{e-1}）
+    return u, v
+
+
+def risch_exp_integrate(fa, fd, de, j):
+    """exp 单项式积分主入口（M5.1a：真分式部分）。
+
+    返回 ((rat_part, logs, nonel, leftover), status)：
+    status: 'ok' | 'has-poly-part' | 'has-special-part'
+    """
+    zero = Poly.zero((de.levels[0],))
+    tj = de.levels[j]
+
+    A = _univar(fa, tj)
+    D = _univar(fd, tj)
+    if _u_is_zero(A):
+        return (None, None, None, None), "ok"
+
+    # 多项式部分检测（M5.1b）：deg_t(fa) >= deg_t(fd)
+    dq = len(D) - 1
+    dp = len(A) - 1
+    if dp >= dq:
+        Q, R = _u_divmod(A, D, zero)
+        # 商拆解：常数项 q_0 可积（x 层），t 幂部分 pending M5.1b
+        if len(Q) > 1 and any(not c.is_zero() for c in Q[1:]):
+            return (None, None, None, None), "has-poly-part"
+        res, st = _integrate_proper(R, D, de, j, zero)
+        rp, lg, nn, lf = res
+        q0 = Q[0] if Q else zero
+        if not q0.is_zero():
+            lf = [q0] if lf is None else _u_add(lf, [q0], zero)
+        return (rp, lg, nn, lf), st
+
+    return _integrate_proper(A, D, de, j, zero)
+
+
+def _integrate_proper(A, D, de, j, zero):
+    """真分式积分：special(t^m) 分离 + 无平方分解 + 部分分式 + Hermite + residue。
+
+    M5.1a 限制：eta' 为多项式（wd=1，覆盖全部单项指数 eta）。
+    """
+    wn, wd = de.ws[j]
+    if not (wd.is_const() and wd.const_val() == 1):
+        raise RischUnsupported("rational eta' not supported in M5.1a")
+    # special 分离：D = t^m * q0（q0[0] != 0）
+    m = 0
+    q0 = list(D)
+    while len(q0) > 0 and q0[0].is_zero():
+        q0 = q0[1:]
+        m += 1
+    q0 = _u_trim(q0)
+    if m > 0:
+        k_m = min(m, len(A))
+        low, high = A[:k_m], A[k_m:]
+        # 低段 Σ a_k t^{k-m}（负幂）= 特殊部分 -> M5.1b RDE
+        if _u_is_zero(high):
+            return (None, None, None, None), "has-special-part"
+        rat_part, logs, nonel, leftover, st = _integrate_normal(high, q0, de, j, zero)
+        return (rat_part, logs, nonel, leftover), ("has-special-part" if st == "ok" else st)
+    return _integrate_normal(A, D, de, j, zero)
+
+
+def _integrate_normal(A, D, de, j, zero):
+    """正规分母真分式：无平方分解 -> 部分分式 -> Hermite(e>1) + residue(e=1)。
+
+    返回 (rat_part, logs, nonel, leftover, status)：
+    rat_part = [(u_k, p, k)] 有理部分 u_k/p^k；logs = [(c, g)] 对数项；
+    nonel = (num, p)|None 不可初等剩余（residue 无常数根——Bronstein 定理：
+    真分式情形 residue 失败即证明不可初等）；leftover = K 分式递归 x 层。
+    """
+    tj = de.levels[j]
+    factors = _squarefree_decomp_t(D, zero)
+    rat_part = []
+    logs = []
+    nonel = None
+    leftover = None
+    for p, e in factors:
+        cof = _u_divmod(D, _u_pow(p, e, zero), zero)[0]
+        B = _u_divmod(_u_mul(A, _u_inv_mod_t(cof, D, zero), zero), _u_pow(p, e, zero), zero)[1]
+        if e > 1:
+            rat, (B1, _) = _hermite_pe(B, p, e, de, j, zero)
+            rat_part.extend(rat)
+        else:
+            B1 = B
+        lg, rem = _residue_sqfr(B1, p, de, j, zero)
+        logs.extend(lg)
+        if not _u_is_zero(rem):
+            q, r = _u_divmod(rem, p, zero)
+            if _u_is_zero(r):
+                # 剩余恰为多项式：常数部分 -> x 层递归；t 幂部分 -> M5.1b
+                if any(not c.is_const() for c in q):
+                    return rat_part, logs, None, ("special", q), "has-special-part"
+                leftover = q
+            else:
+                nonel = (rem, p)
+    return (rat_part, logs, nonel, leftover), "ok"
+
+
+def _u_pow(cs, n, zero):
+    out = [Poly.one(zero.vars)]
+    base = list(cs)
+    while n > 0:
+        if n & 1:
+            out = _u_mul(out, base, zero)
+        base = _u_mul(base, base, zero)
+        n >>= 1
+    return out
+
+
+def _u_inv_mod_t(a, m, zero):
+    """K[t] 上 a^{-1} mod m。"""
+    return _u_inv_mod(a, m, zero)
+
+
+def _squarefree_decomp_t(D, zero):
+    """K[t] 无平方分解 [(p, e)]（形式导数 gcd 递归）。"""
+    def rec(cur):
+        if len(cur) <= 1 or _u_is_zero(cur):
+            return []
+        dc = _u_formal_deriv(cur)
+        g = _u_gcd(cur, dc, zero)
+        if len(g) <= 1:
+            return [(cur, 1)]
+        core, r = _u_divmod(cur, g, zero)
+        if not _u_is_zero(r):
+            raise RischUnsupported("squarefree division failed")
+        rest = rec(g)
+        single = core
+        for pp, _mm in rest:
+            single = _u_divmod(single, pp, zero)[0]
+        out = [(pp, mm + 1) for pp, mm in rest]
+        if len(single) > 1:
+            out.append((single, 1))
+        return out
+
+    out = rec(list(D))
+    # 规范序：按次数升序稳定组装
+    return sorted(out, key=lambda pe: len(pe[0]))
+
+
+def _u_formal_deriv(cs):
+    """形式偏导 ∂/∂t（系数不动）。"""
+    return _u_trim([c.scalar(Fr(k)) for k, c in enumerate(cs)][1:])
+
+
+def _hermite_pe(a, p, e, de, j, zero):
+    """∫ a/p^e（p 无平方正规）-> (有理部分 [(u_k, p, k)], 剩余 (b, p))。
+
+    逐层：u ≡ -(k-1)^{-1}*(a mod p)*inv(D(p)) (mod p)；
+    v = (a + (k-1)*u*D(p))/p - D(u)，整除性由 u 构造保证。
+    """
+    rat = []
+    cur_a, cur_e = list(a), e
+    while cur_e >= 2:
+        u, v = _hermite_factor(cur_a, p, cur_e, de, j, zero)
+        if not _u_is_zero(u):
+            rat.append((u, p, cur_e - 1))
+        cur_a = v
+        cur_e -= 1
+    return rat, (cur_a, p)
+
+
+def _hermite_factor(a, p, e, de, j, zero):
+    """单层剥离：∫ a/p^e -> 贡献 u/p^{e-1}，剩余 v/p^{e-1}。"""
+    Pm = _derive_ut(p, de, j)[0]          # D(p)（wd=1）
+    r = _u_divmod(a, p, zero)[1]
+    pm1 = _u_inv_mod(Pm, p, zero)
+    coef = Fr(-1) / (e - 1)
+    u = [c.scalar(coef) for c in _u_mul(r, pm1, zero)]
+    _, u = _u_divmod(u, p, zero)
+    # N = a + (e-1)*u*P~ 整除 p
+    N_ = _u_add(list(a), _u_mul([c.scalar(Fr(e - 1)) for c in u], Pm, zero), zero)
+    M, rem = _u_divmod(N_, p, zero)
+    if not _u_is_zero(rem):
+        raise RischUnsupported("hermite divisibility failed")
+    Du = _derive_ut(u, de, j)[0]
+    v = _u_add(M, _u_neg(Du, lambda c: c.scalar(Fr(-1))), zero)
+    return u, v
+
+
+# ---------------------------------------------------------------------------
+# residue_reduce（Rothstein-Trager；结式经 Bareiss 行列式，K[z] 系数）
+# ---------------------------------------------------------------------------
+
+def _neg_poly(c):
+    return c.scalar(Fr(-1))
+
+
+def _sylvester_res(fz, gz):
+    """res_t(f, g)：fz/gz 是 K[z] 多项式（list[Poly]，z 升序——与 K[t] 同构）。
+
+    Sylvester 矩阵 + Bareiss 行列式（K[z] 整环上 exact division）。
+    行列式与标准结式至多差符号——求根用途下无关紧要。
+    """
+    m = len(fz) - 1     # deg f
+    n = len(gz) - 1     # deg g
+    size = m + n
+    if size <= 0:
+        return []
+    M = []
+    for i in range(n):
+        row = [[] for _ in range(size)]
+        for jj in range(i, min(i + m + 1, size)):
+            row[jj] = fz[m - (jj - i)]
+        M.append(row)
+    for i in range(m):
+        row = [[] for _ in range(size)]
+        for jj in range(i, min(i + n + 1, size)):
+            row[jj] = gz[n - (jj - i)]
+        M.append(row)
+    zero = Poly.zero((T.S("x"),))
+    return _bareiss_det(M, size, zero)
+
+
+# ---------------------------------------------------------------------------
+# Bareiss 行列式（元素 = K[z] 多项式 = list[Poly]，与 K[t] 同构——_u_* 通用）
+# ---------------------------------------------------------------------------
+
+def _u_sub(a, b):
+    """K 多项式减法（zero 自参数推断）。"""
+    src = a if a else b
+    z = Poly.zero(src[0].vars) if src else Poly.zero((T.S("x"),))
+    return _u_add(a, _u_neg(b, lambda c: c.scalar(Fr(-1))), z)
+
+
+def _u_mul0(a, b):
+    """K 多项式乘法（zero 自参数推断）。"""
+    if not a or not b:
+        return []
+    z = Poly.zero(a[0].vars)
+    return _u_mul(a, b, z)
+
+
+def _bareiss_det(M, size, zero):
+    """Bareiss 分式免除行列式（元素为 K[z] 多项式，_u_* 层直接适用）。"""
+    A = [row[:] for row in M]
+    prev = None         # 上一步主元；第一步除数为 1（不除）
+    sign = 1
+    for k in range(size - 1):
+        if _u_is_zero(A[k][k]):
+            for i in range(k + 1, size):
+                if not _u_is_zero(A[i][k]):
+                    A[k], A[i] = A[i], A[k]
+                    sign = -sign
+                    break
+            else:
+                return []
+        pk = A[k][k]
+        for i in range(k + 1, size):
+            for jj in range(k + 1, size):
+                num = _u_sub(_u_mul0(A[i][jj], pk), _u_mul0(A[i][k], A[k][jj]))
+                if prev is not None:
+                    q, r = _u_divmod(num, prev, zero)
+                    if not _u_is_zero(r):
+                        raise RischUnsupported("bareiss exact division failed")
+                    A[i][jj] = q
+                else:
+                    A[i][jj] = num
+        prev = pk
+    det = _u_trim(A[size - 1][size - 1])
+    det = _uz_trim_det(det)
+    return det if sign == 1 else _u_neg(det, lambda c: c.scalar(Fr(-1)))
+
+
+def _uz_trim_det(p):
+    return _u_trim(p)
+
+
+def _residue_sqfr(B, p, de, j, zero):
+    """∫ B/p（p 无平方正规）-> (logs [(c, g)], rem_num)。
+
+    R(z) = res_t(B - z*D(p), p)；常数根 c（free of x）->
+    贡献 c*log(g)，g = gcd(p, B - c*D(p))；剩余分子 rem（分母仍 p）
+    = 不可初等成分。Bronstein 定理：真分式 + 无常数根 => 不可初等
+    （M5.1b 补多项式部分后为完整证明）。solve 无法定根时显式异常——
+    绝不静默把可积成分误判为不可积。
+    """
+    Dp = _derive_ut(p, de, j)[0]
+    nb = max(len(B), len(Dp))
+    Bp = B + [zero for _ in range(nb - len(B))]
+    Dpp = Dp + [zero for _ in range(nb - len(Dp))]
+    # fz[i] = B_i - z*Dp_i（K[z] 多项式 = list[Poly]）
+    fz = [[b, _neg_poly(d)] for b, d in zip(Bp, Dpp)]
+    gz = [[c] for c in p]
+    Rz = _sylvester_res(fz, gz)
+    logs = []
+    rem = list(B)
+    if len(Rz) >= 1 and not _u_is_zero(Rz):
+        roots = _constant_roots(Rz)
+        for c in roots:
+            # fc = fz 代入 z=c：b + c*(-d)
+            fc = []
+            for zp in fz:
+                val = zp[0]
+                if len(zp) > 1:
+                    val = val + zp[1].scalar(c)
+                fc.append(val)
+            fc = _u_trim(fc)
+            g = _u_gcd(fc, p, zero)
+            if len(g) <= 1:
+                continue
+            logs.append((T.N(c), g))
+            Dg = _derive_ut(g, de, j)[0]
+            cof = _u_divmod(p, g, zero)[0]
+            ct_poly = Poly.const(zero.vars, c)
+            corr = _u_mul([ct_poly], _u_mul(Dg, cof, zero), zero)
+            rem = _u_add(rem, _u_neg(corr, lambda cc: cc.scalar(Fr(-1))), zero)
+    return logs, _u_trim(rem)
+
+
+def _uz_trim_list(cs):
+    return _u_trim(cs)
+
+
+def _constant_roots(Rz):
+    """R(z) ∈ Q(x)[z] 的常数根：转 term 用 solve，含 x 的根丢弃。
+
+    含 x 的根被丢弃正是数学语义：非常数 residue 不对应初等对数项。
+    solve 无法判定（unsupported）时抛异常——绝不静默漏根（漏根会把
+    可积成分误判为不可初等，违反永不静默错）。代数数值根（根式/RootOf）
+    是合法 residue 常数，但系数组装需 Q(alpha) 域——M5.2 扩展，此处
+    显式异常（不误判为不可积）。
+    """
+    from cas.solve import solve as _solve
+
+    z = T.S("_rz")
+    terms = []
+    for e, c in enumerate(Rz):
+        if c.is_zero():
+            continue
+        ct = c.to_term()
+        terms.append(T.times(ct, T.pw(z, N(e))) if e else ct)
+    if not terms:
+        return []
+    poly_t = T.mk(S("Plus"), tuple(terms)) if len(terms) > 1 else terms[0]
+    r = _solve(poly_t, z)
+    if r.status != "ok":
+        raise RischUnsupported(
+            "cannot determine constant roots of the resultant: " + (r.note or ""))
+    out = []
+    for sol in r.solutions:
+        if not _free_of_x(sol):
+            continue
+        if not T.is_num(sol):
+            raise RischUnsupported("algebraic residue roots pending M5.2")
+        out.append(T.num_val(sol))
+    return out
+
+
+def _free_of_x(t):
+    xv = T.S("x")
+    return xv not in T.free_vars(t)
+
+
+# ---------------------------------------------------------------------------
+# 结果组装（塔 -> term）
+# ---------------------------------------------------------------------------
+
+def assemble_exp_result(rat_part, logs, nonel, de, j):
+    """M5.1a 积分结果 -> term（组装 + backsubs）。"""
+    tj = de.levels[j]
+    subs = {de.levels[j]: de.terms[j]}
+    parts = []
+    for u, p, k in rat_part:
+        ut = _from_univar(u, de.vars, tj).to_term()
+        pt = _from_univar(p, de.vars, tj).to_term()
+        ut = T.subst(ut, subs)
+        pt = T.subst(pt, subs)
+        parts.append(T.div(ut, T.pw(pt, N(k))))
+    for c, g in logs:
+        gt = _from_univar(g, de.vars, tj).to_term()
+        gt = T.subst(gt, subs)
+        parts.append(T.times(c, T.log(gt)))
+    if nonel is not None:
+        num, p = nonel
+        nt = _from_univar(num, de.vars, tj).to_term()
+        pt = _from_univar(p, de.vars, tj).to_term()
+        from cas.pprint import to_str as _ts
+
+        raise RischNonElementary(
+            "integral of " + _ts(T.div(nt, pt)) + " over the tower is "
+            "not elementary (no constant residue roots)"
+        )
+    if not parts:
+        return T.ZERO
+    if len(parts) == 1:
+        return parts[0]
+    return T.mk(S("Plus"), tuple(parts))
+
+
+class RischNonElementary(Exception):
+    """不可初等证明载体（Bronstein 决策程序的否定结论）。"""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def integrate_exp_tower(f, x):
+    """顶层 API：term -> term（初等原函数）或 RischNonElementary/RischUnsupported。
+
+    M5.1a 范围：单层 exp 塔 + 真分式；多项式/特殊部分报 pending M5.1b。
+    """
+    from cas.integrate import integrate_rational
+
+    de, fa, fd = build_extension(f, x)
+    # 找最外层 exp（M5.1a 单 exp 层）
+    j = None
+    for i in range(len(de.levels) - 1, 0, -1):
+        if de.cases[i] == "exp":
+            j = i
+            break
+    if j is None:
+        raise RischUnsupported("no exponential layer in extension")
+    (rat_part, logs, nonel, leftover), st = risch_exp_integrate(fa, fd, de, j)
+    if st != "ok":
+        raise RischUnsupported("polynomial/special part pending M5.1b: " + st)
+    expr = assemble_exp_result(rat_part, logs, nonel, de, j)
+    if leftover is not None and any(not c.is_zero() for c in leftover):
+        # 常数剩余 -> x 层有理积分（Hermite+RT 已完备）
+        # 非常数控系数已在 _integrate_normal 拦为 has-special-part
+        cv = sum((c.const_val() for c in leftover), Fr(0))
+        P = Poly.const((x,), cv)
+        val, ok, _method = integrate_rational(P, Poly.one((x,)), x)
+        if not ok:
+            raise RischUnsupported("leftover rational integration failed")
+        expr = T.plus(expr, val)
+    return expr, de

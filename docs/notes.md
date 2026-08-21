@@ -98,6 +98,26 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **M5.1a exp 单项式积分（Hermite 推广 + Rothstein-Trager residue）**：
+  K[t] 视图（list[Poly] 升序系数，K=Q(x)）；eta'=wn/wd 的分式系数用"全局
+  分母 wd"技巧保多项式系数（整除性推导：u ≡ -(e-1)^{-1} r wd inv(P~) mod p
+  => wd*a+(e-1)uP~ ≡ wd(a-r) ≡ 0 mod p）；无平方分解（gcd(D,∂D) 递归，
+  层差恢复重数）+ 部分分式（inv mod p^e）+ 逐层 Hermite（复用已验证的
+  _hermitte_power 结构推广到塔上 D）+ residue（R(z)=res_t(B-zDp,p)，
+  Sylvester 矩阵 + Bareiss 行列式；常数根经现有 solve，含 x 的根丢弃=
+  不可初等成分的数学语义；solve 定不了根显式异常——绝不静默漏根把可积
+  误判为不可积）。剩余整除 p 时商进 leftover（x 层 Hermite+RT 递归）。
+  **层级教训（大弯路）**：K[t] 与 K[z] 同构（都是 list[Poly]，系数运算
+  全是 Poly 算术）——初版给 K[z] 写独立 _uz_* 层是重复且引层级混乱，
+  删掉后 _u_* 直接通用。
+  **五个实测 bug**：EEA 初始化反了（s0/s1 互换 => inv(1)=0 => 部分分式
+  分子全零静默传播成错误答案 0——符号计算的静默错典型形态）；Poly 坏键
+  {(): c}（零维元组，Poly.__init__ 不校验维度，潜伏到 degree 才爆）；
+  Poly != int 恒 True（__eq__ NotImplemented 回退身份比较）；_u_pow 初始
+  out=[zero]（应为乘法单位 [one]）；测试侧 D-check 语义写反（比较 d(f)
+  而非 f 本身——验证关系 D(F)=f 的对象是 f）。验收 = 已知闭式逐项比对
+  + D(result) vs f 数值采样双通道。e^{-x^2} 目前 has-poly-part（M5.1b
+  RDE 补齐后即完整不可初等证明）。
 - **M5.0 微分域塔落地（Risch 一期地基）**：cas/risch.py——DiffExt
   （levels/cases/ws/terms 四表，maxima 属性表存导数同思路）、塔构建
   （log 先 exp 后 = sympy handle_first='log'；integer_powers Fr 倍数归组，
