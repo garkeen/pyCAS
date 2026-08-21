@@ -98,6 +98,30 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **M5.2a primitive case 积分（K 域升级 + limited_integrate 循环）**：
+  K 从"隐式 Q(x) + 全局分母 wd 技巧"升级为显式 RatFunc 域——_u_* 工具族
+  系数全换，_u_divmod 真除法。**隐患修复**：旧 _u_divmod 用 Poly.udivmod
+  做"域除法"，只在首系数好除时正确（M5.1a 测试全绿纯属 exp 塔分母系数
+  多为常数的幸运）；_u_gcd/_u_inv_mod 的 is_const 检查是 Poly 时代非域
+  遗留（域中任何非零元素可逆），1/(x*log(x)) 首触发。
+  _derive_ut 双 case：exp 对角（t^k -> t^k）vs primitive 移位（θ^{k+1}
+  贡献 (k+1)vθ^k）。**数学发现：primitive 无 special 因子**（gcd(θ,v)=1，
+  θ 正规）——全部因子走 normal 路线，比 exp 干净；exp 的 t 因子 special
+  （gcd(t,Dt)=t）源于 Dt=η't。
+  多项式部分 = sympy integrate_primitive_polynomial 同构的 limited_integrate
+  循环：每轮取残差最高次系数 a，求 (b,c) 使 Db + c·v = a（c = ∫a 的
+  log(u) 成分系数——齐次常数与升次统一于此），贡献 c·θ^{m+1}/(m+1) +
+  b·θ^m，残差严格降次终止。**工作方式教训（用户裁定）**：设计算法前先查
+  参考源码（sympy/FriCAS/maxima 本地全有）——手推的"逐阶下降 + 升次判定 +
+  齐次约束检测"三件套被 limited_integrate 一个循环统一替代，且手推版漏掉
+  齐次常数由下层可积性反推的机制（∫(log x+1)/x 类）。非 log(u) 成分 =
+  需新 primitive 层，诚实拒答（不是不可积证明——塔覆盖不足 ≠ 初等无解）。
+  实测 bug：_from_univar 重写两处——shift 把 embed 后已有 t 维度的 key
+  再插入一维（len-3 key，应为替换位置 j）；分母 qe 误带 θ^e 权重
+  （c·θ^e = c.p·θ^e / c.q，分母不带权重）。
+  验收：log 族全对含升次 log(x)/x = log(x)²/2、嵌套 1/(x·log(x)) =
+  log(log(x))、1/log(x) -> NOT ELEMENTARY (proved)（li(x) 类证明性拒答，
+  sympy risch 同判）。445 tests。
 - **路线图重排：M6 = 规则启发式搜索（SAINT/Rubi），原 M6 四候选顺移 M7**。
   动机 = 六参考系统积分管线源码调研（sympy integrals.py / maxima sin.lisp /
   expreduce calculus.m / mathics calculus.py 实测；Mathematica/Maple 文献）：
