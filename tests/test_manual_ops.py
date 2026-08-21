@@ -217,6 +217,103 @@ class TestDomainAudit(unittest.TestCase):
         self.assertIn("(x - 1)", out)   # 分母保留，x != 1 的域不扩大
 
 
+class TestLoopExtraction(unittest.TestCase):
+    """等式链提取：循环分部的方程由机器写（:intro_eq），人不再手抄 RHS。"""
+
+    def test_parts_sign_pullout_and_loop_hint(self):
+        # 符号拉出绑定体 -> 循环名词指针收敛 -> [loop] 提示
+        s = Session()
+        s.handle("I := integrate(exp(x)*sin(x), x)")
+        s.handle("I")
+        orig = s.current
+        s.handle(":parts sin(x)")
+        out = s.handle(":parts cos(x)")
+        self.assertIn("[loop] I recurs", out)
+        self.assertIn("∫[exp(x)*sin(x)]", out)     # 符号已拉出（非 ∫[-...]）
+        self.assertIsNotNone(s._named_loop(s.current))
+        self.assertIs(orig, s.defs["I"][1])         # 链首名词稳定
+
+    def test_intro_eq_closes_loop(self):
+        s = Session()
+        for c in ["I := integrate(exp(x)*sin(x), x)", "I",
+                  ":parts sin(x)", ":parts cos(x)"]:
+            s.handle(c)
+        out = s.handle(":intro_eq I")
+        self.assertIn("==", out)
+        self.assertEqual(s.current.head.name, "Eq")
+        kinds = [st.rule_id for st in s.log]
+        self.assertIn("scheme:intro_eq", kinds)
+        out = s.handle(":solveq I")                 # 按定义名解循环方程
+        self.assertIn("1/2*", out)
+
+    def test_loop_flow_verified(self):
+        s = Session()
+        for c in ["I := integrate(exp(x)*sin(x), x)", "I",
+                  ":parts sin(x)", ":parts cos(x)",
+                  ":intro_eq I", ":solveq I"]:
+            s.handle(c)
+        self.assertEqual(s.handle("!verify % x exp(x)*sin(x)"), "VERIFIED")
+
+    def test_solveq_by_def_name(self):
+        # :solveq 裸符号名字解析为宏体（变量定义；复合项如 log(x) 不被扁平化吞掉）
+        s = Session()
+        s.handle("K := log(x)")
+        s.handle("2*K + 3 = 7")
+        out = s.handle(":solveq K")
+        self.assertIn("2", out)
+
+    def test_no_false_loop_hint(self):
+        # 无命名积分再现时不提示
+        s = Session()
+        s.handle("integrate(exp(x), x)")
+        out = s.handle(":parts exp(x)")
+        self.assertIsInstance(out, str)
+        self.assertNotIn("[loop]", out)
+
+    def test_negative_start_loop_with_fold(self):
+        # 负号起点：循环再现的是 -I（指针不同）-> :fold 线性折叠归一
+        s = Session()
+        for c in ["I := integrate(-exp(x)*sin(x), x)", "I",
+                  ":parts sin(x)", ":parts cos(x)"]:
+            s.handle(c)
+        self.assertIsNone(s._named_loop(s.current))     # 折叠前指针不收敛
+        out = s.handle(":fold")
+        self.assertIn("[loop] I recurs", out)           # 折叠后收敛
+        s.handle(":intro_eq I")
+        out = s.handle(":solveq I")
+        self.assertIn("1/2*", out)
+        self.assertEqual(s.handle("!verify % x -exp(x)*sin(x)"), "VERIFIED")
+
+    def test_intro_eq_from_history_node(self):
+        # 等式链任意节点：%N 历史引用与当前式连等式
+        s = Session()
+        s.handle("x + y")
+        s.handle("(x + y)^2")
+        s.handle(":expand")
+        out = s.handle(":intro_eq %1")
+        self.assertIn("x + y ==", out)
+
+
+class TestGuardObligations(unittest.TestCase):
+    """守卫条件显式在案：域闸门 UNKNOWN 接义务队列，可作答回滚。"""
+
+    def test_domain_gate_creates_obligation(self):
+        s = Session()
+        s.handle("x + y = 5")
+        s.handle(":add_both ln(x-k)")
+        obls = s.handle(":obls")
+        self.assertIn("x - k > 0", obls)
+        self.assertIn("affects steps [1]", obls)
+        self.assertIn("answered", s.handle(":ans 1 x - k > 0"))
+        self.assertIn("(none)", s.handle(":obls"))
+
+    def test_apply_both_creates_obligation(self):
+        s = Session()
+        s.handle("e^x = 5")
+        s.handle(":apply_both log")
+        self.assertIn("exp(x) > 0", s.handle(":obls"))
+
+
 class TestReshaping(unittest.TestCase):
     def test_expand(self):
         s = Session()

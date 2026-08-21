@@ -1312,6 +1312,8 @@ class Session:
             ":complete_square": "complete square: :complete_square <var> [path]",
             ":usub": "forward substitution on inert integral: :usub t=g(x)",
             ":lhop": "one l'Hopital step on quotient form: :lhop <var> <point>",
+            ":intro_eq": "extract chain equation: :intro_eq <lhs|%N> (lhs = current; loop: :intro_eq I)",
+            ":fold": "linearity fold: rewrite constant-multiple named integrals (loop setup)",
             ":parts": "integration by parts on inert integral: :parts <u> (shows u/dv/du/v)",
             ":subst": "substitute new variable: :subst t=g(x) (handles inert integral dx too)",
             ":solveq": "solve current linear equation for unknown: :solveq <term>",
@@ -1441,6 +1443,12 @@ class Session:
                 return "usage: :lhop <var> <point>"
             res = self.lhop(parts[0], parts[1])
             return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":intro_eq "):
+            # %N 先展开：等式链任意节点（历史产出）都可与当前式连等式
+            res = self.intro_eq(self.expand_history(line[10:].strip()))
+            return to_str(res) if isinstance(res, T.Term) else res
+        if line == ":fold":
+            return self.fold()
         if line.startswith(":parts "):
             res = self.iparts(line[7:].strip(), detail=True)
             return res if isinstance(res, str) else to_str(res)
@@ -1611,8 +1619,21 @@ class Session:
             except PolyError:
                 continue
             du = d(u, x)
-            new_int = T.mk(T.S("Integrate"), (T.mk_bound(x, T.times(v, du)),))
-            found = (p, T.plus(T.times(u, v), T.neg(new_int)),
+            cand = T.times(v, du)
+            # 常数符号拉出绑定体：∫(-f) = -∫f（线性，generic 安全）。
+            # 指针收敛：循环再现的积分名词与链首驻留同一（:intro_eq/:solveq 可命中，
+            # 循环检测可行）。不拉出则 -号留在 Bound 内，名词指针分裂。
+            flip = False
+            if isinstance(cand, T.Expr) and cand.head.name == "Times" \
+                    and T.MONE in cand.args:
+                rest = T.mk(T.S("Times"),
+                            tuple(a for a in cand.args if a is not T.MONE))
+                cand = rest
+                flip = True
+            new_int = T.mk(T.S("Integrate"), (T.mk_bound(x, cand),))
+            core = T.times(u, v)
+            repl = T.plus(core, new_int) if flip else T.plus(core, T.neg(new_int))
+            found = (p, repl,
                      {"u": u, "dv": q, "du": du, "v": v})
             break
         if found is None:
@@ -1627,14 +1648,136 @@ class Session:
         ))
         self._remember(self.current)
         if detail:
-            return ("\n".join([
+            lines = [
                 f"u  = {to_str(det['u'])}",
                 f"dv = {to_str(det['dv'])} dx",
                 f"du = {to_str(det['du'])} dx",
                 f"v  = {to_str(det['v'])}",
                 f"=> {to_str(self.current)}",
-            ]))
+            ]
+            hint = self._named_loop(self.current)
+            if hint:
+                lines.append(f"[loop] {hint} recurs - extract equation: "
+                             f":intro_eq {hint}, then :solveq {hint}")
+            return "\n".join(lines)
         return self.current
+
+    def _named_loop(self, t):
+        """循环检测：t 中是否指针再现某个已命名的惰性积分名词 -> 名字或 None。
+
+        驻留使指针判等 O(1)；iparts 的符号拉出保证循环再现时名词同一。
+        """
+        named = [(name, body) for name, (params, body) in self.defs.items()
+                 if not params and isinstance(body, T.Expr)
+                 and body.head.name == "Integrate"]
+        if not named:
+            return None
+        stack = [t]
+        while stack:
+            u = stack.pop()
+            for name, body in named:
+                if u is body:
+                    return name
+            if isinstance(u, T.Expr):
+                stack.extend(u.args)
+            elif isinstance(u, T.Bound):
+                stack.append(u.body)
+        return None
+
+    def fold(self):
+        """:fold：线性折叠——current 中与已命名惰性积分体成数值常数倍的名词，
+        改写为 常数·命名名词（∫c·g = c·∫g，线性 generic 安全）。
+
+        用途：倍数/负号起点的循环。I := ∫-f 时循环再现的是 ∫f = -I，
+        指针天然不同一；fold 用线性性归一后 :intro_eq/:solveq 的循环消解
+        才能命中。这是通用机制（常数倍关系判定），不是针对特定例子的特化。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from fractions import Fraction
+
+        named = [(name, body) for name, (params, body) in self.defs.items()
+                 if not params and isinstance(body, T.Expr)
+                 and body.head.name == "Integrate"]
+        if not named:
+            return "fold: no named inert integrals (:name := integrate(...))"
+        cur = self.current
+        repls = []   # (path, 命名名词体, 倍数)
+        seen_nouns = set()
+        for p in list(T.all_paths(cur)):
+            try:
+                sub = T.term_at(cur, p)
+            except IndexError:
+                continue
+            if not (isinstance(sub, T.Expr) and sub.head.name == "Integrate"
+                    and len(sub.args) == 1 and isinstance(sub.args[0], T.Bound)):
+                continue
+            if sub._h in seen_nouns:
+                continue
+            seen_nouns.add(sub._h)
+            xv, body_n = T.open_bound(sub.args[0])
+            for name, body in named:
+                if body is sub:
+                    break   # 已是命名名词本身
+                xb, body_o = T.open_bound(body.args[0])
+                if xv is not xb:
+                    continue
+                q = _quotient_cancel(body_n, body_o)
+                if T.is_num(q):
+                    c = T.num_val(q)
+                    if c != 0:
+                        repls.append((p, body, c))
+                        break
+        if not repls:
+            return f"{to_str(cur)}   [fold: no constant-multiple integrals]"
+        # 内层路径先替换（嵌套名词时外层路径索引不变）
+        for p, body, c in sorted(repls, key=lambda r: -len(r[0])):
+            cur = T.replace_at(cur, p, T.times(T.N(c), body))
+        before = self.current
+        self.current = simplify(cur)
+        if self.current is before:
+            return f"{to_str(before)}   [fold: no change]"
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:fold", (), before, self.current, "YES",
+            cost(self.current) - cost(before),
+            note=f"linearity fold of {len(repls)} integral(s)",
+        ))
+        self._remember(self.current)
+        out = to_str(self.current)
+        hint = self._named_loop(self.current)
+        if hint:
+            out += f"\n[loop] {hint} recurs - extract equation: :intro_eq {hint}, then :solveq {hint}"
+        return out
+
+    def intro_eq(self, lhs_s):
+        """:intro_eq <lhs>：等式链提取——把当前式声明为 Eq(lhs, current)。
+
+        计算即等式链：step log 每步的 before->after 都是一条等式；本命令把
+        "链首命名项 = 当前式"显式提取为一等方程（循环分部的 I = A - I）。
+        lhs 经用户定义展开（名字解析为宏体）；断言自由但入账（claim 层），
+        后续消费由 :solveq 线性闸门与 !verify 回验把关。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        lhs = self._expand_defs(parse(lhs_s.strip()), bare_ok=True)
+        eq = T.mk(T.S("Eq"), (lhs, self.current))
+        before = self.current
+        self.current = eq
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:intro_eq", (), before, eq, "YES",
+            cost(eq) - cost(before),
+            note=f"chain equation: {to_str(lhs)} = current",
+        ))
+        self._remember(eq)
+        out = to_str(eq)
+        if self.obligations:
+            out += ("   [note: equation inherits the open conditions on record "
+                    "- see :obls]")
+        return out
 
     def solveq(self, unknown_s):
         """把当前等式当线性方程解出指定未知项（未知 → z 提系数）。
@@ -1647,6 +1790,10 @@ class Session:
         from cas.solve import _linear_split, _free
 
         unknown = self._parse_in(unknown_s)
+        # 裸符号且是变量定义 -> 解析为宏体（:solveq I 直接按名字解循环方程）
+        if isinstance(unknown, T.Sym) and unknown.name in self.defs \
+                and self.defs[unknown.name][0] == ():
+            unknown = self.defs[unknown.name][1]
         z = T.S("_solveq_z")
         f = T.subst(T.plus(self.current.args[0], T.neg(self.current.args[1])), {unknown: z})
         f = simplify(expand(f))   # 负号分配/同类项归并（与 solve 同款预处理）
@@ -1731,6 +1878,11 @@ class Session:
                 continue
             if not any(c is p for p in out):
                 out.append(c)
+                self._oid += 1
+                self.obligations.append(Obligation(
+                    self._oid, c, [self._sid + 1],
+                    note="domain condition introduced by replacement",
+                ))
         return out
 
     def set_at(self, path_s, expr_s):
@@ -1840,7 +1992,8 @@ class Session:
 
         等式双侧操作引入的项必须在解点有定义，否则解集被静默收窄
         （借用形 +ln(x-k)-ln(x-k) 类操作的核心风险）。NO 拒绝（与账本矛盾，
-        ex falso 纪律）/ UNKNOWN 记 proviso（generic 不阻塞，事后可作答）。
+        ex falso 纪律）/ UNKNOWN 记 proviso 并创建义务（条件显式在案，
+        可 :ans 作答——守卫不静默丢失）。
         """
         from cas.domain import dom_condition
 
@@ -1851,6 +2004,11 @@ class Session:
                 return None, f"domain empty: {what} requires {to_str(c)} (contradicted)"
             if r is T3.UNKNOWN and not any(c is p for p in provs):
                 provs.append(c)
+                self._oid += 1
+                self.obligations.append(Obligation(
+                    self._oid, c, [self._sid + 1],
+                    note=f"domain condition of {what}",
+                ))
         return provs, None
 
     def eq_add_both(self, t_s):
@@ -1973,6 +2131,11 @@ class Session:
                     return f"domain empty: applying {name} requires {to_str(c)} (contradicted)"
                 if r is T3.UNKNOWN and not any(c is p for p in provs):
                     provs.append(c)
+                    self._oid += 1
+                    self.obligations.append(Obligation(
+                        self._oid, c, [self._sid + 1],
+                        note=f"domain condition of applying {name}",
+                    ))
         notes = []
         if inj is False:
             notes.append(f"{name} is not injective: forward implication only, "

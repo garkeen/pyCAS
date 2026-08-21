@@ -189,7 +189,16 @@ x - sin(x)                     # 表达式 → 当前式
 :lhop x 0                        # 手动洛必达一步（须 0/0 或 ±∞/±∞，否则拒绝并报告
                                  #   两端极限；G'!=0 经典条件由最终求值背书）
 :isteps 2*x*exp(x^2)             # 积分策略步树（只分类不计算）
+:intro_eq I                      # 等式链提取：Eq(命名项, 当前式)（循环分部收尾，
+                                 #   配合 :solveq I 按名解出；[loop] 提示自动announce）
+:fold                            # 线性折叠：∫c·g -> c·∫g（倍数/负号起点的循环归一，
+                                 #   I := ∫-f 时循环再现的是 -I，先 :fold 再 :intro_eq）
 ```
+
+**等式链与守卫（立场）**：计算即等式链——step log 每步 before->after 都是一条
+等式，`:intro_eq <lhs|%N>` 把链上任意节点与当前式连成方程。账本等式在守卫下
+对称使用安全（decide 相对整个账本判定）；域条件 UNKNOWN 时创建义务（`:obls`
+查看、`:ans` 作答）——等式的消费继承全部在案条件，不静默丢失。
 
 ### 3.5 输出
 
@@ -210,11 +219,16 @@ x - sin(x)                     # 表达式 → 当前式
 >> I := integrate(exp(x)*sin(x), x)     # 定义惰性积分为 I
 >> I                                     # ∫[exp(x)*sin(x)] dx（名词）
 >> :parts sin(x)                         # 人选 u=sin x，机器算 dv/v/du
->> :parts cos(x)                         # 再次分部，I 重新出现
->> I = e^x*sin(x) - e^x*cos(x) - I       # 写出循环方程
->> :solveq integrate(exp(x)*sin(x), x)   # 对复合未知项线性求解 → I = .../2
+>> :parts cos(x)                         # 再次分部；[loop] 提示 I 循环再现
+>> :intro_eq I                           # 等式链提取：I = 当前式（机器写方程）
+>> :solveq I                             # 解出 I = .../2
 >> !verify % x exp(x)*sin(x)             # VERIFIED
 ```
+
+计算即等式链：step log 每步的 before -> after 都是一条等式，`:intro_eq` 把
+"链首命名项 = 当前式"提取为一等方程。循环检测由驻留指针完成（`:parts` 把
+常数符号拉出绑定体，保证循环再现的积分名词与链首驻留同一）。
+也可手写方程（`I = e^x*sin(x) - e^x*cos(x) - I`）——断言自由但结论仍由 verify 把关。
 
 ### 4.2 定积分画廊
 
