@@ -177,40 +177,66 @@ latex/refine 零递归）；预算按节点计。
   逐期内容见 notes.md §1 修订史）。
 - **M4 求和/差分 ✓**：Faulhaber 幂和 + Gosper 有理函数不定/定界求和（常系数递推待建）。
 - **M5 Risch 分期（进行中）**：M5.0 微分域塔 ✓ → M5.1 exp case（Hermite 推广 +
-  Rothstein-Trager residue ✓ / RDE 多项式部分进行中）→ M5.2 primitive/log +
-  参数化 log deriv → M5.2.5 ℚ(i) Gaussian rational 系数域 → M5.3 三角经复指数
-  （trigs2explogs 同款，FriCAS 实据印证）。终点 = 超越函数范围内完整 Risch 决策程序，
-  含不可初等证明（e^{-x²}、li(x)、Si(x) 类带证明拒答——sympy 全缺）。
+  Rothstein-Trager residue ✓ / RDE 多项式部分 ✓，exp(−x²) 类不可初等证明已落地）
+  → M5.2 primitive/log + 参数化 log deriv + 递归塔 → M5.2.5 ℚ(i) Gaussian
+  rational 系数域 → M5.3 三角经复指数（trigs2explogs 同款，FriCAS 实据印证）。
+  终点 = 超越函数范围内完整 Risch 决策程序，含不可初等证明（e^{-x²}、li(x)、
+  Si(x) 类带证明拒答——sympy 全缺）。接线裁定：Risch 为 integrate 管线判定
+  终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层失败证据链）。
   FriCAS 对照实据：顶层 trigs2explogs 前置重写 + lfintegrate 五类 kernel 分派；
-  剩余差距 = 代数函数积分（M6a）与代数闭常数域（按需扩张实践等价）。
+  剩余差距 = 代数函数积分（M7a）与代数闭常数域（按需扩张实践等价）。
 - **ODE 扩展**：非齐次（待定系数/常数变易）、常系数系统（exp(At)，特征值前置已就绪）。
 - **剩余结构债**：RootOf 复根隔离（已裁定注销：RootOf 语义 = 实根升序前缀 + 复根仅编号，
   SymPy CRootOf 同款边界；除非需要 Mathematica 式全根几何序）。代数数系数多项式
   （Gröbner 回代遇根式/RootOf 解的继续化）。
 
-### M6 远期扩展候选（启动前需重新论证价值密度）
+### M6 规则启发式搜索积分引擎（SAINT/Rubi 路线）
+
+> 定位裁定：**广度引擎**，与 Risch（判定权威）分工——Risch 对塔内问题
+> 决策完备 + 不可积证明；M6 覆盖特殊函数形态 + 每步可解释。两者输出统一
+> 走 D-check/证书背书，失败语义链共享（每层失败留机器可读原因，拒答本身
+> 可解释）。六系统调研实证：无一家"先跑完整 Risch"，成熟形态全是
+> 便宜优先阶梯 + 启发式中层 + 算法按需的混合体；纯规则库路线由
+> expreduce（Rubi 快照）与 Mathematica 反推实证可行。
+
+- **M6.0 架构裁定**：pyCAS L2 改写规则（lhs→rhs+guard）vs 积分专用目标制导
+  变换（∫f → ∫f' + 证书结构；Rubi DownValues 按特异性排序 = 决策树 ≠ 裸搜索）
+  ——裁定复用 L2 还是建专用层。
+- **M6.1 SAINT 核心循环**：算法规则层（确定性归约：CommonIntegral/Linearity/
+  LinearSubstitution/HalfAngleIdentity…）+ 启发式规则层（搜索边：三角代换/
+  一般代换/分部/二次消去…）+ goal 树 + 已见集合 + 深度限制。
+  参考实现：本地 `pyCAS/SAINT`（Slagle 论文 Python 复刻，slagle.py 规则编号
+  与论文对应）；验收 = Slagle 论文原题集。
+- **M6.2 Rubi 精选翻译**：按章节树分期（1 代数/binomial products → 2 exp →
+  3 log → 4-5 trig/反三角 → 6-7 双曲 → 8 特殊函数）；conditions → guard 3VL
+  映射；**每条入库自动 D-check 验证**（规则库本身不得成为静默错源）；
+  Rubi ShowStep ↔ pyCAS step log 同构（可解释性是架构原生优势）。
+  参考实据：expreduce `resources/rubi/` 全章节 .m 快照。
+- **M6.3 整合**：!integrate 策略通道接入 + 失败语义链统一输出。
+
+### M7 远期扩展候选（启动前需重新论证价值密度）
 
 > 共同纪律：每项都是"可判定片段内完备 + 片段外拒答"，证书背书形态随项标注；
 > 前置设施多数已在 M0–M5 铺设（Gröbner/Sturm/结式/algnum/义务队列）。
 
-- **M6a 代数函数积分（Trager 算法）**：∫R(x, α)（α 为多项式根，如 √(x²+1)、
+- **M7a 代数函数积分（Trager 算法）**：∫R(x, α)（α 为多项式根，如 √(x²+1)、
   √(x³+1)）。前置：ℚ(α) 单扩张域运算（algnum 已有底子）→ 多扩张 + primitive
   element 定理 → Trager resultant/norm 路线。FriCAS 参照 intaf/intalg/primelt
-  （~80KB SPAD，M6 级工程量的主要来源）。验收：∫dx/√(x²+1) = log(x+√(x²+1))；
+  （~80KB SPAD，主要工程量来源）。验收：∫dx/√(x²+1) = log(x+√(x²+1))；
   椭圆积分类（∫dx/√(x³+1) 无初等原函数）给带证明拒答。
-- **M6b 丢番图方程（数论）**：对标 Mathematica `Solve[..., Integers]`/`Reduce`。
+- **M7b 丢番图方程（数论）**：对标 Mathematica `Solve[..., Integers]`/`Reduce`。
   可判定片段分层：线性 ax+by=c（uexgcd 已有）→ Pell 方程与二元二次
   （循环连分数周期 + 判别式分类）→ 平方和（Fermat 两平方和 + Lagrange 四平方和，
   定理表驱动）。**边界裁定：一般多项式丢番图不可判定（Matiyasevich/DPRM）——
   片段外拒答是定理要求而非实现缺陷**。证书 = 解代回（易）+ 片段内完备性论证
   （难，随片段写明依据定理）。
-- **M6c 平面几何定理证明（吴消去法/消点法）**：几何谓词（共线/垂直/等距/共圆）
+- **M7c 平面几何定理证明（吴消去法/消点法）**：几何谓词（共线/垂直/等距/共圆）
   坐标化为多项式组 → 理想成员性判定。两条技术路线：Gröbner 基（✓ 已有前置）
   或 Wu 特征列（伪除构造，对几何问题常更高效）；消点法（张景中）作为面积/比例
   语法的补充表示。非退化条件（分母 ≠ 0、点不重合类）走义务队列显式化——
   绝不静默假设一般位置。证书 = 多项式恒等式（mk 归零验证）。
   验收：垂心、九点圆、Simson 线类经典定理自动证明。
-- **M6d 实不等式决策（CAD/VTS）**：Tarski-Seidenberg 定理保证实闭域一阶理论
+- **M7d 实不等式决策（CAD/VTS）**：Tarski-Seidenberg 定理保证实闭域一阶理论
   可判定。技术路线：Collins CAD（投影-提升）或 Weispfenning 虚拟替代（低维常更快）。
   接入 decide 作新通道——**YES/NO 均可信的决策程序，区别于数值采样的 PROBABLE**
   （补上 decide 管线"结构不等不产 No"之外的语义否证能力）。复杂度双指数——

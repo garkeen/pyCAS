@@ -98,6 +98,26 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **路线图重排：M6 = 规则启发式搜索（SAINT/Rubi），原 M6 四候选顺移 M7**。
+  动机 = 六参考系统积分管线源码调研（sympy integrals.py / maxima sin.lisp /
+  expreduce calculus.m / mathics calculus.py 实测；Mathematica/Maple 文献）：
+  无一家"先跑完整 Risch"——便宜优先阶梯 + 启发式中层 + 算法按需的混合体；
+  纯规则库路线由 expreduce（Rubi 快照零算法内核）与 Mathematica 反推实证。
+  **经验来源纪律（本轮教训）**：建议必须标注来源层级——管线实证（maxima
+  diffdiv=usub、第三阶段分部递归、expand 重试限 4 层；sympy risch 前置快筛
+  vs maxima 末位兜底、manualintegrate 结构 handler）与文献/Rubi 内容补充
+  （Chebyshev 判定、配方反三角族、Euler 代换——来自 Bronstein 教材与 Rubi
+  binomial products 章节，不在任何主管线显眼处）不可混述。
+  M6 分期草案：M6.0 架构裁定（L2 改写规则 vs 积分专用目标制导变换/Rubi
+  DownValues 决策树）→ M6.1 SAINT 核心循环（本地 pyCAS/SAINT 是 Slagle 论文
+  Python 复刻，规则编号对应，现成结构参考）→ M6.2 Rubi 精选翻译（章节树
+  分期、conditions→guard 3VL、入库自动 D-check、ShowStep↔step log 同构）
+  → M6.3 !integrate 策略通道整合。分工裁定：Risch = 塔内判定权威（完备 +
+  不可积证明）；M6 = 广度引擎（特殊函数形态 + 每步可解释）；失败语义链共享
+  （每层失败留机器可读原因，拒答本身可解释——反面教材：maxima rischint
+  noun form 静默失败）。接线形态裁定：Risch 为 integrate 判定终点站
+  （现有瀑布不动 → 尾端 Risch 通道 → NOT ELEMENTARY (proved) 专属输出 +
+  各层失败证据链汇总）。
 - **M5.1b RDE exp 分支（不可初等证明落地）**：频率分解 Σ a_k t^k（正幂商 +
   负幂低段 + residue t 幂剩余统一进频率字典；t·t^{-1}=1 类归并后 k=0 进
   x 层）逐阶解 Risch 微分方程 y' + k*eta'*y = a_k。求解器 = 极点分析定
