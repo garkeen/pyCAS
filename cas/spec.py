@@ -33,6 +33,7 @@ class FunctionSpec:
     numeric: object = None        # callable(*float) -> float：数值求值层（仅验证/抽查通道）
     anti: object = None           # callable(arg) -> 原函数（裸函数简单积分表，定积分友好）
     inv: str = None               # 逆函数头名（主支）：f(x)=c -> x=inv(c)，带主支注释
+    injective: bool = None        # 全域单射性声明（:apply_both 诚实分级用；None = 未声明）
 
 
 SPECS = {}
@@ -58,6 +59,7 @@ register(FunctionSpec(
     numeric=math.sin,
     anti=lambda a: T.neg(T.cos(a)),
     inv="Arcsin",
+    injective=False,
 ))
 register(FunctionSpec(
     "Cos", 1, print_name="cos", parity="even",
@@ -67,6 +69,7 @@ register(FunctionSpec(
     numeric=math.cos,
     anti=lambda a: T.sin(a),
     inv="Arccos",
+    injective=False,
 ))
 register(FunctionSpec(
     "Tan", 1, print_name="tan", parity="odd",
@@ -74,6 +77,7 @@ register(FunctionSpec(
     special={ZERO: ZERO, PI: ZERO, _QUARTER_PI: ONE, T.neg(_QUARTER_PI): MONE},
     numeric=math.tan,
     inv="Atan",
+    injective=False,
 ))
 register(FunctionSpec(
     "Exp", 1, print_name="exp",
@@ -82,6 +86,7 @@ register(FunctionSpec(
     numeric=math.exp,
     anti=lambda a: T.exp(a),
     inv="Log",
+    injective=True,
 ))
 register(FunctionSpec(
     "Log", 1, print_name="log",
@@ -90,16 +95,19 @@ register(FunctionSpec(
     special={ONE: ZERO},
     numeric=math.log,
     inv="Exp",
+    injective=True,
 ))
 register(FunctionSpec(
     "Abs", 1, print_name="abs",
     numeric=abs,
+    injective=False,
 ))
 register(FunctionSpec(
     "Atan", 1, print_name="atan",
     deriv=lambda a: T.div(ONE, T.plus(ONE, T.pw(a, N(2)))),
     special={ZERO: ZERO, ONE: _QUARTER_PI, MONE: T.neg(_QUARTER_PI)},
     numeric=math.atan,
+    injective=True,
 ))
 register(FunctionSpec(
     "Arcsin", 1, print_name="arcsin",
@@ -107,6 +115,7 @@ register(FunctionSpec(
     dom=lambda t: [T.mk(S("Ge"), (t.args[0], MONE)), T.mk(S("Le"), (t.args[0], ONE))],
     special={ZERO: ZERO, ONE: _HALF_PI, MONE: T.neg(_HALF_PI)},
     numeric=math.asin,
+    injective=True,
 ))
 register(FunctionSpec(
     "Arccos", 1, print_name="arccos",
@@ -114,6 +123,7 @@ register(FunctionSpec(
     dom=lambda t: [T.mk(S("Ge"), (t.args[0], MONE)), T.mk(S("Le"), (t.args[0], ONE))],
     special={ONE: ZERO, ZERO: _HALF_PI, MONE: PI},
     numeric=math.acos,
+    injective=True,
 ))
 # 双曲函数域（M2 梯队三）：注册即得导数/打印名/奇偶规则/特殊点折叠/数值层，
 # 核心代码零改动（FunctionSpec 红利验收）；无界故不声明 bound。
@@ -123,6 +133,7 @@ register(FunctionSpec(
     special={ZERO: ZERO},
     numeric=math.sinh,
     anti=lambda a: T.cosh(a),
+    injective=True,
 ))
 register(FunctionSpec(
     "Cosh", 1, print_name="cosh", parity="even",
@@ -130,12 +141,14 @@ register(FunctionSpec(
     special={ZERO: ONE},
     numeric=math.cosh,
     anti=lambda a: T.sinh(a),
+    injective=False,
 ))
 register(FunctionSpec(
     "Tanh", 1, print_name="tanh", parity="odd",
     deriv=lambda a: T.plus(ONE, T.neg(T.pw(T.tanh(a), N(2)))),
     special={ZERO: ZERO},
     numeric=math.tanh,
+    injective=True,
 ))
 
 

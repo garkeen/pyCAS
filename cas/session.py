@@ -8,6 +8,7 @@ from cas.decide import (
     eval_guard as _eval_guard,
     decide as _decide_fn,
     contradicted as _contradicted_fn,
+    equivalent as _equivalent_fn,
     T3,
 )
 from cas.context import Context
@@ -408,6 +409,70 @@ def _eval_inert(t, budget):
         else:
             val[u] = u
     return val[t], changed
+
+
+def _quotient_cancel(num, den):
+    """num/den：顶层乘法因子按驻留指针消去（不展开乘积、不做多项式除法）。
+
+    整数指数幂拆到底（(a*b)^n 因子化），同名因子指数相抵，数值因子有理折叠。
+    存在理由：mk 不拆 (a*b)^-1（非整数指数分支切割安全），直接 T.div 会留
+    (g'(x))^-1 残渣导致换元探测失败（:usub 精确微分分解依赖此消去）。
+    """
+    from fractions import Fraction
+
+    def flat(t, mul=1, acc=None):
+        if acc is None:
+            acc = []
+        if isinstance(t, T.Expr) and t.head.name == "Times":
+            for a in t.args:
+                flat(a, mul, acc)
+        elif isinstance(t, T.Expr) and t.head.name == "Power" \
+                and isinstance(t.args[1], T.Int):
+            acc.append((t.args[0], mul * t.args[1].v))
+        else:
+            acc.append((t, mul))
+        return acc
+
+    nf, df = flat(num), flat(den)
+    cval = Fraction(1)
+    for f, e in nf:
+        if T.is_num(f):
+            cval *= T.num_val(f) ** e
+    for f, e in df:
+        if T.is_num(f):
+            cval /= T.num_val(f) ** e
+    cnt = {}
+    for f, e in nf:
+        if not T.is_num(f):
+            cnt[f] = cnt.get(f, 0) + e
+    for f, e in df:
+        if not T.is_num(f):
+            cnt[f] = cnt.get(f, 0) - e
+    parts = []
+    if cval != 1:
+        parts.append(T.N(cval))
+    for f, e in cnt.items():
+        if e == 0:
+            continue
+        parts.append(f if e == 1 else T.pw(f, T.N(e)))
+    if not parts:
+        return T.ONE
+    return T.mk(T.S("Times"), tuple(parts))
+
+
+def _neg_pow_of(t, f):
+    """t 中是否存在底恰为 f 的负整数幂（整除性残留检测）。"""
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, T.Expr):
+            if (u.head.name == "Power" and u.args[0] is f
+                    and isinstance(u.args[1], T.Int) and u.args[1].v < 0):
+                return True
+            stack.extend(u.args)
+        elif isinstance(u, T.Bound):
+            stack.append(u.body)
+    return False
 
 
 class Session:
@@ -1139,10 +1204,11 @@ class Session:
                 out.append(f"#{st.sid} [algorithm] {src}-> {to_str(st.after)}   ({st.note})")
             else:
                 at = f" at {st.path}" if st.path else ""
+                note = f"  ({st.note})" if st.note else ""
                 out.append(
                     f"#{st.sid} [rule {st.rule_id}]{at}  "
                     f"{to_str(st.before)}  ->  {to_str(st.after)}   "
-                    f"(guard={st.guard}, dcost={st.dcost})"
+                    f"(guard={st.guard}, dcost={st.dcost}){note}"
                 )
         return out
 
@@ -1154,7 +1220,7 @@ class Session:
     # 只读命令不入转录；变更类命令（:rule/:value/:refine/:assume 等）必须入录，
     # 否则回放无法重建推导（转录即 DSL 立场）。
     _NO_RECORD = {":help", ":log", ":steps", ":hist", ":ctx", ":obls", ":defs",
-                  ":q", ":quit", ":save", ":replay", ":rules", ":latex"}
+                  ":q", ":quit", ":save", ":replay", ":rules", ":latex", ":tree"}
 
     def rules_fingerprint(self):
         """规则集指纹：回放确定性校验用（规则变了回放即失效，永不静默错）。
@@ -1229,7 +1295,24 @@ class Session:
             ":a": "apply <rule-id> [path]",
             ":u": "undo [n]",
             ":auto": "core simplify",
-            ":parts": "integration by parts on inert integral: :parts <u>",
+            ":tree": "show subterm tree with paths (selection for path commands)",
+            ":set": "subterm surgery: :set <path> <expr> (equivalent-checked)",
+            ":rsub": "structural replace-all: :rsub <old>=<new>",
+            ":add_both": "equation: add <t> to both sides",
+            ":sub_both": "equation: subtract <t> from both sides",
+            ":mul_both": "equation: multiply both sides by <t>",
+            ":div_both": "equation: divide both sides by <t> (t != 0 gate)",
+            ":neg_both": "equation: negate both sides",
+            ":swap": "equation: swap sides",
+            ":zero_form": "equation: rewrite L = R as L - R = 0",
+            ":apply_both": "equation: apply unary fn to both sides: :apply_both <fn>",
+            ":expand": "expand products/powers: :expand [path]",
+            ":extract": "factor out common factor: :extract <f> [path]",
+            ":separate": "split fraction over sum: (a+b)/c -> a/c+b/c: :separate [path]",
+            ":complete_square": "complete square: :complete_square <var> [path]",
+            ":usub": "forward substitution on inert integral: :usub t=g(x)",
+            ":lhop": "one l'Hopital step on quotient form: :lhop <var> <point>",
+            ":parts": "integration by parts on inert integral: :parts <u> (shows u/dv/du/v)",
             ":subst": "substitute new variable: :subst t=g(x) (handles inert integral dx too)",
             ":solveq": "solve current linear equation for unknown: :solveq <term>",
             ":rule": "define session theorem inline: :rule id = lhs -> rhs [guard ... as ... auto]",
@@ -1303,9 +1386,64 @@ class Session:
             name = parts[0][1:]
             rest = self.expand_history(parts[1].strip()) if len(parts) > 1 else ""
             return self.kernel[name].fn(self, rest)
-        if line.startswith(":parts "):
-            res = self.iparts(line[7:].strip())
+        # ---- 手动交互扩展（子项手术/等式代数/变形工具箱/微积分战术）----
+        # 分支顺序纪律：先于 :s / :u 前缀分支（:set/:swap/:separate 被 :s 吞、
+        # :usub 被 :u 吞的同款 bug 防患）
+        if line == ":tree":
+            return self.tree()
+        if line.startswith(":set "):
+            parts = line[5:].split(None, 1)
+            if len(parts) != 2:
+                return "usage: :set <path> <expr>"
+            return self.set_at(parts[0], self.expand_history(parts[1]))
+        if line.startswith(":rsub "):
+            return self.rsub(self.expand_history(line[6:].strip()))
+        if line.startswith(":add_both "):
+            return self.eq_add_both(line[10:].strip())
+        if line.startswith(":sub_both "):
+            return self.eq_sub_both(line[10:].strip())
+        if line.startswith(":mul_both "):
+            return self.eq_mul_both(line[10:].strip())
+        if line.startswith(":div_both "):
+            return self.eq_div_both(line[10:].strip())
+        if line == ":neg_both":
+            return self.eq_neg_both()
+        if line == ":swap":
+            return self.eq_swap()
+        if line == ":zero_form":
+            return self.eq_zero_form()
+        if line.startswith(":apply_both "):
+            return self.eq_apply_both(line[12:].strip())
+        if line.startswith(":expand"):
+            return self.expand_at(line[7:].strip() or None)
+        if line.startswith(":extract "):
+            parts = line[9:].split()
+            path_s = None
+            if len(parts) >= 2 and all(seg.isdigit() for seg in parts[-1].split(".")):
+                path_s = parts[-1]
+                parts = parts[:-1]
+            return self.extract(" ".join(parts), path_s)
+        if line == ":separate":
+            return self.separate_at(None)
+        if line.startswith(":separate "):
+            return self.separate_at(line[10:].strip() or None)
+        if line.startswith(":complete_square "):
+            parts = line[17:].split()
+            if not parts:
+                return "usage: :complete_square <var> [path]"
+            return self.complete_square(parts[0], parts[1] if len(parts) > 1 else None)
+        if line.startswith(":usub "):
+            res = self.usub(line[6:].strip())
             return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":lhop "):
+            parts = line[6:].split()
+            if len(parts) != 2:
+                return "usage: :lhop <var> <point>"
+            res = self.lhop(parts[0], parts[1])
+            return to_str(res) if isinstance(res, T.Term) else res
+        if line.startswith(":parts "):
+            res = self.iparts(line[7:].strip(), detail=True)
+            return res if isinstance(res, str) else to_str(res)
         if line.startswith(":subst "):
             res = self.subst(line[7:].strip())
             return to_str(res) if isinstance(res, T.Term) else res
@@ -1437,9 +1575,12 @@ class Session:
         self._remember(self.current)
         return self.current
 
-    def iparts(self, u_s):
+    def iparts(self, u_s, detail=False):
         """分部积分（人工干预通道）：用户选 u，内核算 dv = 体/u、v = ∫dv、du，
-        ∫体 -> u·v − ∫v·du。自动搜索当前式中体被 u 整除的惰性积分子项。"""
+        ∫体 -> u·v − ∫v·du。自动搜索当前式中体被 u 整除的惰性积分子项。
+
+        detail=True 返回 u/dv/du/v 明细文本（教学/检查用）；否则返回新项。
+        """
         self._check_locked()
         if self.current is None:
             return "empty session"
@@ -1471,11 +1612,12 @@ class Session:
                 continue
             du = d(u, x)
             new_int = T.mk(T.S("Integrate"), (T.mk_bound(x, T.times(v, du)),))
-            found = (p, T.plus(T.times(u, v), T.neg(new_int)))
+            found = (p, T.plus(T.times(u, v), T.neg(new_int)),
+                     {"u": u, "dv": q, "du": du, "v": v})
             break
         if found is None:
             return f"parts: no inert integral subterm with body divisible by {to_str(u)}"
-        p, repl = found
+        p, repl, det = found
         before = self.current
         self.current = T.replace_at(self.current, p, repl)
         self._sid += 1
@@ -1484,6 +1626,14 @@ class Session:
             cost(self.current) - cost(before), note="integration by parts",
         ))
         self._remember(self.current)
+        if detail:
+            return ("\n".join([
+                f"u  = {to_str(det['u'])}",
+                f"dv = {to_str(det['dv'])} dx",
+                f"du = {to_str(det['du'])} dx",
+                f"v  = {to_str(det['v'])}",
+                f"=> {to_str(self.current)}",
+            ]))
         return self.current
 
     def solveq(self, unknown_s):
@@ -1522,6 +1672,528 @@ class Session:
         if not T.is_num(a):
             return f"{to_str(sol)}   [proviso: {to_str(T.mk(T.S('Ne'), (a, T.ZERO)))}]"
         return sol
+
+    # ---------------- 手动交互扩展：子项手术 / 等式代数 / 变形工具箱 / 微积分战术 ----------------
+
+    def tree(self):
+        """:tree：带路径的子项树（只读）。path 寻址命令的可视化选择器。"""
+        if self.current is None:
+            return "empty session"
+        out = []
+        stack = [(self.current, ())]
+        while stack:
+            t, p = stack.pop()
+            out.append((p, t))
+            if isinstance(t, T.Expr):
+                for i, a in enumerate(t.args):
+                    stack.append((a, p + (i,)))
+            elif isinstance(t, T.Bound):
+                stack.append((t.body, p + (0,)))
+        lines = []
+        for p, t in sorted(out, key=lambda pt: pt[0]):
+            ps = ".".join(str(i) for i in p) or "()"
+            lines.append(f"{ps:12s}{'  ' * len(p)}{to_str(t)}")
+        return "\n".join(lines)
+
+    def _resolve_target(self, path_s):
+        """可选 path 参数 -> (子项, path, None)；path_s 为空取当前式。出错返回错误文本。"""
+        if self.current is None:
+            return None, None, "empty session"
+        if not path_s:
+            return self.current, (), None
+        try:
+            path = tuple(int(i) for i in str(path_s).split("."))
+            sub = T.term_at(self.current, path)
+        except (ValueError, IndexError):
+            return None, None, f"no subterm at path {path_s}"
+        return sub, path, None
+
+    @staticmethod
+    def _eqv_tag(eqv):
+        """equivalent 提交态标注（YES->VERIFIED / PROBABLE；UNKNOWN/NO 由调用方拒绝）。"""
+        return {T3.YES: "VERIFIED", T3.PROBABLE: "PROBABLE"}.get(eqv, "UNVERIFIED")
+
+    def _new_domain_conditions(self, old, new):
+        """new 相对 old 新引入的定义域约束（:set/:rsub 换入项的域收窄检测）。
+
+        公共域采样只在重叠域上比对等价——换入定义域更窄的项会静默收窄表达式
+        的定义范围。恒真约束（decide=YES，如偶次幂非负公理）与 old 已携带的
+        约束跳过；其余作为 proviso 显式记账。
+        """
+        from cas.domain import dom_condition
+
+        old_list = list(dom_condition(old))
+        out = []
+        for c in dom_condition(new):
+            if _decide_fn(c, self.ctx) is T3.YES:
+                continue
+            if any(c is o for o in old_list):
+                continue
+            if not any(c is p for p in out):
+                out.append(c)
+        return out
+
+    def set_at(self, path_s, expr_s):
+        """        :set <path> <expr>：直接子项手术。
+
+        equivalent(旧子项, 新子项) 三态闸门：YES->提交标 VERIFIED /
+        PROBABLE->提交标 PROBABLE；UNKNOWN 拒绝（不可验证的篡改不放行——
+        先 :assume 事实或定义规则再重试）；NO 拒绝。永不静默错。
+        """
+        self._check_locked()
+        old, path, err = self._resolve_target(path_s)
+        if err:
+            return err
+        new = self._parse_in(expr_s)
+        if old is new:
+            return "set: replacement identical"
+        eqv = _equivalent_fn(old, new, self.ctx)
+        if eqv is T3.NO:
+            return f"set refused: {to_str(old)} and {to_str(new)} are not equivalent"
+        if eqv is T3.UNKNOWN:
+            return (f"set refused: cannot verify {to_str(old)} ~ {to_str(new)} "
+                    "(UNKNOWN); :assume the fact or define a rule, then retry")
+        tag = self._eqv_tag(eqv)
+        provs = self._new_domain_conditions(old, new)
+        before = self.current
+        self.current = T.replace_at(self.current, path, new)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:set", tuple(path), before, self.current, "YES",
+            cost(self.current) - cost(before), note=f"subterm replace [{tag}]",
+        ))
+        self._remember(self.current)
+        out = to_str(self.current)
+        if tag != "VERIFIED":
+            out += f"   [{tag}]"
+        return out + self._proviso_suffix(provs)
+
+    def rsub(self, s):
+        """        :rsub <old>=<new>：全式结构替换（T.subst 复合键一次命中）。
+
+        equivalent 三态闸门同 :set（YES/PROBABLE 提交，UNKNOWN/NO 拒绝）；
+        old 未出现则报 not found。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        if "=" not in s:
+            return "usage: :rsub <old>=<new>"
+        olds, news = s.split("=", 1)
+        old = self._parse_in(olds.strip())
+        new = self._parse_in(news.strip())
+        nxt = T.subst(self.current, {old: new})
+        if nxt is self.current:
+            return f"rsub: {to_str(old)} not found in current expression"
+        eqv = _equivalent_fn(old, new, self.ctx)
+        if eqv is T3.NO:
+            return f"rsub refused: {to_str(old)} and {to_str(new)} are not equivalent"
+        if eqv is T3.UNKNOWN:
+            return (f"rsub refused: cannot verify {to_str(old)} ~ {to_str(new)} "
+                    "(UNKNOWN); :assume the fact or define a rule, then retry")
+        tag = self._eqv_tag(eqv)
+        provs = self._new_domain_conditions(old, new)
+        before = self.current
+        self.current = nxt
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:rsub", (), before, self.current, "YES",
+            cost(self.current) - cost(before),
+            note=f"replace {to_str(old)} -> {to_str(new)} [{tag}]",
+        ))
+        self._remember(self.current)
+        out = to_str(self.current)
+        if tag != "VERIFIED":
+            out += f"   [{tag}]"
+        return out + self._proviso_suffix(provs)
+
+    # 等式双侧操作（Maxima eqnflag / Mathematica 等式算术的显式命令化；
+    # mk 保持纯规范化纪律，不引入隐式线程化）
+
+    def _require_eq(self):
+        """等式命令前置检查 -> (lhs, rhs, None) 或 (None, None, 错误文本)。"""
+        if self.current is None:
+            return None, None, "empty session"
+        if not (isinstance(self.current, T.Expr) and self.current.head.name == "Eq"):
+            return None, None, "current must be an equation (L = R)"
+        return self.current.args[0], self.current.args[1], None
+
+    def _commit_eq(self, new_eq, note):
+        before = self.current
+        self.current = new_eq
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:eq", (), before, self.current, "YES",
+            cost(self.current) - cost(before), note=note,
+        ))
+        self._remember(self.current)
+        return to_str(self.current)
+
+    @staticmethod
+    def _proviso_suffix(provs):
+        if not provs:
+            return ""
+        return "   [proviso: " + " && ".join(to_str(c) for c in provs) + "]"
+
+    def _term_domain_gate(self, t, what):
+        """操作数 t 的定义域三态闸门 -> (provisos, None) 或 (None, 错误文本)。
+
+        等式双侧操作引入的项必须在解点有定义，否则解集被静默收窄
+        （借用形 +ln(x-k)-ln(x-k) 类操作的核心风险）。NO 拒绝（与账本矛盾，
+        ex falso 纪律）/ UNKNOWN 记 proviso（generic 不阻塞，事后可作答）。
+        """
+        from cas.domain import dom_condition
+
+        provs = []
+        for c in dom_condition(t):
+            r = _decide_fn(c, self.ctx)
+            if r is T3.NO:
+                return None, f"domain empty: {what} requires {to_str(c)} (contradicted)"
+            if r is T3.UNKNOWN and not any(c is p for p in provs):
+                provs.append(c)
+        return provs, None
+
+    def eq_add_both(self, t_s):
+        """:add_both <t>：两边加 t。群运算安全，但 t 的定义域约束照常闸门
+        （加一个 ln(x-k) 会把解集收窄到 x>k——必须显式记账，绝不静默）。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        t = self._parse_in(t_s)
+        provs, err = self._term_domain_gate(t, f"adding {to_str(t)}")
+        if err:
+            return err
+        out = self._commit_eq(
+            T.mk(T.S("Eq"), (T.plus(L, t), T.plus(R, t))),
+            f"added {to_str(t)} to both sides")
+        return out + self._proviso_suffix(provs)
+
+    def eq_sub_both(self, t_s):
+        """:sub_both <t>：两边减 t（移项 = sub_both + 归一）。域闸门同 add_both。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        t = self._parse_in(t_s)
+        provs, err = self._term_domain_gate(t, f"subtracting {to_str(t)}")
+        if err:
+            return err
+        out = self._commit_eq(
+            T.mk(T.S("Eq"), (T.plus(L, T.neg(t)), T.plus(R, T.neg(t)))),
+            f"subtracted {to_str(t)} from both sides")
+        return out + self._proviso_suffix(provs)
+
+    def eq_mul_both(self, t_s):
+        """:mul_both <t>：两边乘 t。正向蕴含恒成立，t 的定义域约束照常闸门
+        （乘一个未定义项使两侧无定义；反向需 t!=0，由求解端回验负责）。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        t = self._parse_in(t_s)
+        provs, err = self._term_domain_gate(t, f"multiplying by {to_str(t)}")
+        if err:
+            return err
+        out = self._commit_eq(
+            T.mk(T.S("Eq"), (T.times(L, t), T.times(R, t))),
+            f"multiplied both sides by {to_str(t)}")
+        return out + self._proviso_suffix(provs)
+
+    def eq_div_both(self, t_s):
+        """:div_both <t>：两边除 t。域闸门三态（含 t!=0 与 t 自身定义域）：
+        NO 拒绝（域空）/ UNKNOWN 记 proviso / YES 无条件。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        t = self._parse_in(t_s)
+        provs, err = self._term_domain_gate(T.div(T.ONE, t),
+                                            f"dividing by {to_str(t)}")
+        if err:
+            return err
+        out = self._commit_eq(
+            T.mk(T.S("Eq"), (T.div(L, t), T.div(R, t))),
+            f"divided both sides by {to_str(t)}")
+        return out + self._proviso_suffix(provs)
+
+    def eq_neg_both(self):
+        """:neg_both：两边取负。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        return self._commit_eq(
+            T.mk(T.S("Eq"), (T.neg(L), T.neg(R))), "negated both sides")
+
+    def eq_swap(self):
+        """:swap：交换等式两侧。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        return self._commit_eq(T.mk(T.S("Eq"), (R, L)), "swapped sides")
+
+    def eq_zero_form(self):
+        """:zero_form：L = R -> L - R = 0（喂给 !solveineq/Sturm 前的规范形）。"""
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        z = simplify(T.plus(L, T.neg(R)))
+        return self._commit_eq(T.mk(T.S("Eq"), (z, T.ZERO)), "moved to zero form")
+
+    def eq_apply_both(self, name_s):
+        """:apply_both <fn>：对等式两边应用一元函数。
+
+        域闸门：f(L)/f(R) 的 dom_condition 逐个 decide（NO 拒绝 / UNKNOWN 记 proviso）。
+        单射性读 spec.injective 声明：False 提示"仅正向蕴含，后续解须回验"；
+        None 提示未声明。sqrt 特例直写 Power(1/2)。
+        """
+        self._check_locked()
+        L, R, err = self._require_eq()
+        if err:
+            return err
+        name = name_s.strip()
+        if name == "sqrt":
+            fL, fR, inj = T.sqrt(L), T.sqrt(R), None
+        else:
+            sp = _spec.get(name) or _spec.get(name[0].upper() + name[1:] if len(name) > 1 else name)
+            if sp is None or sp.arity != 1:
+                return f"apply_both: unknown unary function {name}"
+            head = T.S(sp.name)
+            fL, fR, inj = T.mk(head, (L,)), T.mk(head, (R,)), sp.injective
+        from cas.domain import dom_condition
+
+        provs = []
+        for side in (fL, fR):
+            for c in dom_condition(side):
+                r = _decide_fn(c, self.ctx)
+                if r is T3.NO:
+                    return f"domain empty: applying {name} requires {to_str(c)} (contradicted)"
+                if r is T3.UNKNOWN and not any(c is p for p in provs):
+                    provs.append(c)
+        notes = []
+        if inj is False:
+            notes.append(f"{name} is not injective: forward implication only, "
+                         "later solutions must be re-verified")
+        elif inj is None:
+            notes.append(f"injectivity of {name} undeclared: proceed with care")
+        out = self._commit_eq(T.mk(T.S("Eq"), (fL, fR)), f"applied {name} to both sides")
+        out += self._proviso_suffix(provs)
+        if notes:
+            out += "   [note: " + "; ".join(notes) + "]"
+        return out
+
+    # 变形工具箱（反向化简/凑形；ops 层为主实现，命令为薄封装）
+
+    def _reshape_drive(self, name, fn, path_s, args=()):
+        """变形命令统一驱动。
+
+        解析目标（可选 path）-> fn(子项, *args) -> (新项, None) 或 (None, 错误文本)。
+        目标为等式且未给 path 时对两侧分别应用（Mathematica 等式线程语义），
+        任一侧失败即整体拒绝（永不半改）。有变化才提交 scheme:<name> 步。
+        """
+        self._check_locked()
+        sub, path, err = self._resolve_target(path_s)
+        if err:
+            return err
+        if isinstance(sub, T.Expr) and sub.head.name == "Eq" and not path_s:
+            targets = [(sub.args[0], path + (0,)), (sub.args[1], path + (1,))]
+        else:
+            targets = [(sub, path)]
+        before = self.current
+        cur = self.current
+        changed = False
+        for tsub, tpath in targets:
+            res, msg = fn(tsub, *args)
+            if msg:
+                return msg
+            if res is not tsub:
+                cur = T.replace_at(cur, tpath, res)
+                changed = True
+        if not changed:
+            return f"{to_str(before)}   [{name}: no change]"
+        self.current = cur
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, f"scheme:{name}", tuple(path), before, cur, "YES",
+            cost(cur) - cost(before), note=name,
+        ))
+        self._remember(cur)
+        return to_str(cur)
+
+    def expand_at(self, path_s=None):
+        """:expand [path]：展开乘积/幂（暴露 simplify.expand）；等式作用两侧。"""
+        return self._reshape_drive("expand", lambda t: (expand(t), None), path_s)
+
+    def extract(self, f_s, path_s=None):
+        """:extract <f> [path]：提公因子 ab+ac -> a(b+c)。
+
+        逐项整除（每项经 mk 消去同名因子，负幂残留 = 不可整除的诚实信号），
+        以 f·Σq_i 重组；equivalent=YES 背书。仅对和式目标有意义。
+        """
+        f = self._parse_in(f_s)
+
+        def fn(t):
+            if not (isinstance(t, T.Expr) and t.head.name == "Plus"):
+                return None, f"extract: {to_str(t)} is not a sum (nothing to factor out of)"
+            qs = []
+            for a in t.args:
+                qa = simplify(T.div(a, f))
+                if _neg_pow_of(qa, f):
+                    return None, (f"extract refused: {to_str(f)} is not "
+                                  f"a common factor of {to_str(t)}")
+                qs.append(qa)
+            res = T.times(f, T.mk(T.S("Plus"), tuple(qs)))
+            if res is t:
+                return t, None
+            # 构造本身 = 分配律逆（结构可靠），验证接受 PROBABLE
+            # （超越因子如 ln(x-k) 的等价判定采样最高只到 PROBABLE）
+            if _equivalent_fn(res, t, self.ctx) not in (T3.YES, T3.PROBABLE):
+                return None, "extract refused: verification failed"
+            return res, None
+
+        return self._reshape_drive("extract", fn, path_s)
+
+    def separate_at(self, path_s=None):
+        """:separate [path]：(a+b)/c -> a/c + b/c（ops.separate；:together 的对偶）。"""
+        from cas.ops import separate
+
+        return self._reshape_drive("separate", lambda t: (separate(t), None), path_s)
+
+    def complete_square(self, var_s, path_s=None):
+        """:complete_square <var> [path]：二次型配方 a x^2+b x+c -> a(x+h)^2+k。
+
+        系数经 ops.coefficient 提取（非多项式诚实拒绝）；该侧无 x^2 项视为
+        无变化（等式另一侧可独立配方）；结果构造后 equivalent 背书。
+        """
+        from cas.ops import coefficient
+        from cas.errors import PolyError
+
+        x = T.S(var_s)
+
+        def fn(t):
+            try:
+                a = coefficient(t, x, 2)
+                b = coefficient(t, x, 1)
+                c = coefficient(t, x, 0)
+            except PolyError:
+                return None, f"complete_square: {to_str(t)} is not polynomial in {var_s}"
+            if T.is_num(a) and T.num_val(a) == 0:
+                return t, None
+            h = simplify(T.div(b, T.times(T.N(2), a)))
+            k = simplify(T.plus(c, T.neg(T.div(T.pw(b, T.N(2)), T.times(T.N(4), a)))))
+            res = T.plus(T.times(a, T.pw(T.plus(x, h), T.N(2))), k)
+            if _equivalent_fn(res, t, self.ctx) is T3.NO:
+                return None, "complete_square: internal verification failed (refused)"
+            return res, None
+
+        return self._reshape_drive("complete_square", fn, path_s)
+
+    # 微积分战术补全
+
+    def usub(self, eq_s):
+        """:usub t=g(x)：正向换元（当前式须为惰性积分）。
+
+        两级策略：
+        ① 精确微分分解：body/g'(x) 把 g(x)->t 代入后无 x -> 干净换元 ∫f(t)dt
+          （defint_auto 的探测逻辑人选版，避免逆函数路线的丑陋形态）；
+        ② 退化：主支逆路线 x=h(t) 全代入（与 :subst 同款语义）。
+        正确性由用户后续 !verify 微分回验背书。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.diff import d as _d
+        from cas.solve import solve as _solve
+
+        eq = parse(eq_s)
+        if not (isinstance(eq, T.Expr) and eq.head.name == "Eq"):
+            return "usage: :usub t=g(x)  (current must be an inert integral)"
+        if not (isinstance(self.current, T.Expr) and self.current.head.name == "Integrate"
+                and len(self.current.args) == 1 and isinstance(self.current.args[0], T.Bound)):
+            return "usub: current must be an inert integral (integrate(f, x))"
+        lhs, rhs = eq.args
+        x, body = T.open_bound(self.current.args[0])
+        fv = T.free_vars(body) | {x}
+        if isinstance(lhs, T.Sym) and lhs not in fv and (T.free_vars(rhs) & fv):
+            newvar, gexpr = lhs, rhs
+        elif isinstance(rhs, T.Sym) and rhs not in fv and (T.free_vars(lhs) & fv):
+            newvar, gexpr = rhs, lhs
+        else:
+            return "usub: 等式一边必须是当前式中未出现的新变量（裸符号）"
+        before = self.current
+        gp = _d(gexpr, x)
+        # 一级：精确微分分解（顶层因子消去——mk 不拆 (a*b)^-1，直接 div 会留残渣）
+        q = _quotient_cancel(body, gp)
+        q2 = T.subst(q, {gexpr: newvar})
+        if x not in T.free_vars(q2):
+            new_int = T.mk(T.S("Integrate"), (T.mk_bound(newvar, q2),))
+            note = f"u-substitution {to_str(gexpr)} = {newvar.name} (exact differential)"
+        else:
+            # 二级：主支逆路线
+            r = _solve(T.plus(gexpr, T.neg(newvar)), x)
+            if r.status != "ok" or not r.solutions:
+                return (f"usub: neither exact differential nor invertible substitution "
+                        f"({to_str(gexpr)} = {newvar.name}; solve: {r.note or r.status})")
+            ht = r.solutions[0]
+            nb = T.subst(body, {x: ht})
+            dht = _d(ht, newvar)
+            new_int = T.mk(T.S("Integrate"),
+                           (T.mk_bound(newvar, simplify(T.times(nb, dht))),))
+            note = (f"u-substitution {to_str(gexpr)} = {newvar.name} "
+                    f"(inverse route x = {to_str(ht)})")
+        self.current = new_int
+        self._sid += 1
+        self.log.append(Step(self._sid, "scheme:usub", (), before, self.current, "YES",
+                             cost(self.current) - cost(before), note=note))
+        self._remember(self.current)
+        return self.current
+
+    def lhop(self, var_s, point_s):
+        """:lhop <var> <point>：手动洛必达一步。
+
+        当前式经 num_den 提取分子分母，在 point 处须为 0/0 或 ±∞/±∞ 不定形
+        （limits.limit 判定），否则诚实拒绝并报告两端极限；一步 = D(F)/D(G)。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        from cas.ops import num_den
+        from cas.limits import limit
+        from cas.diff import d as _d
+
+        F, G = num_den(self.current)
+        x = T.S(var_s)
+        pt = self._parse_bound(point_s)
+
+        def _is_inf(v):
+            if v is T.INFINITY:
+                return True
+            return (isinstance(v, T.Expr) and v.head.name == "Times"
+                    and any(a is T.INFINITY for a in v.args))
+
+        lf = limit(F, x, pt)
+        lg = limit(G, x, pt)
+        zero_zero = lf is T.ZERO and lg is T.ZERO
+        inf_inf = _is_inf(lf) and _is_inf(lg)
+        if not (zero_zero or inf_inf):
+            fmt = lambda v: to_str(v) if v is not None else "UNKNOWN"
+            return (f"lhop: not an indeterminate form at {point_s} "
+                    f"(numerator -> {fmt(lf)}, denominator -> {fmt(lg)})")
+        nf = _d(F, x)
+        ng = _d(G, x)
+        before = self.current
+        self.current = T.div(nf, ng)
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:lhop", (), before, self.current, "YES",
+            cost(self.current) - cost(before),
+            note="l'Hopital 0/0" if zero_zero else "l'Hopital inf/inf",
+        ))
+        self._remember(self.current)
+        return self.current
 
     # ---------------- 会话规则/名词动词切换/Refine（第一批采购清单） ----------------
 

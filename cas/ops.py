@@ -162,6 +162,20 @@ def div_frac(t, k):
     return mul_frac(t, T.pw(k, T.MONE))
 
 
+def separate(t):
+    """(a+b)/c -> a/c + b/c（分子和式按分母拆分；:together 的对偶）。
+
+    num_den 提取分子分母（不约分）后按项拆分，每项经 mk 归一（可自动约分）。
+    分母为 1 或分子非和式时原样返回（无变化，调用方据此报 no change）。
+    """
+    n, d = num_den(t)
+    if d is T.ONE or (T.is_num(d) and T.num_val(d) == 1):
+        return t
+    if isinstance(n, T.Expr) and n.head.name == "Plus":
+        return T.mk(T.S("Plus"), tuple(T.div(a, d) for a in n.args))
+    return t
+
+
 def _poly_with(t, x):
     """以 x 为主变量建 Poly，其余自由符号为次变量。"""
     others = tuple(v for v in _vars_of(t) if v is not x)

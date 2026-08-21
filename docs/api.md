@@ -85,11 +85,12 @@ rollback/drop_origin`。
 
 ```python
 FunctionSpec(name, arity, print_name, parity, deriv, bound, dom,
-             special, numeric, anti, inv)
+             special, numeric, anti, inv, injective)
 ```
 消费者：mk（special 折叠）/ diff（deriv）/ decide（bound 公理）/ domain（dom）/
 pprint·latex（print_name）/ evalnum（numeric）/ integrate（anti，含线性复合）/
-solve·bsub（inv 主支逆）/ loader（gen_rules 奇偶规则 origin='spec'）。
+solve·bsub（inv 主支逆）/ loader（gen_rules 奇偶规则 origin='spec'）/
+session.eq_apply_both（injective 单射性诚实分级：False 提示仅正向蕴含，None 提示未声明）。
 已注册：Sin/Cos/Tan/Atan/Arcsin/Arccos/Exp/Log/Abs/Sinh/Cosh/Tanh。
 `SPECS` 字典 + `get(name)`；纪律：新函数只写 spec + 规则文件。
 
@@ -148,7 +149,8 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 - `ineq.solve_poly_ineq(term, op, x)` → (区间列表, 字符串)（Sturm 符号表）。
 - `sets`：`finite_set/interval/union_of` + `solve_set(f, var)` / `ineq_set(f, op, var)`
   （FiniteSet/Interval/Union 头 + EMPTY_SET；隔离根端点诚实拒答）。
-- `ops`：`together/cancel/collect/coefficient/coefficient_list/numerator/denominator`。
+- `ops`：`together/cancel/collect/coefficient/coefficient_list/numerator/denominator/separate`
+  （separate = (a+b)/c -> a/c+b/c，:together 的对偶）。
 
 ### 函数域（L3）
 - `trig.trig_reduce(t, x)` / `trig_equivalent(a, b, x)`：多角度基规范形。
@@ -213,8 +215,19 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 `:u [n]` 撤销 · `:auto` 自动重写 · `:rule/:unrule/:rules` 会话定理 ·
 `:value` 名词→动词 · `:refine` 账本化简 · `:apart <num> <den>` ·
 `:together/:collect/:numerator/:denominator/:coefficient` · `:isteps <expr> [var]` ·
-`:bsub x=h(t) <expr> <var> <lo> <hi>` · `:subst x=h(t)` · `:parts <u>` ·
+`:bsub x=h(t) <expr> <var> <lo> <hi>` · `:subst x=h(t)` · `:parts <u>`（u/dv/du/v 明细）·
 `:solveq <term>` · `:mulfrac/:divfrac <factor>` · `:latex` · `:steps/:log/:hist/:defs`。
+
+**子项手术/等式代数/变形工具箱/微积分战术（手动扩展批）**：
+`:tree` 子项树（只读） · `:set <path> <expr>` / `:rsub <old>=<new>`
+（equivalent 三态闸门：VERIFIED/PROBABLE 提交，UNKNOWN/NO 拒绝）·
+等式双侧 `:add_both/:sub_both/:mul_both/:div_both`（统一域闸门 _term_domain_gate：
+操作数定义域约束 NO 拒 / UNKNOWN 记 proviso——加 ln(x-k) 记 x-k>0，解集收窄绝不静默；
+除法含 t!=0）·
+`:neg_both/:swap/:zero_form` · `:apply_both <fn>`（域 proviso + spec.injective 单射性分级）·
+变形 `:expand [path]` · `:extract <f> [path]` · `:separate [path]` ·
+`:complete_square <var> [path]`（目标为等式时自动作用两侧，任一侧失败整体拒绝）·
+战术 `:usub t=g(x)`（精确微分优先/主支逆退化两级）· `:lhop <var> <point>`（0/0、∞/∞ 判定）。
 
 **自动（! 前缀，算法黑盒 + verify 背书）**：
 `!verify` · `!solve` · `!solveset` · `!solveineq` · `!factor` ·
@@ -253,5 +266,17 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 |------|------|
 | `simplify_at(path)` | 只化简指定子项，其余子树指针不变 |
 | `auto_at(path)` | 子项上跑 simplify 不动点 + auto 规则（cost 不增 + 已见集） |
-| `value_at(path)` | 只求值该路径惰性头（Quote 脱壳 release / Integrate 实算 / D 名词微分） |
+| `value_at(path)` | 只求值该路径惰性头（Quote 脱壳 / Integrate 实算 / D 名词微分） |
 | `integrate_at(path)` | 子项是 Integrate 名词 → 求值该积分；否则对其做不定积分 |
+| `tree()` | 带路径子项树（只读选择器；Eq 两侧 = path 0/1） |
+| `set_at(path, expr)` | 子项手术：equivalent 三态闸门（YES/PROBABLE 提交，UNKNOWN/NO 拒绝） |
+| `rsub(old=new)` | 全式结构替换（T.subst 复合键），闸门同上 |
+| `eq_add_both/eq_sub_both/eq_mul_both` | 等式两侧加/减/乘（无条件安全） |
+| `eq_div_both(t)` | 两侧除：域闸门（NO 拒 / UNKNOWN 记 proviso t!=0） |
+| `eq_neg_both/eq_swap/eq_zero_form` | 取负 / 换侧 / L−R=0 规范形 |
+| `eq_apply_both(fn)` | 两侧应用一元函数：dom_condition 域闸门 + spec.injective 单射性 note |
+| `_reshape_drive(name, fn, path)` | 变形命令统一驱动：等式目标自动作用两侧，任一侧失败整体拒绝 |
+| `expand_at/extract/separate_at/complete_square` | 变形工具箱（走 _reshape_drive） |
+| `usub(t=g(x))` | 正向换元两级策略：精确微分分解（_quotient_cancel 顶层因子消去）→ 主支逆退化 |
+| `lhop(var, point)` | 手动洛必达一步：num_den 分商 + 不定形判定（0/0、±∞/±∞），否则拒绝报告两端极限 |
+| `iparts(u, detail=True)` | 分部积分 + u/dv/du/v 明细输出 |

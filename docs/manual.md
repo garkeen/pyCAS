@@ -145,21 +145,50 @@ x - sin(x)                     # 表达式 → 当前式
 
 ### 3.4 手动结构操作（: 前缀，逐步可控）
 
-**结构变换**
+**子项手术（path 寻址一等公民）**
 ```
-:subst x=h(t)                     # 正向替换（term 层）
-:bsub x=sin(t) sqrt(1-x^2) x 0 1  # 反向换元（三角代换，新限主支逆解）
-:parts sin(x)                     # 分部积分（选 u，机器算 dv/du/v）
-:solveq integrate(exp(x)*sin(x), x)  # 复合未知项线性求解（循环分部）
-:mulfrac cos(x)                   # 分子分母同乘（凑形）
-:divfrac x^2                      # 分子分母同除
-:apart 1 (x^2-1)                  # 部分分式
+:tree                            # 带路径的子项树（选择器；Eq 两侧 = path 0 / 1）
+:set 0.1 x                       # 直接子项手术：ln(e^x) -> x（equivalent 三态闸门：
+                                 #   VERIFIED/PROBABLE 提交，UNKNOWN/NO 拒绝；
+                                 #   换入项新引入的定义域约束记 proviso）
+:rsub ln(e^x)=x                  # 全式结构替换（old 未出现报 not found）
+```
+
+**等式双侧操作（Maxima eqnflag / Mathematica 等式算术的显式命令化）**
+```
+:add_both <t> / :sub_both <t>    # 两边加/减；t 的定义域照常闸门：
+                                 #   加 ln(x-k) 记 proviso x-k>0（解集收窄绝不静默），
+                                 #   与账本矛盾即拒绝；借用形用 quote: :add_both 'ln(x-k)-ln(x-k)
+:mul_both <t> / :div_both <t>    # 两边乘/除（除法域闸门含 t!=0）
+:neg_both / :swap                # 两边取负 / 交换两侧
+:zero_form                       # L = R -> L - R = 0（喂 !solveineq 前的规范形）
+:apply_both <fn>                 # 两边应用一元函数：域 proviso + 单射性诚实分级
+                                 #   （spec.injective 声明：非单射提示"仅正向蕴含"）
+```
+
+**变形工具箱（反向化简/凑形；目标为等式时自动作用两侧）**
+```
+:expand [path]                   # 展开乘积/幂
+:extract <f> [path]              # 提公因子 ab+ac -> a(b+c)（整除检查 + 回验背书）
+:separate [path]                 # (a+b)/c -> a/c + b/c（:together 的对偶）
+:complete_square <var> [path]    # 配方 a x^2+bx+c -> a(x+h)^2+k
+:subst x=h(t)                    # 正向替换（term 层）
+:mulfrac cos(x) / :divfrac x^2   # 分子分母同乘/同除（凑形，域 proviso）
+:apart 1 (x^2-1)                 # 部分分式
 :together / :collect <var> / :numerator / :denominator / :coefficient <var> [k]
 ```
 
-**策略步树（只分类不计算）**
+**微积分战术**
 ```
-:isteps 2*x*exp(x^2)             # 积分策略步树（manualintegrate 同款）
+:usub t=cos(x)                   # 正向换元（惰性积分）：精确微分分解优先，
+                                 #   主支逆退化（两级策略，note 标注所走路线）；
+                                 #   经典条件 g'!=0 由后续 !verify 微分回验背书
+:bsub x=sin(t) sqrt(1-x^2) x 0 1 # 反向换元（三角代换，新限主支逆解）
+:parts sin(x)                    # 分部积分（人选 u，输出 u/dv/du/v 明细）
+:solveq integrate(exp(x)*sin(x), x)  # 复合未知项线性求解（循环分部）
+:lhop x 0                        # 手动洛必达一步（须 0/0 或 ±∞/±∞，否则拒绝并报告
+                                 #   两端极限；G'!=0 经典条件由最终求值背书）
+:isteps 2*x*exp(x^2)             # 积分策略步树（只分类不计算）
 ```
 
 ### 3.5 输出
@@ -211,6 +240,18 @@ DIVERGES: improper integral diverges at infinity
 >> :refine                # 3*a
 >> !solveset x^2 = 4 x    # x in {-2, 2}
 >> :latex                 # LaTeX 输出
+```
+
+### 4.4 手动解方程全程（配方路线，每步入账可撤销）
+
+```
+>> x^2 + 4*x = -3
+>> :add_both 3                    # x^2 + 4*x + 3 == 0
+>> :complete_square x             # (x + 2)^2 - 1 == 0   （等式线程：LHS 配方）
+>> :add_both 1                    # (x + 2)^2 == 1
+>> :apply_both sqrt               # 主支开方（sqrt 单射性未声明，诚实提示）
+>> :sub_both 2                    # x = -1（主支；负支可 :neg_both 后重试）
+>> :tree                          # 全程路径可见，:u 可逐步回退
 ```
 
 ---

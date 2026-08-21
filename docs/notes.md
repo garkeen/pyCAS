@@ -37,6 +37,33 @@
 - **手动/自动语法分层**：`:` 前缀 = 手动操作（逐步可控每步入账）；`!` 前缀 = 自动求解
   （算法黑盒 verify 背书）。kernel 注册表拆分（self.kernel 手动 / self.solver 自动），
   不兼容旧 `:integrate` 等（直接改；step log 内部 `kernel:xxx` 标识不变）。
+- **手动交互扩展批（子项手术/等式代数/变形工具箱/微积分战术）**：
+  调研定案——Maxima eqnflag + distribute_over、Mathematica 等式算术、SymPy Eq 算术
+  三家收敛于"等式即二元容器"，pyCAS 以显式命令族落地（mk 保持纯规范化纪律，不做隐式线程化）。
+  `:tree` 带路径子项树（选择器）；`:set`/`:rsub` 子项手术（equivalent 三态闸门：
+  YES/PROBABLE 提交，UNKNOWN 拒绝——不可验证的篡改不放行，先 :assume 再重试；
+  L0 的 term_at/replace_at 对 Bound 体 α-安全，底层零改动）；等式双侧命令族
+  （add/sub/mul/div/neg/swap/zero_form/apply_both；div 域闸门 t!=0 记 proviso；
+  apply_both 读 spec.injective 新字段做单射性诚实分级）；变形工具箱
+  （expand/extract/separate/complete_square，_reshape_drive 统一驱动：等式目标
+  自动作用两侧、任一侧失败整体拒绝；extract 逐项整除 + 负幂残留检测——
+  mk 不拆 (a·b)^-1 且 times 重构会塌回原形，是两个实测教训）；微积分战术
+  （usub 两级策略：精确微分分解 _quotient_cancel 顶层因子消去优先、主支逆退化；
+  lhop 手动一步带不定形判定；parts 输出 u/dv/du/v 明细）。steps() 规则步补 note 显示。
+  实现权衡判据链：模式可表达 -> 规则；要算才知 -> ops/: 命令；搜索+回验 -> ! 内核；
+  原语编排 -> session tactic（本批全部为 tactic/ops 级，零新内核算法）。
+- **等式双侧操作的域闸门（借用形教训）**：add/sub/mul both 初版误标"无条件安全"——
+  加 ln(x-k) 会把解集静默收窄到 x>k，违反永不静默错。修正：四则统一走
+  _term_domain_gate（dom_condition 三态：NO 拒 / UNKNOWN 记 proviso）。
+  借用形 +ln(x-k)-ln(x-k) 的正确姿势 = quote（'ln(x-k)-ln(x-k) 保结构不被 mk 消、
+  dom_condition 穿透 Quote 提取域约束）；裸形式在 mk 即合并（generic 语义），
+  中间步的 proviso 在形式复原后保守保留（中间步确实收窄过，不假装没发生）。
+  全命令域审计结论：separate/extract/complete_square/expand 域安全
+  （分母保留 / 因子已在 terms 中 / 多项式全纯）；set/rsub 补 _new_domain_conditions
+  （公共域采样只在重叠域比对，换入更窄定义域的项须显式记账；恒真约束与
+  old 已携带约束跳过）；extract 验证放宽到 PROBABLE（构造 = 分配律逆，结构可靠，
+  超越因子采样最高 PROBABLE）；usub/lhop 的经典条件（g'!=0、G'!=0）由
+  verify 背书链承担（docstring + manual 标注）。
 - **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
 
 ### 1.2 立场裁定（长期有效，改动需重新论证）
