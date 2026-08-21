@@ -552,41 +552,127 @@ def _exp_w(de, j):
 
 
 # ---------------------------------------------------------------------------
-# Hermite 推广（逐因子逐层，FriCAS normalHermiteIntegrate 同数学）
+# M5.1b：Risch 微分方程 exp case——y' + k*eta'*y = g（y ∈ Q(x)）
+#
+# 极点分析：p^m ∥ denom(y) => y' 有 p^{m+1} 极点而 k*eta'*y 只有 p^m
+# （eta' 多项式）=> p^{m+1} | denom(g)。故 denom(y) 的界
+# D = Π p^{e-1}（p^e ∥ denom(g)，e>=2）；z = y*D 多项式化后待定系数。
+# f = k*eta' != 0 保证齐次多项式解只有 0（deg y' < deg f*y）=> 解唯一。
 # ---------------------------------------------------------------------------
 
-def _hermite_factor(a, p, e, de, j, zero):
-    """∫ a/p^e -> (u/p^{e-1} 贡献, 新 (a', p^{e-1}))。
+def _poly_to_list(p):
+    """Poly((x,)) -> 升序 Fr 系数 list。"""
+    xv = p.vars[0]
+    d = p.degree(xv)
+    out = [Fr(0)] * (d + 1)
+    for k, v in p.monos.items():
+        out[k[0]] = v
+    return out
 
-    u ≡ -(e-1)^{-1}*(a mod p)*wd*inv(D(p) mod p) (mod p)；
-    v = (wd*a + (e-1)*u*P~)/p/wd - D(u)/wd，整除性已证。
+
+def _list_to_poly(cs, vars_):
+    """升序 Fr list -> Poly（一元）。"""
+    return Poly(vars_, {(e,): c for e, c in enumerate(cs) if c != 0})
+
+
+def _gauss_solve(M, b):
+    """Fr 系数线性方程组高斯消元。返回解 list | None（无解）。
+
+    自由变量取 0（f != 0 时 RDE 齐次只有零解，理论保证无自由变量；
+    此处取 0 为防御性特解）。
     """
-    wn, wd = de.ws[j]
-    Pm = _derive_ut(p, de, j)[0]          # D(p) 的分子（分母 wd）
-    r = _u_divmod(a, p, zero)[1]
-    pm1 = _u_inv_mod(Pm, p, zero)
-    coef = Fr(-1) / (e - 1)
-    u = _u_mul(_u_mul(r, pm1, zero), [wd], zero)
-    u = [c.scalar(coef) for c in u]
-    _, u = _u_divmod(u, p, zero)
-    # N = wd*a + (e-1)*u*P~ （整除 p）
-    N_ = _u_add([c.scalar(wd) for c in a],
-                _u_mul([c.scalar(Fr(e - 1)) for c in u], Pm, zero), zero)
-    M, rem = _u_divmod(N_, p, zero)
-    if not _u_is_zero(rem):
-        raise RischUnsupported("hermite divisibility failed")
-    # v = M/wd - D(u)/wd = (M - Du_num)/wd
-    Du, _dw = _derive_ut(u, de, j)
-    v = _u_add(M, _u_neg(Du, lambda c: c.scalar(Fr(-1))), zero)
-    # 剩余 a' = v/(wd*p^{e-1})？不——v 已是剩余分子（分母 wd*p^{e-1}）
-    return u, v
+    n = len(M)
+    cols = len(M[0]) if n else 0
+    A = [row[:] + [b[i]] for i, row in enumerate(M)]
+    piv_cols = []
+    r = 0
+    for cidx in range(cols):
+        piv = None
+        for i in range(r, n):
+            if A[i][cidx] != 0:
+                piv = i
+                break
+        if piv is None:
+            continue
+        A[r], A[piv] = A[piv], A[r]
+        pv = A[r][cidx]
+        A[r] = [v / pv for v in A[r]]
+        for i in range(n):
+            if i != r and A[i][cidx] != 0:
+                fac = A[i][cidx]
+                A[i] = [vi - fac * vr for vi, vr in zip(A[i], A[r])]
+        piv_cols.append(cidx)
+        r += 1
+        if r == n:
+            break
+    for i in range(n):
+        if all(v == 0 for v in A[i][:cols]) and A[i][-1] != 0:
+            return None
+    sol = [Fr(0)] * cols
+    for i, cidx in enumerate(piv_cols):
+        sol[cidx] = A[i][-1]
+    return sol
+
+
+def _rde_exp_solve(k, eta_p, an, ad, zero):
+    """解 y' + k*eta'*y = an/ad（y ∈ Q(x)）。返回 y: Poly | None。
+
+    None = 无有理解（该频率分量不可初等的证明载体）。
+    """
+    xv = zero.vars[0]
+    f = eta_p.scalar(Fr(k))
+    # 步骤1：分母界 D = Π p^{e-1}（p^e ∥ denom(g)，e>=2）
+    Dp = Poly.one(zero.vars)
+    from cas.factor import squarefree_decomp
+
+    for pp, e in squarefree_decomp(ad):
+        if e >= 2:
+            Dp = Dp * pp ** (e - 1)
+    # 步骤2：z = y*D；两边乘 ad：ad*D*z' + (f*D − D')*ad*z = an*D²
+    A_ = ad * Dp
+    B_ = (f * Dp - Dp.deriv(xv)) * ad
+    C_ = an * Dp * Dp
+    degB = B_.degree(xv)
+    degC = C_.degree(xv)
+    if degB < 0:
+        # B ≡ 0：f*D = D' 且 ad 常数——eta' 多项式时仅 f=0，已排除
+        raise RischUnsupported("degenerate RDE (f*D == D')")
+    N = degC - degB
+    if N < 0:
+        # z 只能 = 0；rhs 非零即无解
+        return None if not C_.is_zero() else Poly.zero(zero.vars)
+    # 步骤3：待定系数线性方程组
+    A_l = _poly_to_list(A_)
+    B_l = _poly_to_list(B_)
+    C_l = _poly_to_list(C_)
+    ncols = N + 1
+    top = max(len(C_l) - 1, (len(B_l) - 1) + N,
+              (len(A_l) - 1) + (N - 1) if N > 0 else 0)
+    nrows = max(top, len(C_l) - 1) + 1
+    M = [[Fr(0)] * ncols for _ in range(nrows)]
+    rhs_v = [Fr(0)] * nrows
+    for i, cv in enumerate(C_l):
+        rhs_v[i] = cv
+    for ci in range(ncols):
+        # 基 z = x^ci：LHS = A*(ci*x^(ci-1)) + B*x^ci
+        if ci > 0:
+            for ai, av in enumerate(A_l):
+                m = ai + ci - 1
+                M[m][ci] += av * Fr(ci)
+        for bi, bv in enumerate(B_l):
+            M[bi + ci][ci] += bv
+    sol = _gauss_solve(M, rhs_v)
+    if sol is None:
+        return None
+    return _list_to_poly(sol, zero.vars)
 
 
 def risch_exp_integrate(fa, fd, de, j):
-    """exp 单项式积分主入口（M5.1a：真分式部分）。
+    """exp 单项式积分主入口（M5.1：真分式 + 频率分解）。
 
-    返回 ((rat_part, logs, nonel, leftover), status)：
-    status: 'ok' | 'has-poly-part' | 'has-special-part'
+    返回 ((rat_part, logs, nonel, leftover), freqs, status)：
+    freqs = {k: (an, ad)}——全部非零频率分量（正幂商 + 负幂低幂 +
+    residue t 幂剩余），k≠0 待 RDE；status: 'ok'。
     """
     zero = Poly.zero((de.levels[0],))
     tj = de.levels[j]
@@ -594,34 +680,44 @@ def risch_exp_integrate(fa, fd, de, j):
     A = _univar(fa, tj)
     D = _univar(fd, tj)
     if _u_is_zero(A):
-        return (None, None, None, None), "ok"
+        return (None, None, None, None), {}, "ok"
 
-    # 多项式部分检测（M5.1b）：deg_t(fa) >= deg_t(fd)
+    # 多项式部分：商 Q 的频率 + 真分式 R
     dq = len(D) - 1
     dp = len(A) - 1
+    pos_freqs = {}
     if dp >= dq:
         Q, R = _u_divmod(A, D, zero)
-        # 商拆解：常数项 q_0 可积（x 层），t 幂部分 pending M5.1b
-        if len(Q) > 1 and any(not c.is_zero() for c in Q[1:]):
-            return (None, None, None, None), "has-poly-part"
-        res, st = _integrate_proper(R, D, de, j, zero)
-        rp, lg, nn, lf = res
-        q0 = Q[0] if Q else zero
-        if not q0.is_zero():
-            lf = [q0] if lf is None else _u_add(lf, [q0], zero)
-        return (rp, lg, nn, lf), st
+        for k, c in enumerate(Q):
+            if not c.is_zero():
+                pos_freqs[k] = (c, Poly.one(zero.vars))
+        A = R
+        if _u_is_zero(A):
+            return (None, None, None, None), pos_freqs, "ok"
 
-    return _integrate_proper(A, D, de, j, zero)
+    res, neg_freqs, st = _integrate_proper(A, D, de, j, zero)
+    freqs = dict(pos_freqs)
+    for k, v in neg_freqs.items():
+        if k in freqs:
+            an1, ad1 = freqs[k]
+            an2, ad2 = v
+            # 分式加法（K 上）
+            freqs[k] = (an1 * ad2 + an2 * ad1, ad1 * ad2)
+        else:
+            freqs[k] = v
+    return res, freqs, st
 
 
 def _integrate_proper(A, D, de, j, zero):
     """真分式积分：special(t^m) 分离 + 无平方分解 + 部分分式 + Hermite + residue。
 
-    M5.1a 限制：eta' 为多项式（wd=1，覆盖全部单项指数 eta）。
+    返回 ((rat_part, logs, nonel, leftover), neg_freqs, status)：
+    neg_freqs = {k: (an, ad)}——t 负幂频率分量（k<0，M5.1b RDE 处理）。
+    M5.1 限制：eta' 为多项式（wd=1，覆盖全部单项指数 eta）。
     """
     wn, wd = de.ws[j]
     if not (wd.is_const() and wd.const_val() == 1):
-        raise RischUnsupported("rational eta' not supported in M5.1a")
+        raise RischUnsupported("rational eta' not supported in M5.1")
     # special 分离：D = t^m * q0（q0[0] != 0）
     m = 0
     q0 = list(D)
@@ -632,12 +728,25 @@ def _integrate_proper(A, D, de, j, zero):
     if m > 0:
         k_m = min(m, len(A))
         low, high = A[:k_m], A[k_m:]
-        # 低段 Σ a_k t^{k-m}（负幂）= 特殊部分 -> M5.1b RDE
+        # 低段 Σ a_k t^{k-m}（负幂频率）；高段走正规路线
+        neg_freqs = {}
+        for k, c in enumerate(low):
+            if not c.is_zero():
+                neg_freqs[k - m] = (c, Poly.one(zero.vars))
         if _u_is_zero(high):
-            return (None, None, None, None), "has-special-part"
-        rat_part, logs, nonel, leftover, st = _integrate_normal(high, q0, de, j, zero)
-        return (rat_part, logs, nonel, leftover), ("has-special-part" if st == "ok" else st)
-    return _integrate_normal(A, D, de, j, zero)
+            return (None, None, None, None), neg_freqs, "ok"
+        res, st = _integrate_normal(high, q0, de, j, zero)
+        # 正规部分的 t 幂剩余（"special" 标记）也并入正频
+        rat_part, logs, nonel, leftover = res
+        return (rat_part, logs, nonel, leftover), neg_freqs, st
+    res, st = _integrate_normal(A, D, de, j, zero)
+    rat_part, logs, nonel, leftover = res
+    if isinstance(leftover, tuple) and leftover and leftover[0] == "special":
+        # residue 剩余的 t 幂部分 -> 正频
+        pos_freqs = {k: (c, Poly.one(zero.vars)) for k, c in enumerate(leftover[1])
+                     if not c.is_zero()}
+        return (rat_part, logs, nonel, None), pos_freqs, st
+    return res, {}, st
 
 
 def _integrate_normal(A, D, de, j, zero):
@@ -667,9 +776,9 @@ def _integrate_normal(A, D, de, j, zero):
         if not _u_is_zero(rem):
             q, r = _u_divmod(rem, p, zero)
             if _u_is_zero(r):
-                # 剩余恰为多项式：常数部分 -> x 层递归；t 幂部分 -> M5.1b
+                # 剩余恰为多项式：常数部分 -> x 层递归；t 幂部分 -> 频率 RDE
                 if any(not c.is_const() for c in q):
-                    return rat_part, logs, None, ("special", q), "has-special-part"
+                    return (rat_part, logs, None, ("special", q)), "ok"
                 leftover = q
             else:
                 nonel = (rem, p)
@@ -940,6 +1049,8 @@ def assemble_exp_result(rat_part, logs, nonel, de, j):
     """M5.1a 积分结果 -> term（组装 + backsubs）。"""
     tj = de.levels[j]
     subs = {de.levels[j]: de.terms[j]}
+    rat_part = rat_part or []
+    logs = logs or []
     parts = []
     for u, p, k in rat_part:
         ut = _from_univar(u, de.vars, tj).to_term()
@@ -979,12 +1090,14 @@ class RischNonElementary(Exception):
 def integrate_exp_tower(f, x):
     """顶层 API：term -> term（初等原函数）或 RischNonElementary/RischUnsupported。
 
-    M5.1a 范围：单层 exp 塔 + 真分式；多项式/特殊部分报 pending M5.1b。
+    M5.1 范围：单层 exp 塔（eta' 多项式）。真分式走 Hermite+residue，
+    频率分量 Σ a_k t^k 逐阶解 RDE y' + k*eta'*y = a_k——任一阶无有理解
+    即不可初等（t 在 K 上超越 => 频率分量线性无关，和可积 <=> 各项可积）。
     """
     from cas.integrate import integrate_rational
 
     de, fa, fd = build_extension(f, x)
-    # 找最外层 exp（M5.1a 单 exp 层）
+    # 找最外层 exp（M5.1 单 exp 层）
     j = None
     for i in range(len(de.levels) - 1, 0, -1):
         if de.cases[i] == "exp":
@@ -992,17 +1105,54 @@ def integrate_exp_tower(f, x):
             break
     if j is None:
         raise RischUnsupported("no exponential layer in extension")
-    (rat_part, logs, nonel, leftover), st = risch_exp_integrate(fa, fd, de, j)
-    if st != "ok":
-        raise RischUnsupported("polynomial/special part pending M5.1b: " + st)
+    # M5.1 单 exp 层限制：多层塔的系数域含低层变量（递归塔 pending M5.2）
+    n_exp = sum(1 for c in de.cases if c == "exp")
+    if n_exp > 1:
+        raise RischUnsupported(
+            "multiple exponential layers: recursive tower pending M5.2")
+    eta_p = de.ws[j][0]
+    (rat_part, logs, nonel, leftover), freqs, st = risch_exp_integrate(fa, fd, de, j)
+
+    # 频率逐阶 RDE
+    freq_terms = []       # [(b_k, k)] -> b_k * t^k
+    rde_fail = None       # 首个无解频率（不可初等证明载体）
+    for k in sorted(freqs):
+        an, ad = freqs[k]
+        if k == 0:
+            leftover = [an] if leftover is None else _u_add(leftover, [an], Poly.zero((x,)))
+            continue
+        b = _rde_exp_solve(k, eta_p, an, ad, Poly.zero((x,)))
+        if b is None:
+            rde_fail = k
+            break
+        if not b.is_zero():
+            freq_terms.append((b, k))
+
     expr = assemble_exp_result(rat_part, logs, nonel, de, j)
+    tj = de.levels[j]
+    for bk, k in freq_terms:
+        bt = T.subst(bk.to_term(), {tj: de.terms[j]})
+        tk = T.pw(de.terms[j], N(k)) if k != 1 else de.terms[j]
+        parts = T.times(bt, tk)
+        expr = T.plus(expr, parts)
     if leftover is not None and any(not c.is_zero() for c in leftover):
-        # 常数剩余 -> x 层有理积分（Hermite+RT 已完备）
-        # 非常数控系数已在 _integrate_normal 拦为 has-special-part
         cv = sum((c.const_val() for c in leftover), Fr(0))
         P = Poly.const((x,), cv)
         val, ok, _method = integrate_rational(P, Poly.one((x,)), x)
         if not ok:
             raise RischUnsupported("leftover rational integration failed")
         expr = T.plus(expr, val)
+    if rde_fail is not None:
+        from cas.pprint import to_str as _ts
+        an, ad = freqs[rde_fail]
+        raise RischNonElementary(
+            "not elementary: the %s component has no rational solution of "
+            "the Risch differential equation y' + %d*eta'*y = %s "
+            "(proved; eta' = %s)" % (
+                ("t^%d" % rde_fail) if rde_fail != 1 else "t",
+                rde_fail,
+                _ts(T.div(an.to_term(), ad.to_term())),
+                _ts(eta_p.to_term()),
+            )
+        )
     return expr, de

@@ -98,6 +98,19 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **M5.1b RDE exp 分支（不可初等证明落地）**：频率分解 Σ a_k t^k（正幂商 +
+  负幂低段 + residue t 幂剩余统一进频率字典；t·t^{-1}=1 类归并后 k=0 进
+  x 层）逐阶解 Risch 微分方程 y' + k*eta'*y = a_k。求解器 = 极点分析定
+  分母界（p^m ∥ denom(y) => p^{m+1} | denom(g)，eta' 多项式时 f*y 不升阶）
+  => D = Π p^{e-1}，z = y*D 多项式化，待定系数线性方程组 + 高斯消元；
+  f = k*eta' != 0 保证齐次只有零解 => 解唯一。**任一频率无有理解 =>
+  不可初等证明**（t 在 K 上超越 => 频率分量线性无关，和可积 <=> 各项可积）
+  ——RischNonElementary 携带完整原因（哪一阶、RDE 形态、eta'）。
+  实测：exp(-x^2)/exp(x^2) -> NOT ELEMENTARY (proved: y'+eta'*y=1 无有理解，
+  eta'=±2x)；x^2*exp(x) -> e^x(x^2-2x+2)（高阶多项式 RDE 解）；
+  exp(x)*exp(-x) -> x（频率归并）。多层 exp 塔诚实拒答（递归塔 pending
+  M5.2——系数域含低层变量破坏 K=Q(x) 假设）。死代码清理：M5.1a 的 wd 版
+  _hermite_factor 被 wd=1 版覆盖后未删（Python 后定义遮蔽，两份并存）。
 - **M5.1a exp 单项式积分（Hermite 推广 + Rothstein-Trager residue）**：
   K[t] 视图（list[Poly] 升序系数，K=Q(x)）；eta'=wn/wd 的分式系数用"全局
   分母 wd"技巧保多项式系数（整除性推导：u ≡ -(e-1)^{-1} r wd inv(P~) mod p

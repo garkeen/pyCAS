@@ -200,12 +200,42 @@ class TestRischExpIntegrate(unittest.TestCase):
         self._dcheck("exp(x)/(exp(x)+1)^2", r)
 
     def test_poly_part_pending(self):
-        # e^(-x^2)：多项式部分 t -> M5.1b RDE（届时给不可初等证明）
+        # e^(-x^2)：RDE y' - 2x*y = 1 无有理解 -> 不可初等证明（M5.1b）
+        from cas.risch import RischNonElementary
+
+        with self.assertRaises(RischNonElementary) as cm:
+            self._integrate("exp(-x^2)")
+        self.assertIn("not elementary", str(cm.exception))
+        self.assertIn("Risch differential equation", str(cm.exception))
+
+    def test_rde_positive_powers(self):
+        # 正幂频率：RDE 多项式解
+        r = self._integrate("x^2*exp(x)")
+        self.assertEqual(to_str(simplify(r)), "exp(x)*(x^2 - 2*x + 2)")
+        self._dcheck("x^2*exp(x)", r)
+        r2 = self._integrate("exp(2*x)")
+        self.assertEqual(to_str(simplify(r2)), "1/2*exp(2*x)")
+        self._dcheck("exp(2*x)", r2)
+
+    def test_rde_negative_frequency(self):
+        # 负幂频率 t^-1 = exp(-x)：y' - y = 1 -> y = -1
+        r = self._integrate("exp(-x)")
+        self.assertEqual(to_str(simplify(r)), "-exp(-x)")
+        self._dcheck("exp(-x)", r)
+
+    def test_frequency_cancellation(self):
+        # t * t^-1 = 1：频率归并后 k=0 -> x 层
+        r = self._integrate("exp(x)*exp(-x)")
+        self.assertEqual(to_str(simplify(r)), "x")
+        self._dcheck("exp(x)*exp(-x)", r)
+
+    def test_multilayer_unsupported(self):
+        # 双层 exp 塔：递归塔 pending M5.2（诚实拒答，不误判）
         from cas.risch import RischUnsupported
 
         with self.assertRaises(RischUnsupported) as cm:
-            self._integrate("exp(-x^2)")
-        self.assertIn("M5.1b", str(cm.exception))
+            self._integrate("exp(x) + exp(x^2)")
+        self.assertIn("M5.2", str(cm.exception))
 
 
 if __name__ == "__main__":
