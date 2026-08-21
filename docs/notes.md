@@ -88,6 +88,9 @@
 - 三角积分路径的 [VERIFIED] 只覆盖 t 域有理积分，半角代回本身未单独验证。
 - 主支逆求解不给周期族通解（诚实标注 principal branch）。
 - 绑定词打印变量名取首次驻留的 hint（α 等价代价，语义无影响）。
+- decide/equivalent 的账本通道不消费 Eq 事实做归一代入（"等式即规则"目前只在
+  session auto 的 cost 严格下降通道生效）——换元回代需声明会话规则
+  （examples/06 的 backsub 模式）；decide 账本等式代入归一待建。
 
 ---
 

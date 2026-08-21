@@ -286,7 +286,7 @@ rule <id> = <lhs> -> <rhs> [guard <条件>] [as <方向>] [channels a,b] [prio N
 在新会话逐条重建——回放与交互走**同一代码路径**，头部规则指纹不匹配即拒绝
 回放（永不静默错），驻留项保证回放产物与原产物指针同一。
 
-`examples/` 目录有四个成品案例（均由测试回放断言）：
+`examples/` 目录有六个成品案例（均由测试回放断言）：
 
 | 文件 | 内容 |
 |---|---|
@@ -294,6 +294,8 @@ rule <id> = <lhs> -> <rhs> [guard <条件>] [as <方向>] [channels a,b] [prio N
 | `02_defint_gallery.pycas` | 定积分四形态（正向换元/嵌套换元/判敛/分段） |
 | `03_rules_refine_sets.pycas` | 会话定理 + refine + 解集 + LaTeX |
 | `04_ode_bsub.pycas` | ODE 分类求解 + 反向换元 |
+| `05_trig_half_angle.pycas` | ∫1/(a+b·cos x) tan 半角代换 + 参数 proviso |
+| `06_sec_manual_substitution.pycas` | ∫sec x 手动 sin-代换全程（:set 绑定体内手术 + :usub 精确微分 + 规则回代） |
 
 `#` 开头的行是注释，回放时跳过——案例文件本身就是可读的推导文档。
 
