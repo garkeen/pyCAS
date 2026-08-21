@@ -293,6 +293,35 @@ class TestLoopExtraction(unittest.TestCase):
         out = s.handle(":intro_eq %1")
         self.assertIn("x + y ==", out)
 
+    def test_add_sub_borrow_form_guard_settlement(self):
+        """核心场景：A 操作得到 A+ln(x-k)-ln(x-k)，这条等式的守卫条件？
+
+        答：x-k>0（链上条件的合取）。机器在 add_sub 时已知该条件（创建义务），
+        intro_eq 建立等式前必须结算（硬闸门），结算后守卫以账本事实 +
+        等式项自身 dom_condition 双重载体随行——消费时绝不静默丢失。
+        """
+        from cas.domain import dom_condition
+
+        s = Session()
+        s.handle("x*y")
+        out = s.handle(":add_sub ln(x-k)")
+        self.assertIn("x*y + 'log(x - k) - 'log(x - k)", out)   # 借用形保结构
+        out = s.handle(":intro_eq %1")
+        self.assertIn("refused", out)                            # 守卫未决 -> 拒绝
+        self.assertIn("open guards", out)
+        self.assertIn("x - k > 0", out)
+        s.handle(":ans 1 x - k > 0")                             # 结算 -> 入账本
+        out = s.handle(":intro_eq %1")
+        self.assertIn("x*y == x*y + 'log(x - k) - 'log(x - k)", out)
+        cons = [str(c) for c in dom_condition(s.current)]
+        self.assertTrue(any("(k * -1)" in c and "> 0" in c for c in cons))  # 等式项自带守卫
+
+    def test_intro_eq_refuses_nested_eq(self):
+        s = Session()
+        s.handle("x + y = 0")
+        out = s.handle(":intro_eq %1")
+        self.assertIn("already an equation", out)
+
 
 class TestGuardObligations(unittest.TestCase):
     """守卫条件显式在案：域闸门 UNKNOWN 接义务队列，可作答回滚。"""

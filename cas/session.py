@@ -1314,6 +1314,7 @@ class Session:
             ":lhop": "one l'Hopital step on quotient form: :lhop <var> <point>",
             ":intro_eq": "extract chain equation: :intro_eq <lhs|%N> (lhs = current; loop: :intro_eq I)",
             ":fold": "linearity fold: rewrite constant-multiple named integrals (loop setup)",
+            ":add_sub": "add-zero borrow: :add_sub <t> (A -> A + t - t, quoted; domain obligation)",
             ":parts": "integration by parts on inert integral: :parts <u> (shows u/dv/du/v)",
             ":subst": "substitute new variable: :subst t=g(x) (handles inert integral dx too)",
             ":solveq": "solve current linear equation for unknown: :solveq <term>",
@@ -1449,6 +1450,9 @@ class Session:
             return to_str(res) if isinstance(res, T.Term) else res
         if line == ":fold":
             return self.fold()
+        if line.startswith(":add_sub "):
+            res = self.add_sub(line[9:].strip())
+            return to_str(res) if isinstance(res, T.Term) else res
         if line.startswith(":parts "):
             res = self.iparts(line[7:].strip(), detail=True)
             return res if isinstance(res, str) else to_str(res)
@@ -1751,19 +1755,63 @@ class Session:
             out += f"\n[loop] {hint} recurs - extract equation: :intro_eq {hint}, then :solveq {hint}"
         return out
 
-    def intro_eq(self, lhs_s):
-        """:intro_eq <lhs>：等式链提取——把当前式声明为 Eq(lhs, current)。
+    def add_sub(self, t_s):
+        """:add_sub <t>：加零凑形 A -> A + t - t（表达式层借用形战术）。
 
-        计算即等式链：step log 每步的 before->after 都是一条等式；本命令把
-        "链首命名项 = 当前式"显式提取为一等方程（循环分部的 I = A - I）。
-        lhs 经用户定义展开（名字解析为宏体）；断言自由但入账（claim 层），
-        后续消费由 :solveq 线性闸门与 !verify 回验把关。
+        结构保真：t 以 quote 包裹、和式走纯驻留构造（_intern_expr）——
+        否则 mk 的同类项归并当场消掉 +t-t，等式塌成 A=A。
+        t 的定义域照常闸门并创建义务：后续 :intro_eq 提取等式时，
+        该守卫必须先行结算（硬闸门）——机器知道的守卫不允许蒸发。
         """
         self._check_locked()
         if self.current is None:
             return "empty session"
+        if isinstance(self.current, T.Expr) and self.current.head.name == "Eq":
+            return "add_sub: current is an equation (use :add_both/:sub_both)"
+        t = parse(t_s.strip())
+        provs, err = self._term_domain_gate(t, f"borrowing {to_str(t)}")
+        if err:
+            return err
+        qt = T.quote(t)
+        nq = T._intern_expr(T.S("Times"), (T.MONE, qt))
+        before = self.current
+        new = T._intern_expr(T.S("Plus"), (before, qt, nq))
+        self.current = new
+        self._sid += 1
+        self.log.append(Step(
+            self._sid, "scheme:add_sub", (), before, new, "YES",
+            cost(new) - cost(before),
+            note=f"added and subtracted {to_str(t)} (borrowed form)",
+        ))
+        self._remember(new)
+        out = to_str(new)
+        return out + self._proviso_suffix(provs)
+
+    def intro_eq(self, lhs_s):
+        """:intro_eq <lhs|%N>：等式链提取——把当前式声明为 Eq(lhs, current)。
+
+        计算即等式链：step log 每步的 before->after 都是一条等式；本命令把
+        链上节点显式提取为一等方程（循环分部的 I = A - I）。
+
+        守卫结算（硬闸门）：派生等式的守卫 = 链上所有步骤条件的合取。
+        规则 guard 已在 commit 时入账本；开放义务（域条件等）未决时拒绝
+        建立等式——机器知道的守卫不允许蒸发。先 :ans 作答使条件入账，
+        再重试。手写方程（feed 层）不受此限：断言自由但由断言者担责。
+        """
+        self._check_locked()
+        if self.current is None:
+            return "empty session"
+        if isinstance(self.current, T.Expr) and self.current.head.name == "Eq":
+            return "intro_eq: current is already an equation"
+        if self.obligations:
+            gs = "; ".join(f"#{o.oid} {to_str(o.question)}" for o in self.obligations)
+            return (f"intro_eq refused: derivation chain has open guards ({gs}) - "
+                    f"the equation holds only under them. Resolve with "
+                    f":ans <oid> <fact> first, then retry.")
         lhs = self._expand_defs(parse(lhs_s.strip()), bare_ok=True)
-        eq = T.mk(T.S("Eq"), (lhs, self.current))
+        # 纯驻留构造：mk 会把 current 中的借用形（'t - 't）当场归并塌掉，
+        # 等式将失去其守卫载体——Eq 必须原样保结构
+        eq = T._intern_expr(T.S("Eq"), (lhs, self.current))
         before = self.current
         self.current = eq
         self._sid += 1
@@ -1773,11 +1821,7 @@ class Session:
             note=f"chain equation: {to_str(lhs)} = current",
         ))
         self._remember(eq)
-        out = to_str(eq)
-        if self.obligations:
-            out += ("   [note: equation inherits the open conditions on record "
-                    "- see :obls]")
-        return out
+        return to_str(eq)
 
     def solveq(self, unknown_s):
         """把当前等式当线性方程解出指定未知项（未知 → z 提系数）。
