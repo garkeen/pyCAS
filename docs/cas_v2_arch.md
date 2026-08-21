@@ -125,13 +125,13 @@ latex/refine 零递归）；预算按节点计。
 ## 4. 领域地图（四梯队，按依赖排序）
 
 > 地图由**目标驱动**（积分/ODE 终点），每个域标注谁消费它；梯队 = 建造依赖顺序。
-> 当前完成状态：M0–M3 已收官；✓ = 已落地。
+> 当前完成状态：M0–M3 已收官 + 后 M3 批次（ℚ(params) 全参数化、真 hold、变形/域 proviso）；✓ = 已落地。
 
 ### 梯队一：算术与多项式代数 ✓
 | 域 | 内容 |
 |----|------|
 | Z/Q | 精确算术、gcd/lcm |
-| 多项式 | 稀疏字典、带余除、ugcd/mgcd（原始伪除 PRS + 递归 content）、div_exact、resultant、discriminant、Zassenhaus 因式分解 |
+| 多项式 | 稀疏字典、带余除、ugcd/mgcd（原始伪除 PRS + 递归 content）、div_exact、resultant、discriminant、Zassenhaus 因式分解、ℚ(params) 符号系数域（SymRat 全参数化） |
 | 有理函数 | 互素规范形（RatFunc）、apart 部分分式 |
 | 代数数 | RootOf 名词 + ℚ(α) 域 + 幂和迹 + Sturm 实根隔离（复根隔离待建） |
 
@@ -175,8 +175,7 @@ latex/refine 零递归）；预算按节点计。
 - **M5 Risch 分期**：exp/log 子情形 → 三角（经 exp 塔）→ 完整决策程序（含不可初等的证明）；
   前置真模块：表达式↔微分域塔转换器 + 塔上导数表。
 - **ODE 扩展**：非齐次（待定系数/常数变易）、常系数系统（exp(At)，特征值前置已就绪）。
-- **剩余结构债**：ℚ(params) 系数域全参数化（前置 = ℚ(params) 因式分解；参数积分/ODE 的门槛）；
-  RootOf 复根隔离；Gröbner 基（多元方程组）。
+- **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
 
 ---
 

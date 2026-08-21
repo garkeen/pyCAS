@@ -19,7 +19,16 @@
 - **M3 分析层**：级数/极限/定积分三件套 + 正/反向换元 + 反常积分判敛 + 分段积分 +
   ODE 四题型；转录 DSL（:save/:replay + 规则指纹）；两批采购清单
   （:rule/:value/:refine/:latex/:solveset/:series/:isteps + Protected）。
-- **剩余结构债**：ℚ(params) 系数域全参数化（前置 = ℚ(params) 因式分解）；RootOf 复根隔离。
+- **后 M3（ℚ(params) 全参数化 + 变形/域 + 真 hold）**：
+  ℚ(params) 系数域全参数化（poly.py SymRat 参数有理函数系数域，is_param_poly 检测、
+  混合算术、参数判别式 pos/neg/unknown 分类 + proviso，参数积分完备）；
+  apart 推广到复合项原子（Log/Sin/Exp 作多项式变量）；
+  ops 变形原语（term 层 num_den 支持 cos/log + mulfrac/divfrac）；
+  变形命令因子域 proviso（mulfrac/divfrac：NO 拒 domain empty / UNKNOWN 记 proviso）；
+  bsub 主支逆无实原像诚实报告（x=t² 识别 surjectivity 域问题，不再误报边界不可比）；
+  equivalent 公共域采样（sample_agrees 域过滤，sqrt(x)²~x → PROBABLE）；
+  quote 真 hold（parser 跳 mk 规范化保留反化简形 + 域约束；subst/instantiate 走 raw 路径）。
+- **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
 
 ### 1.2 立场裁定（长期有效，改动需重新论证）
 
