@@ -83,13 +83,13 @@ class TestDefintSymmetryAndBoundaries(unittest.TestCase):
     """对称性预检 + 无原函数边界 + spec anti 补全（Log/Atan）。"""
 
     def test_no_antiderivative_honest_refusal(self):
-        # exp(-x^2) 无初等原函数：诚实拒答（此前 _linear_split None 解包崩溃）
+        # exp(-x^2) 无初等原函数：Risch 证明性拒答（M5.1b 起带 proved 标记）
         from cas.session import Session
 
         s = Session()
         out = s.handle("!defint exp(-x^2) x 0 1")
         self.assertIn("unsupported", out)
-        self.assertIn("no antiderivative", out)
+        self.assertIn("proved", out)
 
     def test_log_anti_and_improper_endpoint(self):
         # Log anti 表项（分部积分标准结果）+ 端点瑕点单侧极限

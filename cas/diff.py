@@ -41,6 +41,24 @@ def d(t, x):
     return T.mk(S("D"), (t, x))
 
 
+def _tower_zero(a, b, x):
+    """a − b 在 exp/log 微分塔上是否恒零（塔内表示唯一性，M5 结构定理）。
+
+    build_extension 成功（被积式覆盖 by 塔）时分子 is_zero 即精确 YES；
+    塔外（三角/代数依赖/嵌套）返回 False——交回通用管线结论。
+    """
+    from cas.risch import build_extension, RischUnsupported
+
+    try:
+        d0 = plus(a, neg(b))
+        if d0 is T.ZERO:
+            return True
+        _de, na, nd = build_extension(d0, x)
+        return na.is_zero()
+    except Exception:
+        return False
+
+
 def verify(F, x, f, budget=100000):
     from cas.decide import equivalent, T3
 
@@ -49,6 +67,10 @@ def verify(F, x, f, budget=100000):
         return "VERIFIED"
     if r is T3.NO:
         return "FAILED"
+    # 塔上精确通道：exp/log 塔内零等价可判定（Risch 结构定理）
+    tz = _tower_zero(d(F, x), f, x)
+    if tz:
+        return "VERIFIED"
     if r is T3.PROBABLE:
         return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"

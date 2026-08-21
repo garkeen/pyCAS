@@ -1241,6 +1241,7 @@ class Session:
 
     def integrate(self, s, var_s=None):
         from cas.integrate import integrate as zz_int
+        from cas.risch import RischNonElementary
         from cas.pprint import to_str as ps
 
         t = self._parse_in(s)
@@ -1254,7 +1255,16 @@ class Session:
                 n = str(len(vs)) if vs else "no"
                 return f"integrate: specify the integration variable (expr has {n} free variable)"
             x = vs[0]
-        res, ok, method, provisos = zz_int(t, x)
+        try:
+            res, ok, method, provisos = zz_int(t, x)
+        except RischNonElementary as e:
+            # Risch 决策程序的证明性拒答——区别于 unsupported 的定理结论
+            self._sid += 1
+            self.log.append(Step(
+                self._sid, "kernel:integrate[risch nonelementary]", (), t, t,
+                "YES", 0, note=f"proved: {e.reason}",
+            ))
+            return f"NOT ELEMENTARY (proved)   [Risch decision: {e.reason}]"
         self._kernel_step(f"integrate[{method}]", res, before=t)
         out = ps(res)
         tag = "VERIFIED" if ok else "UNVERIFIED"

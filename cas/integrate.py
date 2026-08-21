@@ -3,6 +3,7 @@
 from fractions import Fraction as Fr
 
 from cas.errors import PolyError
+from cas.risch import RischNonElementary
 from cas.poly import Poly, SymRat, ugcd
 from cas.apart import apart
 from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums, tr_eval, coefs
@@ -422,9 +423,23 @@ def integrate(t, x):
         return term, ok, "Hermite reduction + RootOf log part", provisos
     except PolyError:
         res = _trig_tan_half(t, x)
-        if res is None:
-            raise PolyError("unsupported integrand")
-        return res[0], res[1], "t = tan(x/2) substitution -> rational integration", res[2]
+        if res is not None:
+            return res[0], res[1], "t = tan(x/2) substitution -> rational integration", res[2]
+    # Risch 判定终点站（M5.1/M5.2：exp/primitive 塔）——便宜层全空手后调用；
+    # 结论即终局：初等原函数 VERIFIED，或 NOT ELEMENTARY (proved) 上抛。
+    from cas.risch import (integrate_exp_tower as _risch, RischUnsupported,
+                           RischNonElementary)
+
+    try:
+        F, _de = _risch(t, x)
+    except RischNonElementary:
+        raise   # 证明性拒答（session 层专属输出，区别于 unsupported）
+    except RischUnsupported:
+        raise PolyError("unsupported integrand")
+    from cas.diff import verify as _verify
+
+    ok = _verify(F, x, t) == "VERIFIED"
+    return F, ok, "Risch tower (exp/primitive case)", []
 
 
 def _trig_linear_integrand(t, x):
@@ -720,6 +735,9 @@ def defint(t, x, lo, hi, _no_sym=False):
         sign = -1
     try:
         F, ok, _method, _prov = integrate(t, x)
+    except RischNonElementary:
+        # Risch 证明不可初等：定积分无初等原函数，诚实拒答（带证明标记）
+        return None, "unsupported", "no elementary antiderivative (proved)"
     except PolyError:
         return None, "unsupported", "no antiderivative method"
     if F is None:
@@ -882,6 +900,9 @@ def _defint_improper(t, x, lo, hi):
         return T.plus(v1, v2), st, "improper both ends, split at 0"
     try:
         F, ok, _method, _prov = integrate(t, x)
+    except RischNonElementary:
+        # Risch 证明不可初等：定积分无初等原函数，诚实拒答（带证明标记）
+        return None, "unsupported", "no elementary antiderivative (proved)"
     except PolyError:
         return None, "unsupported", "no antiderivative method"
     if F is None:
