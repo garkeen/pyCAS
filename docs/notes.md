@@ -98,6 +98,21 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **M5.0 微分域塔落地（Risch 一期地基）**：cas/risch.py——DiffExt
+  （levels/cases/ws/terms 四表，maxima 属性表存导数同思路）、塔构建
+  （log 先 exp 后 = sympy handle_first='log'；integer_powers Fr 倍数归组，
+  content=1 规范基；参数限 Q(x)）、derivation（扁平多元 Poly 全变量链式
+  法则，maxima spderivative 对应物）、term<->塔双向转换。
+  **验收纪律的教训**：冒烟打印"D(f) = -2x/t"当场没看出是错的（应为
+  -2xt）——dpair 把 t 因子传进了分母位。三个实测 bug：dpair 参数顺序；
+  _ratio 的 deg<=1 提前返回砍掉 e^(x^2)/e^(2x^2) 归组（udivmod 本身就能
+  判常数商）；测试侧商法则写错（D(a/d) 分子用 d 不是 D(d) 的分母、分母
+  漏 d^2）。**最终正确性证据 = 双实现差分**：derivation（链式法则）vs
+  diff.d（spec 表驱动）数值采样交叉核对 + 回写重建塔的规范形逐项还原
+  （Q(x,t) 表示唯一性，比 equivalent 采样强——超越式判等只有 PROBABLE）。
+  采样点须取正（log 定义域）、容差用相对误差（大数值处 float64 绝对
+  误差放大）。诚实拒绝路径全测：代数依赖 exp(log(x)/2)、嵌套超越
+  exp(x*e^x)、三角 sin(x)（M5.3 经复指数解除）。
 - **RootOf 接线与语义统一（"拿不出根"的诊断与修复）**：诊断——factor 在 Q 上
   本来完备（不可约就是正确结论），缺口是 solve 对不可约 >=3 次直接拒答，而
   RootOf 数据结构 + Sturm 隔离早已存在（被积分器独占）。修复 = 纯组装：

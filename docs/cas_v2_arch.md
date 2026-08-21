@@ -290,7 +290,8 @@ decide 检出矛盾 → 会话冻结：后续 feed/apply/auto/answer 一律拒�
 | `cas/trig.py` | 三角多角度基规范形（trig_reduce/trig_equivalent） | L3 |
 | `cas/diff.py` | 微分器（读 spec.deriv）+ verify 回验 | L3 |
 | `cas/integrate.py` | 不定积分（spec anti/usub/Hermite+RT/tan 半角）+ 定积分（defint/反常/分段/正向换元） | L3/L7 |
-| `cas/istrategy.py` `cas/bsub.py` | 积分策略步树（IntStep）/ 反向换元（主支逆+符号窗口） | L7 |
+| `cas/istrategy.py` `cas/bsub.py` | 积分策略步树（IntStep）/ 反向换元（主支逆+符号窗口） |
+| `cas/risch.py` | 微分域塔（DiffExt 塔构建 + derivation 塔上求导；M5 Risch 地基） | L7 |
 | `cas/series.py` `cas/limits.py` | Taylor 级数引擎（含 O 项）/ 三值极限（含 ±∞ 与支配通道） | L3 |
 | `cas/ode.py` | ODE 四题型分类求解 + 回验 | L3 |
 | `cas/evalnum.py` | 数值求值层（仅验证/抽查通道） | 横切 |
