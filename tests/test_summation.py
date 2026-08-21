@@ -75,6 +75,41 @@ class TestFiniteSum(unittest.TestCase):
         self.assertIsNone(sm.finite_sum(parse("1/k"), k, parse("1"), parse("10")))
 
 
+class TestGosper(unittest.TestCase):
+    def check(self, expr_str, expected=None):
+        k = S("k")
+        t = parse(expr_str)
+        r = sm.indef_sum(t, k)
+        self.assertIsNotNone(r, f"Σ({expr_str}) should be summable")
+        self.assertTrue(sm.verify_indef(r, t, k), f"Σ({expr_str}) diff verify failed")
+        if expected is not None:
+            self.assertEqual(to_str(r), expected, f"Σ({expr_str})")
+
+    def test_rational_summable(self):
+        self.check("1/(k*(k+1))", "-1/(k + 1)")
+        self.check("(2*k+1)/(k^2*(k+1)^2)")
+
+    def test_unsupported(self):
+        k = S("k")
+        for s in ["1/k", "1/(2*k+1)", "k/(k+1)"]:
+            self.assertIsNone(sm.indef_sum(parse(s), k), f"Σ({s}) should be unsupported")
+
+    def test_finite_gosper(self):
+        k = S("k")
+        r = sm.finite_sum(parse("1/(k*(k+1))"), k, parse("1"), parse("10"))
+        self.assertIs(r, parse("10/11"))
+        r = sm.finite_sum(parse("1/(k*(k+1))"), k, parse("1"), parse("n"))
+        self.assertEqual(to_str(r), "-1/(n + 1) + 1")
+
+    def test_session_gosper(self):
+        from cas.session import Session
+        s = Session()
+        out = s.handle(":sum 1/(k*(k+1)) k")
+        self.assertIn("VERIFIED", out)
+        out = s.handle(":sum 1/(k*(k+1)) k 1 10")
+        self.assertIn("10/11", out)
+
+
 class TestSessionSum(unittest.TestCase):
     def test_sum_command(self):
         from cas.session import Session
