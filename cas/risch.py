@@ -35,8 +35,8 @@ class DiffExt:
 
     levels[i]：塔变量（levels[0] = 积分变量 x）；
     cases[i]：'base' | 'exp' | 'primitive'；
-    ws[i]：(wn, wd) Poly((x,)) 对——exp: D(t_i) = (wn/wd)*t_i；
-    primitive: D(t_i) = wn/wd（= u'/u）；
+    ws[i]：RatFunc（K_{i-1} 上）——exp: D(t_i) = w*t_i；
+    primitive: D(t_i) = w；
     terms[i]：塔变量的原函数形态（backsubs 用，如 Exp(x/2)、Log(x)）。
     """
 
@@ -64,9 +64,9 @@ class DiffExt:
         """D(levels[j]) 作为 all_vars 上的 (num, den) 分式。"""
         if self.cases[j] == "base":
             return Poly.const(all_vars, Fr(1)), Poly.one(all_vars)
-        wn, wd = self.ws[j]
-        wn = _embed(wn, all_vars)
-        wd = _embed(wd, all_vars)
+        w = self.ws[j]
+        wn = _embed(w.p, all_vars)
+        wd = _embed(w.q, all_vars)
         if self.cases[j] == "exp":
             tj = _embed(Poly.mono(all_vars, self.levels[j], 1), all_vars)
             return _rmul_polys(wn, wd, tj, Poly.one(all_vars))
@@ -237,56 +237,103 @@ def _fresh_sym(levels, hint):
 # 塔构建
 # ---------------------------------------------------------------------------
 
+def _tower_deriv_frac(nn, nd, de):
+    """D(nn/nd) 在塔上的 RatFunc（nn, nd: Poly(de.vars)）。"""
+    from cas.ratfunc import RatFunc
+
+    an, ad = derivation(nn, de)
+    bn, bd = derivation(nd, de)
+    num = an * bd * nd - nn * bn * ad
+    den = ad * bd * nd * nd
+    return RatFunc(num, den)
+
+
+def _tower_logderiv(nn, nd, de):
+    """D(nn/nd)/(nn/nd)（primitive 层 w = u'/u）在塔上的 RatFunc。"""
+    from cas.ratfunc import RatFunc
+
+    an, ad = derivation(nn, de)
+    bn, bd = derivation(nd, de)
+    num = an * bd * nd - nn * bn * ad
+    den = ad * bd * nn * nd     # 注意分母含 nn——除以 u 本身
+    return RatFunc(num, den)
+
+
 def build_extension(f, x):
     """term -> (DiffExt, fa, fd)：f 在塔上的 (num, den) 表示。
 
     建塔顺序 log 先 exp 后（sympy handle_first='log' 同款：primitive
-    在下、超指数在外）。参数非 Q(x) -> RischUnsupported。
+    在下、超指数在外）。参数重写到当前塔上表示（M5.2b 多层：log(log x)
+    类嵌套合法）；参数非塔上有理函数 -> RischUnsupported。
     """
+    from cas.ratfunc import RatFunc
+
     de = DiffExt(x)
-    exps, logs = _collect_exts(f)
+    subs = {}   # 原始 Exp/Log term -> 塔符号（驻留键）
 
-    # log 层（primitive）：u 必须 in Q(x) 且非常数
-    log_map = {}
-    for u in logs:
-        up = _try_qx(u)
-        if up is None:
-            raise RischUnsupported(
-                "log argument not rational in " + x.name + ": nested/algebraic extension"
-            )
-        if up.is_const() or up.degree(x) == 0:
-            continue   # log(常数) 属常数域，不建层
-        key = u
-        if key in log_map:
+    def tower_frac(t):
+        """t 在当前塔上的 (num, den)；含未覆盖 Exp/Log/非有理 -> PolyError。"""
+        g = T.subst(t, subs) if subs else t
+        return _frac_from_term(g, de.vars)
+
+    # 工作队列：反复扫描直到无新层可建（嵌套参数依赖内层先建，
+    # 如 log(log(x)) 外层需等内层）；永久建不了的由末尾残留检查拒绝。
+    while True:
+        exps, logs = _collect_exts(f)
+        changed = False
+
+        # log 层（primitive）：u = 塔上分式且非常数
+        for u in logs:
+            key = T.mk(S("Log"), (u,))
+            if key in subs:
+                continue
+            try:
+                un, ud = tower_frac(u)
+            except PolyError:
+                continue   # 本轮建不了（内层未就绪或永不可建）
+            if un.is_const() and ud.is_const():
+                continue   # log(常数) 属常数域，不建层
+            w = _tower_logderiv(un, ud, de)   # D(u)/u
+            tl = de.add("primitive", w, key, "l")
+            subs[key] = T.S(tl.name)
+            changed = True
+
+        # exp 层（hyperexponential）：base = 塔上分式，Fr 倍数归组
+        for base, members in _group_integer_powers(exps):
+            key = T.mk(S("Exp"), (base,))
+            if key in subs:
+                continue
+            try:
+                bn, bd = tower_frac(base)
+            except PolyError:
+                continue
+            if bn.is_const() and bd.is_const():
+                continue   # exp(常数) = 常数因子
+            # 代数依赖守卫：base 含既有塔变量 => e^base 与塔代数相关
+            # （如 exp(log(x)/2): t² = x），破坏超越性 => 诚实拒绝
+            if any(e > 0 for mono in bn.monos for e in mono[1:]) \
+                    or any(e > 0 for mono in bd.monos for e in mono[1:]):
+                raise RischUnsupported(
+                    "exponent depends on existing tower variables: "
+                    "algebraic dependency")
+            w = _tower_deriv_frac(bn, bd, de)   # eta' = D(base)
+            t = de.add("exp", w, key, "t")
+            subs[key] = T.S(t.name)
+            changed = True
+
+        if not changed:
+            break
+
+    # 重写 f 到塔上：Exp(m*base) -> t^m（归组成员按幂次展开），Log(u) -> tl
+    full_subs = dict(subs)
+    for base, members in _group_integer_powers(_collect_exts(f)[0]):
+        key = T.mk(S("Exp"), (base,))
+        if key not in subs:
             continue
-        du = up.deriv(x)
-        w = _cancel(du, up)
-        t = de.add("primitive", w, T.mk(S("Log"), (u,)), "l")
-        log_map[key] = t
-
-    # exp 层（hyperexponential）：arg in Q(x)，Fr 倍数归组
-    exp_map = {}
-    for base, members in _group_integer_powers(exps):
-        bp = _try_qx(base)
-        if bp is None:
-            raise RischUnsupported(
-                "exponent not rational in " + x.name + ": nested/algebraic extension"
-            )
-        if bp.degree(x) == 0:
-            continue   # exp(常数) = 常数因子
-        w = (bp.deriv(x), Poly.one((x,)))
-        t = de.add("exp", w, T.mk(S("Exp"), (base,)), "t")
+        tv = subs[key]
         for arg, m in members:
-            exp_map[arg] = (t, m)
-
-    # 重写 f 到塔上：Exp(m*base) -> t^m，Log(u) -> tl
-    subs = {}
-    for arg, (t, m) in exp_map.items():
-        target = T.pw(T.S(t.name), N(m)) if m != 1 else T.S(t.name)
-        subs[T.mk(S("Exp"), (arg,))] = target
-    for u, t in log_map.items():
-        subs[T.mk(S("Log"), (u,))] = T.S(t.name)
-    g = T.subst(f, subs) if subs else f
+            full_subs[T.mk(S("Exp"), (arg,))] = T.pw(tv, N(m)) if m != 1 else tv
+    g = T.subst(f, full_subs) if full_subs else f
 
     # 残留检查：漏网的 Exp/Log = 塔覆盖不全（诚实拒绝）
     rexp, rlog = _collect_exts(g)
@@ -369,11 +416,13 @@ def derivation(p, de):
 # 回写（塔 -> term）
 # ---------------------------------------------------------------------------
 
-def tower_to_term_pair(a, d, de):
-    """(num, den) Poly -> term（逐层 backsubst）。"""
+def tower_to_term_pair(a, d, de, backsub=True):
+    """(num, den) Poly -> term（backsub=False 保留塔符号）。"""
     nt = a.to_term() if not a.is_zero() else T.ZERO
     dt = d.to_term()
     val = T.div(nt, dt) if not dt is T.ONE else nt
+    if not backsub:
+        return val
     subs = {}
     for i in range(1, len(de.levels)):
         subs[T.S(de.levels[i].name)] = de.terms[i]
@@ -529,21 +578,21 @@ def _u_deriv_x(coeffs):
 
 
 def _derive_ut(coeffs, de, j):
-    """塔上 D 作用于 Σ a_k t_j^k -> K[t] 系数 list（无分母——K 是域）。
+    """塔上 D 作用于 Σ a_k t_j^k -> K[t] 系数 list（K 是域，无分母）。
 
     exp:       D(Σa_k t^k) = Σ (Da_k + k·η'·a_k) t^k          （对角）
     primitive: D(Σa_k θ^k) = Σ_i (Da_i + (i+1)·v·a_{i+1}) θ^i  （移位）
     """
     from cas.ratfunc import RatFunc
 
-    wn, wd = de.ws[j]
-    w = RatFunc(wn, wd)
-    xv = coeffs[0].p.vars[0] if coeffs else de.levels[0]
+    w = de.ws[j]
+    zv = RatFunc.zero(w.p.vars)   # 系数域零元（vars = levels[:j]）
     n = len(coeffs)
     out = []
     for i in range(n):
         a = coeffs[i]
-        term = a.deriv(xv) if not a.is_zero() else RatFunc.zero((xv,))
+        # K 层导数必须是塔上导数 D_K（多层时 d/dx 不够——D(l)=1/x 类）
+        term = _tower_deriv_frac(a.p, a.q, de) if not a.is_zero() else zv
         if de.cases[j] == "exp":
             if i > 0 and not a.is_zero():
                 term = term + a * w * Fr(i)
@@ -556,10 +605,7 @@ def _derive_ut(coeffs, de, j):
 
 def _exp_w(de, j):
     """第 j 层的 w = D(t)/t 或 D(θ)（RatFunc）。"""
-    from cas.ratfunc import RatFunc
-
-    wn, wd = de.ws[j]
-    return RatFunc(wn, wd)
+    return de.ws[j]
 
 
 # ---------------------------------------------------------------------------
@@ -780,9 +826,9 @@ def _integrate_normal(A, D, de, j, zero):
         if not _u_is_zero(rem):
             q, r = _u_divmod(rem, p, zero)
             if _u_is_zero(r):
-                # 剩余恰为多项式：exp 下 t 幂部分 -> 频率 RDE；
-                # primitive 下 θ-多项式剩余 -> 回多项式积分（leftover）
-                if de.cases[j] == "exp" and any(not c.is_const() for c in q):
+                # 剩余恰为多项式：exp 下全部进频率（k=0 分量由低层递归
+                # 积分处理）；primitive 下回本层多项式循环（leftover）
+                if de.cases[j] == "exp":
                     return (rat_part, logs, None, ("special", q)), "ok"
                 leftover = q if leftover is None else _u_add(leftover, q, zero)
             else:
@@ -1060,21 +1106,20 @@ def _free_of_x(t):
 # ---------------------------------------------------------------------------
 
 def assemble_exp_result(rat_part, logs, nonel, de, j):
-    """M5.1a 积分结果 -> term（组装 + backsubs）。"""
+    """积分结果 -> 塔符号 term（不回写——出口统一 backsubst）。"""
     tj = de.levels[j]
-    subs = {de.levels[j]: de.terms[j]}
     rat_part = rat_part or []
     logs = logs or []
     parts = []
     for u, p, k in rat_part:
         un, ud = _from_univar(u, de.vars, tj)
         pn, pd = _from_univar(p, de.vars, tj)
-        ut = T.subst(tower_to_term_pair(un, ud, de), subs)
-        pt = T.subst(tower_to_term_pair(pn, pd, de), subs)
+        ut = tower_to_term_pair(un, ud, de, backsub=False)
+        pt = tower_to_term_pair(pn, pd, de, backsub=False)
         parts.append(T.div(ut, T.pw(pt, N(k))))
     for c, g in logs:
         gn, gd = _from_univar(g, de.vars, tj)
-        gt = T.subst(tower_to_term_pair(gn, gd, de), subs)
+        gt = tower_to_term_pair(gn, gd, de, backsub=False)
         parts.append(T.times(c, T.log(gt)))
     if nonel is not None:
         num, p = nonel
@@ -1084,8 +1129,8 @@ def assemble_exp_result(rat_part, logs, nonel, de, j):
 
         raise RischNonElementary(
             "integral of " + _ts(T.div(
-                T.subst(tower_to_term_pair(nn, nd, de), subs),
-                T.subst(tower_to_term_pair(pn, pd, de), subs))) +
+                tower_to_term_pair(nn, nd, de, backsub=False),
+                tower_to_term_pair(pn, pd, de, backsub=False))) +
             " over the tower is not elementary (no constant residue roots)"
         )
     if not parts:
@@ -1104,74 +1149,208 @@ class RischNonElementary(Exception):
 
 
 def integrate_exp_tower(f, x):
-    """顶层 API：term -> term（初等原函数）或 RischNonElementary/RischUnsupported。
+    """顶层 API：term -> (term, de)（初等原函数）或异常。
 
-    M5.1/M5.2 范围：单层塔（exp 或 primitive，K = Q(x)）。按最外层 case
-    分派——exp 走频率 RDE（y' + k·η'·y = g），primitive 走逐阶有理积分。
+    M5.2b 递归塔：任意 primitive/exp 层序列，K 上积分递归下降。
+    内部全程塔符号空间，出口统一回写。
     """
     de, fa, fd = build_extension(f, x)
-    # 找最外层塔层
     j = len(de.levels) - 1
     if j == 0:
         raise RischUnsupported("no extension layer in expression")
-    case = de.cases[j]
-    # M5.2 单层限制：多层塔的系数域含低层变量（递归塔 pending M5.2b）
-    if len(de.levels) > 2:
-        raise RischUnsupported(
-            "multiple extension layers: recursive tower pending M5.2b")
-    if case == "primitive":
-        return risch_primitive_integrate(fa, fd, de, j)
-    return _integrate_exp_layer(fa, fd, de, j)
+    expr = _risch_rec(fa, fd, de, j)
+    subs = {T.S(de.levels[i].name): de.terms[i]
+            for i in range(1, len(de.levels))}
+    if subs:
+        expr = T.subst(expr, subs)
+    return expr, de
 
 
-def _integrate_exp_layer(fa, fd, de, j):
-    """exp 层积分（M5.1 算法体）。"""
+def _integrate_in_K(g, de, j):
+    """∫g dx，g ∈ K_j = ℚ(x, t₁..t_{j-1})（RatFunc on levels[:j]）→ term。"""
     from cas.integrate import integrate_rational
+
+    if j <= 1:
+        xv = de.levels[0]
+        val, ok, _prov = integrate_rational(g.p, g.q, xv)
+        if not ok:
+            raise RischUnsupported("rational integration failed in base field")
+        return val
+    return _risch_rec(g.p, g.q, de, j - 1)
+
+
+def _limited_integrate(a, de, j):
+    """K_j 上求 (b_rf, c) 使 Db + c·v = a（limited integration 问题）。
+
+    全程塔符号空间：c = ∫a 中 log(θ_j) 成分系数——θ_j 的对数形态
+    Log(u_j) 的塔符号即本层变量自身。其余 log/atan 成分无法由 b ∈ K_j
+    解释 -> rest ≠ 0 表示该塔内无解形态。
+    """
     from cas.ratfunc import RatFunc
 
-    eta_p = de.ws[j][0]
-    (rat_part, logs, nonel, leftover), freqs, st = risch_exp_integrate(fa, fd, de, j)
+    syms = {de.terms[i]: T.S(de.levels[i].name)
+            for i in range(1, len(de.levels))}
+    u_sym = T.subst(de.terms[j].args[0], syms)   # u_j 的塔符号形态
+    val = _integrate_in_K(a, de, j)
+    rat_t, alpha, rest = _decompose_integral(val, u_sym, syms)
+    if rest is not T.ZERO:
+        return None, None, rest
+    try:
+        b_rf = RatFunc.from_term(rat_t, tuple(de.levels[:j]))
+    except PolyError:
+        return None, None, val
+    return b_rf, (alpha if alpha != 0 else None), T.ZERO
 
-    # 频率逐阶 RDE
-    freq_terms = []       # [(b_k, k)] -> b_k * t^k
-    rde_fail = None       # 首个无解频率（不可初等证明载体）
+
+def _has_trans_head(t):
+    """t 是否含 Log/Atan 头（任意深度）。"""
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, T.Expr):
+            if u.head.name in ("Log", "Atan"):
+                return True
+            stack.extend(u.args)
+    return False
+
+
+def _decompose_integral(val, u_sym, syms):
+    """塔符号空间的初等原函数 term -> (rat_term, alpha, rest)。
+
+    - Log(g) 且 g ≡ u_sym：alpha 累加（limited 的 c）
+    - Log(g) 且 g ≡ 某已建层参数 u_i：替换为塔符号 S(levels[i])（低层
+      residue 出的 log(θ_i) 即 θ_i 自身形态，归 rat）
+    - 其余含 Log/Atan 头：rest（新层候选，塔外成分）
+    - 纯有理：rat
+    """
+    parts = val.args if isinstance(val, T.Expr) and val.head.name == "Plus" \
+        else (val,)
+    alpha = Fr(0)
+    rest_parts = []
+    rat_parts = []
+    for t in parts:
+        hit, coef = _log_u_factor_generic(t, u_sym)
+        if hit:
+            alpha += T.num_val(coef)
+            continue
+        mapped, new_t = _map_known_log(t, syms)
+        if mapped:
+            rat_parts.append(new_t)
+        elif _has_trans_head(t):
+            rest_parts.append(t)
+        else:
+            rat_parts.append(t)
+    rat_t = T.mk(S("Plus"), tuple(rat_parts)) if len(rat_parts) > 1 \
+        else (rat_parts[0] if rat_parts else T.ZERO)
+    rest = T.mk(S("Plus"), tuple(rest_parts)) if len(rest_parts) > 1 \
+        else (rest_parts[0] if rest_parts else T.ZERO)
+    return rat_t, alpha, rest
+
+
+def _log_u_factor_generic(t, u_sym):
+    """t 是否含 Log(恰为 u_sym) 因子。-> (bool, 系数 term)。"""
+    if isinstance(t, T.Expr) and t.head.name == "Log" \
+            and len(t.args) == 1 and t.args[0] is u_sym:
+        return True, T.ONE
+    if isinstance(t, T.Expr) and t.head.name == "Times":
+        lgs = [a for a in t.args if isinstance(a, T.Expr)
+               and a.head.name == "Log" and len(a.args) == 1
+               and a.args[0] is u_sym]
+        if len(lgs) == 1:
+            coef = T.ONE
+            for o in t.args:
+                if o is not lgs[0]:
+                    coef = T.times(coef, o)
+            return True, coef
+    return False, None
+
+
+def _map_known_log(t, syms):
+    """t 中 Log(u_i)（u_i = 第 i 层参数）替换为塔符号 S(levels[i])。
+
+    返回 (是否替换发生, 新 term)。t 不含任何已知 Log 时 (False, t)。
+    """
+    if not isinstance(t, T.Expr):
+        return False, t
+    hit = [False]
+
+    def rec(u):
+        if not isinstance(u, T.Expr):
+            return u
+        if u.head.name == "Log" and len(u.args) == 1:
+            for key, sym in syms.items():
+                if isinstance(key, T.Expr) and key.head.name == "Log" \
+                        and len(key.args) == 1 and key.args[0] is u.args[0]:
+                    hit[0] = True
+                    return sym
+        return T.mk(u.head, tuple(rec(a) for a in u.args))
+
+    out = rec(t)
+    return hit[0], out
+
+
+def _primitive_poly_part(Q, de, j):
+    """∫ Σ a_k θ^k：limited_integrate 循环（sympy integrate_primitive_polynomial
+    同构）。每轮残差最高次严格下降，终止。"""
+    from cas.ratfunc import RatFunc
+    from cas.pprint import to_str as _ts
+
+    sub = tuple(de.levels[:j])
+    zero = RatFunc.zero(sub)
+    out = []
+    p = list(Q)
+    while not _u_is_zero(p):
+        m = len(p) - 1
+        a = p[m]
+        b_rf, c, rest = _limited_integrate(a, de, j)
+        if b_rf is None:
+            raise RischUnsupported(
+                "component requires integration outside the tower: "
+                + _ts(rest)[:80])
+        q0 = [zero] * (m + 2)
+        if c is not None:
+            q0[m + 1] = zero.one(zero.p.vars) * (Fr(c) / Fr(m + 1))
+        q0[m] = b_rf
+        p = _u_sub(p, _derive_ut(q0, de, j))
+        if not q0[m + 1].is_zero():
+            out.append((q0[m + 1], m + 1))
+        if not q0[m].is_zero():
+            out.append((q0[m], m))
+    return out
+
+
+def _exp_freq_part(freqs, de, j):
+    """exp 频率分量：k=0 → 低层递归积分；k≠0 → RDE（暂限 ℚ(x) 系数域，
+    多元 RDE 待 rde.py 移植）。任一频率无解 => 不可初等证明。"""
+    from cas.ratfunc import RatFunc
+
+    tj = de.levels[j]
+    xv = de.levels[0]
+    expr = T.ZERO
+    freq_terms = []
+    rde_fail = None
     for k in sorted(freqs):
         g = freqs[k]
         if k == 0:
-            leftover = [g] if leftover is None else _u_add(leftover, [g], RatFunc.zero((de.levels[0],)))
+            expr = T.plus(expr, _integrate_in_K(g, de, j))
             continue
-        if not g.q.is_const():
+        w = de.ws[j]
+        if not (g.q.is_const() and g.p.vars == (xv,)
+                and w.q.is_const() and w.p.vars == (xv,)):
             raise RischUnsupported(
-                "RDE with rational g pending: eta' polynomial restriction")
-        b = _rde_exp_solve(k, eta_p, g.p, g.q, Poly.zero((de.levels[0],)))
+                "multivariate Risch differential equation pending "
+                "M5.2c (rde.py port); frequency k=%d" % k)
+        b = _rde_exp_solve(k, w.p, g.p, g.q, Poly.zero((xv,)))
         if b is None:
             rde_fail = k
             break
         bp = RatFunc.from_poly(b)
         if not bp.is_zero():
             freq_terms.append((bp, k))
-
-    expr = assemble_exp_result(rat_part, logs, nonel, de, j)
-    tj = de.levels[j]
     for bk, k in freq_terms:
-        bt = T.subst(bk.to_term(), {tj: de.terms[j]})
-        tk = T.pw(de.terms[j], N(k)) if k != 1 else de.terms[j]
-        parts = T.times(bt, tk)
-        expr = T.plus(expr, parts)
-    if leftover is not None and any(not c.is_zero() for c in leftover):
-        lf = _u_trim(list(leftover))
-        cv = Fr(0)
-        for c in lf:
-            if not c.is_zero():
-                if not c.is_const():
-                    raise RischUnsupported(
-                        "non-constant theta-free leftover over Q(x)")
-                cv += c.const_val()
-        P = Poly.const((de.levels[0],), cv)
-        val, ok, _method = integrate_rational(P, Poly.one((de.levels[0],)), de.levels[0])
-        if not ok:
-            raise RischUnsupported("leftover rational integration failed")
-        expr = T.plus(expr, val)
+        bt = bk.to_term()   # 塔符号形态（出口统一回写）
+        tk = T.pw(T.S(tj.name), N(k)) if k != 1 else T.S(tj.name)
+        expr = T.plus(expr, T.times(bt, tk))
     if rde_fail is not None:
         from cas.pprint import to_str as _ts
 
@@ -1183,158 +1362,79 @@ def _integrate_exp_layer(fa, fd, de, j):
                 ("t^%d" % rde_fail) if rde_fail != 1 else "t",
                 rde_fail,
                 _ts(g.to_term()),
-                _ts(RatFunc(eta_p, Poly.one(eta_p.vars)).to_term()),
+                _ts(de.ws[j]),
             )
         )
-    return expr, de
+    return expr
 
 
-# ---------------------------------------------------------------------------
-# M5.2：primitive 层积分（θ = log(u)，Dθ = v = u'/u ∈ K，K = Q(x) 单层）
-#
-# 多项式部分 Σ a_k θ^k 总可积：逐阶 Db_k = a_k − (k+1)·v·b_{k+1} 归到
-# Q(x) 有理积分（完备）；log/atan 成分剥离直进结果（入 b_k 会以
-# k·v·log(·) 污染高阶方程）。真分式走 Hermite+residue（θ 正规——
-# gcd(θ, v) = 1，无 special 因子，比 exp 干净）。
-# ---------------------------------------------------------------------------
+def _risch_rec(fa, fd, de, j):
+    """在第 j 层积分 fa/fd（Poly(levels[:j+1])）——递归塔核心。
 
-def _integrate_poly_part_prim(Q, de, j):
-    """∫ Σ a_k θ^k -> ([(b_k, k)], extras)。
-
-    sympy integrate_primitive_polynomial 同构（limited_integrate 循环）：
-    每轮取残差最高次系数 a，求 (b, c) 使 Db + c·v = a（K=Q(x) 特化：
-    c = ∫a 的 log(u) 成分系数——齐次常数/升次统一于此；b = 有理部分），
-    贡献 c·θ^{m+1}/(m+1) + b·θ^m，残差严格降次终止。
-    非 log(u) 的 log/atan 成分 = 需要新 primitive 层，诚实拒答
-    （不是不可积证明——是当前塔覆盖不足）。
+    商/真分式分离后按 case 分派：primitive 多项式走 limited 循环，
+    exp 多项式走频率 RDE；真分式共用 Hermite+residue（泛型）；
+    leftover 按 case 回本层多项式循环（primitive，deg 严格降）或
+    低层递归积分（exp 的 k=0 分量）。
     """
     from cas.ratfunc import RatFunc
     from cas.integrate import integrate_rational
 
-    v = _exp_w(de, j)
-    xv = de.levels[0]
-    zero = RatFunc.zero((xv,))
-    out = []
-    extras = []
-    p = list(Q)
-    while not _u_is_zero(p):
-        m = len(p) - 1
-        a = p[m]
-        _t, ok, _prov, rat_term, extra = integrate_rational(
-            a.p, a.q, xv, structured=True)
-        if not ok:
-            raise RischUnsupported(
-                "rational integration failed in primitive poly part")
-        try:
-            rf = RatFunc.from_term(rat_term, (xv,))
-        except PolyError:
-            raise RischUnsupported(
-                "non-rational rational part in primitive poly part")
-        c = None
-        if extra is not T.ZERO:
-            wn, wd = de.ws[j]
-            alpha, rest = _split_log_coeff(extra, wd.to_term())
-            if rest is not T.ZERO:
-                raise RischUnsupported(
-                    "integral requires a new logarithmic extension "
-                    "(pending recursive tower)")
-            if alpha != 0:
-                c = alpha
-        q0 = [zero] * (m + 2)
-        if c is not None:
-            q0[m + 1] = zero.one(zero.p.vars) * (Fr(c) / Fr(m + 1))
-        q0[m] = rf
-        p = _u_sub(p, _derive_ut(q0, de, j))
-        if not q0[m + 1].is_zero():
-            out.append((q0[m + 1], m + 1))
-        if not q0[m].is_zero():
-            out.append((q0[m], m))
-    return out, extras
-
-
-def _split_log_coeff(extra, u_term):
-    """extra（term）-> (alpha: Fr, rest: term)。
-
-    提取 Log(恰为 u_term) 成分的总系数（驻留指针判等）；其余成分重组。
-    """
-    parts = extra.args if isinstance(extra, T.Expr) \
-        and extra.head.name == "Plus" else (extra,)
-    alpha = Fr(0)
-    rest_parts = []
-    for t in parts:
-        hit, coef = _log_u_factor(t, u_term)
-        if hit:
-            alpha += T.num_val(coef)
-        else:
-            rest_parts.append(t)
-    rest = T.mk(S("Plus"), tuple(rest_parts)) if len(rest_parts) > 1 \
-        else (rest_parts[0] if rest_parts else T.ZERO)
-    return alpha, rest
-
-
-def _log_u_factor(t, u_term):
-    """t 是否含 Log(u_term) 因子。-> (bool, 系数 term)。"""
-    if isinstance(t, T.Expr) and t.head.name == "Log" \
-            and len(t.args) == 1 and t.args[0] is u_term:
-        return True, T.ONE
-    if isinstance(t, T.Expr) and t.head.name == "Times":
-        lgs = [a for a in t.args if isinstance(a, T.Expr)
-               and a.head.name == "Log" and len(a.args) == 1
-               and a.args[0] is u_term]
-        if len(lgs) == 1:
-            coef = T.ONE
-            for o in t.args:
-                if o is not lgs[0]:
-                    coef = T.times(coef, o)
-            return True, coef
-    return False, None
-
-
-def risch_primitive_integrate(fa, fd, de, j):
-    """primitive 层积分主入口（M5.2：K = Q(x) 单层）。"""
-    from cas.ratfunc import RatFunc
-
-    zero = RatFunc.zero((de.levels[0],))
+    sub = tuple(de.levels[:j])
+    zero = RatFunc.zero(sub)
     tj = de.levels[j]
+    case = de.cases[j]
 
     A = _univar(fa, tj)
     D = _univar(fd, tj)
     if _u_is_zero(A):
-        return T.ZERO, de
+        return T.ZERO
 
-    expr = T.ZERO
     dq = len(D) - 1
     dp = len(A) - 1
     if dp >= dq:
         Q, R = _u_divmod(A, D, zero)
-        pairs, extras = _integrate_poly_part_prim(Q, de, j)
-        for bk, k in pairs:
-            bt = T.subst(bk.to_term(), {tj: de.terms[j]})
-            tk = T.pw(de.terms[j], N(k)) if k != 1 else de.terms[j]
-            expr = T.plus(expr, T.times(bt, tk))
-        A = R
     else:
-        extras = []
-    if not _u_is_zero(A):
-        res, _negf, st = _integrate_proper(A, D, de, j, zero)
-        sub_expr = assemble_exp_result(res[0], res[1], res[2], de, j)
-        expr = T.plus(expr, sub_expr)
-        if res[3] is not None and any(not c.is_zero() for c in res[3]):
-            lf = _u_trim(list(res[3]))
-            if all(c.is_const() for c in lf):
-                cv = sum((c.const_val() for c in lf), Fr(0))
-                from cas.integrate import integrate_rational as _ir
+        Q, R = [], A
 
-                val, ok, _m = _ir(Poly.const((de.levels[0],), cv),
-                                  Poly.one((de.levels[0],)), de.levels[0])
+    expr = T.ZERO
+    if case == "primitive":
+        for bk, k in _primitive_poly_part(Q, de, j):
+            bt = bk.to_term()   # 塔符号形态
+            tk = T.pw(T.S(tj.name), N(k)) if k != 1 else T.S(tj.name)
+            expr = T.plus(expr, T.times(bt, tk))
+        res, negf, st = (None, None, None, None), {}, "ok"
+        if not _u_is_zero(R):
+            res, negf, st = _integrate_proper(R, D, de, j, zero)
+    else:
+        freqs = {k: c for k, c in enumerate(Q) if not c.is_zero()}
+        res, negf, st = (None, None, None, None), {}, "ok"
+        if not _u_is_zero(R):
+            res, negf, st = _integrate_proper(R, D, de, j, zero)
+        for k, v in negf.items():
+            freqs[k] = freqs[k] + v if k in freqs else v
+        expr = T.plus(expr, _exp_freq_part(freqs, de, j))
+
+    rat_part, logs, nonel, leftover = res
+    expr = T.plus(expr, assemble_exp_result(rat_part, logs, nonel, de, j))
+
+    if leftover is not None and any(not c.is_zero() for c in leftover):
+        lf = _u_trim(list(leftover))
+        if case == "primitive":
+            # θ-多项式剩余：回本层多项式积分（deg 严格降，终止）
+            fn, fdd = _from_univar(lf, de.vars, tj)
+            expr = T.plus(expr, _risch_rec(fn, fdd, de, j))
+        else:
+            # exp：ℚ 常数剩余（非常数系数已在频率分量中）
+            cv = Fr(0)
+            for c in lf:
+                if not c.is_zero():
+                    cv += c.const_val()
+            if cv != 0:
+                xv = de.levels[0]
+                val, ok, _m = integrate_rational(Poly.const((xv,), cv),
+                                                 Poly.one((xv,)), xv)
                 if not ok:
                     raise RischUnsupported("leftover rational integration failed")
                 expr = T.plus(expr, val)
-            else:
-                # θ-多项式剩余：递归（deg_θ 严格小于原，终止）
-                fn, fdd = _from_univar(lf, de.vars, tj)
-                sub2, _de2 = risch_primitive_integrate(fn, fdd, de, j)
-                expr = T.plus(expr, sub2)
-    for e in extras:
-        expr = T.plus(expr, e)
-    return expr, de
+    return expr
+

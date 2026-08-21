@@ -35,8 +35,7 @@ class TestTowerBuild(unittest.TestCase):
         de, fa, fd = _build("exp(-x^2)")
         self.assertEqual([v.name for v in de.levels], ["x", "t"])
         self.assertEqual(de.cases, ["base", "exp"])
-        wn, wd = de.ws[1]
-        self.assertEqual(to_str(wn.to_term()), "-2*x")
+        self.assertEqual(to_str(de.ws[1].to_term()), "-2*x")
         # f = t / 1
         self.assertEqual(to_str(fa.to_term()), "t")
         self.assertTrue(fd.is_const())
@@ -44,8 +43,7 @@ class TestTowerBuild(unittest.TestCase):
     def test_integer_power_grouping(self):
         # e^x + e^(x/2)：归组到基 x/2，f = t^2 + t
         de, fa, fd = _build("exp(x) + exp(x/2)")
-        wn, _wd = de.ws[1]
-        self.assertEqual(to_str(wn.to_term()), "1/2")
+        self.assertEqual(to_str(de.ws[1].to_term()), "1/2")
         self.assertEqual(to_str(fa.to_term()), "t + t^2")
 
     def test_grouping_higher_degree(self):
@@ -57,9 +55,8 @@ class TestTowerBuild(unittest.TestCase):
     def test_log_primitive_layer(self):
         de, fa, fd = _build("log(x^2 + 1)")
         self.assertEqual(de.cases, ["base", "primitive"])
-        wn, wd = de.ws[1]
-        self.assertEqual(to_str(wn.to_term()), "2*x")
-        self.assertEqual(to_str(wd.to_term()), "x^2 + 1")
+        self.assertEqual(to_str(de.ws[1].p.to_term()), "2*x")
+        self.assertEqual(to_str(de.ws[1].q.to_term()), "x^2 + 1")
 
     def test_mixed_layers_log_first(self):
         # log 先建（primitive 在下），exp 在外（sympy handle_first='log' 同款）
@@ -229,13 +226,14 @@ class TestRischExpIntegrate(unittest.TestCase):
         self.assertEqual(to_str(simplify(r)), "x")
         self._dcheck("exp(x)*exp(-x)", r)
 
-    def test_multilayer_unsupported(self):
-        # 双层 exp 塔：递归塔 pending M5.2b（诚实拒答，不误判）
-        from cas.risch import RischUnsupported
+    def test_multilayer_nonelementary(self):
+        # 双层 exp 塔（M5.2b 递归）：e^x 分量积出、e^(x^2) 分量 RDE 无解
+        # => 整体不可初等（频率分量代数独立 => 和可积 <=> 各项可积）
+        from cas.risch import RischNonElementary
 
-        with self.assertRaises(RischUnsupported) as cm:
+        with self.assertRaises(RischNonElementary) as cm:
             self._integrate("exp(x) + exp(x^2)")
-        self.assertIn("M5.2", str(cm.exception))
+        self.assertIn("not elementary", str(cm.exception))
 
 
 class TestRischPrimitive(unittest.TestCase):
