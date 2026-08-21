@@ -89,9 +89,14 @@ class TestGosper(unittest.TestCase):
         self.check("1/(k*(k+1))", "-1/(k + 1)")
         self.check("(2*k+1)/(k^2*(k+1)^2)")
 
+    def test_full_gosper(self):
+        """完整 normal form（z 有理函数，c≠1 的情况）"""
+        self.check("1/(k*(k+2))")        # 简化版做不了，完整版能做
+        self.check("1/((2*k+1)*(2*k+3))")  # 裂项
+
     def test_unsupported(self):
         k = S("k")
-        for s in ["1/k", "1/(2*k+1)", "k/(k+1)"]:
+        for s in ["1/k", "1/(2*k+1)", "k/(k+1)", "1/k^2", "1/(k^2+1)"]:
             self.assertIsNone(sm.indef_sum(parse(s), k), f"Σ({s}) should be unsupported")
 
     def test_finite_gosper(self):
@@ -100,6 +105,9 @@ class TestGosper(unittest.TestCase):
         self.assertIs(r, parse("10/11"))
         r = sm.finite_sum(parse("1/(k*(k+1))"), k, parse("1"), parse("n"))
         self.assertEqual(to_str(r), "-1/(n + 1) + 1")
+        # 完整 normal form 的定界求和
+        r = sm.finite_sum(parse("1/(k*(k+2))"), k, parse("1"), parse("10"))
+        self.assertEqual(to_str(r), "175/264")
 
     def test_session_gosper(self):
         from cas.session import Session

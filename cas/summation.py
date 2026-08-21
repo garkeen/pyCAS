@@ -139,8 +139,82 @@ def _gauss_solve(M, rhs, n_vars):
     return sol
 
 
+def _gosper_normal_form(P, Q, x):
+    """Gosper normal form: P/Q = (a/b) * (c(k+1)/c(k))。
+
+    gcd(a(k), b(k+j)) = 1 for j >= 0。
+    c 累积公式：每次找到 g = gcd(a(k), b(k+j))，c *= g(k-1)*...*g(k-j)。
+    """
+    a, b, c = P, Q, Poly.one((x,))
+    while True:
+        found = False
+        for j in range(1, max(a.degree(x), b.degree(x)) + 2):
+            b_shifted = _shift_poly(b, x, j)
+            if b_shifted.is_zero():
+                continue
+            g = ugcd(a, b_shifted)
+            if (g.is_const() and g.const_val() == 1) or g.is_zero():
+                continue
+            a = div_exact(a, g)
+            b = div_exact(b, _shift_poly(g, x, -j))
+            for i in range(1, j + 1):
+                c = c * _shift_poly(g, x, -i)
+            found = True
+            break
+        if not found:
+            break
+    return a, b, c
+
+
+def _gosper_full(t_sr, x):
+    """完整 Gosper：normal form 分解 + z = f/c 有理函数。
+
+    方程 a*f(k+1) - b*f(k) = P（P = a*c(k+1) 来自 normal form）。
+    S = t * f / c。覆盖 z 有理函数的情况（如 1/(k(k+2))）。
+    """
+    if isinstance(t_sr, Fr):
+        t_sr = SymRat(Poly.const((x,), t_sr), Poly.one((x,)))
+    # r = t(k+1)/t(k) = P/Q
+    t_plus = _shift_symrat(t_sr, x, 1)
+    r = t_plus / t_sr
+    if isinstance(r, Fr):
+        r = SymRat(Poly.const((x,), r), Poly.one((x,)))
+    P, Q = r.num, r.den
+    if not _is_fr_poly(P) or not _is_fr_poly(Q):
+        return None
+    # normal form: r = (a/b) * (c(k+1)/c(k))
+    a, b, c = _gosper_normal_form(P, Q, x)
+    # 方程：a*f(k+1) - b*f(k) = P
+    D = max(a.degree(x), b.degree(x), P.degree(x)) + 2
+    contributions = []
+    for i in range(D + 1):
+        fi = Poly.mono((x,), x, i)
+        fi_shift = _shift_poly(fi, x, 1)
+        contrib = a * fi_shift - b * fi
+        contributions.append(contrib)
+    max_deg = max((c_poly.degree(x) for c_poly in contributions + [P] if not c_poly.is_zero()), default=0)
+    M = [[c_poly.monos.get((j,), Fr(0)) for c_poly in contributions] for j in range(max_deg + 1)]
+    rhs_vec = [P.monos.get((j,), Fr(0)) for j in range(max_deg + 1)]
+    sol = _gauss_solve(M, rhs_vec, D + 1)
+    if sol is None:
+        return None
+    f = Poly.zero((x,))
+    for i, ci in enumerate(sol):
+        if ci != 0:
+            f = f + Poly((x,), {(i,): ci})
+    if f.is_zero():
+        return None
+    # S = t * f / c
+    f_sr = _mk_rat(f, Poly.one((x,)))
+    c_sr = _mk_rat(c, Poly.one((x,)))
+    S = t_sr * (f_sr / c_sr)
+    if isinstance(S, Fr):
+        S = SymRat(Poly.const((x,), S), Poly.one((x,)))
+    return S
+
+
 def _gosper_poly_z(t_sr, x):
-    """简化 Gosper：假设 z 是多项式，解 P·f(k+1) - Q·f(k) = P。
+    """简化 Gosper（c=1 退化）：假设 z 是多项式，解 P·f(k+1) - Q·f(k) = P。
 
     t_sr 是 SymRat（x 的有理函数）。返回 S SymRat 或 None。
     只处理 Fr 系数（参数系数留后续）。
@@ -191,18 +265,20 @@ def _gosper_poly_z(t_sr, x):
 def indef_sum(t, x):
     """f(x) 的不定求和 S(x)：满足 S(x)-S(x-1) = f(x)。
 
-    派发：多项式 → Faulhaber 幂和；有理函数 → Gosper（z 多项式）。
+    派发：多项式 → Faulhaber 幂和；有理函数 → 完整 Gosper（normal form + z=f/c）。
     非可求和 → None（拒答，诚实）。
     """
     # 先试多项式（Faulhaber）
     r = _indef_poly(t, x)
     if r is not None:
         return r
-    # 再试 Gosper（有理函数，z 多项式）
+    # 再试 Gosper（有理函数，完整 normal form）
     t_sr = _term_to_symrat(t, x)
     if t_sr is None:
         return None
-    S = _gosper_poly_z(t_sr, x)
+    if isinstance(t_sr, Fr):
+        t_sr = SymRat(Poly.const((x,), t_sr), Poly.one((x,)))
+    S = _gosper_full(t_sr, x)
     if S is not None:
         return S.to_term()
     return None
