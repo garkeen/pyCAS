@@ -34,7 +34,16 @@ def inv_mod(a, m):
 
 
 class RootOf:
-    """不可约 monic 多项式 m 的第 idx 个根（共轭类编号）。"""
+    """不可约 monic 多项式 m 的第 idx 个根（1-based，idx = 1..deg m）。
+
+    语义（全根编号，Mathematica Root[f,k] 式）：实根按升序占据 1..r
+    （r = 实根数，Sturm 隔离区间序——前 r 个有确定位置与相互次序）；
+    复根占据 r+1..deg(m)（仅共轭类编号，不承诺几何序——无复根隔离，
+    SymPy CRootOf 干脆不索引复根，此处比它多给稳定编号）。判等不受
+    影响：同 m 同 idx ⟺ 同根（编号由 m 唯一确定）。消费方：积分器
+    Hermite+RT（迹方法对全部共轭根求和，不依赖单根定位）、solve
+    （只枚举实根前缀，复根数量如实入 note）。
+    """
 
     __slots__ = ("m", "idx")
 

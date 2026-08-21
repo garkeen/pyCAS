@@ -114,6 +114,11 @@ def to_str(t, prec=0, hint=None, src=False):
         if name == "O" and len(u.args) == 1:
             val[u] = ("O(" + _wrap(val[u.args[0]], 0) + ")", _ATOM_P)
             continue
+        if name == "RootOf" and len(u.args) == 2:
+            # 原样大写输出：parser 对小写头自动首字母大写（rootof -> Rootof
+            # != RootOf），round-trip 要求精确形态
+            val[u] = (f"RootOf({_wrap(val[u.args[0]], 0)}, {val[u.args[1]][0]})", _ATOM_P)
+            continue
         if name in _PREC:
             p = _PREC[name]
             if name == "Plus":

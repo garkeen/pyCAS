@@ -143,7 +143,14 @@ defs + kernel(KernelCmd 注册表)。入口：`handle(line)`（REPL 与回放同
 ### 求解与线性代数（L3）
 - `solve(f, var)` → `SolveResult(solutions, provisos, status, note)`：
   线性/二次（含复根）/有理根/参数低次（proviso）/**主支逆**（spec.inv 驱动，
-  sin/cos/tan/exp/log）。`check_solution(f, sol, var)` 回验。
+  sin/cos/tan/exp/log）/**不可约高次 RootOf 实根**（factor 逐因子分派：
+  deg1 线性 / deg2 根式 / ≥3 不可约 → RootOf(g, k)，实根升序 Sturm 隔离序，
+  复根数量入 note 不逐个索引）。`check_solution(f, sol, var)` 回验
+  （RootOf 解走因子整除判定：g 不可约时 p(β)=0 ⟺ g|p，代数恒真）。
+- `groebner`：`groebner(fs, order)`（Buchberger，grevlex/lex）/
+  `reduced_basis(G, order)`（互相归约+monic，固定序唯一）/
+  `solve_system(fs, vars)`（零维方程组：lex 消元 + 逐变量回代；
+  状态 ok/contradiction/positive-dim/partial——非有理根回代诚实截断）。
 - `Matrix`：`parse/add/scale/mul/transpose/trace/det/rank/inv/solve` +
   谱理论 `charpoly/eigenvalues/eigenvectors`。`LinResult(unique, particular, null_basis)`。
 - `ineq.solve_poly_ineq(term, op, x)` → (区间列表, 字符串)（Sturm 符号表）。

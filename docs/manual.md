@@ -105,9 +105,15 @@ x - sin(x)                     # 表达式 → 当前式
 ```
 !factor x^4-1                # Zassenhaus 因式分解
 !solve x^2 - 5*x + 6 = 0 x   # 方程（低次/有理根/参数低次/主支逆）
+!solve x^3+x+1               # 不可约高次：实根 RootOf(隔离区间序) + 复根数量如实标注
 !solveset x^2 = 1 x          # 解集一等结构：x in {-1, 1}；不等式给区间并
 !solveineq x^2-1 > 0 x       # 一元多项式不等式（Sturm）
+!gsolve x^2+y^2==1 && x+y==1 for x,y    # 多项式方程组（Gröbner 消元）
 ```
+
+`!gsolve` 说明：零维方程组给全部解（解代回验证 `[VERIFIED]`）；
+正维（无穷解集）诚实拒答通解；回代遇非有理根（根式/RootOf）诚实截断
+（`partial` + note——ℚ 系数域不支持代数数系数多项式）。
 
 **微积分**
 ```

@@ -237,6 +237,68 @@ def _k_msolve(s, rest):
     return "usage: !msolve [[a,b],[c,d]] [e,f]"
 
 
+def _k_gsolve(s, rest):
+    """!gsolve f1 && f2 && ... for x,y —— Groebner 消元求解多项式方程组。"""
+    parts = rest.rsplit(" for ", 1)
+    if len(parts) != 2:
+        return "usage: !gsolve f1 && f2 && ... for x,y"
+    try:
+        tree = parse(parts[0].strip())
+        vs = [T.S(v.strip()) for v in parts[1].split(",") if v.strip()]
+    except Exception as e:
+        return f"parse error: {e}"
+    if not vs or len(set(id(v) for v in vs)) != len(vs):
+        return "usage: !gsolve f1 && f2 && ... for x,y"
+    fs = []
+
+    def walk(t):
+        if isinstance(t, T.Expr) and t.head.name == "And":
+            for a in t.args:   # And 是 n 元头（AC flatten）
+                walk(a)
+        else:
+            fs.append(t)
+
+    walk(tree)
+    if not fs:
+        return "usage: !gsolve f1 && f2 && ... for x,y"
+    from cas.groebner import solve_system
+
+    r = solve_system(fs, tuple(vs))
+    if r.status == "identity":
+        return "identity: every point is a common zero"
+    if r.status == "contradiction":
+        return "contradiction: no common zero (1 in ideal)"
+    if r.status == "positive-dim":
+        return "positive-dimensional: " + r.note
+    if r.status == "unsupported":
+        return "unsupported: " + r.note
+    # 解代回验证（证书：subst 全部原方程判零；Eq 归一 lhs-rhs）
+    def _lhs(t):
+        if isinstance(t, T.Expr) and t.head.name == "Eq":
+            return T.plus(t.args[0], T.neg(t.args[1]))
+        return t
+
+    lines = []
+    nver = 0
+    for sol in r.solutions:
+        assign = dict(zip(vs, sol))
+        ok = True
+        for f in fs:
+            e = simplify(expand(T.subst(_lhs(f), assign)))
+            if e is not T.ZERO:
+                ok = False
+                break
+        nver += ok
+        lines.append("(" + ", ".join(to_str(t) for t in sol) + ")")
+    out = "; ".join(lines) if lines else "(no rational solutions enumerated)"
+    if r.solutions:
+        tag = "VERIFIED" if nver == len(r.solutions) else f"UNVERIFIED ({len(r.solutions)-nver}/{len(r.solutions)} failed)"
+        out += f"   [{tag}]"
+    if r.note:
+        out += "   [note: " + r.note + "]"
+    return "solutions (" + ",".join(v.name for v in vs) + "): " + out
+
+
 def _k_together(s, rest):
     from cas import ops
     from cas.parser import parse as _parse
@@ -528,6 +590,7 @@ class Session:
             "mrank": KernelCmd("rank [[a,b],[c,d]]", lambda s, r: s.mrank(r.strip())),
             "minv": KernelCmd("inverse [[a,b],[c,d]]", lambda s, r: s.minv(r.strip())),
             "msolve": KernelCmd("solve system: !msolve [[a,b],[c,d]] [e,f]", _k_msolve),
+            "gsolve": KernelCmd("polynomial system: !gsolve f1 && f2 for x,y (Groebner elimination)", _k_gsolve),
             "charpoly": KernelCmd("charpoly [[a,b],[c,d]] = det(lam*I - M)", lambda s, r: s.mcharpoly(r.strip())),
             "eigenvalues": KernelCmd("eigenvalues [[a,b],[c,d]]", lambda s, r: s.meigenvalues(r.strip())),
             "eigenvectors": KernelCmd("eigenvectors [[a,b],[c,d]]", lambda s, r: s.meigenvectors(r.strip())),
@@ -975,6 +1038,8 @@ class Session:
                 tag = f"UNVERIFIED ({bad}/{len(checks)} solutions failed substitution)"
         if r.provisos:
             out += "   [proviso: " + " && ".join(to_str(g) for g in r.provisos) + "]"
+        if r.note:
+            out += "   [note: " + r.note + "]"
         if tag:
             out += f"   [{tag}]"
         return var.name + " = " + out

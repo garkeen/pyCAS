@@ -145,6 +145,46 @@ def _sort_sols(sols):
     return sorted(sols, key=sk)
 
 
+def _irreducible_roots(p, var):
+    """不可约剩余的根：逐因子分派（deg1 线性 / deg2 根式 / >=3 RootOf 实根）。
+
+    RootOf 语义见 algnum.RootOf：实根升序占 1..r（Sturm 隔离序），
+    solve 只枚举实根前缀；复根数量如实入 note（不逐个索引——复根无
+    隔离区间，SymPy CRootOf 同款边界）。二次因子仍走根式解（sqrt(2)
+    优于 RootOf(x^2-2,1)）。返回 (sols, note)。
+    """
+    from cas.factor import factor as zz_factor
+    from cas.algnum import RootOf
+    from cas.sturm import isolate_real_roots
+
+    sols = []
+    ncomplex = 0
+    _c, facs = zz_factor(p)
+    for g, mult in facs:
+        dg = g.degree(var)
+        if dg == 1:
+            # 防御分支：有理根阶段应已除尽一次因子
+            sols.append(_root_term(-g.const_val() / g.lc(var)))
+        elif dg == 2:
+            s2, _n = _quadratic(
+                g.monos.get((2,), Fr(0)),
+                g.monos.get((1,), Fr(0)),
+                g.monos.get((0,), Fr(0)),
+            )
+            sols.extend(s2)
+        else:
+            gm = g.scalar(Fr(1) / g.lc(var))
+            nreal = len(isolate_real_roots(gm))
+            for i in range(nreal):
+                sols.append(RootOf(gm, i + 1).to_term())
+            ncomplex += (dg - nreal) * mult
+    note = ""
+    if ncomplex:
+        note = ("%d complex root(s) not enumerated "
+                "(RootOf indexes real roots only)" % ncomplex)
+    return sols, note
+
+
 def _poly_solve(p, var):
     if p.is_zero():
         return SolveResult([], [], "identity")
@@ -199,19 +239,22 @@ def _poly_solve(p, var):
     if rd == 1:
         roots.append(_root_term(-rem.const_val() / rem.lc(var)))
     elif rd == 2:
-        sols, note = _quadratic(
+        sols, _qn = _quadratic(
             rem.monos.get((2,), Fr(0)),
             rem.monos.get((1,), Fr(0)),
             rem.monos.get((0,), Fr(0)),
         )
         roots.extend(sols)
     elif rd >= 3:
-        note = "irreducible part of degree %d beyond rational-root method" % rd
+        sols3, note = _irreducible_roots(rem, var)
+        roots.extend(sols3)
     seen = []
     for r in roots:
         if r not in seen:
             seen.append(r)
-    return SolveResult(_sort_sols(seen), [], "ok" if not note else "unsupported", note=note)
+    # RootOf 接线后 rd>=3 不再拒答：实根 RootOf 精确表示（note 仅信息性
+    # 复根未枚举说明），status 恒 ok
+    return SolveResult(_sort_sols(seen), [], "ok", note=note)
 
 
 def _affine(a1, var):
@@ -359,13 +402,35 @@ def _solve_param_lowdeg(lhs, var):
     return SolveResult([x1, x2], prov, "ok")
 
 
+def _rootof_check(lhs, var, sol):
+    """RootOf 解的代数验证：sol = RootOf(g, k) 时 p(β) = 0 ⟺ g | p
+    （g 不可约即 β 的极小多项式，整除任何以 β 为根的 ℚ 多项式）——
+    纯符号精确判定，三态完备：整除 VERIFIED / 不整除 UNVERIFIED /
+    非多项式形态 None（落回代回路径）。"""
+    if not (isinstance(sol, Expr) and sol.head.name == "RootOf" and len(sol.args) == 2):
+        return None
+    try:
+        p = Poly.from_term(lhs, (var,))
+        g = Poly.from_term(sol.args[0], (var,))
+    except PolyError:
+        return None
+    if p.degree(var) < g.degree(var):
+        return "UNVERIFIED"
+    return "VERIFIED" if p.udivmod(g)[1].is_zero() else "UNVERIFIED"
+
+
 def check_solution(f, sol, var, budget=100000):
     var = T.S(var) if isinstance(var, str) else var
     if isinstance(f, Expr) and f.head.name == "Eq":
         lhs = _sub(f.args[0], f.args[1])
     else:
         lhs = f
-    e = simplify(T.subst(lhs, {var: sol}), budget)
+    r = _rootof_check(lhs, var, sol)
+    if r is not None:
+        return r
+    # expand 后再判零：复根代回产生 (i*sqrt(3)/2-1/2)^3-1 类乘积幂，
+    # i 整数幂折叠（mk 层）需先展开乘积——纯 simplify 不展开乘积幂
+    e = simplify(expand(T.subst(lhs, {var: sol})), budget)
     if e is T.ZERO:
         return "VERIFIED"
     return "UNVERIFIED"

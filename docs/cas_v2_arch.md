@@ -138,10 +138,11 @@ latex/refine 零递归）；预算按节点计。
 | 有理函数 | 互素规范形（RatFunc）、apart 部分分式 |
 | 代数数 | RootOf 名词 + ℚ(α) 域 + 幂和迹 + Sturm 实根隔离（复根隔离待建） |
 
-### 梯队二：等式与不等式求解 ✓（Gröbner 待建）
+### 梯队二：等式与不等式求解 ✓
 | 域 | 内容 |
 |----|------|
-| 方程求解 | 线性/二次（含复根）/有理根/参数低次（proviso）/主支逆（spec.inv） |
+| 方程求解 | 线性/二次（含复根）/有理根/参数低次（proviso）/主支逆（spec.inv）/不可约高次 RootOf 实根（Sturm 隔离序 + 因子整除回验） |
+| 方程组 | Gröbner 消元（Buchberger + reduced basis，零维全解 / 正维诚实拒答 / 非有理根截断标注） |
 | 线性代数 | 精确消元（det/rank/inv/solve）+ 谱理论（charpoly 排列展开/eigenvalues/eigenvectors） |
 | 不等式 | 一元线性链 + 一元多项式 Sturm 符号表（偶重根不换号）；解集一等结构（FiniteSet/Interval/Union） |
 
@@ -178,7 +179,8 @@ latex/refine 零递归）；预算按节点计。
 - **M5 Risch 分期**：exp/log 子情形 → 三角（经 exp 塔）→ 完整决策程序（含不可初等的证明）；
   前置真模块：表达式↔微分域塔转换器 + 塔上导数表。
 - **ODE 扩展**：非齐次（待定系数/常数变易）、常系数系统（exp(At)，特征值前置已就绪）。
-- **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
+- **剩余结构债**：RootOf 复根隔离（已裁定注销：RootOf 语义 = 实根升序前缀 + 复根仅编号，
+  SymPy CRootOf 同款边界；除非需要 Mathematica 式全根几何序）。
 
 ---
 
@@ -282,7 +284,7 @@ decide 检出矛盾 → 会话冻结：后续 feed/apply/auto/answer 一律拒�
 | `cas/simplify.py` `cas/refine.py` | 显式栈重建化简（exp 加法定律合并）/ 账本驱动化简 | L5 |
 | `cas/poly.py` `cas/ratfunc.py` `cas/factor.py` `cas/apart.py` | 多项式（含 mgcd/div_exact）/ 有理函数 / Zassenhaus 因式分解 / 部分分式 | L3 |
 | `cas/algnum.py` `cas/sturm.py` | 代数数 ℚ(α) + RootOf + 幂和迹 / Sturm 实根隔离 | L3 |
-| `cas/solve.py` `cas/matrix.py` `cas/ineq.py` `cas/sets.py` | 方程求解（含参数低次/主支逆）/ 矩阵+谱理论 / 多项式不等式 / 解集一等结构 | L3 |
+| `cas/solve.py` `cas/matrix.py` `cas/ineq.py` `cas/sets.py` `cas/groebner.py` | 方程求解（含参数低次/主支逆/RootOf 实根）/ 矩阵+谱理论 / 多项式不等式 / 解集一等结构 / Gröbner 消元方程组 | L3 |
 | `cas/ops.py` | 项层结构 API：together/cancel/collect/coefficient/numerator/denominator | L3 |
 | `cas/spec.py` | FunctionSpec 注册表（导数/打印名/奇偶/特殊点/有界/定义域/anti/inv/numeric） | L3 地基 |
 | `cas/trig.py` | 三角多角度基规范形（trig_reduce/trig_equivalent） | L3 |

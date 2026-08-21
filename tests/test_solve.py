@@ -76,6 +76,34 @@ class TestSolve(unittest.TestCase):
         r = self.sols("sin(x) + x - 2")
         self.assertEqual(r.status, "unsupported")
 
+    def test_rootof_irreducible(self):
+        # RootOf 接线：不可约三次 -> 实根 RootOf（Sturm 隔离序）+ 复根 note
+        r = self.sols("x^3 + x + 1")
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(len(r.solutions), 1)
+        v = r.solutions[0]
+        self.assertEqual(v.head.name, "RootOf")
+        # 因子整除验证：g | p 代数恒真
+        self.assertEqual(self.check(parse("x^3 + x + 1"), v, x), "VERIFIED")
+        self.assertIn("complex root", r.note)
+        # round-trip：打印 -> 解析 -> 同一驻留项
+        self.assertIs(parse(to_str(v)), v)
+
+    def test_rootof_mixed_factors(self):
+        # 混合因子：二次根式解 + 三次 RootOf 解共存；重根去重
+        r = self.sols("(x^2 + 1)*(x^3 + x + 1)")
+        strs = [to_str(v) for v in r.solutions]
+        self.assertEqual(strs, ["i", "-i", "RootOf(x + x^3 + 1, 1)"])
+        r2 = self.sols("(x - 1)^2*(x^3 + x + 1)")
+        self.assertEqual([to_str(v) for v in r2.solutions], ["1", "RootOf(x + x^3 + 1, 1)"])
+
+    def test_no_real_roots(self):
+        # 全复根：实解集空 + 复根数量如实入 note（不伪造）
+        r = self.sols("x^4 + 1")
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.solutions, [])
+        self.assertIn("4 complex root", r.note)
+
     def test_inverse_principal(self):
         # 主支逆解（spec.inv 声明驱动；特殊点折叠自动）
         r = self.sols("sin(x) - 1")

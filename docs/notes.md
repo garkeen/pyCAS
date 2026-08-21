@@ -98,6 +98,31 @@
   对谐波失明）补整数频率；sin^2 类三角多项式改走多角度基线性化逐项积分
   （连续原函数），绕开 tan-half 原函数 atan(tan(x/2)) 在 x=(2k+1)pi 的分支跳变
   （跨切区间 NL 代限值错误，交叉核对曾正确扣留）；spec 补 Log/Atan anti 表项。
+- **RootOf 接线与语义统一（"拿不出根"的诊断与修复）**：诊断——factor 在 Q 上
+  本来完备（不可约就是正确结论），缺口是 solve 对不可约 >=3 次直接拒答，而
+  RootOf 数据结构 + Sturm 隔离早已存在（被积分器独占）。修复 = 纯组装：
+  _poly_solve 尾部 factor 逐因子分派（deg1 线性 / deg2 根式 / >=3 不可约 ->
+  RootOf(g,k) 实根）。**语义裁定**：RootOf(m,k) 全根编号（Mathematica
+  Root[f,k] 式）——实根按升序占 1..r（Sturm 隔离序），复根占 r+1..deg(m)
+  仅编号不承诺几何序；比 SymPy CRootOf（只索引实根）多给稳定编号。积分器
+  j=1..n 全根循环天然兼容（迹方法不依赖单根定位）。**复根隔离债务注销**：
+  消费场景全在实数域（ineq/solve），除非要 Mathematica 式全根几何序否则无需
+  Collins-Krandick 矩形细分。配套：check_solution 加因子整除判定（g 不可约
+  即 beta 极小多项式，p(beta)=0 <=> g|p，代数恒真三态完备）；check_solution
+  补 expand（复根代回 (i*sqrt(3)/2-1/2)^3-1 类乘积幂需展开后 i 幂才折叠，
+  纯 simplify 不展开乘积幂——既有缺口顺手修）。
+- **Gröbner 基落地（朴素 Buchberger + 消元求解）**：单项式序 lex/grevlex
+  （grevlex key = (总次数, 反转取负)）、多变元完全归约、S-多项式、第一判则
+  剪枝（首单项式互素必归零）、reduced basis 迭代重建（成员被其余消去即删除，
+  理想不变）。solve_system：lex 消元定理只保证最末变量有单变量基元素
+  （正维检测只查 vars[-1]——初版要求每个变量都有是方向性错误）；回代从
+  最末变量起，有理解代入继续、根式/RootOf 解诚实截断（partial + note，
+  Q 系数域不支持代数数系数多项式——代数数扩张是远期项）。实测教训三个：
+  _poly_solve 只认一元 Poly（指数元组 1 维），消元多项式须投影
+  （(0,2)->(2,)，否则 monos.get((2,)) 取不到系数产生 Undefined）；_only_in
+  初版错误要求每个单项都含目标变量（y-1/2 的常数项被误判）；And 是 n 元头
+  （AC flatten），walk 拆方程必须遍历全部 args。!gsolve 语法
+  `f1 && f2 for x,y`，解代回验证 VERIFIED。
 - **无原函数定积分的 verify 裁定**：系统定位拒绝浮点数值通道（无高精度数值
   积分），故找不到原函数时不存在可用的独立验证手段——唯一诚实选项是拒答
   （unsupported: no antiderivative）。Maxima defint 的无原函数闭式全部是符号
@@ -114,7 +139,7 @@
   integrate/defint 原有验证；factor/solve/minv/msolve/eigenvalues/limit/series
   七处裸奔已补齐（check_solution 此前存在但未接入管线）。所有 ! 输出统一
   携带 [VERIFIED/PROBABLE/UNVERIFIED, method] 标注。
-- **剩余结构债**：RootOf 复根隔离；Gröbner 基（多元方程组）。
+- **剩余结构债**：代数数系数多项式（Gröbner 回代遇根式/RootOf 解的继续化）。
 
 ### 1.2 立场裁定（长期有效，改动需重新论证）
 
@@ -134,7 +159,8 @@
 ### 1.3 诚实记录（已知局限）
 
 - apart 实现依赖 Zassenhaus 因式分解（非纯 CRT 路线）。
-- RootOf 实根有 Sturm 隔离区间；复根仍只有共轭类编号。
+- RootOf 实根有 Sturm 隔离区间（升序即 idx 序）；复根仅共轭类编号
+  （语义裁定见 §1.1 RootOf 接线条目——除非需要全根几何序，否则不建复根隔离）。
 - 三角积分路径的 [VERIFIED] 只覆盖 t 域有理积分，半角代回本身未单独验证。
 - 主支逆求解不给周期族通解（诚实标注 principal branch）。
 - 绑定词打印变量名取首次驻留的 hint（α 等价代价，语义无影响）。
