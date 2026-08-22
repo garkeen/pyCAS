@@ -299,6 +299,25 @@ class TestRischPrimitive(unittest.TestCase):
             self._integrate("1/log(x)")
         self.assertIn("not elementary", str(cm.exception))
 
+    def test_exp_log_nonelementary(self):
+        # M5.2c-ii：∫e^x·log(x)dx = e^x·Ei 类，频率方程 y'+y=log(x)
+        # 在 ℚ(x,log x) 无有理解——primitive 视角逐度下降 round0
+        # D(s)+s=-1/x 判 proved（Ei 成分的机器证明）
+        from cas.risch import RischNonElementary, integrate_exp_tower
+
+        with self.assertRaises(RischNonElementary) as cm:
+            integrate_exp_tower(parse("exp(x)*log(x)"), x)
+        self.assertIn("not elementary", str(cm.exception))
+
+    def test_exp_log_mixed(self):
+        # M5.2c-ii：e^x(log x + 1/x) 可积——round0 rhs=1/x-(1/x)*s_1=0，
+        # 解 u=log x；与 e^x*log(x) 的 proved 形成判定分界对照
+        from cas.risch import integrate_exp_tower
+
+        r = integrate_exp_tower(parse("exp(x)*(1/x + log(x))"), x)[0]
+        self.assertEqual(to_str(simplify(r)), "exp(x)*log(x)")
+        self._dcheck("exp(x)*(1/x + log(x))", r)
+
 
 if __name__ == "__main__":
     unittest.main()

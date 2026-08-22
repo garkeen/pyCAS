@@ -150,6 +150,20 @@ wn 吸收 q=x 后链路给 y=1，验证差 1/x；用官方测试同款 extension
 必须先读 FriCAS rdeefx.spad 的 no_cancel_b_large/small/equal 与
 weak_normalization 完整语义（其调用契约与右端处理），弄清归约的严格
 适用条件后重做。防御性验证器再次拦下错误输出（设计生效）。
+**M5.2c-ii 落地（FriCAS 拓扑重做成功）**：
+推翻首轮贪心归约后按 intpar.spad 拓扑重建，核心结构 = wn(右端缩放)→
+normal denominator(z=h·y, 方程×dh)→界(sympy bound_degree 移植)→
+spde 核(a,b,c 各自除 gcd！曾犯 aa=cn/g 污染)→终解分派(large/small/
+equal/cancellation 逐度下降)。关键语义修正三处：(1) primitive 视角
+耦合项是 (jd+1)·dk·s_{jd+1} 进低次方程（exp 视角才是 f0+j·η 对角）——
+上轮失败根因即两者混用；(2) 空列表=零多项式，分母单位必须是 [one]，
+fu 运算入口强制规范化；(3) 基层 ℚ(x) 不进塔机制（_univar 剥唯一变量
+产生 ()-变组系数与 (x,) 域错位），j==1 直接委托极点分析。切片边界
+S-a/S-b/S-c（radical/常数依赖/完整 limited_integrate）触发时诚实
+undecided；da=db==0 时 naive 界 n>=dc 不截断故跳过共振修正是可证安全。
+验收：e^x*log(x)=Ei 类 proved 与 e^x(1/x+log x)=e^x log x VERIFIED
+形成判定分界，差异精确来自 round0 方程 D(s)+s=-1/x 的可解性——算法
+正确区分。447 tests 全绿。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前

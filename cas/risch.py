@@ -1386,104 +1386,504 @@ def _restrict(rf, vars_):
     return _RF(shrink(rf.p), shrink(rf.q))
 
 
-def _rde_tower_solve(f, g, de, j):
-    """解 D(y) + f·y = g，y ∈ K_j = ℚ(x, t₁..t_{j-1})。
+# ---------------------------------------------------------------------------
+# M5.2c-ii：塔域 Risch DE 完备判定
+#
+# 解 D(y) + f·y = g（y ∈ K_j = ℚ(x, t₁..t_{j-1})），三态返回：
+#   (y, 'ok')          有理解（出口精确验证兜底，验证不过 = 内部错误异常）
+#   (None, 'proved')   无有理解的机器证明（界否定/贪心余量/整除性失败）
+#   (None, 'undecided') 当前理论不可判——绝不猜测、绝不误证
+#
+# 唯一算法参考：FriCAS intpar.spad ParametricRischDE（weak normalization
+# :920 / get_denom :910 / 变换 :1406-1410 / 右端缩放 :1237）+ sympy rde.py
+# 的 bound_degree / spde / no_cancel_b_large / no_cancel_b_small /
+# no_cancel_equal / cancel_* 分派细节补全。已知切片边界（触发时诚实
+# undecided，绝不降级猜测）：
+#   S-a primitive db==da 共振的 radical 判定（is_log_deriv_k_t_radical）
+#   S-b B==0 cancellation（is_deriv_in_field 机器）
+#   S-c 非常数比值的共振判定（limited_integrate / parametric_log_deriv 完整版）
+# ---------------------------------------------------------------------------
 
-    f: RatFunc 不含塔变量（exp 频率 k·η'，η' ∈ ℚ[x]）；g: RatFunc 任意。
-    返回 y: RatFunc | None。None = 当前理论无法判定（unsupported，
-    绝不误判不可积——cancellation/精确界分析留 M5.2c-ii）。
+
+def _fu_add(n1, d1, n2, d2, zero):
+    """K[t] 分式加法（n/d 为 univar list；空分母按单位 1 规范化）。"""
+    one_c = zero.one(zero.p.vars)
+    d1 = d1 if d1 else [one_c]
+    d2 = d2 if d2 else [one_c]
+    return (_u_add(_u_mul(n1, d2, zero), _u_mul(n2, d1, zero), zero),
+            _u_mul(d1, d2, zero))
+
+
+def _fu_mul(n1, d1, n2, d2, zero):
+    one_c = zero.one(zero.p.vars)
+    d1 = d1 if d1 else [one_c]
+    d2 = d2 if d2 else [one_c]
+    return (_u_mul(n1, n2, zero), _u_mul(d1, d2, zero))
+
+
+def _u_deg(cs):
+    return len(_u_trim(list(cs))) - 1
+
+
+def _u_xgcd(a, b, zero):
+    """扩展欧几里得：返回 (s, t, g) 使 s·a + t·b = g。"""
+    one_c = zero.one(zero.p.vars)
+    r0, r1 = _u_trim([c for c in b]), _u_trim([c for c in a])
+    s0, s1 = [], [one_c]
+    t0, t1 = [one_c], []
+    while not _u_is_zero(r1):
+        q, r = _u_divmod(r0, r1, zero)
+        s_new = _u_sub(s0, _u_mul(q, s1, zero))
+        t_new = _u_sub(t0, _u_mul(q, t1, zero))
+        r0, r1 = r1, r
+        s0, s1 = s1, s_new
+        t0, t1 = t1, t_new
+    if _u_is_zero(r0):
+        return s0, t0, []
+    inv = one_c / r0[0]
+    return [c * inv for c in s0], [c * inv for c in t0], \
+        [c * inv for c in r0]
+
+
+def _u_diophantine(b, a, c, zero):
+    """解 r·b + z·a = c（sympy gcdex_diophantine(b, a, c) 语义）。"""
+    s, t, g = _u_xgcd(b, a, zero)
+    if _u_is_zero(g):
+        return None
+    qq, rr = _u_divmod(c, g, zero)
+    if not _u_is_zero(rr):
+        return None
+    return _u_mul(s, qq, zero), _u_mul(t, qq, zero)
+
+
+def _split_ns(p, der_fn, zero):
+    """intrf.spad:141 split：p = normal·special。
+
+    normal 的平方因子与 D(p) 互素；special 为 D-不变型因子。
+    返回 (normal_list, special_list)。
     """
+    p = _u_trim(list(p))
+    if _u_is_zero(p) or len(p) <= 1:
+        return list(p), []
+    dp = der_fn(p)
+    dfp = _u_formal_deriv(p)
+    if _u_is_zero(_u_sub(dp, dfp)):
+        return list(p), []
+    g = _u_gcd(p, dp, zero)
+    if len(g) <= 1:
+        return list(p), []
+    gd = _u_gcd(p, dfp, zero)
+    if len(gd) <= 1:
+        pbar = list(g)
+    else:
+        pbar, r = _u_divmod(g, gd, zero)
+        if not _u_is_zero(r):
+            return list(p), []
+    if len(pbar) <= 1:
+        return list(p), []
+    rest, rr = _u_divmod(p, pbar, zero)
+    if not _u_is_zero(rr):
+        return list(p), []
+    rn, rs = _split_ns(rest, der_fn, zero)
+    return rn, _u_mul(pbar, rs, zero)
+
+
+def _normal_part(p, der_fn, zero):
+    return _split_ns(p, der_fn, zero)[0]
+
+
+def _make_der_fn(de, jv):
+    """视图层 jv 的 K[t]-导子 der1：D(Σcᵢτⁱ)。jv==0 时 D=d/dx、dk=1。"""
+    if jv == 0:
+        def der_fn(cs):
+            out = []
+            nn = len(cs)
+            for i in range(nn):
+                a = cs[i]
+                term = a.deriv(de.levels[0]) if not a.is_zero() \
+                    else a * Fr(0)
+                if i + 1 < nn and not cs[i + 1].is_zero():
+                    term = term + cs[i + 1] * Fr(i + 1)
+                out.append(term)
+            return _u_trim(out)
+        return der_fn
+    return lambda cs: _derive_ut(cs, de, jv)
+
+
+def _wn_normalize(fn, fd, de, jv, der_fn, zero):
+    """intpar.spad:920 weak normalization（非参数化特化）。
+
+    返回 (fn2, fd2, pn, pd)：f_new = fn2/fd2 已消 normal 极点；
+    p = pn/pd 使 v = y·p 时新方程右端须 ×p（intpar:1237）、解 ÷p（:1239）。
+    无法判定返回 None。
+    """
+    one_c = zero.one(zero.p.vars)
+    pn, pd = [one_c], []
+    d = _normal_part(fd, der_fn, zero)
+    if len(d) <= 1:
+        return list(fn), list(fd), pn, pd
+    g0 = _u_gcd(d, der_fn(d), zero)
+    d0 = _u_divmod(d, g0, zero)[0]
+    dd = _u_gcd(d0, g0, zero)
+    d1 = _u_divmod(d0, dd, zero)[0]
+    if len(d1) <= 1:
+        return list(fn), list(fd), pn, pd
+    q2, r2 = _u_divmod(fd, d1, zero)
+    if not _u_is_zero(r2):
+        return None
+    d2 = q2
+    s_, _t_, g_ = _u_xgcd(d2, d1, zero)
+    if _u_is_zero(g_):
+        return None
+    qqf, rf = _u_divmod(fn, g_, zero)
+    if not _u_is_zero(rf):
+        return None
+    a_ = _u_mul(s_, qqf, zero)
+    d1d = der_fn(d1)
+    nb = max(len(a_), len(d1d))
+    a_pad = list(a_) + [zero for _ in range(nb - len(a_))]
+    d_pad = list(d1d) + [zero for _ in range(nb - len(d1d))]
+    fz = [[ai, c * Fr(-1)] for ai, c in zip(a_pad, d_pad)]
+    gz = [[ci] for ci in d1]
+    Rz = _sylvester_res(fz, gz)
+    rl = []
+    if Rz and not _u_is_zero(Rz):
+        for mval in _constant_roots(Rz):
+            try:
+                mv = mval if isinstance(mval, Fr) else Fr(mval)
+            except Exception:
+                return None
+            if mv.denominator != 1 or mv <= 0:
+                continue
+            fm = _u_sub(a_pad, [c * mv for c in d_pad])
+            pi_m = _u_gcd(fm, d1, zero)
+            if len(pi_m) <= 1:
+                continue
+            rl.append((pi_m, int(mv)))
+    fn2, fd2 = list(fn), list(fd)
+    for pi_m, mv in rl:
+        fn2, fd2 = _fu_sub(fn2, fd2,
+                           [c * Fr(mv) for c in der_fn(pi_m)],
+                           list(pi_m), zero)
+        for _ in range(mv):
+            pn, pd = _fu_mul(pn, pd, list(pi_m), [], zero)
+    return fn2, fd2, pn, pd
+
+
+def _dk_pair(de, jv):
+    """D(levels[jv]) 的 τ-系数表示 (n_list, d_list)。"""
+    tview = de.levels[jv]
+    dk_n, dk_d = de.dpair(jv, tuple(de.levels[:jv + 1]))
+    return _univar(dk_n, tview), _univar(dk_d, tview)
+
+
+def _solve_low(lam, rhs, de, jl):
+    """低层 RDE D(s)+λ·s=rhs，s ∈ levels[:jl]（jl>=1 递归，jl==0 基层）。"""
+    if jl >= 1:
+        return _rde_tower_solve(lam, rhs, de, jl)
+    return _rde_base_rde(lam, rhs, de)
+
+
+def _rde_base_rde(lam, rhs, de):
+    """ℚ(x)：D(s)+λ·s=rhs。λ 多项式 -> 极点分析完备判定；否则 undecided。"""
     from cas.ratfunc import RatFunc
 
-    if j <= 1:
-        # base：f 须为 ℚ[x] 多项式（现有极点分析前提）
-        if not (f.q.is_const() and f.p.vars == (de.levels[0],)):
-            return None
-        return None   # 由调用方分流到 _rde_exp_solve（保持既有路径）
+    xv = de.levels[0]
+    if not (lam.q.is_const() and lam.p.vars == (xv,) and
+            rhs.p.vars == (xv,) and rhs.q.vars == (xv,)):
+        return None, 'undecided'
+    # λ 任意多项式（含常数）、rhs 任意有理式：极点分析 + 待定系数完备
+    b = _rde_exp_solve(1, lam.p, rhs.p, rhs.q, Poly.zero((xv,)))
+    if b is None:
+        return None, 'proved'
+    if isinstance(b, Poly):
+        b = RatFunc.from_poly(b)
+    return b, 'ok'
+
+
+def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
+                    der_fn, de, jv, zero):
+    """sympy solve_poly_rde 非参数版：解 D(u)+bbr·u=cn（deg u ≤ n）。
+
+    返回 ('ok', u_list) | ('proved', None) | ('undecided', reason)。
+    """
+    dB = _u_deg(bbr)
+    thr = max(0, dk_deg - 1)
+
+    def corr(cc, pmono):
+        return _u_sub(cc, _u_add(der_fn(pmono), _u_mul(bbr, pmono, zero),
+                                 zero))
+
+    # no_cancel_b_large
+    if not _u_is_zero(bbr) and (base_flag or dB > thr):
+        u_acc, cc, mm = [], list(cn), n
+        while not _u_is_zero(cc):
+            stp = _u_deg(cc) - dB
+            if stp < 0 or stp > mm:
+                return 'proved', None
+            pmono = [zero for _ in range(stp)] + [cc[-1] / bbr[dB]]
+            u_acc = _u_add(u_acc, pmono, zero)
+            mm = stp - 1
+            cc = corr(cc, pmono)
+        return 'ok', u_acc
+
+    # no_cancel_b_small（含降到低层的 (h,b0,c0) 归约）
+    if (_u_is_zero(bbr) or dB < dk_deg - 1) and (base_flag or dk_deg >= 2):
+        u_acc, cc, mm = [], list(cn), n
+        low_eq = None
+        while not _u_is_zero(cc):
+            dcc = _u_deg(cc)
+            stp = 0 if mm == 0 else dcc - dk_deg + 1
+            if stp < 0 or stp > mm:
+                return 'proved', None
+            if stp > 0:
+                pmono = [zero for _ in range(stp)] + \
+                    [cc[-1] / (dk_ncs[dk_deg] * Fr(stp))]
+            else:
+                if dB != dcc:
+                    return 'proved', None
+                if dB == 0:
+                    low_eq = (bbr[0], cc[0])
+                    break
+                pmono = [cc[-1] / bbr[0]]
+            u_acc = _u_add(u_acc, pmono, zero)
+            mm = stp - 1
+            cc = corr(cc, pmono)
+        if low_eq is not None:
+            yl, stl = _solve_low(low_eq[0], low_eq[1], de, jv)
+            if stl != 'ok':
+                return stl, None
+            return 'ok', _u_add(u_acc, [yl], zero)
+        return 'ok', u_acc
+
+    # no_cancel_equal（共振贪心，自包含）
+    if dk_deg >= 2 and dB == dk_deg - 1:
+        lc_ratio = (bbr[dB] * Fr(-1)) / dk_ncs[dk_deg]
+        big_m = -1
+        if lc_ratio.is_const() and lc_ratio.const_val().denominator == 1 \
+                and lc_ratio.const_val() > 0:
+            big_m = int(lc_ratio.const_val())
+        u_acc, cc, mm = [], list(cn), n
+        while not _u_is_zero(cc):
+            dcc = _u_deg(cc)
+            stp = max(big_m, dcc - dk_deg + 1)
+            if stp < 0 or stp > mm:
+                return 'proved', None
+            uu = stp * dk_ncs[dk_deg] + bbr[dB]
+            if uu.is_zero():
+                return 'undecided', 'no_cancel_equal tail recursion pending'
+            if stp > 0:
+                pmono = [zero for _ in range(stp)] + [cc[-1] / uu]
+            else:
+                if dcc != dk_deg - 1:
+                    return 'proved', None
+                pmono = [cc[-1] / bbr[dB]]
+            u_acc = _u_add(u_acc, pmono, zero)
+            mm = stp - 1
+            cc = corr(cc, pmono)
+        return 'ok', u_acc
+
+    # cancellation 形态
+    if _u_is_zero(bbr):
+        return 'undecided', 'S-b: B=0 cancellation pending'
+    if dB != 0:
+        return 'undecided', 'unexpected B degree in cancellation shape'
+    lam = bbr[0]
+    w_eta = de.ws[jv] if case_v == 'exp' and jv >= 1 else None
+    u_acc, cc, mm = [], list(cn), n
+    while not _u_is_zero(cc):
+        jd = _u_deg(cc)
+        if jd > mm:
+            return 'proved', None
+        lam_j = lam + w_eta * Fr(jd) if w_eta is not None else lam
+        s_rf, stl = _solve_low(lam_j, cc[-1], de, jv)
+        if stl != 'ok':
+            return stl, None
+        stm = [zero for _ in range(jd)] + [s_rf]
+        u_acc = _u_add(u_acc, stm, zero)
+        mm = jd - 1
+        cc = corr(cc, stm)
+    return 'ok', u_acc
+
+
+def _rde_tower_solve(f, g, de, j):
+    """完备判定求解器入口（契约见块注释）。j>=2 进塔机制（视图 jv=j-1>=1）；
+    j==1 即 ℚ(x) 基层，直接委托极点分析（基层无更低视图，塔机制不适用）。"""
+    from cas.ratfunc import RatFunc
+
+    if j < 1:
+        return None, 'undecided'
+    if j == 1:
+        return _rde_base_rde(f, g, de)
     tview = de.levels[j - 1]
-    if de.cases[j - 1] != "primitive":
-        return None   # exp-view RDE pending M5.2c-ii
-    sub = tuple(de.levels[:j - 1])
-    zero_k = RatFunc.zero(sub)
-    # f ∈ K_{j-1}（exp 守卫：η' 不含塔变量）——限制到系数域变量集
-    try:
-        f = _restrict(f, sub)
-    except PolyError:
-        return None   # f 含塔变量：理论前提破坏（诚实 unsupported）
+    case_v = de.cases[j - 1]
+    jv = j - 1
+    sub_vars = tuple(de.levels[:jv])
 
-    # g 的 K[t] 视图
-    gA = _univar(g.p, tview)
-    gd_list = _univar(g.q, tview)
+    def RF_of(ncs, dcs):
+        nump = _from_univar(ncs, tuple(de.levels[:j]), tview)
+        denp = _from_univar(dcs, tuple(de.levels[:j]), tview)
+        if nump[0].is_zero():
+            return RatFunc.zero(tuple(de.levels[:j]))
+        return RatFunc(nump[0] * denp[1], denp[0] * nump[1])
 
-    # 步骤1：denominator bound Q_b = Π s^{e-1}（s^e ∥ den(g)，正规分解）
-    qb = [zero_k.one(zero_k.p.vars)]
-    try:
-        factors = _squarefree_decomp_t(gd_list, zero_k)
-    except RischUnsupported:
-        return None
-    for p, e in factors:
-        if e >= 2:
-            qb = _u_mul(qb, _u_pow(p, e - 1, zero_k), zero_k)
+    zero = RatFunc.zero(sub_vars)
+    one_c = zero.one(sub_vars)
+    der_fn = _make_der_fn(de, jv)
 
-    # 步骤2：多项式化 A·D(z) + B·z = C（z = y·Q_b）
-    fq = _u_mul([f], qb, zero_k)          # f·Q_b（f 无 ℓ => 常数系数）
-    dqb = _derive_ut(qb, de, j - 1)
-    B_ = _u_sub(fq, dqb)
-    C_ = _u_mul(_u_divmod(gA, [zero_k.one(zero_k.p.vars)], zero_k)[0],
-                _u_pow(qb, 2, zero_k), zero_k)
-    # g = gA/gd，C = g·Q_b² 应为多项式：gA·Q_b²/gd——gd | gA·Q_b² 由界的构造保证；
-    # 若不整除则除法带余 => 界不完备，诚实放弃
-    q2 = _u_pow(qb, 2, zero_k)
-    prod = _u_mul(gA, q2, zero_k)
-    C_, remC = _u_divmod(prod, gd_list, zero_k)
-    if not _u_is_zero(remC):
-        return None
+    dk_ncs, dk_dcs = _dk_pair(de, jv)
+    if _u_deg(_u_formal_deriv(dk_dcs)) >= 0:
+        return None, 'undecided'
+    dk_deg = _u_deg(dk_ncs)
 
-    # 步骤3：待定系数——未知 z₀..z_n ∈ K
-    n_unk = max(len(C_) - 1, len(B_) - 1, len(qb) - 1) + 3
-    ncols = n_unk + 1
-    nrows = max(len(C_), len(B_) + n_unk, len(qb) + n_unk) + 2
-    M = [[zero_k for _ in range(ncols)] for _ in range(nrows)]
-    rhs = [zero_k for _ in range(nrows)]
+    fn = _univar(f.p, tview)
+    fd = _univar(f.q, tview)
+    gn = _univar(g.p, tview)
+    gd = _univar(g.q, tview)
 
-    def poly_at(cidx):
-        """单位基 z = ℓ^cidx 的 K[t] 表示。"""
-        v = [zero_k for _ in range(cidx + 1)]
-        v[cidx] = zero_k.one(zero_k.p.vars)
-        return v
+    # ---- Step 1: weak normalization（intpar:920；右端缩放 :1237）----
+    wn = _wn_normalize(fn, fd, de, jv, der_fn, zero)
+    if wn is None:
+        return None, 'undecided'
+    fn2, fd2, pn, pd = wn
+    gn2, gd2 = _fu_mul(gn, gd, pn, pd, zero)
 
-    for cidx in range(ncols):
-        base_v = poly_at(cidx)
-        dz = _derive_ut(base_v, de, j - 1)
-        lhs = _u_add(_u_mul(qb, dz, zero_k), _u_mul(B_, base_v, zero_k), zero_k)
-        for r_, coef in enumerate(lhs):
-            if not coef.is_zero():
-                M[r_][cidx] = coef
-    for r_, coef in enumerate(C_):
-        if not coef.is_zero():
-            rhs[r_] = coef
+    # ---- Step 2: normal denominator -> 多项式方程（intpar:910, 1406-1410）----
+    dn_ = _normal_part(fd2, der_fn, zero)
+    en_ = _normal_part(gd2, der_fn, zero)
+    gg = _u_gcd(dn_, en_, zero)
+    hq, hr = _u_divmod(_u_gcd(en_, der_fn(en_), zero),
+                       _u_gcd(gg, der_fn(gg), zero), zero)
+    if not _u_is_zero(hr):
+        return None, 'undecided'
+    h = hq
+    aa = _u_mul(dn_, h, zero)
+    dh = der_fn(h)
+    bbr_n = _u_sub(_u_mul(aa, fn2, zero), _u_mul(dn_, dh, zero))
+    bq, br = _u_divmod(bbr_n, fd2, zero)
+    if not _u_is_zero(br):
+        return None, 'undecided'
+    bbr = bq
+    aa1 = _u_mul(aa, h, zero)
+    cn, cd = _fu_mul(aa1, [one_c], gn2, gd2, zero)
 
-    sol = _u_gauss_solve_k(M, rhs)
-    if sol is None:
-        return None
+    # ---- Step 3: C 的 τ-分母必须已消（Laurent 型右端 -> undecided）----
+    if _u_deg(_u_formal_deriv(cd)) >= 0:
+        return None, 'undecided'
 
-    # 步骤4：组合 y = z/Q_b 回多元 RatFunc
-    zn, zd = _from_univar(sol, de.vars, tview)
-    qn, qd = _from_univar(qb, de.vars, tview)
-    from cas.ratfunc import RatFunc as _RF
-    y = _RF(zn * qd, zd * qn)   # (zn/zd)/(qn/qd)
+    u_list = []
+    if not _u_is_zero(cn):
+        inv_cd = one_c / cd[0]
+        cn = [c * inv_cd for c in cn]
 
-    # 步骤5：精确验证 D(y) + f·y − g ≡ 0（塔上导数 + 通分验零）
-    from cas.ratfunc import RatFunc as _RF2
+        da, db, dc = _u_deg(aa), _u_deg(bbr), _u_deg(cn)
+        base_flag = (case_v == 'base')
 
-    f_full = _RF2(_embed(f.p, de.vars), _embed(f.q, de.vars))
-    g_full = _RF2(_embed(g.p, de.vars), _embed(g.q, de.vars))
+        # ---- Step 4: 次数界（sympy bound_degree 移植 + 切片边界）----
+        if case_v == 'base':
+            n = max(0, dc - max(db, da - 1))
+            if db == da - 1 and da >= 1:
+                al = (bbr[db] * Fr(-1)) / aa[da]
+                if al.is_const():
+                    cv = al.const_val()
+                    if cv.denominator == 1:
+                        n = max(n, int(cv), dc - db)
+                else:
+                    return None, 'undecided'
+        elif case_v == 'primitive':
+            n = max(0, dc - db) if db > da else max(0, dc - da + 1)
+            if db == da - 1:
+                al = (bbr[db] * Fr(-1)) / aa[da]
+                eta_rf = RF_of(dk_ncs, dk_dcs)
+                if not eta_rf.is_zero():
+                    rho = al / eta_rf
+                    if rho.is_const():
+                        cv = rho.const_val()
+                        if cv.denominator == 1 and cv > 0:
+                            n = max(n, int(cv))
+                    else:
+                        return None, 'undecided'      # S-c
+            elif db == da and da != 0:
+                return None, 'undecided'              # S-a
+            # da==db==0：cancellation 逐度下降，naive 界 n>=dc 不截断，
+            # 无需共振修正（安全性：各度独立处理到底）
+        else:  # exp
+            n = max(0, dc - max(da, db))
+            if da == db and da != 0:
+                al = (bbr[db] * Fr(-1)) / aa[da]
+                rho = al / de.ws[jv]
+                if rho.is_const():
+                    cv = rho.const_val()
+                    if cv.denominator == 1 and cv > 0:
+                        n = max(n, int(cv))
+                else:
+                    return None, 'undecided'          # S-c
+            # da==db==0：exp 对角下降同理安全
+
+        # ---- Step 5: spde 归约核（sympy spde 忠实移植）----
+        alpha_l = [one_c]
+        beta_l = []
+        proved = False
+        guard = 0
+        while True:
+            guard += 1
+            if guard > 64:
+                return None, 'undecided'
+            if _u_is_zero(cn):
+                break
+            if n < 0:
+                proved = True
+                break
+            gfac = _u_gcd(aa, bbr, zero)
+            qa_, ra_ = _u_divmod(aa, gfac, zero)
+            qb_, rb_ = _u_divmod(bbr, gfac, zero)
+            qc_, rc_ = _u_divmod(cn, gfac, zero)
+            if not _u_is_zero(rc_) or not _u_is_zero(ra_) \
+                    or not _u_is_zero(rb_):
+                proved = True                         # gcd ∤ => 无解
+                break
+            aa, bbr, cn = qa_, qb_, qc_
+            if _u_deg(aa) == 0:
+                inv_a = one_c / aa[0]
+                bbr = [c * inv_a for c in bbr]
+                cn = [c * inv_a for c in cn]
+                break
+            rz = _u_diophantine(bbr, aa, cn, zero)
+            if rz is None:
+                proved = True
+                break
+            r_, z_ = rz
+            bbr = _u_add(bbr, der_fn(aa), zero)
+            cn = _u_sub(z_, der_fn(r_))
+            n -= _u_deg(aa)
+            beta_l = _u_add(beta_l, _u_mul(alpha_l, r_, zero), zero)
+            alpha_l = _u_mul(alpha_l, aa, zero)
+
+        if proved:
+            return None, 'proved'
+
+        # ---- Step 6: 终解分派 ----
+        if _u_is_zero(cn):
+            u_list = list(beta_l)
+        else:
+            st_f, res_u = _poly_rde_final(bbr, cn, n, case_v, base_flag,
+                                          dk_deg, dk_ncs, der_fn, de, jv,
+                                          zero)
+            if st_f != 'ok':
+                return None, st_f
+            u_list = _u_add(_u_mul(alpha_l, res_u, zero), beta_l, zero)
+
+    # ---- Step 7: 组合 y = u/(h·p) + 出口精确验证 ----
+    oneL = [one_c]
+    ynum_cs = _u_mul(u_list, list(pd) or oneL, zero)
+    yden_cs = _u_mul(h, list(pn) or oneL, zero)
+    y = RF_of(ynum_cs, yden_cs)
     dy = _tower_deriv_frac(y.p, y.q, de)
-    fy = f_full * y
-    gg = dy + fy - g_full
-    if not gg.p.is_zero():
-        return None
-    return y
+    if not (dy + f * y - g).p.is_zero():
+        raise RischUnsupported(
+            "internal: RDE candidate failed exact verify "
+            "(this is a bug, not an honest refusal)")
+    return y, 'ok'
 
 
 def _exp_freq_part(freqs, de, j):
@@ -1504,13 +1904,20 @@ def _exp_freq_part(freqs, de, j):
         w = de.ws[j] * Fr(k)
         if g.q.is_const() and g.p.vars == (xv,) \
                 and w.q.is_const() and w.p.vars == (xv,):
-            # base 快路径：现有 ℚ(x) 极点分析求解器
+            # base 快路径：现有 ℚ(x) 极点分析求解器（无解即 proved——
+            # η' 多项式保证界严格）
             b = _rde_exp_solve(k, de.ws[j].p, g.p, g.q, Poly.zero((xv,)))
             proved = b is None
         else:
-            # 塔系数域：M5.2c 求解器（None = 无法判定，非证明）
-            b = _rde_tower_solve(w, g, de, j)
-            proved = False
+            # 塔系数域：M5.2c-ii 完备判定求解器
+            b, st = _rde_tower_solve(w, g, de, j)
+            if st == 'proved':
+                rde_fail = k
+                break
+            if st != 'ok':
+                raise RischUnsupported(
+                    "Risch DE on the tower undecidable with current theory "
+                    "(%s); frequency k=%d" % (st, k))
         if b is None:
             if proved:
                 rde_fail = k
