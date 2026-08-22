@@ -178,6 +178,45 @@ class TestNestedTowerIntegration(unittest.TestCase):
             pass
 
 
+class TestLimitedIntPrim(unittest.TestCase):
+    """S-a/S-c 收口：limited_integrate 可判定探测（primitive 共振修正）。"""
+
+    def test_finds_smallest_valid_m(self):
+        # 双 log 塔（l=log(x+1)、l1=log x）：α=ℓ+1+2/(x+1)、v=1/(x+1)
+        # m=1：z=x·ℓ+x+ℓ 域内合法 => 返回最小有效整数 1
+        from cas.risch import _limited_int_prim, build_extension
+
+        de, _, _ = build_extension(parse("1/(log(x)*log(x+1))"), x)
+        allv = tuple(de.levels[:3])
+        lsym = de.levels[1]
+        eta = RatFunc(Poly.one(allv), Poly.mono(allv, x, 1) + Poly.one(allv))
+        num = (Poly.mono(allv, lsym, 1)
+               * (Poly.mono(allv, x, 1) + Poly.one(allv))
+               + Poly.const(allv, Fr(1)) * (Poly.mono(allv, x, 1)
+                                            + Poly.one(allv))
+               + Poly.const(allv, Fr(2)))
+        al = RatFunc(num, Poly.mono(allv, x, 1) + Poly.one(allv))
+        st, m = _limited_int_prim(al, eta, de, 1)
+        self.assertEqual((st, m), ("ok", 1))
+
+    def test_und_conservative(self):
+        from cas.risch import _limited_int_prim, build_extension
+
+        de, _, _ = build_extension(parse("1/(log(x)*log(x+1))"), x)
+        allv = tuple(de.levels[:3])
+        eta = RatFunc(Poly.one(allv), Poly.mono(allv, x, 1) + Poly.one(allv))
+        den_pole = Poly.mono(allv, x, 1) - Poly.const(allv, Fr(2))
+        num = (Poly.mono(allv, de.levels[1], 1)
+               * (Poly.mono(allv, x, 1) + Poly.one(allv)) * den_pole
+               + Poly.const(allv, Fr(1)) * (Poly.mono(allv, x, 1)
+                                            + Poly.one(allv))
+               + Poly.const(allv, Ga(0, 1)))
+        al = RatFunc(num, (Poly.mono(allv, x, 1) + Poly.one(allv)) * den_pole)
+        st, m = _limited_int_prim(al, eta, de, 1)
+        self.assertEqual(st, "und")
+        self.assertIsNone(m)
+
+
 class TestB0Cancellation(unittest.TestCase):
     """S-b 修复：B=0 cancellation（D(u)=c 纯塔积分）经 lam=0 统一下降。"""
 

@@ -1162,6 +1162,15 @@ def _uz_trim_list(cs):
     return _u_trim(cs)
 
 
+def _iter_subterms(t):
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        yield u
+        if isinstance(u, Expr):
+            stack.extend(u.args)
+
+
 def _term_to_ga(t):
     """term -> Ga（仅含数字与符号 i 的线性形态）；否则 None。"""
     fv = T.free_vars(t)
@@ -1936,6 +1945,66 @@ def _ldrad_base(f_rf, de):
     return _ld_finish(n, RatFunc(u, Poly.one((xv,))), f_rf, de)
 
 
+def _term_within_field(val_t, de, jl):
+    """term 的 Log/Exp 参数是否全部落在允许塔层（≤jl）内。
+
+    基层有理积分会以实形态吐 Log——若其参数恰为某允许层的原函数
+    形态则该层符号可承载（合法），否则为域外泄漏。
+    """
+    allowed_args = []
+    for i in range(1, jl + 1):
+        tm = de.terms[i]
+        if isinstance(tm, Expr) and len(tm.args) == 1:
+            allowed_args.append(tm.args[0])
+    stack = [val_t]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, Expr) and u.head.name in ("Log", "Exp") \
+                and len(u.args) == 1:
+            if not any(u.args[0] == ag for ag in allowed_args):
+                return False
+            stack.extend(u.args)
+            continue
+        if isinstance(u, Expr):
+            stack.extend(u.args)
+    return True
+
+
+def _limited_int_prim(al_rf, v_rf, de, jl, cap=16):
+    """系数域 levels[:jl+1] 内解 alpha = m*v + D(z)，m∈ℤ、z∈K。
+
+    可判定探测：对候选 m 调 _integrate_in_K（塔层受限积分——z 的
+    域界由层参数强制）。三态：
+      ('ok', m)     找到合法整数解
+      ('und', None) 范围内未找到或理论受限 => 调用方保守升级
+                    undecided（漏修正会欠界导致误证不可积，方向安全
+                    要求绝不漏；多探测只耗时间）
+    """
+    if jl < 0:
+        return "und", None
+    allv_sub = tuple(de.levels[:jl + 1])
+    try:
+        al_rf = _restrict(al_rf, allv_sub)
+        v_rf = _restrict(v_rf, allv_sub)
+    except PolyError:
+        return "und", None
+
+    for m in range(1, cap + 1):
+        cm = al_rf - v_rf * Fr(m)
+        if cm.is_zero():
+            return "ok", m
+        try:
+            t_val = _integrate_in_K(cm, de, jl + 1)
+        except RischNonElementary:
+            continue          # 该 m 在系数域内无初等原函数（证明性排除）
+        except RischUnsupported:
+            return "und", None
+        if not _term_within_field(t_val, de, jl):
+            continue          # 解需域外元素（如未建层 Log）=> 该 m 无效
+        return "ok", m
+    return "und", None
+
+
 def _is_logderiv_radical(f_rf, de, jv, depth=0):
     """主判定入口。f_rf: RatFunc over levels[:jv+1]，视图 τ=levels[jv]。"""
     from cas.ratfunc import RatFunc
@@ -2462,11 +2531,16 @@ def _rde_base_rde(lam, rhs, de):
             rhs.p.vars == (xv,) and rhs.q.vars == (xv,)):
         return None, 'undecided'
     if lam.is_const() and lam.const_val() == 0:
-        # λ=0：D(s)=rhs 纯有理积分（S-b B=0 下降的基层落点）
+        # λ=0：D(s)=rhs 纯有理积分（S-b B=0 下降的基层落点）。
+        # 域内精确性门：解含 Log => 需要塔外元素 => 该层无解（proved）
         from cas.integrate import integrate_rational
         val, ok, _m = integrate_rational(rhs.p, rhs.q, xv)
         if not ok:
             return None, 'undecided'
+        if T.free_vars(val) and any(
+                isinstance(n_, Expr) and n_.head.name == "Log"
+                for n_ in _iter_subterms(val)):
+            return None, 'proved'
         return RatFunc.from_term(val, (xv,)), 'ok'
     # λ 任意多项式（含常数）、rhs 任意有理式：极点分析 + 待定系数完备
     b = _rde_exp_solve(1, lam.p, rhs.p, rhs.q, Poly.zero((xv,)))
@@ -2742,15 +2816,45 @@ def _rde_tower_solve(f, g, de, j):
                 al = (bbr[db] * Fr(-1)) / aa[da]
                 eta_rf = RF_of(dk_ncs, dk_dcs)
                 if not eta_rf.is_zero():
-                    rho = al / eta_rf
-                    if rho.is_const():
-                        cv = rho.const_val()
-                        if cv.denominator == 1 and cv > 0:
-                            n = max(n, int(cv))
+                    st_m, m_v = _limited_int_prim(al, eta_rf, de, jv - 1)
+                    if st_m == 'ok':
+                        if m_v > 0:
+                            n = max(n, m_v)
                     else:
-                        return None, 'undecided'      # S-c
+                        # 'und'：紧刻画兜底（z=const 子情形瞬时判定）
+                        rho = al / eta_rf
+                        if rho.is_const():
+                            cv = rho.const_val()
+                            cvi = cv
+                            if isinstance(cvi, Ga):
+                                cvi = None
+                            if cvi is not None and cvi.denominator == 1 \
+                                    and cvi > 0:
+                                n = max(n, int(cvi))
+                            elif cvi is None:
+                                return None, 'undecided'
+                        else:
+                            return None, 'undecided'
             elif db == da and da != 0:
-                return None, 'undecided'              # S-a
+                # S-a 第二阶修正（sympy bound_degree primitive db==da 分支）：
+                # α 为对数导数-根式（n_l==1）时经 beta 公式再探 limited
+                al = (bbr[db] * Fr(-1)) / aa[da]
+                rec = _is_logderiv_radical(al, de, jv - 1)
+                if rec is None:
+                    return None, 'undecided'          # S-a（保守）
+                n_l, z_rf = rec
+                if n_l == 1:
+                    lc_a, lc_b = aa[da], bbr[db]
+                    Dz = _tower_deriv_frac(z_rf.p, z_rf.q, de)
+                    num = lc_a * Dz + lc_b * z_rf
+                    beta = -(num / (z_rf * lc_a))
+                    eta_rf = RF_of(dk_ncs, dk_dcs)
+                    st_m, m_v = _limited_int_prim(beta, eta_rf, de, jv - 1)
+                    if st_m == 'ok':
+                        if m_v > 0:
+                            n = max(n, m_v)
+                    else:
+                        return None, 'undecided'      # S-a（保守）
             # da==db==0：cancellation 逐度下降，naive 界 n>=dc 不截断，
             # 无需共振修正（安全性：各度独立处理到底）
         else:  # exp

@@ -226,6 +226,19 @@ D(u)=x -> x²/2、D(u)=θ -> x·θ−x²/2 精确零检查。(2) exp da==db 共�
 分支语义：n_lower==1 时以 m 抬界；heu None 混合证明否定/受限故保守
 undecided）。顺带消解 rho.const_val 的 Ga 潜在崩溃点。剩余：S-a/S-c
 的 limited_integrate 完整版（primitive db==da±1 修正在用紧刻画）。
+**阶段一 #3 落地（limited_integrate 可判定探测版）**：
+设计迭代三次的教训浓缩：(1) 首选 Hermite 残数比例判据失败——primitive
+塔的 α 极点藏在系数域内部而非 τ-结构层，层内 sqf 对比全盲；(2) 符号-m
+线程到底层太重；(3) 终案 = 有界整数探测（m∈1..16）+ _integrate_in_K
+域界受限积分探针——复用已证明管线，z 的域界由层参数天然强制。两个
+深坑：(a) 基层 λ=0 有理积分以实形态吐 Log 绕过域界（log(x+1) 实为
+已建层符号的实形态！）=> _term_within_field 后验门（Log/Exp 参数须
+匹配允许层 terms）；(b) 探针返回 term 非 RatFunc 需包装。三态语义
+收敛：'no' 不单独存在（范围内全排除与理论受限统一 'und'）——漏修正
+会欠界导致误证不可积（最严重违反），多抬界只损失效率，方向安全压倒
+覆盖完备。接线双分支：db==da−1 主修正 + db==da 二阶 beta 修正（radical
+n_l==1 时 beta=−(a·Dz+b·z).lc/(z·a.lc)）。验收：双层 log 塔正例返最小
+有效整数、域外极点负例保守 und，481 绿。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
