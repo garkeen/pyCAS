@@ -177,6 +177,18 @@ do_SPSE_exp0 的 GP 形态，e^x*sin x 的频率系数恰带 t^-1；(2) m>0 分�
 形态精确，实化回 sin/cos 属出口层后续），sin(x)/x = Si 类 proved。
 行为升级连带三个旧测试期望更新（PROBABLE->VERIFIED 强证书化、parts
 不再拒绝可积 dv、sin(y) 常量通道），均逐个验证数学正确性后放行。464 绿。
+**出口实化切片一落地（共轭对实化，纯可判定）**：
+设计要点：(1) 实性判定 = y == C*(y)（子域叶系数 Ga 共轭 + tau 反转，
+RatFunc 分子 is_zero 精确非数值）；(2) 配对公式 s_e*tau^e+s_-e*tau^-e =
+2a*cos(e*theta)-2b*sin(e*theta) 直接产出，无幂展开无启发式化简；
+(3) 钩子层级教训：实化必须含 t^k 频率因子所在层——先在 Laurent 出口
+做丢了外层 e^x 因子，移到 _exp_freq_part 组装层后 b 本身实化（tau=
+虚指数层符号）+ 外层实指数因子项形态外乘；(4) term 树结构相等不可靠
+（顺序敏感），共轭比较用 RatFunc 差零判定。工程事故记录：patch 脚本
+区间替换误删相邻函数（_solve_low/_rde_base_rde/_poly_final），从 git
+HEAD 恢复拼接——大文件手术前后必须 grep 函数清单核对。验收：e^x sin/
+e^x cos/e^2x sin 教科书形态 VERIFIED；tan 的 log 配对留切片二（诚实
+保留复形态）。464 绿。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前

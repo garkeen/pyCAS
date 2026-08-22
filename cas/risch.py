@@ -1696,6 +1696,212 @@ def _dk_pair(de, jv):
     return _univar(dk_n, tview), _univar(dk_d, tview)
 
 
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# M5.3 出口实化（可判定子集）：tau = e^{i*sgn*u} 视角的 Laurent 解
+# -> 实三角形态。全部精确恒等式，无启发式搜索：
+#
+#   C* = 全共轭：子域叶系数 Ga(a,b) -> a-b，且 tau -> tau^{-1}。
+#   实原函数的判定 = y == C*(y)（RatFunc 分子 is_zero，精确非数值）。
+#   R = (y + C*y)/2 的 tau-系数必实（_rf_split_im 拆分后断言）。
+#   单位圆恒等式 (C+iS)^{-e} = (C-iS)^e 保证负幂无分母。
+#   奇 i-相位单项式总和必为零（对称性，精确多项式零检查断言）。
+# 任一环节不满足 => 返回 None，调用方保留复形态（诚实回退）。
+# ---------------------------------------------------------------------------
+
+def _parse_imag_exp_arg(arg):
+    """Exp 参数 = q*i*u（q 非 0 有理）-> (sgn, u_eff=|q|*u)；否则 None。"""
+    if not isinstance(arg, Expr) or arg.head.name != "Times":
+        return None
+    q = Fr(1)
+    i_cnt = 0
+    rest = []
+    for a in arg.args:
+        if isinstance(a, Sym) and a.name == "i":
+            i_cnt += 1
+            continue
+        if T.is_num(a):
+            try:
+                q *= Fr(T.num_val(a))
+            except Exception:
+                return None
+            continue
+        rest.append(a)
+    if i_cnt != 1 or q == 0 or not rest:
+        return None
+    u_eff = rest[0] if len(rest) == 1 else T.mk(S("Times"), tuple(rest))
+    aq = abs(q)
+    if aq != 1:
+        u_eff = T.times(N(aq), u_eff)
+    return (1 if q > 0 else -1), u_eff
+
+
+def _imag_exp_level_info(de, jv):
+    """视图层 jv 的 Exp 项为 e^{+-iu} -> (sgn, u_eff)；否则 None。"""
+    if de.cases[jv] != "exp":
+        return None
+    tm = de.terms[jv]
+    if not isinstance(tm, Expr) or tm.head.name != "Exp":
+        return None
+    if len(tm.args) != 1:
+        return None
+    return _parse_imag_exp_arg(tm.args[0])
+
+
+def _poly_map_leaves(p, fn):
+    """Poly 叶系数映射重建（多变量递归）。"""
+    from cas.poly import _rec_view, _from_rec
+    if not p.monos:
+        return p
+    if len(p.vars) <= 1:
+        return Poly(p.vars, {k: fn(v) for k, v in p.monos.items()})
+    rec = {e0: _poly_map_leaves(sub, fn) for e0, sub in _rec_view(p).items()}
+    return _from_rec(rec, p.vars)
+
+
+def _ga_conj_leaf(v):
+    if isinstance(v, Ga):
+        return Ga(v.re, -v.im)
+    return v
+
+
+def _rf_split_im(rf):
+    """RatFunc -> (实部, 虚部) RatFunc（叶系数 Ga 精确拆分）。"""
+    from cas.ratfunc import RatFunc
+
+    def sp(p, take):
+        def fn(v):
+            if isinstance(v, Ga):
+                return v.re if take == "re" else v.im
+            return v if take == "re" else Fr(0)
+        return _poly_map_leaves(p, fn)
+
+    pn, pi_ = sp(rf.p, "re"), sp(rf.p, "im")
+    qn, qi = sp(rf.q, "re"), sp(rf.q, "im")
+    den_n = qn * qn + qi * qi
+    return RatFunc(pn * qn + pi_ * qi, den_n), RatFunc(pi_ * qn - pn * qi, den_n)
+
+
+class _RealifyFail(Exception):
+    pass
+
+
+def _realify_laurent(y_rf, tau, sgn, u_eff, xv):
+    """tau=e^{i*sgn*u_eff} 视角 Laurent 解 -> 实三角 term；否则 None。
+
+    可判定核心：
+      1) y 归一为显式指数字典 {(p0-q0)+j: 系数}；
+      2) 实性 <=> 对每个非零指数 k 存在 -k 且系数互为共轭
+         （叶系数 Ga 精确比较，非数值）；零指数系数必须实；
+      3) 共轭对直接公式化：s_e=a+ib =>
+             2a*cos(e*theta) - 2b*sin(e*theta)，theta=sgn*u_eff。
+    无启发式搜索；任一前提不满足返回 None（调用方保留复形态）。
+    """
+    from cas.ratfunc import RatFunc
+
+    def conj_rf(rf):
+        return RatFunc(_poly_map_leaves(rf.p, _ga_conj_leaf),
+                       _poly_map_leaves(rf.q, _ga_conj_leaf))
+
+    one_p = Poly.one(y_rf.p.vars)
+
+    # ---- 1) 归一化：y = tau^K * P(tau)/c，K=p0-q0、c 为分母首非零 ----
+    P_cs = _univar(y_rf.p, tau)
+    Q_cs = _univar(y_rf.q, tau)
+
+    def mono_power(cs):
+        """cs 必须为单项式 c*tau^v -> (v, c)；否则 None。"""
+        first = None
+        for idx, c in enumerate(cs):
+            if c.is_zero():
+                continue
+            if first is not None:
+                return None          # 非单项式
+            first = (idx, c)
+        return first
+
+    p0 = None
+    while len(P_cs) > 0 and P_cs[0].is_zero():
+        P_cs = P_cs[1:]
+        p0 = 0
+    # 分子允许一般多项式：记录最低次
+    p_lo = 0
+    P_trim = _u_trim(list(P_cs))
+    if _u_is_zero(P_trim):
+        return None
+    while P_cs[p_lo].is_zero():
+        p_lo += 1
+
+    qmono = mono_power(Q_cs)
+    if qmono is None:
+        return None                  # 分母含非常数非常单项式因子
+    q0, c_den = qmono
+    K = p_lo - q0
+    # 分子其余部分仍是一般多项式（从 p_lo 起到尾部）
+    body = {}
+    ok_any = False
+    for idx in range(p_lo, len(P_cs)):
+        c = P_cs[idx]
+        if c.is_zero():
+            continue
+        body[(idx - p_lo) + K] = c / c_den
+        ok_any = True
+    if not ok_any:
+        return None
+
+    # ---- 2) 实性：逐指数配对 ----
+    half_done = set()
+    parts = []
+    u_arg_cache = {}
+
+    def u_arg_of(e):
+        if e not in u_arg_cache:
+            u_arg_cache[e] = u_eff if e == 1 else T.times(N(e), u_eff)
+        return u_arg_cache[e]
+
+    keys = sorted(body.keys())
+    for k in keys:
+        if k in half_done:
+            continue
+        s_k = body[k]
+        if k == 0:
+            a_rf, b_rf = _rf_split_im(s_k)
+            if not b_rf.p.is_zero():
+                return None
+            if not a_rf.p.is_zero():
+                parts.append(a_rf.to_term())
+            half_done.add(0)
+            continue
+        kn = -k
+        s_n = body.get(kn)
+        if s_n is None:
+            return None              # 缺共轭伙伴 => 非实
+        if not (conj_rf(s_k) - s_n).p.is_zero():
+            return None              # 系数非共轭（精确零判定）
+        s_pos = s_k if k > 0 else s_n
+        e = abs(k)
+        a_rf, b_rf = _rf_split_im(s_pos)
+        ct = T.mk(S("Cos"), (u_arg_of(e),))
+        st_t = T.mk(S("Sin"), (u_arg_of(e),))
+        t1 = a_rf * Fr(2)
+        t2 = b_rf * Fr(-2 * sgn)
+        if not t1.p.is_zero():
+            parts.append(T.times(t1.to_term(), ct))
+        if not t2.p.is_zero():
+            parts.append(T.times(t2.to_term(), st_t))
+        half_done.add(k)
+        half_done.add(kn)
+
+    if not parts:
+        return None
+    body_t = parts[0] if len(parts) == 1 else T.mk(S("Plus"), tuple(parts))
+    return body_t
+
+
+def b_rf_zero(b0):
+    return b0.p.is_zero()
+
+
 def _solve_low(lam, rhs, de, jl):
     """低层 RDE D(s)+λ·s=rhs，s ∈ levels[:jl]（jl>=1 递归，jl==0 基层）。"""
     if jl >= 1:
@@ -1956,6 +2162,7 @@ def _rde_tower_solve(f, g, de, j):
         if not (dy + f * y_final - g).p.is_zero():
             raise RischUnsupported(
                 "internal: Laurent RDE candidate failed exact verify")
+        # 实化在 _exp_freq_part 组装层做（t^k 频率因子须一并参与）
         return y_final, 'ok'
     if not _u_is_zero(cn):
         inv_cd = one_c / cd[0]
@@ -2112,7 +2319,25 @@ def _exp_freq_part(freqs, de, j):
                 "(cancellation analysis pending); frequency k=%d" % k)
         bp = b
         if not bp.is_zero():
-            freq_terms.append((bp, k))
+            # 出口实化（可判定子集）：虚指数层视图的 b 本身做共轭对
+            # 实化（τ=levels[j-1]），外层实指数因子 τ_j^k 以项形态外乘
+            # （实因子不参与共轭配对）。正确性由 integrate() 出口全量
+            # 精确验证兜底。
+            re_t = None
+            info = _imag_exp_level_info(de, j - 1) if j >= 2 else None
+            if info is not None:
+                sgn_i, u_eff_i = info
+                tau_im = de.levels[j - 1]
+                re_t = _realify_laurent(bp, tau_im, sgn_i, u_eff_i, xv)
+                if re_t is not None:
+                    tk_t = T.pw(de.terms[j], N(k)) if k != 1 else de.terms[j]
+                    if k < 0:
+                        tk_t = T.div(T.ONE, T.pw(de.terms[j], N(-k)))
+                    re_t = re_t if k == 0 else T.times(re_t, tk_t)
+            if re_t is not None:
+                expr = T.plus(expr, re_t)
+            else:
+                freq_terms.append((bp, k))
     for bk, k in freq_terms:
         bt = bk.to_term()   # 塔符号形态（出口统一回写）
         tk = T.pw(T.S(tj.name), N(k)) if k != 1 else T.S(tj.name)
