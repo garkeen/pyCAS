@@ -212,7 +212,15 @@ unsupported 并注明卡点（现有纪律），本矩阵即声明的权威出�
   右端缩放缺陷）→ M5.2.5 ℚ(i) ✓ Gaussian rational 系数域（第一个代数常数扩张基建）
   → M5.3 三角经复指数 ✓（trigs_to_exp 重写 + exp 视角 special 分母的
   Laurent 对角下降；tan/eˣsin/eˣcos VERIFIED、sin(x)/x proved；
-  复形态出口实化回 sin/cos 待做）→ **M5.4 代数
+  复形态出口实化回 sin/cos 待做）
+  → **M5.2c-iii** prde 判定件移植 ✓（is_logderiv_radical/_pld_heu/
+  limited_integrate 探测版/S-b lam=0 下降；守卫换精确代数相关性判定、
+  嵌套塔解锁、√log x 拒绝、∫x^x dx proved）
+  → **M5.3.1 ℚ(i) 积分链收尾**（Ga-有理积分实虚拆分归约 ℚ——三角
+  真分式残数的域内组装；_constant_roots ℚ(i) 根已就绪 ✓）
+  → **M5.3.2 出口实化切片二**（log 配对：自反多项式分解 → atan/
+  实 log，tan 类出真实形态；符号常数 undecidable 消息模板接线）
+  → **M5.4 代数
   常数域泛化**（ℚ(i) 基建参数化极小多项式 → 任意 ℚ(α) 单/多扩张；因子分解
   经 Trager 归约回 ℚ——**代数数完全可判定，非 Richardson 障碍**；不可判定性
   仅出现于超越常数符号（e/π 不透明组合的零等价，Richardson 定理），届时按
