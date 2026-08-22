@@ -380,16 +380,32 @@ def build_extension(f, x):
                 continue
             if bn.is_const() and bd.is_const():
                 continue   # exp(常数) = 常数因子
-            # 代数依赖守卫：base 含既有塔变量 => e^base 与塔代数相关
-            # （如 exp(log(x)/2): t² = x），破坏超越性 => 诚实拒绝
+            # 代数依赖守卫（M5.2c-iii 精确判定版）：e^base 与塔代数
+            # 相关 ⟺ ∃n∈ℤ≠0, w: n·D(base) = D(w)/w —— 对底数的导数
+            # 做对数导数-根式判定（经典 Risch 结构定理；直接判 base 会
+            # 漏掉 e^{log x /2}=√x 类无极点代数情形）。判定为超越
+            # （None）=> 放行建新层；代数相关 => 诚实拒绝。
             if any(e > 0 for mono in bn.monos for e in mono[1:]) \
                     or any(e > 0 for mono in bd.monos for e in mono[1:]):
-                raise RischUnsupported(
-                    "exponent depends on existing tower variables: "
-                    "algebraic dependency")
+                from cas.ratfunc import RatFunc as _RFg
+                cur_vars = tuple(de.levels)
+                g_rf = _RFg(_embed(bn, cur_vars), _embed(bd, cur_vars))
+                dg_rf = _tower_deriv_frac(g_rf.p, g_rf.q, de)
+                dep = _is_logderiv_radical(dg_rf, de,
+                                           len(de.levels) - 1)
+                if dep is not None:
+                    raise RischUnsupported(
+                        "exponent algebraically dependent on existing "
+                        "tower variables (log-derivative radical)")
             w = _tower_deriv_frac(bn, bd, de)   # eta' = D(base)
-            t = de.add("exp", w, key, "t")
-            subs[key] = T.S(t.name)
+            tl = de.add("exp", w, key, "t")
+            subs[key] = T.S(tl.name)
+            # 组内各成员方向同步登记（复合底的下一轮解析依赖：
+            # 如 Exp(−ix) 建层后 Exp(+ix) 须映射为 t^{-1}）
+            for arg_m, mm2 in members:
+                mkey = T.mk(S("Exp"), (arg_m,))
+                subs[mkey] = (T.pw(T.S(tl.name), N(mm2)) if mm2 != 1
+                              else T.S(tl.name))
             changed = True
 
         if not changed:
@@ -1133,7 +1149,7 @@ def _residue_sqfr(B, p, de, j, zero):
             g = _u_gcd(fc, p, zero)
             if len(g) <= 1:
                 continue
-            logs.append((T.N(c), g))
+            logs.append((c, g))
             Dg = _derive_ut(g, de, j)
             cof = _u_divmod(p, g, zero)[0]
             ct = zero.one(zero.p.vars) * c
@@ -1146,14 +1162,81 @@ def _uz_trim_list(cs):
     return _u_trim(cs)
 
 
+def _term_to_ga(t):
+    """term -> Ga（仅含数字与符号 i 的线性形态）；否则 None。"""
+    fv = T.free_vars(t)
+    if any(v.name != "i" for v in fv):
+        return None
+    try:
+        return Ga.from_term_val(t)
+    except Exception:
+        return None
+
+
+def _frac_sqrt(f):
+    """有理数的精确平方根；非完全平方返回 None。"""
+    from math import isqrt
+
+    f = Fr(f)
+    if f < 0:
+        return None
+    rn, rd = isqrt(f.numerator), isqrt(f.denominator)
+    if rn * rn != f.numerator or rd * rd != f.denominator:
+        return None
+    return Fr(rn, rd)
+
+
+def _ga_sqrt_exact(g):
+    """Ga 的精确平方根（系数有理域内）；非完全平方返回 None。"""
+    A, B = g.re, g.im
+    n = A * A + B * B
+    sn = _frac_sqrt(n)
+    if sn is None:
+        return None
+    u2 = (A + sn) / 2
+    su = _frac_sqrt(u2)
+    if su is None:
+        return None
+    if su == 0:
+        sv = _frac_sqrt((A - sn) / 2)
+        if sv is None:
+            return None
+        return Ga(Fr(0), sv)
+    return Ga(su, B / (2 * su))
+
+
+def _const_roots_ga_quad(Rz):
+    """R(z) 全 ℚ(i)-常数且次数 ≤2 时精确求根；否则 None。"""
+    cs = [c for c in Rz if not c.is_zero()]
+    if not cs or len(cs) > 3:
+        return None
+    vals = []
+    for c in cs:
+        g = _rf_const_ga(c)
+        if g is None:
+            return None
+        vals.append(g)
+    if len(vals) == 1:
+        return []
+    if len(vals) == 2:
+        return [-vals[0] / vals[1]]
+    a2, b1, c0 = vals
+    disc = b1 * b1 - a2 * c0 * 4
+    s = _ga_sqrt_exact(disc)
+    if s is None:
+        return None
+    two = Ga(2)
+    return [(-b1 + s) / (a2 * 2), (-b1 - s) / (a2 * 2)]
+
+
 def _constant_roots(Rz):
     """R(z) ∈ Q(x)[z] 的常数根：转 term 用 solve，含 x 的根丢弃。
 
     含 x 的根被丢弃正是数学语义：非常数 residue 不对应初等对数项。
     solve 无法判定（unsupported）时抛异常——绝不静默漏根（漏根会把
-    可积成分误判为不可初等，违反永不静默错）。代数数值根（根式/RootOf）
-    是合法 residue 常数，但系数组装需 Q(alpha) 域——M5.2 扩展，此处
-    显式异常（不误判为不可积）。
+    可积成分误判为不可初等，违反永不静默错）。ℚ(i) 根（含符号 i 的
+    线性解）经 _term_to_ga 精确收集；更高阶代数根需 Q(alpha) 域——
+    M5.4 前显式异常（不误判为不可积）。
     """
     from cas.solve import solve as _solve
 
@@ -1169,6 +1252,10 @@ def _constant_roots(Rz):
     poly_t = T.mk(S("Plus"), tuple(terms)) if len(terms) > 1 else terms[0]
     r = _solve(poly_t, z)
     if r.status != "ok":
+        # ℚ(i) 常数低次回退：精确二次/一次求根（三角残数常为 ±i 型）
+        fb = _const_roots_ga_quad(Rz)
+        if fb is not None:
+            return fb
         raise RischUnsupported(
             "cannot determine constant roots of the resultant: " + (r.note or ""))
     out = []
@@ -1176,7 +1263,12 @@ def _constant_roots(Rz):
         if not _free_of_x(sol):
             continue
         if not T.is_num(sol):
-            raise RischUnsupported("algebraic residue roots pending M5.2")
+            ga = _term_to_ga(sol)
+            if ga is not None:
+                out.append(ga)
+                continue
+            raise RischUnsupported(
+                "algebraic residue roots beyond Q(i) pending M5.4")
         out.append(T.num_val(sol))
     return out
 
@@ -1205,7 +1297,8 @@ def assemble_exp_result(rat_part, logs, nonel, de, j):
     for c, g in logs:
         gn, gd = _from_univar(g, de.vars, tj)
         gt = tower_to_term_pair(gn, gd, de, backsub=False)
-        parts.append(T.times(c, T.log(gt)))
+        ct = c.to_term() if hasattr(c, "to_term") else N(c)
+        parts.append(T.times(ct, T.log(gt)))
     if nonel is not None:
         num, p = nonel
         nn, nd = _from_univar(num, de.vars, tj)
@@ -1697,6 +1790,447 @@ def _dk_pair(de, jv):
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# M5.2c-iii #1：对数导数-根式判定（sympy prde.is_log_deriv_k_t_radical_in_field
+# + parametric_log_deriv_heu 忠实移植，非参数化特化到 ℚ(i) 常数域）。
+#
+# 判定：∃n∈ℤ\{0}, u∈K*: n·f = D(u)/u ？返回 (n, u)|None。
+# 用途：(a) 塔构建守卫的精确代数相关性判定；(b) primitive db==da 界修正；
+#       (c) cancel_primitive 完整化的前置。
+# 结构：base/primitive/exp 三 case；exp 经 parametric 启发式（解出整数比
+# c1=m/n 后在低一层做 radical 判定——DecrementLevel 语义对应）；互递归
+# 层严格下降保证终止。出口全量精确验证 D(U)==N·f·U 兜底。
+# ---------------------------------------------------------------------------
+
+def _const_to_term(c):
+    return c.to_term() if hasattr(c, "to_term") else N(c)
+
+
+def _rf_const_ga(rf):
+    """RatFunc 是否为 ℚ(i) 标量；是则返回 Ga，否则 None。"""
+    for pp in (rf.p, rf.q):
+        for k in pp.monos:
+            if any(e != 0 for e in k):
+                return None
+    num = rf.p.const_val()
+    den = rf.q.const_val()
+    from cas.gaussian import Ga as _G
+    num_g = num if isinstance(num, _G) else _G(num)
+    den_g = den if isinstance(den, _G) else _G(den)
+    if den_g.is_zero():
+        return None
+    return num_g / den_g
+
+
+def _ga_den(ga):
+    from fractions import Fraction as _Fr
+    return _lcm2(ga.re.denominator, ga.im.denominator)
+
+
+def _lcm2(a, b):
+    from math import gcd as _g
+    return a * b // _g(a, b)
+
+
+def _rf_of_cs(cs, allv, tau):
+    from cas.ratfunc import RatFunc as _RF
+    n_, d_ = _from_univar(cs, allv, tau)
+    return _RF(n_, d_)
+
+
+def _cs_const_val(cs, allv):
+    """univar list 是否整体为零多项式；非零时无意义（仅供零检查）。"""
+    return all(c.is_zero() for c in cs)
+
+
+def _ldrad_base(f_rf, de):
+    """ℚ(i)(x) 上的对数导数-根式判定（base case，Poly 级实现）。
+
+    f 真分式且分母无平方时：R(z)=Res_x(a−z·b',b) 的根全为 ℚ(i)
+    常数 <=> ∃n,u: n·f=D(u)/u；n=lcm(残数分母)、u=Πg^{n·r}。
+    """
+    from cas.poly import ugcd as _pugcd
+    from cas.factor import squarefree_decomp
+    from math import lcm as _lcm3
+    from cas.ratfunc import RatFunc
+
+    def _uni_strip(p):
+        if len(p.vars) <= 1:
+            return p
+        for k, _c in p.monos.items():
+            if any(e != 0 for e in k[1:]):
+                raise RischUnsupported(
+                    "internal: base-level poly carries higher tower vars")
+        return Poly((p.vars[0],),
+                    {(k[0],): c for k, c in p.monos.items()})
+
+    xv = de.levels[0]
+    a = _uni_strip(f_rf.p)
+    b = _uni_strip(f_rf.q)
+    if a.is_zero():
+        return 1, f_rf
+    if b.degree(xv) == 0:
+        return None                    # 无极点：非常数 f 不可能是 dlog
+    if a.degree(xv) >= b.degree(xv):
+        return None                    # 非真分式（多项式部分无处承载）
+    try:
+        parts = squarefree_decomp(b)
+    except Exception:
+        return None
+    if len(parts) != 1 or parts[0][1] != 1:
+        return None                    # 分母须无平方
+
+    db = b.deriv(xv)
+    la, lb, ldb = _poly_to_list(a), _poly_to_list(b), _poly_to_list(db)
+    from cas.ratfunc import RatFunc as _RFb
+
+    def _wrap_list(lst):
+        return [_RFb.from_poly(Poly.const((xv,), v)) for v in lst]
+
+    la, lb, ldb = _wrap_list(la), _wrap_list(lb), _wrap_list(ldb)
+    nb = max(len(la), len(lb), len(ldb))
+    lap = la + [_RFb.from_poly(Poly.const((xv,), Fr(0)))
+                for _ in range(nb - len(la))]
+    lbp = lb + [_RFb.from_poly(Poly.const((xv,), Fr(0)))
+                for _ in range(nb - len(lb))]
+    ldbp = ldb + [_RFb.from_poly(Poly.const((xv,), Fr(0)))
+                  for _ in range(nb - len(ldb))]
+    fz = [[aa, _neg_poly(dd)] for aa, dd in zip(lap, ldbp)]
+    gz = [[cc] for cc in lbp]
+    Rz = _sylvester_res(fz, gz)
+    if _u_is_zero(Rz):
+        return None
+
+    roots = _constant_roots(Rz)        # 无法判定 => 异常上抛（诚实）
+    residueterms = []
+
+    def _neg_val(v):
+        if isinstance(v, Ga):
+            return Ga(-v.re, -v.im)
+        return -v
+
+    for c in roots:
+        diffp = a + db.scalar(_neg_val(c))
+        g = _pugcd(diffp, b)
+        if g.degree(xv) <= 0:
+            continue
+        dn_ = _ga_den(c) if isinstance(c, Ga) else c.denominator
+        residueterms.append((g, c, dn_))
+    if not residueterms:
+        return None
+    n = 1
+    for _, _, dn_ in residueterms:
+        n = _lcm3(n, dn_)
+    u = Poly.one((xv,))
+    for g, c, _dn in residueterms:
+        ee = n * c
+        if isinstance(ee, Ga):
+            if ee.im != 0 or ee.re.denominator != 1:
+                return None
+            ee = int(ee.re)
+        u = u * g ** int(ee)
+    return _ld_finish(n, RatFunc(u, Poly.one((xv,))), f_rf, de)
+
+
+def _is_logderiv_radical(f_rf, de, jv, depth=0):
+    """主判定入口。f_rf: RatFunc over levels[:jv+1]，视图 τ=levels[jv]。"""
+    from cas.ratfunc import RatFunc
+
+    if depth > 8:
+        return None
+    if f_rf.is_zero():
+        return 1, RatFunc.one(tuple(de.levels[:jv + 1]))
+
+    if jv == 0:
+        return _ldrad_base(f_rf, de)
+
+    tau = de.levels[jv]
+    allv = tuple(de.levels[:jv + 1])
+    sub = tuple(de.levels[:jv])
+    zero = RatFunc.zero(sub)
+    one_c = zero.one(sub)
+    der_fn = _make_der_fn(de, jv)
+
+    # τ 不在变量集 => f ∈ K_{jv-1}：直接降层递归（结构定理模式）
+    if tau not in f_rf.p.vars and tau not in f_rf.q.vars:
+        return _is_logderiv_radical(f_rf, de, jv - 1, depth + 1)
+
+    fn_cs = _univar(f_rf.p, tau)
+    fd_cs = _univar(f_rf.q, tau)
+
+    # ---- -1) τ-gcd 约分（未约分形态会污染残数结果式）----
+    g0 = _u_gcd(fn_cs, fd_cs, zero)
+    if len(g0) > 1:
+        fn_cs = _u_divmod(fn_cs, g0, zero)[0]
+        fd_cs = _u_divmod(fd_cs, g0, zero)[0]
+
+    # ---- 0) 分母须无平方（对数导数只有单极点）----
+    sqf = _squarefree_decomp_t(fd_cs, zero)
+    if any(e >= 2 for _, e in sqf):
+        return None
+
+    # ---- 1) 多项式部分 + 逐因子残数（复用 _integrate_normal 模式）----
+    Q_cs, _R_all = _u_divmod(fn_cs, fd_cs, zero)
+    logs = []                        # [(c(Ga|Fr), g_cs)]
+    ok = True
+    rem_polys = []                   # 各因子的可除余商（τ-poly）
+    for p1, _e1 in sqf:
+        cof = _u_divmod(fd_cs, p1, zero)[0]
+        Bm = _u_divmod(
+            _u_mul(fn_cs, _u_inv_mod(cof, fd_cs, zero), zero), p1, zero)[1]
+        lg, rem = _residue_sqfr(Bm, p1, de, jv, zero)
+        for c, g in lg:
+            cv = c if isinstance(c, (Fr, Ga)) else None
+            if cv is None:
+                try:
+                    cv = Fr(c)
+                except Exception:
+                    return None      # 非常数残数 => 非对数导数
+            logs.append((cv, g))
+        if _u_is_zero(rem):
+            continue
+        qq, rr = _u_divmod(rem, p1, zero)
+        if not _u_is_zero(rr):
+            return None              # normal 极点未被解释 => 非对数导数
+        rem_polys.append(qq)
+
+    # ---- 2) p_final = 多项式部分 − Σ c·D(g)/g，须为 τ-常数（∈K_{jv}）----
+    P_n, P_d = list(Q_cs), [one_c]
+    for qq in rem_polys:
+        P_n = _u_add(P_n, qq, zero)
+    P_rf = _rf_of_cs(P_n, allv, tau) / _rf_of_cs(P_d, allv, tau)
+    for cv, g in logs:
+        g_rf = _rf_of_cs(list(g), allv, tau)
+        dg_rf = _rf_of_cs(der_fn(g), allv, tau)
+        term = dg_rf / g_rf * cv
+        P_rf = P_rf - term
+    # τ-free 门（deg < max(1, deg(Dτ)) 的等价形式）
+    Pp_cs = _univar(P_rf.p, tau)
+    Pq_cs = _univar(P_rf.q, tau)
+    if _u_deg(_u_formal_deriv(Pp_cs)) >= 0 or \
+            _u_deg(_u_formal_deriv(Pq_cs)) >= 0:
+        return None
+
+    # ---- 3) case 分派 ----
+    def dens_lcm():
+        nd = 1
+        for cv, _g in logs:
+            nd = _lcm2(nd, _ga_den(cv) if isinstance(cv, Ga)
+                       else cv.denominator)
+        return nd
+
+    if jv == 0:
+        # base：P 必须为零（无更低层承载）
+        if not _u_is_zero(_univar(P_rf.p, tau)) and not P_rf.p.is_zero():
+            if not P_rf.p.is_zero() or not P_rf.q.is_one():
+                if not P_rf.p.is_zero():
+                    return None
+        if not P_rf.p.is_zero():
+            return None
+        n = dens_lcm()
+        u = RatFunc(one_c * 0 + Poly.one(allv), Poly.one(allv))
+        uacc = RatFunc(Poly.one(allv), Poly.one(allv))
+        for cv, g in logs:
+            ee = int(n * cv)
+            gp = _u_pow(list(g), ee, zero)
+            gu, gd = _from_univar(gp, allv, tau)
+            uacc = uacc * RatFunc(gu, gd)
+        U = uacc
+    elif de.cases[jv] == "primitive":
+        rec = _is_logderiv_radical(P_rf, de, jv - 1, depth + 1)
+        if rec is None:
+            return None
+        n_l, v = rec
+        N = _lcm2(n_l, dens_lcm())
+        mm = N // n_l
+        uacc = v ** mm
+        for cv, g in logs:
+            ee = int(N * cv)
+            gp = _u_pow(list(g), ee, zero)
+            gu, gd = _from_univar(gp, allv, tau)
+            uacc = uacc * RatFunc(gu, gd)
+        N_final, U = N, uacc
+        return _ld_finish(N_final, U, f_rf, de)
+    else:  # exp
+        eta = de.ws[jv]
+        # 常数 P 平凡参数化（heu 的结构定理限制补全）：
+        # v=1 时 n·P = m·η <=> P/η ∈ ℚ，取 n=分母、m=分子、U=τ^m/n·?
+        # 即 U=τ^E，E/n = P/η。
+        P_cv = _rf_const_ga(P_rf)
+        if P_cv is not None:
+            eta_cv = _rf_const_ga(eta)
+            if eta_cv is not None and not eta_cv.is_zero():
+                rho = P_cv / eta_cv
+                if rho.im == 0 and rho.re.denominator != 0:
+                    nn = rho.re.denominator
+                    EE = int(rho.re * nn)
+                    tau_u = (RatFunc(Poly.mono(allv, tau, EE),
+                                     Poly.one(allv)) if EE > 0 else
+                             RatFunc(Poly.one(allv),
+                                     Poly.mono(allv, tau, -EE))
+                             if EE < 0 else
+                             RatFunc(Poly.one(allv), Poly.one(allv)))
+                    return _ld_finish(nn, tau_u, f_rf, de)
+        rec = _pld_heu(P_rf, eta, de, jv - 1, depth + 1)
+        if rec is None:
+            return None
+        n_l, m_l, v = rec
+        N = _lcm2(n_l, dens_lcm())
+        mm = N // n_l
+        uacc = v ** mm
+        for cv, g in logs:
+            ee = int(N * cv)
+            gp = _u_pow(list(g), ee, zero)
+            gu, gd = _from_univar(gp, allv, tau)
+            uacc = uacc * RatFunc(gu, gd)
+        E = mm * m_l
+        if E > 0:
+            uacc = uacc * RatFunc(Poly.mono(allv, tau, E), Poly.one(allv))
+        elif E < 0:
+            uacc = uacc / RatFunc(Poly.mono(allv, tau, -E),
+                                  Poly.one(allv))
+        return _ld_finish(N, uacc, f_rf, de)
+
+    # base 路径收尾（带验证）
+    return _ld_finish(n, U, f_rf, de)
+
+
+def _ld_finish(N, U, f_rf, de):
+    """出口全量精确验证 D(U)==N·f·U；失败=内部错误（绝不静默）。"""
+    from cas.ratfunc import RatFunc
+    if U.p.vars != f_rf.p.vars:
+        U = RatFunc(_embed(U.p, f_rf.p.vars), _embed(U.q, f_rf.p.vars))
+    from cas.ratfunc import RatFunc
+
+    DU = _tower_deriv_frac(U.p, U.q, de)
+    lhs = DU / U
+    rhs = f_rf * N
+    diff = lhs - rhs
+    if not diff.p.is_zero():
+        raise RischUnsupported(
+            "internal: log-deriv radical witness failed exact verify "
+            "(this is a bug, not an honest refusal)")
+    return N, U
+
+
+def _pld_heu(f_rf, w_rf, de, jl, depth=0):
+    """参数化启发式（sympy parametric_log_deriv_heu 移植）：
+    解 n·f = D(v)/v + m·w（n,m∈ℤ, v∈levels[:jl+1]*）。
+    返回 (n, m, v)|None。f,w ∈ levels[:jl+1]，视图 τ'=levels[jl]。"""
+    from cas.ratfunc import RatFunc
+
+    if depth > 8:
+        return None
+    tp = de.levels[jl]
+    allv = tuple(de.levels[:jl + 1])
+    sub2 = tuple(de.levels[:jl])
+    zero = RatFunc.zero(sub2)
+    der_fn = _make_der_fn(de, jl)
+
+    f_cs_n = _univar(f_rf.p, tp)
+    f_cs_d = _univar(f_rf.q, tp)
+    w_cs_n = _univar(w_rf.p, tp)
+    w_cs_d = _univar(w_rf.q, tp)
+
+    dk_cs, _dkd = _dk_pair(de, jl)
+    dk_deg = _u_deg(dk_cs)
+    B = max(0, dk_deg - 1)
+
+    p_part, _ = _u_divmod(f_cs_n, f_cs_d, zero)
+    q_part, _ = _u_divmod(w_cs_n, w_cs_d, zero)
+    C = max(_u_deg(p_part), _u_deg(q_part))
+    q_deg = _u_deg(q_part)
+
+    c1 = None
+    if q_deg > B:
+        rat = None
+        ok = True
+        for i in range(B + 1, C + 1):
+            qi = q_part[i] if i < len(q_part) else zero
+            pi_ = p_part[i] if i < len(p_part) else zero
+            if qi.is_zero():
+                if not pi_.is_zero():
+                    ok = False
+                    break
+                continue
+            r_i = pi_ / qi
+            if rat is None:
+                rat = r_i
+            elif not (r_i - rat).p.is_zero():
+                ok = False
+                break
+        if not ok or rat is None:
+            return None
+        c1 = _rf_const_ga(rat)
+        if c1 is None or c1.im != 0:
+            return None
+    elif _u_deg(p_part) > B:
+        return None
+    else:
+        # l = lcm(monic(f_den), monic(w_den))；z = special(l)·gcd(normal, normal')
+        fdm = _u_divmod(f_cs_d,
+                        [_u_trim(list(f_cs_d))[-1]], zero)[0]
+        wdm = _u_divmod(w_cs_d,
+                        [_u_trim(list(w_cs_d))[-1]], zero)[0]
+        g_ = _u_gcd(fdm, wdm, zero)
+        l_cs = _u_mul(fdm, _u_divmod(wdm, g_, zero)[0], zero)
+        ln_, ls_ = _split_ns(l_cs, der_fn, zero)
+        if _u_is_zero(ln_):
+            return None
+        gg = _u_gcd(ln_, der_fn(ln_), zero)
+        z_cs = _u_mul(ls_, gg, zero)
+        if _u_deg(_u_formal_deriv(z_cs)) < 0 and _u_deg(z_cs) <= 0:
+            return None          # z 无 τ'：需结构定理（诚实放弃）
+        lf = _u_mul(f_cs_n,
+                    _u_divmod(l_cs, f_cs_d, zero)[0], zero)
+        lw = _u_mul(w_cs_n,
+                    _u_divmod(l_cs, w_cs_d, zero)[0], zero)
+        _q1, r1 = _u_divmod(lf, z_cs, zero)
+        _q2, r2 = _u_divmod(lw, z_cs, zero)
+        zdeg = max(len(z_cs) - 1, 1)
+        rat = None
+        ok = True
+        for i in range(zdeg):
+            ri1 = r1[i] if i < len(r1) else zero
+            ri2 = r2[i] if i < len(r2) else zero
+            if ri2.is_zero():
+                if not ri1.is_zero():
+                    ok = False
+                    break
+                continue
+            rr = ri1 / ri2
+            if rat is None:
+                rat = rr
+            elif not (rr - rat).p.is_zero():
+                ok = False
+                break
+        if not ok or rat is None:
+            return None
+        c1 = _rf_const_ga(rat)
+        if c1 is None or c1.im != 0:
+            return None
+
+    # c1 = M/N（有理数）
+    cv = c1
+    den = _lcm2(cv.re.denominator, cv.im.denominator)
+    M = int(cv.re * den + cv.im * den) if False else         int((cv.re * den))
+    Nn = den
+    if cv.im != 0:
+        return None
+    M = int(cv.re * Nn)
+
+    # h = N·f − M·w 在更低层做 radical 判定（DecrementLevel 语义）
+    h = f_rf * Nn - w_rf * M
+    if jl == 0:
+        return None                 # 无更低层承载（ℚ(i)(x) 内非平凡参数化）
+    rad = _is_logderiv_radical(h, de, jl - 1, depth + 1)
+    if rad is None:
+        return None
+    Qn, v = rad
+    return Qn * Nn, Qn * M, v
+
+
 # ---------------------------------------------------------------------------
 # M5.3 出口实化（可判定子集）：tau = e^{i*sgn*u} 视角的 Laurent 解
 # -> 实三角形态。全部精确恒等式，无启发式搜索：
@@ -2404,7 +2938,7 @@ def _exp_freq_part(freqs, de, j):
                 ("t^%d" % rde_fail) if rde_fail != 1 else "t",
                 rde_fail,
                 _ts(g.to_term()),
-                _ts(de.ws[j]),
+                _ts(de.ws[j].to_term()),
             )
         )
     return expr

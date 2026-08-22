@@ -200,6 +200,22 @@ sincos->-cos2x/4、cos^3->3sin/4+sin3x/12 全教科书形态 VERIFIED；
 e^ax*sin(bx) 族标准公式形态；嵌套 sin(sinx)/e^sinx 导数在瀑布层被
 u=sinx 正向换元截获（真实形态直出），强制复路线则诚实 unsupported
 （外层 exp 底含内层塔变量=覆盖边界）。464 绿。
+**M5.2c-iii #1 落地：对数导数-根式判定（is_logderiv_radical 移植）**：
+最难的升级，一次移植三处收益。数学要点：(1) 守卫判据是 n·D(base)=
+D(w)/w（对底数的导数判定）——直接判 base 会漏 e^{log x/2}=√x 类无极点
+代数情形（残数视角看不见）；(2) dlog 残数 = 指数·Dπ(根)，在 exp 层带
+η 因子而非裸整数——cot 复形态残数 ±i 与 sin-elem 指数 1 一致性由此
+调和；(3) sympy heu 的 z-has-no-t 结构定理限制，用常数 P 平凡参数化
+（v=1, n·P=m·η, P/η∈ℚ）补全 cot/tan 场景。工程修复链：_tower_deriv_frac
+返回单 RatFunc 非元组；base 层剥唯一变量须 _uni_strip 投影；RatFunc
+自动约分会吃掉 τ-free 表示（1/(2x)→1/4 事故——系数域与函数域混淆）；
+±ix 组成员方向须同步登记进工作 subs（复合底下一轮解析依赖）；
+_constant_roots 升级 ℚ(i) 根解析 + 二次精确回退（_ga_sqrt_exact：
+norm 开方+半角公式，非完全平方诚实 None）。验收：√log x 拒/嵌套塔
+建、x^x 链与 e^{eˣ} 链复 Risch 直出 VERIFIED、∫x^x dx 证明性拒答、
+477 tests 全绿（新增 14）。剩余切片：parametric_log_deriv 完整版
+（heu 之外的结构定理路径）、limited_integrate 完整版（S-c prim 界
+修正）、is_deriv_in_field（S-b B=0 cancellation）、log 配对实化。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前

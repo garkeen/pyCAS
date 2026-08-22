@@ -67,14 +67,16 @@ class TestTowerBuild(unittest.TestCase):
     def test_reject_algebraic_dependency(self):
         from cas.risch import RischUnsupported
 
+        # exp(log(x)/2) = sqrt(log x)：代数相关（精确判定后仍拒绝）
         with self.assertRaises(RischUnsupported):
             _build("exp(log(x)/2)")
 
-    def test_reject_nested_transcendental_arg(self):
-        from cas.risch import RischUnsupported
-
-        with self.assertRaises(RischUnsupported):
-            _build("exp(x*exp(x))")
+    def test_accept_nested_transcendental(self):
+        # M5.2c-iii：exp(x*exp(x)) 底含塔变量但超越（精确判定非对数
+        # 导数-根式）=> 放行建嵌套塔（原保守守卫一律拒绝，已解锁）
+        de, fa, fd = _build("exp(x*exp(x))")
+        self.assertEqual(len(de.levels), 3)
+        self.assertEqual(de.cases[1:], ["exp", "exp"])
 
     def test_reject_trig(self):
         from cas.risch import RischUnsupported

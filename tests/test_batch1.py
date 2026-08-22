@@ -82,7 +82,9 @@ class TestNounVerb(unittest.TestCase):
         s = Session()
         s.handle("integrate(exp(exp(x)), x)")
         out = s.handle(":value")
-        self.assertIn("no inert form evaluated", out)
+        # M5.2c-iii 嵌套塔解锁后 e^{e^x} 可建塔：积分给出证明性拒答
+        # （强于原名词挂起——诚实且信息更多）
+        self.assertIn("not elementary", out)
 
     def test_inert_nested_in_expr(self):
         # 惰性形式嵌在表达式深处也能求值（全式遍历；规范序）

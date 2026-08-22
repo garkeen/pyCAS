@@ -134,6 +134,35 @@ class Ga:
             return parts[0]
         return T.mk(S("Plus"), tuple(parts))
 
+    @classmethod
+    def from_term_val(cls, t):
+        """仅含数字与符号 i 的 term 精确求值为 Ga。"""
+        import cas.term as _T
+
+        if _T.is_num(t):
+            return cls(_T.num_val(t))
+        if isinstance(t, _T.Const) and getattr(t, "name", "") == "i":
+            return cls(0, 1)
+        if isinstance(t, _T.Sym):
+            if t.name == "i":
+                return cls(0, 1)
+            raise ValueError("non-gaussian symbol")
+        if isinstance(t, _T.Expr):
+            n = t.head.name
+            if n == "Plus":
+                acc = cls(0)
+                for a in t.args:
+                    acc = acc + cls.from_term_val(a)
+                return acc
+            if n == "Times":
+                acc = cls(1)
+                for a in t.args:
+                    acc = acc * cls.from_term_val(a)
+                return acc
+            if n == "Power" and isinstance(t.args[1], _T.Int):
+                return cls.from_term_val(t.args[0]) ** t.args[1].v
+        raise ValueError("not a gaussian-valued term")
+
     def __str__(self):
         if self.im == 0:
             return str(self.re)
