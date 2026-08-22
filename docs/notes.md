@@ -137,7 +137,20 @@
   对照 FriCAS rdeefx.spad 的 weak_normalization 语义裁定正确变换方向，
   再恢复 ii 实现**（组件代码已验证可用的部分存 stash：_gcdex_qx/
   _wn_qx/_nden_qx/_bd_qx/_spde_qx/_no_cancel_large_qx/_RdeFail）。
-  工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
+  **M5.2c-ii 首轮尝试失败（已回滚，核心未决问题记录）**：
+按 sympy rde.py 移植 weak_normalizer→normal_denom→spde→no_cancel 全链，
+组件单测全过，但端到端出现**错误否证**（把可积的 eˣ(1/x+log x) 判成
+proved 不可积——最严重违反类型）。根因分析：(1) 数值实验确认 sympy
+自身 wn→rischDE 链在该类案例同样产出不满足原方程的解（F=1+1/x,G=1:
+wn 吸收 q=x 后链路给 y=1，验证差 1/x；用官方测试同款 extension={'D':...}
+构造复现）；(2) 数学推导：wn 变换 f_new=f−q'/q 对应 v=y·q 且右端须缩放
+为 q·G，sympy rischDE 未做；(3) 修正缩放后仍错——primitive 移位耦合下
+"每轮低层 RDE 独立可解"的贪心归约不完备（ℓ¹ 项求解依赖 ℓ⁰ 项配合时，
+逐项独立判 FAIL 会误否证整体）。结论：**不能照抄 sympy rde.py 该路径**，
+必须先读 FriCAS rdeefx.spad 的 no_cancel_b_large/small/equal 与
+weak_normalization 完整语义（其调用契约与右端处理），弄清归约的严格
+适用条件后重做。防御性验证器再次拦下错误输出（设计生效）。
+工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
   塔上 + 工作队列循环处理嵌套依赖；代数依赖守卫：exp base 含既有塔变量
