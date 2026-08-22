@@ -617,8 +617,10 @@ def _mk_param(sym):
 
 
 def _coef_to_term(c):
-    """Fr/SymRat 系数 -> term。"""
+    """Fr/SymRat/Ga 系数 -> term。"""
     if isinstance(c, SymRat):
+        return c.to_term()
+    if hasattr(c, "to_term"):       # Ga（ℚ(i)）等自带出口的域元素
         return c.to_term()
     return N(c)
 
@@ -687,6 +689,9 @@ def _rat_inv(x):
         return _mk_rat(x.den, x.num)
     if x == 0:
         raise PolyError("division by zero")
+    if hasattr(x, "norm"):          # Ga（ℚ(i)）：域逆
+        from cas.gaussian import Ga
+        return Ga.one() / x
     return Fr(1) / x
 
 

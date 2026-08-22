@@ -665,7 +665,8 @@ def _gauss_solve(M, b):
     for i in range(n):
         if all(v == 0 for v in A[i][:cols]) and A[i][-1] != 0:
             return None
-    sol = [Fr(0)] * cols
+    z0 = b[0] * 0 if n else Fr(0)   # 系数域零元（Fr/Ga 通用）
+    sol = [z0] * cols
     for i, cidx in enumerate(piv_cols):
         sol[cidx] = A[i][-1]
     return sol
