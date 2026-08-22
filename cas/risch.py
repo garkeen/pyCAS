@@ -1799,6 +1799,13 @@ def _realify_laurent(y_rf, tau, sgn, u_eff, xv):
     """
     from cas.ratfunc import RatFunc
 
+    # tau 不在变量集 => y 为 tau^0：仅须实（虚部精确零）
+    if tau not in y_rf.p.vars:
+        a_rf, b_rf = _rf_split_im(y_rf)
+        if not b_rf.p.is_zero():
+            return None
+        return y_rf.to_term()
+
     def conj_rf(rf):
         return RatFunc(_poly_map_leaves(rf.p, _ga_conj_leaf),
                        _poly_map_leaves(rf.q, _ga_conj_leaf))
@@ -2288,6 +2295,10 @@ def _exp_freq_part(freqs, de, j):
     expr = T.ZERO
     freq_terms = []
     rde_fail = None
+    # 顶层虚指数层：±k 频率对可合并做共轭对实化（单个 k 分量不实，
+    # 合并后才实——sin(2x) 类的核心形态）
+    imag_top = _imag_exp_level_info(de, j) if de.cases[j] == "exp" else None
+    re_pairs = {} if imag_top is not None else None
     for k in sorted(freqs):
         g = freqs[k]
         if k == 0:
@@ -2319,16 +2330,31 @@ def _exp_freq_part(freqs, de, j):
                 "(cancellation analysis pending); frequency k=%d" % k)
         bp = b
         if not bp.is_zero():
-            # 出口实化（可判定子集）：虚指数层视图的 b 本身做共轭对
-            # 实化（τ=levels[j-1]），外层实指数因子 τ_j^k 以项形态外乘
-            # （实因子不参与共轭配对）。正确性由 integrate() 出口全量
-            # 精确验证兜底。
+            # ---- 通道 A（顶层虚指数层）：±k 合并后一次共轭对实化 ----
+            if re_pairs is not None:
+                from cas.ratfunc import RatFunc as _RF
+                if isinstance(bp, Poly):
+                    re_pairs[k] = _RF.from_poly(
+                        _embed(bp, tuple(de.levels[:j])))
+                else:
+                    re_pairs[k] = bp
+                continue
+            # ---- 通道 B（嵌套：虚层在系数域内）：逐 k 实化 b 本身，
+            # 外层实指数因子 τ_j^k 以项形态外乘。----
             re_t = None
-            info = _imag_exp_level_info(de, j - 1) if j >= 2 else None
+            if j >= 2:
+                info = _imag_exp_level_info(de, j - 1)
+                tau_im = de.levels[j - 1]
+            else:
+                info = None
             if info is not None:
                 sgn_i, u_eff_i = info
-                tau_im = de.levels[j - 1]
-                re_t = _realify_laurent(bp, tau_im, sgn_i, u_eff_i, xv)
+                if isinstance(bp, Poly):
+                    from cas.ratfunc import RatFunc as _RF
+                    bp_rf = _RF.from_poly(_embed(bp, tuple(de.levels[:j])))
+                else:
+                    bp_rf = bp
+                re_t = _realify_laurent(bp_rf, tau_im, sgn_i, u_eff_i, xv)
                 if re_t is not None:
                     tk_t = T.pw(de.terms[j], N(k)) if k != 1 else de.terms[j]
                     if k < 0:
@@ -2338,6 +2364,31 @@ def _exp_freq_part(freqs, de, j):
                 expr = T.plus(expr, re_t)
             else:
                 freq_terms.append((bp, k))
+    # ---- 通道 A 汇总实化 ----
+    if re_pairs and imag_top is not None:
+        sgn_i, u_eff_i = imag_top
+        klo, khi = min(re_pairs), max(re_pairs)
+        zero_k = RatFunc.zero(tuple(de.levels[:j]))
+        cs = [zero_k for _ in range(khi - klo + 1)]
+        for kk, rf in re_pairs.items():
+            cs[kk - klo] = rf
+        n_, d_ = _from_univar(cs, tuple(de.levels[:j + 1]), tj)
+        combined = RatFunc(n_, d_)
+        # _from_univar 指数从 0 起：补回 klo 偏移
+        if klo > 0:
+            combined = combined * RatFunc(
+                Poly.mono(tuple(de.levels[:j + 1]), tj, klo),
+                Poly.one(tuple(de.levels[:j + 1])))
+        elif klo < 0:
+            combined = combined / RatFunc(
+                Poly.mono(tuple(de.levels[:j + 1]), tj, -klo),
+                Poly.one(tuple(de.levels[:j + 1])))
+        re_t = _realify_laurent(combined, tj, sgn_i, u_eff_i, xv)
+        if re_t is not None:
+            expr = T.plus(expr, re_t)
+        else:
+            freq_terms.extend([(rf, kk) for kk, rf
+                               in sorted(re_pairs.items())])
     for bk, k in freq_terms:
         bt = bk.to_term()   # 塔符号形态（出口统一回写）
         tk = T.pw(T.S(tj.name), N(k)) if k != 1 else T.S(tj.name)

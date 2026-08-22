@@ -189,6 +189,17 @@ RatFunc 分子 is_zero 精确非数值）；(2) 配对公式 s_e*tau^e+s_-e*tau^
 HEAD 恢复拼接——大文件手术前后必须 grep 函数清单核对。验收：e^x sin/
 e^x cos/e^2x sin 教科书形态 VERIFIED；tan 的 log 配对留切片二（诚实
 保留复形态）。464 绿。
+**实化补片：单层塔 ±k 频率对合并实化（sin(2x) 类）**：
+用户压测暴露的缺口——单个 k 分量不实（b_1=1/(2i) 纯虚），±k 对合并
+后才实。通道 A（顶层即虚指数层）：全部 ±k 的 b_k 装入显式指数字典
+（_from_univar 从 0 起算须乘 tau^klo 补偏移——两次踩坑记录），一次
+_realify_laurent；通道 B（嵌套，虚层在系数域）：逐 k 实化 b 本身 +
+外层实因子项形态外乘。元组顺序事故：(k,rf) extend 进 (bk,k) 循环 =>
+int.to_term 崩溃。验收矩阵：2cos2x->sin2x、cos3x->sin3x/3、
+sincos->-cos2x/4、cos^3->3sin/4+sin3x/12 全教科书形态 VERIFIED；
+e^ax*sin(bx) 族标准公式形态；嵌套 sin(sinx)/e^sinx 导数在瀑布层被
+u=sinx 正向换元截获（真实形态直出），强制复路线则诚实 unsupported
+（外层 exp 底含内层塔变量=覆盖边界）。464 绿。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
