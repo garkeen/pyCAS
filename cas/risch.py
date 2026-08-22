@@ -1319,9 +1319,176 @@ def _primitive_poly_part(Q, de, j):
     return out
 
 
+# ---------------------------------------------------------------------------
+# M5.2c：塔系数域上的 Risch 微分方程（exp 层频率方程 y' + k·w·y = g，
+# y ∈ K_j 含低层塔变量）。f = k·w 不含塔变量（exp 守卫保证）=> 极点分析
+# 直接成立：den(y) | Π s^{e-1}（s^e ∥ den(g) 正规因子）——无需 weak
+# normalization（那处理的是 f 本身有塔极点的 cancellation 情形）。
+# 多项式化后 K 域线性系统待定系数；有解经精确验证输出，无解返回 None
+# （unsupported，绝不误判不可积——完整 cancellation 分析留后续）。
+# ---------------------------------------------------------------------------
+
+def _u_gauss_solve_k(M, b):
+    """K 域（RatFunc）线性方程组高斯消元。返回解 list | None（无解）。"""
+    n = len(M)
+    cols = len(M[0]) if n else 0
+    if n == 0 or cols == 0:
+        return [] if not any(not x.is_zero() for x in b) else None
+    one = b[0].one(b[0].p.vars)
+    A = [list(M[r]) + [b[r]] for r in range(n)]
+    piv_cols = []
+    r = 0
+    for cidx in range(cols):
+        piv = None
+        for i in range(r, n):
+            if not A[i][cidx].is_zero():
+                piv = i
+                break
+        if piv is None:
+            continue
+        A[r], A[piv] = A[piv], A[r]
+        pv = A[r][cidx]
+        inv = one / pv
+        A[r] = [x * inv for x in A[r]]
+        for i in range(n):
+            if i != r and not A[i][cidx].is_zero():
+                fac = A[i][cidx]
+                A[i] = [vi - fac * vr for vi, vr in zip(A[i], A[r])]
+        piv_cols.append(cidx)
+        r += 1
+        if r == n:
+            break
+    for i in range(n):
+        if all(x.is_zero() for x in A[i][:cols]) and not A[i][cols].is_zero():
+            return None
+    sol = [one.zero(one.p.vars) for _ in range(cols)]
+    for i, cidx in enumerate(piv_cols):
+        sol[cidx] = A[i][cols]
+    return sol
+
+
+def _restrict(rf, vars_):
+    """RatFunc 收缩到指定变量集（缺失维度指数须全零，否则 PolyError）。"""
+    from cas.ratfunc import RatFunc as _RF
+
+    def shrink(p):
+        if p.vars == tuple(vars_):
+            return p
+        idx = {v: i for i, v in enumerate(p.vars)}
+        out = {}
+        for k, c in p.monos.items():
+            for v in p.vars:
+                if v not in vars_ and k[idx[v]] != 0:
+                    raise PolyError("cannot restrict: variable present")
+            out[tuple(k[idx[v]] if v in idx else 0 for v in vars_)] = c
+        return Poly(tuple(vars_), out)
+
+    return _RF(shrink(rf.p), shrink(rf.q))
+
+
+def _rde_tower_solve(f, g, de, j):
+    """解 D(y) + f·y = g，y ∈ K_j = ℚ(x, t₁..t_{j-1})。
+
+    f: RatFunc 不含塔变量（exp 频率 k·η'，η' ∈ ℚ[x]）；g: RatFunc 任意。
+    返回 y: RatFunc | None。None = 当前理论无法判定（unsupported，
+    绝不误判不可积——cancellation/精确界分析留 M5.2c-ii）。
+    """
+    from cas.ratfunc import RatFunc
+
+    if j <= 1:
+        # base：f 须为 ℚ[x] 多项式（现有极点分析前提）
+        if not (f.q.is_const() and f.p.vars == (de.levels[0],)):
+            return None
+        return None   # 由调用方分流到 _rde_exp_solve（保持既有路径）
+    tview = de.levels[j - 1]
+    if de.cases[j - 1] != "primitive":
+        return None   # exp-view RDE pending M5.2c-ii
+    sub = tuple(de.levels[:j - 1])
+    zero_k = RatFunc.zero(sub)
+    # f ∈ K_{j-1}（exp 守卫：η' 不含塔变量）——限制到系数域变量集
+    try:
+        f = _restrict(f, sub)
+    except PolyError:
+        return None   # f 含塔变量：理论前提破坏（诚实 unsupported）
+
+    # g 的 K[t] 视图
+    gA = _univar(g.p, tview)
+    gd_list = _univar(g.q, tview)
+
+    # 步骤1：denominator bound Q_b = Π s^{e-1}（s^e ∥ den(g)，正规分解）
+    qb = [zero_k.one(zero_k.p.vars)]
+    try:
+        factors = _squarefree_decomp_t(gd_list, zero_k)
+    except RischUnsupported:
+        return None
+    for p, e in factors:
+        if e >= 2:
+            qb = _u_mul(qb, _u_pow(p, e - 1, zero_k), zero_k)
+
+    # 步骤2：多项式化 A·D(z) + B·z = C（z = y·Q_b）
+    fq = _u_mul([f], qb, zero_k)          # f·Q_b（f 无 ℓ => 常数系数）
+    dqb = _derive_ut(qb, de, j - 1)
+    B_ = _u_sub(fq, dqb)
+    C_ = _u_mul(_u_divmod(gA, [zero_k.one(zero_k.p.vars)], zero_k)[0],
+                _u_pow(qb, 2, zero_k), zero_k)
+    # g = gA/gd，C = g·Q_b² 应为多项式：gA·Q_b²/gd——gd | gA·Q_b² 由界的构造保证；
+    # 若不整除则除法带余 => 界不完备，诚实放弃
+    q2 = _u_pow(qb, 2, zero_k)
+    prod = _u_mul(gA, q2, zero_k)
+    C_, remC = _u_divmod(prod, gd_list, zero_k)
+    if not _u_is_zero(remC):
+        return None
+
+    # 步骤3：待定系数——未知 z₀..z_n ∈ K
+    n_unk = max(len(C_) - 1, len(B_) - 1, len(qb) - 1) + 3
+    ncols = n_unk + 1
+    nrows = max(len(C_), len(B_) + n_unk, len(qb) + n_unk) + 2
+    M = [[zero_k for _ in range(ncols)] for _ in range(nrows)]
+    rhs = [zero_k for _ in range(nrows)]
+
+    def poly_at(cidx):
+        """单位基 z = ℓ^cidx 的 K[t] 表示。"""
+        v = [zero_k for _ in range(cidx + 1)]
+        v[cidx] = zero_k.one(zero_k.p.vars)
+        return v
+
+    for cidx in range(ncols):
+        base_v = poly_at(cidx)
+        dz = _derive_ut(base_v, de, j - 1)
+        lhs = _u_add(_u_mul(qb, dz, zero_k), _u_mul(B_, base_v, zero_k), zero_k)
+        for r_, coef in enumerate(lhs):
+            if not coef.is_zero():
+                M[r_][cidx] = coef
+    for r_, coef in enumerate(C_):
+        if not coef.is_zero():
+            rhs[r_] = coef
+
+    sol = _u_gauss_solve_k(M, rhs)
+    if sol is None:
+        return None
+
+    # 步骤4：组合 y = z/Q_b 回多元 RatFunc
+    zn, zd = _from_univar(sol, de.vars, tview)
+    qn, qd = _from_univar(qb, de.vars, tview)
+    from cas.ratfunc import RatFunc as _RF
+    y = _RF(zn * qd, zd * qn)   # (zn/zd)/(qn/qd)
+
+    # 步骤5：精确验证 D(y) + f·y − g ≡ 0（塔上导数 + 通分验零）
+    from cas.ratfunc import RatFunc as _RF2
+
+    f_full = _RF2(_embed(f.p, de.vars), _embed(f.q, de.vars))
+    g_full = _RF2(_embed(g.p, de.vars), _embed(g.q, de.vars))
+    dy = _tower_deriv_frac(y.p, y.q, de)
+    fy = f_full * y
+    gg = dy + fy - g_full
+    if not gg.p.is_zero():
+        return None
+    return y
+
+
 def _exp_freq_part(freqs, de, j):
-    """exp 频率分量：k=0 → 低层递归积分；k≠0 → RDE（暂限 ℚ(x) 系数域，
-    多元 RDE 待 rde.py 移植）。任一频率无解 => 不可初等证明。"""
+    """exp 频率分量：k=0 → 低层递归积分；k≠0 → RDE。任一频率无解
+    => 不可初等证明；理论无法判定（多元 cancellation 等）=> unsupported。"""
     from cas.ratfunc import RatFunc
 
     tj = de.levels[j]
@@ -1334,17 +1501,24 @@ def _exp_freq_part(freqs, de, j):
         if k == 0:
             expr = T.plus(expr, _integrate_in_K(g, de, j))
             continue
-        w = de.ws[j]
-        if not (g.q.is_const() and g.p.vars == (xv,)
-                and w.q.is_const() and w.p.vars == (xv,)):
-            raise RischUnsupported(
-                "multivariate Risch differential equation pending "
-                "M5.2c (rde.py port); frequency k=%d" % k)
-        b = _rde_exp_solve(k, w.p, g.p, g.q, Poly.zero((xv,)))
+        w = de.ws[j] * Fr(k)
+        if g.q.is_const() and g.p.vars == (xv,) \
+                and w.q.is_const() and w.p.vars == (xv,):
+            # base 快路径：现有 ℚ(x) 极点分析求解器
+            b = _rde_exp_solve(k, de.ws[j].p, g.p, g.q, Poly.zero((xv,)))
+            proved = b is None
+        else:
+            # 塔系数域：M5.2c 求解器（None = 无法判定，非证明）
+            b = _rde_tower_solve(w, g, de, j)
+            proved = False
         if b is None:
-            rde_fail = k
-            break
-        bp = RatFunc.from_poly(b)
+            if proved:
+                rde_fail = k
+                break
+            raise RischUnsupported(
+                "Risch DE on the tower undecidable with current theory "
+                "(cancellation analysis pending); frequency k=%d" % k)
+        bp = b
         if not bp.is_zero():
             freq_terms.append((bp, k))
     for bk, k in freq_terms:
