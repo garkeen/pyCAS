@@ -122,6 +122,23 @@
   验收：log 族全对含升次 log(x)/x = log(x)²/2、嵌套 1/(x·log(x)) =
   log(log(x))、1/log(x) -> NOT ELEMENTARY (proved)（li(x) 类证明性拒答，
   sympy risch 同判）。445 tests。
+- **M5.2c 塔域 RDE（进行中，i 阶段已提交 64d2664）**：_rde_tower_solve
+  解 exp 层频率方程 D(y)+f·y=g（y ∈ K_j 含低层塔变量）。f=k·η' 不含塔
+  变量（exp 守卫）=> 极点分析免 weak_normalizer 直接成立。当前实现 =
+  K 域待定系数 + 精确验证兜底。
+  **ii 阶段（weak_normalizer 全链）实测发现的核心问题**：按 sympy
+  rde.py weak_normalizer -> normal_denom -> spde -> no_cancel 流程移植，
+  数值对照实验表明 **sympy 自身在该案例产出不满足原方程的解**
+  （F=1+1/x, G=1: wn 吸收 q=x、f_new=1，链路给 y=1，但 D(1)+(1+1/x)=
+  1+1/x ≠ 1——差 1/x）。推导确认：wn 变换 f_new=f−q'/q 对应 v=y·q 且
+  右端应为 q·G（非 G）；sympy rischDE 未做该右端缩放。两个可能：
+  (a) sympy 该路径 bug/调用契约有未理解的隐含约束；(b) integrate_
+  hyperexponential_polynomial 的调用场景恰好保证 q=1。**下一步必须先
+  对照 FriCAS rdeefx.spad 的 weak_normalization 语义裁定正确变换方向，
+  再恢复 ii 实现**（组件代码已验证可用的部分存 stash：_gcdex_qx/
+  _wn_qx/_nden_qx/_bd_qx/_spde_qx/_no_cancel_large_qx/_RdeFail）。
+  工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
+  全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
   塔上 + 工作队列循环处理嵌套依赖；代数依赖守卫：exp base 含既有塔变量
   => 拒绝）；_risch_rec 统一层积分入口 + _integrate_in_K 递归下降 +
