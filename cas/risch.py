@@ -1611,9 +1611,12 @@ def _restrict(rf, vars_):
 # 的 bound_degree / spde / no_cancel_b_large / no_cancel_b_small /
 # no_cancel_equal / cancel_* 分派细节补全。已知切片边界（触发时诚实
 # undecided，绝不降级猜测）：
-#   S-a primitive db==da 共振的 radical 判定（is_log_deriv_k_t_radical）
-#   S-b B==0 cancellation（is_deriv_in_field 机器）
-#   S-c 非常数比值的共振判定（limited_integrate / parametric_log_deriv 完整版）
+#   S-a primitive db==da-1 共振的 limited_integrate 完整版
+#       （当前用紧刻画 alpha/eta∈ℚ 覆盖 z-自由子情形）
+#   S-c 非常数比值的共振判定（limited_integrate 完整版）
+# 已修复：S-a radical 判定（_is_logderiv_radical，守卫共用）、
+#   S-b B=0 cancellation（lam=0 统一下降）、exp da==db 界修正
+#   （_pld_heu 判据）。
 # ---------------------------------------------------------------------------
 
 
@@ -2458,6 +2461,13 @@ def _rde_base_rde(lam, rhs, de):
     if not (lam.q.is_const() and lam.p.vars == (xv,) and
             rhs.p.vars == (xv,) and rhs.q.vars == (xv,)):
         return None, 'undecided'
+    if lam.is_const() and lam.const_val() == 0:
+        # λ=0：D(s)=rhs 纯有理积分（S-b B=0 下降的基层落点）
+        from cas.integrate import integrate_rational
+        val, ok, _m = integrate_rational(rhs.p, rhs.q, xv)
+        if not ok:
+            return None, 'undecided'
+        return RatFunc.from_term(val, (xv,)), 'ok'
     # λ 任意多项式（含常数）、rhs 任意有理式：极点分析 + 待定系数完备
     b = _rde_exp_solve(1, lam.p, rhs.p, rhs.q, Poly.zero((xv,)))
     if b is None:
@@ -2550,11 +2560,14 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
         return 'ok', u_acc
 
     # cancellation 形态
-    if _u_is_zero(bbr):
-        return 'undecided', 'S-b: B=0 cancellation pending'
-    if dB != 0:
+    # B=0（S-b 已修复）：方程 D(u)=cn 即纯塔积分——对角/三角下降对
+    # lam=0 同样完备（每度独立解低层 D(s)=c_jd，不可解即 proved）
+    if not _u_is_zero(bbr) and dB != 0:
         return 'undecided', 'unexpected B degree in cancellation shape'
-    lam = bbr[0]
+    if _u_is_zero(bbr):
+        lam = zero
+    else:
+        lam = bbr[0]
     w_eta = de.ws[jv] if case_v == 'exp' and jv >= 1 else None
     u_acc, cc, mm = [], list(cn), n
     while not _u_is_zero(cc):
@@ -2743,14 +2756,17 @@ def _rde_tower_solve(f, g, de, j):
         else:  # exp
             n = max(0, dc - max(da, db))
             if da == db and da != 0:
+                # 共振界修正（sympy bound_degree exp 分支）：α=m·η+D(v)/v
+                # 型判定经 _pld_heu；成功且 n_lower==1 时以 m 抬界。
+                # heu 的 None 混合"证明否定/启发受限"，保守取 undecided。
                 al = (bbr[db] * Fr(-1)) / aa[da]
-                rho = al / de.ws[jv]
-                if rho.is_const():
-                    cv = rho.const_val()
-                    if cv.denominator == 1 and cv > 0:
-                        n = max(n, int(cv))
+                rec = _pld_heu(al, de.ws[jv], de, jv - 1)
+                if rec is not None:
+                    nn_, mm_, _v_ = rec
+                    if nn_ == 1 and mm_ > 0:
+                        n = max(n, mm_)
                 else:
-                    return None, 'undecided'          # S-c
+                    return None, 'undecided'          # S-c（保守）
             # da==db==0：exp 对角下降同理安全
 
         # ---- Step 5: spde 归约核（sympy spde 忠实移植）----

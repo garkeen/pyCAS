@@ -178,5 +178,60 @@ class TestNestedTowerIntegration(unittest.TestCase):
             pass
 
 
+class TestB0Cancellation(unittest.TestCase):
+    """S-b 修复：B=0 cancellation（D(u)=c 纯塔积分）经 lam=0 统一下降。"""
+
+    def _run(self, tower_s, case_v, cn_terms, jv):
+        from cas.risch import (build_extension, _poly_rde_final,
+                               _make_der_fn)
+
+        de, _, _ = build_extension(parse(tower_s), x)
+        allv = tuple(de.levels[:jv + 1])
+        sub = tuple(de.levels[:jv])
+        zero = RatFunc.zero(sub)
+        one_c = zero.one(sub)
+        cn = [RatFunc(Poly.from_term(t, sub), Poly.one(sub))
+              for t in cn_terms]
+        return _poly_rde_final([], cn, 6, case_v, False, 0 if jv == 1 else 1,
+                               [zero, one_c], _make_der_fn(de, jv), de, jv,
+                               zero)
+
+    def test_exp_view_pure_integral(self):
+        # exp 塔：D(u)=x → u=x²/2
+        st, u = self._run("exp(x)", "exp", [parse("x")], 1)
+        self.assertEqual(st, "ok")
+        self.assertEqual(to_str(u[0].to_term()), "1/2*x^2")
+
+    def test_primitive_view_theta(self):
+        # log 塔：D(u)=θ (=log x) → u=x·θ−x²/2（x*log x − x²/2 的塔形态）
+        st, u = self._run("log(x)", "primitive",
+                          [parse("0"), parse("1")], 1)
+        self.assertEqual(st, "ok")
+        uf = RatFunc(*_from_univar_local(u))
+        from cas.risch import _tower_deriv_frac
+
+        du = _tower_deriv_frac(uf.p, uf.q, _build_de("log(x)"))
+        want = RatFunc(*_from_univar_local(
+            [RatFunc.zero(tuple(_de_levels("log(x)")[:1])),
+             RatFunc(Poly.one((x,)), Poly.one((x,)))]))
+        self.assertTrue((du - want).p.is_zero())
+
+
+def _from_univar_local(cs):
+    from cas.risch import _from_univar as _fu
+
+    return _fu(cs, (x, S("_lt")), S("_lt"))
+
+
+def _build_de(s):
+    from cas.risch import build_extension
+
+    return build_extension(parse(s), x)[0]
+
+
+def _de_levels(s):
+    return _build_de(s).levels
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -216,6 +216,16 @@ norm 开方+半角公式，非完全平方诚实 None）。验收：√log x 拒
 477 tests 全绿（新增 14）。剩余切片：parametric_log_deriv 完整版
 （heu 之外的结构定理路径）、limited_integrate 完整版（S-c prim 界
 修正）、is_deriv_in_field（S-b B=0 cancellation）、log 配对实化。
+**阶段一 #2 落地（S-b 修复 + exp 界修正升级）**：
+(1) S-b B=0 cancellation：D(u)=c 纯塔积分经 lam=0 统一下降完备处理——
+exp 视角对角（每度独立 D_K(s)=c_jd）、primitive 视角三角（der_fn 移位
+进残差），基层落点 λ=0 补 integrate_rational 分支（含 term->RatFunc
+包装，此前重构时并掉了 λ=0 分支导致 degenerate 假异常）。验收：
+D(u)=x -> x²/2、D(u)=θ -> x·θ−x²/2 精确零检查。(2) exp da==db 共振界
+修正从常数比值紧刻画升级为 _pld_heu 全判据（sympy bound_degree exp
+分支语义：n_lower==1 时以 m 抬界；heu None 混合证明否定/受限故保守
+undecided）。顺带消解 rho.const_val 的 Ga 潜在崩溃点。剩余：S-a/S-c
+的 limited_integrate 完整版（primitive db==da±1 修正在用紧刻画）。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
