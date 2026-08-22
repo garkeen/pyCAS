@@ -178,14 +178,30 @@ latex/refine 零递归）；预算按节点计。
 - **M4 求和/差分 ✓**：Faulhaber 幂和 + Gosper 有理函数不定/定界求和（常系数递推待建）。
 - **M5 Risch 分期（进行中）**：M5.0 微分域塔 ✓ → M5.1 exp case（Hermite 推广 +
   Rothstein-Trager residue ✓ / RDE 多项式部分 ✓，exp(−x²) 类不可初等证明已落地）
-  → M5.2 primitive/log + 参数化 log deriv + 递归塔 → M5.2.5 ℚ(i) Gaussian
-  rational 系数域 → M5.3 三角经复指数（trigs2explogs 同款，FriCAS 实据印证）。
+  → M5.2 primitive/log + 参数化 log deriv + 递归塔（M5.2c 塔域 RDE **完备判定**
+  进行中：可积给解/不可积给证明/超界诚实拒答，设计见 m52c2_design.md，
+  唯一算法参考 FriCAS intpar.spad，不参考 sympy——实测其 wn→rischDE 链有
+  右端缩放缺陷）→ M5.2.5 ℚ(i) Gaussian rational 系数域（**第一个代数常数
+  扩张**：α²+1 极小多项式基建，零等价 = mod 极小多项式归约）→ M5.3 三角经
+  复指数（trigs2explogs 同款，FriCAS 实据印证；消费 ℚ(i)）→ **M5.4 代数
+  常数域泛化**（ℚ(i) 基建参数化极小多项式 → 任意 ℚ(α) 单/多扩张；因子分解
+  经 Trager 归约回 ℚ——**代数数完全可判定，非 Richardson 障碍**；不可判定性
+  仅出现于超越常数符号（e/π 不透明组合的零等价，Richardson 定理），届时按
+  三态纪律输出 undecidable 并注明卡点）→ **M5.5 特殊函数输出层**（Ei/erf/Li₂
+  作为答案而非 proved 拒答——FriCAS rdeefx ei_int primpart 形态；判定逻辑
+  不变，产品级增量）→ **M5.6 符号参数积分**（参数并入常数域 ℚ(a)：零等价 =
+  有理函数恒等式，精确可判；generic 答案 + **条件标注/退化分支**——∫x^a 在
+  a=−1、∫e^{ax} 在 a=0 时塔结构塌缩，答案须声明成立条件，绝不静默）。
   终点 = 超越函数范围内完整 Risch 决策程序，含不可初等证明（e^{-x²}、li(x)、
    Si(x) 类带证明拒答——sympy 全缺）。接线裁定：Risch 为 **!integrate 黑盒
-   通道**判定终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层
-   失败证据链）；可解释步骤链由 M6 通道②承担（见 M6 定位裁定）。
+  通道**判定终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层
+  失败证据链）；可解释步骤链由 M6 通道②承担（见 M6 定位裁定）。
   FriCAS 对照实据：顶层 trigs2explogs 前置重写 + lfintegrate 五类 kernel 分派；
-  剩余差距 = 代数函数积分（M7a）与代数闭常数域（按需扩张实践等价）。
+  **对齐差距清单**（M5.4 后逐项评估价值密度）：代数函数积分（= M7a，M5.4 的
+  ℚ(α) 基建即其直接前置）、tan 核（我们走复指数路线，结果等价路径不同）、
+  参数化 RDE 装置（可实现——intpar.spad 全套已读通；单条积分不需要，查询类
+  功能"哪些常数组合可积"/常数依赖强化时再做）、微分核/用户自定义核扩展
+  （可扩展性非核心）、常数依赖引擎强化（符号常数线性关系启发判定）。
 - **ODE 扩展**：非齐次（待定系数/常数变易）、常系数系统（exp(At)，特征值前置已就绪）。
 - **剩余结构债**：RootOf 复根隔离（已裁定注销：RootOf 语义 = 实根升序前缀 + 复根仅编号，
   SymPy CRootOf 同款边界；除非需要 Mathematica 式全根几何序）。代数数系数多项式
@@ -236,7 +252,8 @@ latex/refine 零递归）；预算按节点计。
 > 前置设施多数已在 M0–M5 铺设（Gröbner/Sturm/结式/algnum/义务队列）。
 
 - **M7a 代数函数积分（Trager 算法）**：∫R(x, α)（α 为多项式根，如 √(x²+1)、
-  √(x³+1)）。前置：ℚ(α) 单扩张域运算（algnum 已有底子）→ 多扩张 + primitive
+  √(x³+1)）。前置：ℚ(α) 单扩张域运算（**M5.4 基建直接复用** + algnum 已有底子）
+  → 多扩张 + primitive
   element 定理 → Trager resultant/norm 路线。FriCAS 参照 intaf/intalg/primelt
   （~80KB SPAD，主要工程量来源）。验收：∫dx/√(x²+1) = log(x+√(x²+1))；
   椭圆积分类（∫dx/√(x³+1) 无初等原函数）给带证明拒答。
