@@ -20,6 +20,7 @@ from cas import term as T
 from cas.term import S, N, Expr, Sym
 from cas.poly import Poly
 from cas.errors import PolyError
+from cas.gaussian import Ga
 
 
 class RischUnsupported(Exception):
@@ -102,11 +103,19 @@ def _cancel(n, d):
     """轻量规范：常数 content 约化 + 分母 monic。
 
     多项式 gcd 约化不在 M5.0 范围（Hermite 推广在 M5.1 正规处理）；
-    此处只防分式代数的系数膨胀。
+    此处只防分式代数的系数膨胀。域系数（Ga/SymRat）时 content 已是
+    单位元，monic 化用域除法（scalar 乘系数域元素）。
     """
     if n.is_zero():
         return Poly.zero(n.vars), Poly.one(n.vars)
     cn, cd = n.content(), d.content()
+    if hasattr(cn, "is_zero"):
+        # 域系数路径：content 单位元，直接 monic
+        lc = d.lc(d.vars[0])
+        inv = cn / lc          # 域除法（cn 为单位元 => 1/lc）
+        n = n.scalar(inv)
+        d = d.scalar(inv)
+        return n, d
     c = _fr_gcd(cn, cd)
     if c != 0 and c != 1:
         n = n.scalar(Fr(1) / c)
@@ -165,6 +174,62 @@ def _collect_exts(t):
     return exps, logs
 
 
+# ---------------------------------------------------------------------------
+# M5.3：三角/双曲经复指数（trigs2explogs 同款前置重写）
+#
+# Sin(u) = (e^{iu} − e^{−iu})/(2i)、Cos(u) = (e^{iu} + e^{−iu})/2、
+# Tan = Sin/Cos；Sinh/Cosh/Tanh 同构（无 i）。自底向上递归；
+# 虚单位为保留符号 i（Poly._build/_frac_num 识别为 Ga 常量，i²=−1
+# 关系由此保留——升参数会破坏它）。
+# ---------------------------------------------------------------------------
+
+_TRIG_HEADS = ("Sin", "Cos", "Tan", "Sinh", "Cosh", "Tanh")
+
+
+def _exp_of(tt):
+    return T.mk(S("Exp"), (tt,))
+
+
+def _neg_term(tt):
+    return T.mk(S("Times"), (N(-1), tt))
+
+
+def _iu(u):
+    """i·u 与 −i·u 的 term。"""
+    iu = T.mk(S("Times"), (T.S("i"), u))
+    return iu, _neg_term(iu)
+
+
+def trigs_to_exp(t):
+    """三角/双曲函数 -> 复指数有理式（无三角头则原样返回）。"""
+    if not isinstance(t, Expr):
+        return t
+    n = t.head.name
+    if len(t.args) == 1 and n in _TRIG_HEADS:
+        u = trigs_to_exp(t.args[0])
+        if n in ("Sin", "Cos", "Tan"):
+            iu, niu = _iu(u)
+            e1, e2 = _exp_of(iu), _exp_of(niu)
+            if n == "Sin":
+                return T.div(T.plus(e1, _neg_term(e2)),
+                             T.times(N(2), T.S("i")))
+            if n == "Cos":
+                return T.div(T.plus(e1, e2), N(2))
+            c1 = T.div(T.plus(e1, _neg_term(e2)),
+                       T.times(N(2), T.S("i")))
+            c2 = T.div(T.plus(e1, e2), N(2))
+            return T.div(c1, c2)
+        eu, enu = _exp_of(u), _exp_of(_neg_term(u))
+        if n == "Sinh":
+            return T.div(T.plus(eu, _neg_term(enu)), N(2))
+        if n == "Cosh":
+            return T.div(T.plus(eu, enu), N(2))
+        return T.div(T.plus(eu, _neg_term(enu)), T.plus(eu, enu))
+    if t.args:
+        return T.mk(t.head, tuple(trigs_to_exp(a) for a in t.args))
+    return t
+
+
 def _group_integer_powers(args):
     """Fr 倍数关系归组（sympy integer_powers 同款）。
 
@@ -176,10 +241,16 @@ def _group_integer_powers(args):
         placed = False
         for base, members in groups:
             q = _ratio(a, base)
-            if q is not None:
-                members.append((a, q))
-                placed = True
-                break
+            if q is None:
+                continue
+            if isinstance(q, Ga):
+                # ℚ(i) 比值：仅实有理数可作幂次归组（i 倍数 = 独立基）
+                if not q.is_real():
+                    continue
+                q = q.re
+            members.append((a, q))
+            placed = True
+            break
         if not placed:
             groups.append((a, [(a, Fr(1))]))
     out = []
@@ -360,6 +431,10 @@ def _frac_num(t, vars_):
         for v in vars_:
             if t is v:
                 return Poly.mono(vars_, t, 1), Poly.one(vars_)
+        if t.name == "i":
+            # 虚单位常量（ℚ(i)）——与 Poly._build 同款保留名
+            from cas.gaussian import Ga
+            return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
         raise PolyError("free symbol outside extension: " + t.name)
     if isinstance(t, Expr):
         n = t.head.name
@@ -790,7 +865,16 @@ def _integrate_proper(A, D, de, j, zero):
         if _u_is_zero(high):
             return (None, None, None, None), neg_freqs, "ok"
         res, st = _integrate_normal(high, q0, de, j, zero)
-        return (res[0], res[1], res[2], res[3]), neg_freqs, st
+        rat_part, logs, nonel, leftover = res
+        if isinstance(leftover, tuple) and leftover \
+                and leftover[0] == "special":
+            # residue 剩余的 t 幂部分 -> 正频（与 m==0 分支同款转换；
+            # 键空间不相交：neg k<0 / pos k>=0）
+            pos_freqs = {k: c for k, c in enumerate(leftover[1])
+                         if not c.is_zero()}
+            return (rat_part, logs, nonel, None), \
+                {**neg_freqs, **pos_freqs}, st
+        return res, neg_freqs, st
     res, st = _integrate_normal(A, D, de, j, zero)
     rat_part, logs, nonel, leftover = res
     if isinstance(leftover, tuple) and leftover and leftover[0] == "special":
@@ -1153,8 +1237,15 @@ def integrate_exp_tower(f, x):
     """顶层 API：term -> (term, de)（初等原函数）或异常。
 
     M5.2b 递归塔：任意 primitive/exp 层序列，K 上积分递归下降。
-    内部全程塔符号空间，出口统一回写。
+    内部全程塔符号空间，出口统一回写。入口先做三角/双曲复指数化
+    （M5.3 trigs_to_exp——无三角头时零开销直通）。
     """
+    # 常被积函数快捷通道：∫c dx = c·x（c 为任意不含 x 的常量表达式，
+    # 含 sin(y)/π²/ℚ(i) 元素等——塔机制本就不适用，直接精确给出；
+    # 置于复指数化之前以保持用户原始形态）
+    if x not in T.free_vars(f):
+        return T.times(f, x), DiffExt(x)
+    f = trigs_to_exp(f)
     de, fa, fd = build_extension(f, x)
     j = len(de.levels) - 1
     if j == 0:
@@ -1173,11 +1264,38 @@ def _integrate_in_K(g, de, j):
 
     if j <= 1:
         xv = de.levels[0]
+        if g.is_const():
+            # 常数被积函数（含 ℚ(i) 常数，M5.3 复指数化的 k=0 分量）
+            cv = g.const_val()
+            ct = cv.to_term() if hasattr(cv, "to_term") else N(cv)
+            return T.times(ct, xv)
+        all_fr = all(isinstance(c, Fr) for c in _coef_iter(g))
+        if not all_fr:
+            raise RischUnsupported(
+                "rational integration over Q(i) pending (M5.3 slice 2)")
         val, ok, _prov = integrate_rational(g.p, g.q, xv)
         if not ok:
             raise RischUnsupported("rational integration failed in base field")
         return val
     return _risch_rec(g.p, g.q, de, j - 1)
+
+
+def _coef_iter(rf):
+    """RatFunc 的全部叶系数。"""
+    yield from _iter_leaf_coefs_m(rf.p)
+    yield from _iter_leaf_coefs_m(rf.q)
+
+
+def _iter_leaf_coefs_m(p):
+    if not p.monos:
+        return
+    if len(p.vars) <= 1:
+        for v in p.monos.values():
+            yield v
+        return
+    from cas.poly import _rec_view
+    for sub in _rec_view(p).values():
+        yield from _iter_leaf_coefs_m(sub)
 
 
 def _limited_integrate(a, de, j):
@@ -1768,11 +1886,77 @@ def _rde_tower_solve(f, g, de, j):
     aa1 = _u_mul(aa, h, zero)
     cn, cd = _fu_mul(aa1, [one_c], gn2, gd2, zero)
 
-    # ---- Step 3: C 的 τ-分母必须已消（Laurent 型右端 -> undecided）----
-    if _u_deg(_u_formal_deriv(cd)) >= 0:
+    # ---- Step 3: C 的分母结构分流 ----
+    # exp 视角 special 型 τ-分母（τ^v 单项式）=> Laurent 对角下降
+    # （FriCAS do_SPDE_exp0 的 GP 形态：special 因子 = τ 幂，展开后
+    # 系数 τ-free，各指数独立）。混合/normal 型分母仍走原路线。
+    laurent = None
+    if case_v == 'exp' and _u_deg(_u_formal_deriv(cd)) >= 0:
+        v_tau = 0
+        cd_w = list(cd)
+        while len(cd_w) > 0 and cd_w[0].is_zero():
+            cd_w = cd_w[1:]
+            v_tau += 1
+        rest = _u_trim(cd_w)
+        rest_const = len(rest) <= 1
+        if rest_const and _u_deg(aa) == 0 and _u_deg(bbr) == 0 \
+                and not _u_is_zero(cn):
+            laurent = (v_tau, rest[0])
+        else:
+            return None, 'undecided'
+    elif _u_deg(_u_formal_deriv(cd)) >= 0:
         return None, 'undecided'
 
     u_list = []
+    if laurent is not None:
+        # ---- Laurent 对角下降 ----
+        # c = cn/(τ^v·r)：指数 e=idx−v，系数=cn[idx]/r；逐指数解
+        # D(s)+(lam+e·η)s=c_e（对角：D(τ^e)=e·η·τ^e 不跨指数），
+        # 残差同步消去该指数。η=D(τ)/τ=ws[jv]。
+        v_tau, r_coef = laurent
+        eta_w = de.ws[jv]
+        lam = bbr[0] / aa[0]
+        inv_r = one_c / r_coef
+        cc = {idx - v_tau: c * inv_r for idx, c in enumerate(cn)
+              if not c.is_zero()}
+        u_parts = {}
+        guard = 0
+        while cc:
+            guard += 1
+            if guard > 64:
+                return None, 'undecided'
+            e_top = max(cc.keys())
+            c_e = cc.pop(e_top)
+            lam_e = lam + eta_w * Fr(e_top)
+            s_rf, st_l = _solve_low(lam_e, c_e, de, jv)
+            if st_l != 'ok':
+                return None, st_l
+            u_parts[e_top] = s_rf
+            # 残差：D(s·τ^e)+B·s·τ^e 的 e-系数 = D_low? 此处 s ∈ K_{j-1}，
+            # 其 D 含 η·s 已含在低层方程内——残差恰为 (D_K(s)+e·η·s+B·s)τ^e，
+            # 而低层方程 D_low(s)+(lam+e·η)s=c_e 中 D_low 即 K_{j-1} 全导数，
+            # 解代入后该指数余量 = c_e − [D_low(s)+(lam+eη)s] = 0 恒成立，
+            # 无跨指数泄漏（exp 对角保证），无需额外扣减。
+        if not u_parts:
+            y_final = RatFunc.zero(tuple(de.levels[:j]))
+        else:
+            e_min = min(u_parts.keys())
+            e_max = max(u_parts.keys())
+            num_cs = [zero for _ in range(e_max - e_min + 1)]
+            for e, s_rf in u_parts.items():
+                num_cs[e - e_min] = s_rf
+            np_, nd_ = _from_univar(num_cs, tuple(de.levels[:j]), tview)
+            if e_min < 0:
+                tau_v = Poly.mono(tuple(de.levels[:j]), tview, -e_min)
+                y_final = RatFunc(np_, nd_ * tau_v)
+            else:
+                y_final = RatFunc(np_, nd_)
+        # Laurent 出口直接验证（常数 a、b 路径下 h、p 均为单位）
+        dy = _tower_deriv_frac(y_final.p, y_final.q, de)
+        if not (dy + f * y_final - g).p.is_zero():
+            raise RischUnsupported(
+                "internal: Laurent RDE candidate failed exact verify")
+        return y_final, 'ok'
     if not _u_is_zero(cn):
         inv_cd = one_c / cd[0]
         cn = [c * inv_cd for c in cn]

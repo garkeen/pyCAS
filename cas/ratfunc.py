@@ -6,6 +6,29 @@ from cas import term as T
 from cas.term import Expr, Int
 
 
+def _iter_leaf_coefs(p):
+    """Poly 的全部叶系数（多变量递归视图）。"""
+    if not p.monos:
+        return
+    if len(p.vars) <= 1:
+        for v in p.monos.values():
+            yield v
+        return
+    from cas.poly import _rec_view
+    for sub in _rec_view(p).values():
+        yield from _iter_leaf_coefs(sub)
+
+
+def _coef_inv(c):
+    """系数域求逆（Fr / Ga / duck-typed）。"""
+    if isinstance(c, Fr):
+        return Fr(1) / c
+    if hasattr(c, "norm"):
+        from cas.gaussian import Ga
+        return Ga.one() / c
+    return 1 / c
+
+
 class RatFunc:
     __slots__ = ("p", "q")
 
@@ -23,15 +46,25 @@ class RatFunc:
             p2 = p.udivmod(g)[0] if not g.is_zero() else p
             q2 = q.udivmod(g)[0] if not g.is_zero() else q
         else:
-            # 多变量：mgcd + 精确除法
-            g = mgcd(p, q)
-            if not g.is_zero() and not g.is_const():
-                p2, q2 = div_exact(p, g), div_exact(q, g)
+            # 多变量：mgcd + 精确除法；域系数（Ga 等）时 content/符号
+            # 规范无定义——跳过 gcd 约化（分数不约，正确性不受影响，
+            # 下游 Hermite/residue 各自正规约化）
+            all_fr = all(isinstance(v, Fr)
+                         for sub in _iter_leaf_coefs(p) for v in [sub]) \
+                and all(isinstance(v, Fr)
+                        for sub in _iter_leaf_coefs(q) for v in [sub])
+            if all_fr:
+                g = mgcd(p, q)
+                if not g.is_zero() and not g.is_const():
+                    p2, q2 = div_exact(p, g), div_exact(q, g)
+                else:
+                    p2, q2 = p, q
             else:
                 p2, q2 = p, q
         lc = q2.lc(q2.vars[0]) if q2.vars else Fr(1)
-        self.p = p2.scalar(Fr(1) / lc)
-        self.q = q2.scalar(Fr(1) / lc)
+        inv = _coef_inv(lc)
+        self.p = p2.scalar(inv)
+        self.q = q2.scalar(inv)
 
     @staticmethod
     def from_poly(p):

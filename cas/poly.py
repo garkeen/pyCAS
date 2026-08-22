@@ -58,6 +58,11 @@ class Poly:
             for v in vars_:
                 if t is v:
                     return Poly.mono(vars_, t, 1)
+            if t.name == "i":
+                # 保留名 i = 虚单位常量（ℚ(i)，M5.2.5/M5.3；用户若以
+                # i 为参数符号则冲突——文档级保留，sympy I 同款取舍）
+                from cas.gaussian import Ga
+                return Poly.const(vars_, Ga(0, 1))
             # 不在 vars 的符号 = 参数：系数升入 ℚ(params)（SymRat 域）
             return Poly.const(vars_, _mk_param(t))
         if isinstance(t, Expr):
@@ -185,9 +190,16 @@ class Poly:
             return Fr(0)
         from math import gcd
 
+        vs = list(self.monos.values())
+        # 域系数（Ga/SymRat 等）：无 ℚ-content 概念，恒取单位元
+        # （primitive 不改变多项式，对 gcd/cancel 正确性无损）
+        for v in vs:
+            nz = v.is_zero() if hasattr(v, "is_zero") else v != 0
+            if not nz:
+                return v / v
         num = 0
         den = 1
-        for v in self.monos.values():
+        for v in vs:
             num = gcd(num, abs(v.numerator))
             den = den * v.denominator // gcd(den, v.denominator)
         return Fr(num, den)

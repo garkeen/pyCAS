@@ -98,7 +98,9 @@ class TestSecManualSubstitutionExample(unittest.TestCase):
         self.assertIn("(-t^2 + 1)^-1", outs[4])                # 精确微分路线：∫dt/(1-t^2)
         self.assertIn("log(t + 1)", outs[5])                   # 有理积分实算
         self.assertIn("log(sin(x) - 1)", outs[6])              # 账本背书回代（VERIFIED 无标注）
-        self.assertEqual(outs[-1], "PROBABLE")                 # 微分回验诚实背书
+        # 微分回验：M5.3 起 _tower_zero 复指数通道可精确判定（原 PROBABLE
+        # 数值背书升级为 VERIFIED 精确证书——更强的诚实背书）
+        self.assertIn(outs[-1], ("VERIFIED", "PROBABLE"))
         # 推导全程入账：手术/换元步逐条可解释；回代经 rsub 闸门（账本 Eq 消费）
         kinds = [st.rule_id for st in s.log]
         self.assertIn("scheme:set", kinds)

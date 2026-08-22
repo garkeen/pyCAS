@@ -90,10 +90,13 @@ class TestPartsShowcase(unittest.TestCase):
         )
 
     def test_parts_rejects_non_divisible(self):
+        # M5.3 后 e^{-x}sin(x) 的 v 可由复指数 Risch 通道闭式给出，
+        # :parts 不再拒绝而是产出完整步链（v 为 ℚ(i) 复形态，精确）
         s = Session()
         s.handle("integrate(exp(x)*sin(x), x)")
         out = s.handle(":parts exp(2*x)")
-        self.assertIn("no inert integral", out)
+        self.assertIn("dv =", out)
+        self.assertIn("=>", out)
 
 
 class TestDefintUSub(unittest.TestCase):

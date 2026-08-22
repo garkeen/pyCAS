@@ -181,9 +181,10 @@ latex/refine 零递归）；预算按节点计。
   → M5.2 primitive/log + 参数化 log deriv + 递归塔（M5.2c 塔域 RDE **完备判定**
   进行中：可积给解/不可积给证明/超界诚实拒答，设计见 m52c2_design.md，
   唯一算法参考 FriCAS intpar.spad，不参考 sympy——实测其 wn→rischDE 链有
-  右端缩放缺陷）→ M5.2.5 ℚ(i) Gaussian rational 系数域（**第一个代数常数
-  扩张**：α²+1 极小多项式基建，零等价 = mod 极小多项式归约）→ M5.3 三角经
-  复指数（trigs2explogs 同款，FriCAS 实据印证；消费 ℚ(i)）→ **M5.4 代数
+  右端缩放缺陷）→ M5.2.5 ℚ(i) ✓ Gaussian rational 系数域（第一个代数常数扩张基建）
+  → M5.3 三角经复指数 ✓（trigs_to_exp 重写 + exp 视角 special 分母的
+  Laurent 对角下降；tan/eˣsin/eˣcos VERIFIED、sin(x)/x proved；
+  复形态出口实化回 sin/cos 待做）→ **M5.4 代数
   常数域泛化**（ℚ(i) 基建参数化极小多项式 → 任意 ℚ(α) 单/多扩张；因子分解
   经 Trager 归约回 ℚ——**代数数完全可判定，非 Richardson 障碍**；不可判定性
   仅出现于超越常数符号（e/π 不透明组合的零等价，Richardson 定理），届时按

@@ -164,6 +164,19 @@ undecided；da=db==0 时 naive 界 n>=dc 不截断故跳过共振修正是可证
 验收：e^x*log(x)=Ei 类 proved 与 e^x(1/x+log x)=e^x log x VERIFIED
 形成判定分界，差异精确来自 round0 方程 D(s)+s=-1/x 的可解性——算法
 正确区分。447 tests 全绿。
+**M5.3 三角经复指数落地**：
+trigs_to_exp 前置重写（Sin/Cos/Tan/Sinh/Cosh/Tanh，自底向上）+ 虚单位
+保留名 i 直通 Poly._build/_frac_num 为 Ga 常量（升参数会丢 i^2=-1 关系
+——归组 _ratio 与塔构建全链因此打通）。关键补片三处：(1) exp 视角
+special 型 tau-分母（tau 幂单项式）的 Laurent 对角下降——FriCAS
+do_SPSE_exp0 的 GP 形态，e^x*sin x 的频率系数恰带 t^-1；(2) m>0 分支
+漏掉 special->pos_freqs 转换（m==0 有、m>0 无的不对称，tan 案例暴露）；
+(3) _tower_zero 复指数化前置 + Poly.content/RatFunc 构造的域系数泛化
+（content 在域上恒为单位元）。新增常被积函数快捷通道（∫c dx=cx，
+置于重写前保形态）。旗舰验收：tan/e^x sin/e^x cos 全 VERIFIED（复
+形态精确，实化回 sin/cos 属出口层后续），sin(x)/x = Si 类 proved。
+行为升级连带三个旧测试期望更新（PROBABLE->VERIFIED 强证书化、parts
+不再拒绝可积 dv、sin(y) 常量通道），均逐个验证数学正确性后放行。464 绿。
 工程教训：多 patch 脚本区间替换会误删相邻块（fix_ts3 把 [_gcdex..]
   全吃了）——大文件改造必须每步跑测试 + git diff 审查。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前

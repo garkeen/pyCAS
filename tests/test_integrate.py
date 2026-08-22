@@ -123,10 +123,13 @@ class TestTrigIntegrate(unittest.TestCase):
     def test_unsupported(self):
         from cas.errors import PolyError
 
-        # exp(x)/sin(2x) 已入 spec anti 表（含线性复合）；和式与异变量仍未支持
-        for s in ("x+sin(x)", "sin(y)"):
-            with self.assertRaises(PolyError, msg=s):
-                self.t(s)
+        # exp(x)/sin(2x) 已入 spec anti 表（含线性复合）；和式仍未支持；
+        # sin(y) 自 M5.3 起走常被积函数通道（∫c dx = c·x）不再 unsupported
+        with self.assertRaises(PolyError, msg="x+sin(x)"):
+            self.t("x+sin(x)")
+        # x^x = exp(x*log x)：指数依赖既有塔变量 => 代数相关，诚实拒绝
+        with self.assertRaises(PolyError, msg="x^x"):
+            self.t("x^x")
 
     def test_linear_composition(self):
         # 线性复合 f(a x+b)：∫ = anti(a x+b)/a（微分回验）

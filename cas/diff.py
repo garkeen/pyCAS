@@ -50,10 +50,12 @@ def _tower_zero(a, b, x):
     from cas.risch import build_extension, RischUnsupported
 
     try:
+        from cas.risch import trigs_to_exp
         d0 = plus(a, neg(b))
         if d0 is T.ZERO:
             return True
-        _de, na, nd = build_extension(d0, x)
+        # 三角头先复指数化（M5.3），否则塔覆盖检查必然拒绝
+        _de, na, nd = build_extension(trigs_to_exp(d0), x)
         return na.is_zero()
     except Exception:
         return False

@@ -319,5 +319,47 @@ class TestRischPrimitive(unittest.TestCase):
         self._dcheck("exp(x)*(1/x + log(x))", r)
 
 
+class TestTrigViaComplexExp(unittest.TestCase):
+    """M5.3：三角/双曲经复指数——session 级验收（VERIFIED = 出口精确
+    验证背书；答案形态为 ℚ(i) 复指数式，实化回 sin/cos 属后续出口层）。"""
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().integrate(s)
+
+    def test_tan(self):
+        # ∫tan x dx：复形态 = -log(cos x)（差常数意义下精确）
+        out = self._int("tan(x)")
+        self.assertIn("VERIFIED", out)
+
+    def test_exp_sin(self):
+        # 旗舰可积：∫e^x sin x = e^x(sin x - cos x)/2 的 ℚ(i) 形态
+        out = self._int("exp(x)*sin(x)")
+        self.assertIn("VERIFIED", out)
+
+    def test_exp_cos(self):
+        out = self._int("exp(x)*cos(x)")
+        self.assertIn("VERIFIED", out)
+
+    def test_sin_over_x_nonelementary(self):
+        # 旗舰不可积：∫sin(x)/x dx = Si(x) 类，频率方程 y'±iy=c/x
+        # 在 Q(i,x) 无有理解——机器证明（session 层转为专属输出串）
+        from cas.session import Session
+
+        out = Session().integrate("sin(x)/x")
+        self.assertIn("NOT ELEMENTARY", out)
+        self.assertIn("proved", out)
+
+    def test_constant_integrand(self):
+        # 常被积函数快捷通道：∫c dx = c·x（c 不含积分变量；此处直接
+        # 打 risch 层，session 的变量自动检测会改取 y 为积分变量）
+        from cas.pprint import to_str
+        from cas.risch import integrate_exp_tower
+
+        r, _de = integrate_exp_tower(parse("sin(y)"), parse("x"))
+        self.assertEqual(to_str(simplify(r)), "x*sin(y)")
+
+
 if __name__ == "__main__":
     unittest.main()
