@@ -50,12 +50,20 @@ def _tower_zero(a, b, x):
     from cas.risch import build_extension, RischUnsupported
 
     try:
-        from cas.risch import trigs_to_exp
+        from cas.risch import (trigs_to_exp, _norm_num_powers,
+                               _parametrize_const_logs)
         d0 = plus(a, neg(b))
         if d0 is T.ZERO:
             return True
-        # 三角头先复指数化（M5.3），否则塔覆盖检查必然拒绝
-        _de, na, nd = build_extension(trigs_to_exp(d0), x)
+        if T.is_num(d0) and T.num_val(d0) == 0:
+            return True   # mk 规范化折叠出的数值零（如 exp(x·log2)−2^x）
+        # 与 integrate_exp_tower 同款入口归一（M5.6）：数值底幂 -> 复
+        # 指数、Log(常量) -> 独立超越参数——两侧同一常量集按同一排序
+        # 编号，替换一致；恒等式在 ℚ(c₁..)(tower) 上判定，对真实
+        # 超越值特化仍成立（独立性假设只会保守拒绝，不产生误证）
+        d0 = trigs_to_exp(_norm_num_powers(d0, x))
+        d0, _bs = _parametrize_const_logs(d0)
+        _de, na, nd = build_extension(d0, x)
         return na.is_zero()
     except Exception:
         return False

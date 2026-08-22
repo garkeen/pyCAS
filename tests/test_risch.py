@@ -363,5 +363,49 @@ class TestTrigViaComplexExp(unittest.TestCase):
         self.assertEqual(to_str(simplify(r)), "x*sin(y)")
 
 
+class TestConstLogParam(unittest.TestCase):
+    """M5.6 首项：Log(常量) 参数化（∫2^x 全族解锁）。
+
+    语义：log 2 作独立超越参数 c 进系数域（ℚ(c) 上零等价可判定，
+    Richardson 安全——积分全程无需此类常量间关系），出口回代；
+    状态必须 VERIFIED（出口精确验证背书）。
+    """
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().integrate(s)
+
+    def test_2_to_x(self):
+        out = self._int("2^x")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("log(2)", out)
+
+    def test_x_times_2_to_x(self):
+        # 教科书形态 e^{x ln2}(x/ln2 - 1/ln²2)，分部积分同款
+        out = self._int("x*2^x")
+        self.assertIn("VERIFIED", out)
+
+    def test_10_to_x(self):
+        out = self._int("10^x")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("log(10)", out)
+
+    def test_mixed_with_rational(self):
+        # 参数通道与有理分量共存
+        out = self._int("2^x + x")
+        self.assertIn("VERIFIED", out)
+
+    def test_numeric_base_power_norm(self):
+        # 4^x 经数值底幂归一走同一参数通道
+        out = self._int("4^x")
+        self.assertIn("VERIFIED", out)
+
+    def test_exp_regression(self):
+        # 回归：普通 Exp 不受参数化影响（spec 表路径）
+        out = self._int("exp(2*x)")
+        self.assertIn("VERIFIED", out)
+
+
 if __name__ == "__main__":
     unittest.main()

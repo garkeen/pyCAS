@@ -103,16 +103,17 @@ def _cancel(n, d):
     """轻量规范：常数 content 约化 + 分母 monic。
 
     多项式 gcd 约化不在 M5.0 范围（Hermite 推广在 M5.1 正规处理）；
-    此处只防分式代数的系数膨胀。域系数（Ga/SymRat）时 content 已是
-    单位元，monic 化用域除法（scalar 乘系数域元素）。
+    此处只防分式代数的系数膨胀。含域系数（Ga/SymRat，或混合——
+    Poly 构造把常量 SymRat 退化回 Fr，同一多项式可两种并存）时
+    content 已是单位元，仅 monic 化用域除法。
     """
     if n.is_zero():
         return Poly.zero(n.vars), Poly.one(n.vars)
     cn, cd = n.content(), d.content()
-    if hasattr(cn, "is_zero"):
-        # 域系数路径：content 单位元，直接 monic
+    if not (isinstance(cn, Fr) and isinstance(cd, Fr)):
+        # 域/混合系数路径
         lc = d.lc(d.vars[0])
-        inv = cn / lc          # 域除法（cn 为单位元 => 1/lc）
+        inv = Fr(1) / lc if isinstance(lc, Fr) else 1 / lc
         n = n.scalar(inv)
         d = d.scalar(inv)
         return n, d
@@ -451,7 +452,10 @@ def _frac_num(t, vars_):
             # 虚单位常量（ℚ(i)）——与 Poly._build 同款保留名
             from cas.gaussian import Ga
             return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
-        raise PolyError("free symbol outside extension: " + t.name)
+        # 不在 vars 的符号 = 超越参数：升入 ℚ(params)（M5.6 首项，
+        # ∫2^x 全族；与 Poly._build 同款语义）
+        from cas.poly import _mk_param
+        return Poly.const(vars_, _mk_param(t)), Poly.one(vars_)
     if isinstance(t, Expr):
         n = t.head.name
         if n == "Plus":
@@ -1335,6 +1339,55 @@ class RischNonElementary(Exception):
         self.reason = reason
 
 
+def _norm_num_powers(t, x):
+    """自底向上：数值底幂 b^e（e 含 x）-> Exp(e·Log(b))。
+
+    积分塔只认 Exp/Log 头（微分侧有通用幂规则故无此步）。b 为符号
+    常量（pi 等）暂不动——其参数化待 M5.6 符号常数通道扩展。
+    """
+    head = getattr(t, "head", None)
+    if head is None:
+        return t          # Int/Fr 等数值叶（无头，无需重写）
+    args = tuple(_norm_num_powers(a, x) for a in t.args)
+    u = T.mk(head, args)
+    uhead = getattr(u, "head", None)
+    if uhead is None:
+        return u          # mk 规范化可能整体折叠（如 exp(x·log2)−2^x -> 0）
+    if uhead.name == "Power":
+        b, e = u.args
+        if T.is_num(b) and x in T.free_vars(e):
+            return T.mk(S("Exp"), (T.times(e, T.fn("Log")(b)),))
+    return u
+
+
+def _parametrize_const_logs(f):
+    """Log(无自由变量项) -> 独立超越参数符号（M5.6 首项：∫2^x 修复）。
+
+    log 2 类常量须进系数域做线性代数，而此类常量间的数值关系不可
+    判定（Richardson）；积分全程只需"互相超越独立"假设——零等价 =
+    ℚ(c₁..cₙ) 上有理恒等（可判定，SymRat 参数机器），出口回代还原。
+    返回 (新 f, 回代表 {塔符号 -> 原 Log 项})。
+    """
+    found = {}
+    stack = [f]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, Expr) and getattr(u, "head", None) is not None:
+            if u.head.name == "Log" and not T.free_vars(u.args[0]):
+                found[u] = None      # 整体替换，不再深入 arg
+                continue
+            stack.extend(u.args)
+    if not found:
+        return f, {}
+    subs = {}
+    backsub = {}
+    for k, lt in enumerate(sorted(found, key=repr), 1):
+        sym = S(f"_cl{k}")
+        subs[lt] = sym
+        backsub[sym] = lt
+    return T.subst(f, subs), backsub
+
+
 def integrate_exp_tower(f, x):
     """顶层 API：term -> (term, de)（初等原函数）或异常。
 
@@ -1348,6 +1401,8 @@ def integrate_exp_tower(f, x):
     if x not in T.free_vars(f):
         return T.times(f, x), DiffExt(x)
     f = trigs_to_exp(f)
+    # M5.6 首项：数值底幂归一 + Log(常量) 参数化（∫2^x 全族解锁）
+    f, backsub = _parametrize_const_logs(_norm_num_powers(f, x))
     de, fa, fd = build_extension(f, x)
     j = len(de.levels) - 1
     if j == 0:
@@ -1357,6 +1412,8 @@ def integrate_exp_tower(f, x):
             for i in range(1, len(de.levels))}
     if subs:
         expr = T.subst(expr, subs)
+    if backsub:
+        expr = T.subst(expr, backsub)
     return expr, de
 
 
