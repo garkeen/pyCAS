@@ -1246,6 +1246,7 @@ class Session:
         from cas.structure import analyze
 
         t = self._parse_in(s)
+        pb = getattr(self, "_principal_branch", None)
         if var_s:
             x = T.S(var_s)
             if x not in T.free_vars(t):
@@ -1259,7 +1260,8 @@ class Session:
         # 统一管线 P1：入口单次结构分析（结果一等对象，随 step log 留痕）
         self._last_analysis = analyze(t, x)
         try:
-            res, ok, method, provisos = zz_int(t, x)
+            res, ok, method, provisos = zz_int(
+            t, x, principal=getattr(self, "_principal_branch", None))
         except RischNonElementary as e:
             # Risch 决策程序的证明性拒答——区别于 unsupported 的定理结论
             self._sid += 1
@@ -1723,7 +1725,9 @@ class Session:
                 from cas import structure as _st
                 on = (parts[1].lower() in ("on", "true", "1")
                       if len(parts) > 1 else True)
-                _st.set_principal_branch(on)
+                # 会话级声明：只写本 Session（互不影响）；全局位留给
+                # 程序化调用方经 structure.set_principal_branch 设置
+                self._principal_branch = on
                 return ("branch policy: principal = "
                         + ("ON (fractional-power identities active "
                            "in verification)" if on else "OFF"))

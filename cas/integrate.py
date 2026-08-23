@@ -427,7 +427,7 @@ def _try_usub(t, x):
     return None
 
 
-def integrate(t, x):
+def integrate(t, x, principal=None):
     """∫ t dx（外层）：EF 收缩 + 各通道结果统一过参数分母 proviso 扫描。
 
     EF 收缩（FriCAS iiilog 同款）：Exp(k·Log(u)) -> u^k（k∈ℤ 精确）——
@@ -438,7 +438,8 @@ def integrate(t, x):
     from cas.structure import run_pre_passes
 
     t, a = run_pre_passes(t, x)
-    F, ok, method, provisos = _integrate_core(t, x, a)
+    F, ok, method, provisos = _integrate_core(t, x, a,
+                                              principal=principal)
     from cas.risch import _param_provisos
     for p in _param_provisos(F, x):
         if p not in provisos:
@@ -470,7 +471,7 @@ def _power_antideriv(t, x):
     return F
 
 
-def _integrate_core(t, x, a=None):
+def _integrate_core(t, x, a=None, principal=None):
     """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method, provisos)。
 
     裸 spec 函数走 anti 表（连续原函数，定积分友好）；
@@ -541,7 +542,8 @@ def _integrate_core(t, x, a=None):
             last_reason = str(_pe)
             continue
         if ok is None:                     # 塔通道：管线统一验证
-            ok = _verify(term, x, t) == "VERIFIED"
+            ok = _verify(term, x, t,
+                         principal=principal) == "VERIFIED"
         return term, ok, s.method, provisos
     raise PolyError("unsupported integrand"
                     + (": " + last_reason if last_reason else ""))

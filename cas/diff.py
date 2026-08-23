@@ -69,7 +69,7 @@ def _tower_zero(a, b, x):
         return False
 
 
-def verify(F, x, f, budget=100000):
+def verify(F, x, f, budget=100000, principal=None):
     from cas.decide import equivalent, T3
 
     r = equivalent(d(F, x), f, budget=budget)
@@ -84,7 +84,8 @@ def verify(F, x, f, budget=100000):
     # 分数幂合并阶段（P4）：仅 principal 承诺开启时启用——对差值树
     # 做同底有理指数幂合并后判零
     from cas.structure import principal_branch, _merge_ratpow
-    if principal_branch():
+    use_pb = principal_branch() if principal is None else principal
+    if use_pb:
         d0 = T.plus(d(F, x), T.neg(f))
         m = _merge_ratpow(d0)
         if m is not d0:
