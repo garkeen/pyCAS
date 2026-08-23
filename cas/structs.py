@@ -59,30 +59,37 @@ class QxStruct(Struct):
     method = "Hermite reduction + RootOf log part"
 
     def project(self, t, x, a):
-        from cas.integrate import _rat_pair, _collect_rad_params
+        from cas.integrate import (_rat_pair, _collect_rad_params,
+                                   _collect_const_params)
         try:
             P, Q = _rat_pair(t, x)
             return (P, Q, x, {})
         except Exception:
             pass
-        # M5.4-c：根式代数常数 -> 局部不透明参数（无全局关系语义）
+        # M5.4-c + M5.6#1：根式/命名常数/常数函数项 -> 局部不透明参数
         try:
-            rmap = _collect_rad_params(t)
+            rmap = _collect_const_params(t, x)
             if not rmap:
                 return FAIL
             t2 = T.subst(t, rmap)
             P, Q = _rat_pair(t2, x)
             back = {sym: rad for rad, sym in rmap.items()}
-            # A2：登记隔离区间（符号全局唯一，跨调用无碰撞；
-            # retract 清除——泄漏仅冗余不致错）
-            # A3：登记极小多项式（apart 的 Trager 范数分解消费）
+            # A2/A3：根式叶登记隔离区间与极小多项式（符号全局唯一，
+            # retract 清除——泄漏仅冗余不致错）；非根式常量项无关系语义
             from cas.integrate import (AN_INTERVALS, AN_RELATIONS,
                                        _radical_bracket)
             registered = []
             try:
                 for rad, sym in rmap.items():
+                    if not (isinstance(rad, T.Expr)
+                            and rad.head.name == "Power"):
+                        continue
                     b_, e_ = rad.args
+                    if not (T.is_num(b_) and isinstance(e_, T.Rat)):
+                        continue
                     bv = T.num_val(b_)
+                    if bv <= 0 or e_.f <= 0:
+                        continue
                     lo, hi = _radical_bracket(bv, e_.f.numerator,
                                               e_.f.denominator)
                     AN_INTERVALS[sym] = (lo, hi)

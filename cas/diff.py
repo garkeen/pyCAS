@@ -61,6 +61,10 @@ def _tower_zero(a, b, x):
         # 指数、Log(常量) -> 独立超越参数——两侧同一常量集按同一排序
         # 编号，替换一致；恒等式在 ℚ(c₁..)(tower) 上判定，对真实
         # 超越值特化仍成立（独立性假设只会保守拒绝，不产生误证）
+        # M5.5：入口先 expand+simplify——链式法则产物含 Exp(c)·Exp(u)
+        # 双层积与未提取的常数分母，未经环规范折叠会让塔构建拒绝
+        from cas.simplify import simplify as _simp, expand as _exp
+        d0 = _simp(_exp(d0))
         d0 = trigs_to_exp(_norm_const_base_powers(d0, x))
         d0, _bs = _parametrize_const_logs(d0, x)
         _de, na, nd = build_extension(d0, x)

@@ -191,5 +191,78 @@ class TestAlgebraicRational(unittest.TestCase):
             ALG_MODULI.pop(sym, None)
 
 
+class TestSpecialFunctionOutput(unittest.TestCase):
+    """M5.5：Risch proved 拒答后的特殊函数出口层。
+
+    结构化候选族（Ei 线性族/li/Ci/erf）+ diff.verify 背书——
+    导数塌缩回初等域后精确判等，未验证候选绝不出门。"""
+
+    def setUp(self):
+        self.x = parse("x")
+
+    def integ(self, s):
+        from cas.integrate import integrate
+
+        return integrate(parse(s), parse("x"))
+
+    def test_ei_linear_family(self):
+        cases = [
+            ("exp(x)/x", "Ei"),
+            ("exp(x)/(x-1)", "Ei"),
+            ("exp(2*x)/(x-1)", "Ei"),
+            ("exp(3*x+1)/(2*x)", "Ei"),
+        ]
+        for s, fn in cases:
+            F, ok, method, _pv = self.integ(s)
+            self.assertTrue(ok, s)
+            self.assertIn(fn, to_str(F), s)
+            self.assertIn("special function", method, s)
+
+    def test_li_ci_erf(self):
+        F, ok, _m, _pv = self.integ("1/log(x)")
+        self.assertTrue(ok)
+        self.assertIn("li", to_str(F))
+        F, ok, _m, _pv = self.integ("cos(x)/x")
+        self.assertTrue(ok)
+        self.assertIn("Ci", to_str(F))
+        # exp(-x^2)：erf 形态；sqrt(pi) 经命名常数幂参数化让验证链
+        # 精确归零（塔零判定），非采样级
+        F, ok, _m, _pv = self.integ("exp(-x^2)")
+        self.assertTrue(ok)
+        self.assertIn("erf", to_str(F))
+
+    def test_symbolic_power_rule(self):
+        # M5.6：x^a generic 形态 + [a+1!=0] proviso；
+        # principal 承诺开启时符号指数合并升级 VERIFIED
+        from cas.structure import set_principal_branch
+
+        set_principal_branch(True)
+        try:
+            for s, k in [("x^a", "1"), ("x^(a+1)", "2")]:
+                F, ok, _m, pv = self.integ(s)
+                self.assertTrue(ok, s)
+                self.assertEqual(len(pv), 1, s)
+                self.assertIn("!=", to_str(pv[0]), s)
+        finally:
+            set_principal_branch(False)
+
+    def test_const_term_coefficients(self):
+        # M5.6#1：非有理常数项作系数（有理通道作用域参数化）
+        import math
+        from cas.evalnum import eval_approx
+        from cas.diff import d
+
+        cases = ["pi*x", "pi/(x^2+1)", "sin(1)*x", "e^2/(x^2+1)",
+                 "log(3)/(x-1)", "atan(1/2)/(x^2+1)"]
+        for s in cases:
+            F, ok, _m, _pv = self.integ(s)
+            self.assertTrue(ok, s)
+            dF = d(F, self.x)
+            good = all(abs(eval_approx(dF, {self.x: p}) -
+                           eval_approx(parse(s), {self.x: p})) < 1e-9
+                       for p in (0.41, 0.93, 1.77))
+            self.assertTrue(good, s)
+
+
 if __name__ == "__main__":
     unittest.main()

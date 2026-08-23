@@ -206,7 +206,7 @@ latex/refine 零递归）；预算按节点计。
 | Gröbner gsolve | ✓ 基 | ✗ | ✗ | 未系统验证 | ✗ | 解枚举限有理 |
 | 不等式 solveineq | ✓ Sturm+RootOf 端点比较 | ✗ | 端点✓ | ✗ **崩溃**(SymRat numerator bug 已定位) | ✗ | Sturm 假设 Fr |
 | ODE dsolve | ✓ direct/separable/linear1/constcoef2(特征方程→代数根) | ✗ | 输出侧✓ | 未系统验证 | ✗ | 题型分类制 |
-| **不定积分** | ✓ Risch 三态全链 | ✓ 塔+实化全链 | 有理通道✓(M5.4-c 全链：根式参数化+符号隔离判定+Trager 范数分解)+输出侧✓(root_logs) | ⚠ 塔内✓(a^x 族实证)/有理积分✗(M5.6#3)/条件✗(#4)；ℚ(i,params) 混合有理✓(A4 共轭拆分)/混合塔 RDE 仍门控 | ⚠ Log(常量)✓ 新/π、sin1 作系数✗(M5.6#1) | 最深审计见下 |
+| **不定积分** | ✓ Risch 三态全链 | ✓ 塔+实化全链 | 有理通道✓(M5.4-c 全链)+特殊函数出口✓(Si/Ei 线性族/li/Ci/erf, M5.5 扩容) | ⚠ 塔内✓(a^x 族+x^a 符号幂 generic+proviso)/ℚ(i,params) 混合有理✓(A4)/混合塔 RDE 仍门控/常量项系数✓(M5.6#1: π/sin(1)/e² 类) | ⚠ Log(常量)✓/π 作系数✓/sqrt(π) 参数化✓(erf 解锁) | 最深审计见下 |
 | 定积分 defint | ✓ NL+奇点分割 | 同左 | — | 界✗ 诚实拒("不可数值比较") | **界✓ 精确**(sin(1)³) | 无原函数→诚实 unsupported，无数值积分通道 |
 | 极限 limit | ✓ PROBABLE(数值探针) | 同左 | — | 点含参数→UNKNOWN 诚实 | ✓ 经采样 | Gruntz 显式延后 |
 | 级数 series | ✓ | ✓ | — | ✓ | ✗ 诚实拒("系数非数值") | 系数域要求可折叠数值 |
@@ -287,10 +287,28 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   ——α≡2、α²≡4 静默错域；修复为 Poly((sym,), {(q,):1,(0,):-b^p})。
   剩余：塔内 AN 零判定的关系感知完备审计（RDE 全链）、多 AN 符号/
   自由参数混合的 Trager 推广、ℚ(i,params) 混合塔 RDE 门控解除
-  （_fgcd 已备，需 spde/no_cancel 全链系统测试）。  → **M5.5 特殊函数输出层**（Ei/erf/Li₂ 作为答案而非 proved 拒答
-  ——FriCAS rdeefx ei_int primpart 形态；判定逻辑不变，产品级增量）
-  → **M5.6 符号参数积分（大部分 ✓，2026-08 冲刺）**：Log(常量)/命名
-  常数 pi,e,gamma/根式 b^(p/q) 统一参数化进 ℚ(params) 系数域
+  （_fgcd 已备，需 spde/no_cancel 全链系统测试）。  → **M5.5 特殊函数输出层 ✓（M5 收官批扩容）**：Risch proved 拒答后
+  的结构化候选族——Si/Ci（sin(x)/x、cos(x)/x）、Ei 线性族
+  （e^(ax+b)/(cx+d) -> (1/c)·e^(b-ad/c)·Ei((a/c)(cx+d))，含复合
+  斜率/截距/分母斜率全参数组合，公式经多斜率数值回验定稿）、
+  li 族（1/Log(cx+d) -> Li(cx+d)/c）、erf 族（e^(-x²) ->
+  sqrt(pi)/2·erf(x)）；每个候选过 diff.verify 背书（导数塌缩回
+  初等域精确判等）。配套：命名常数幂参数化（sqrt(π) -> _npK 独立
+  参数进塔零判定——erf 验证链精确归零的关键）；_tower_zero 入口补
+  expand+simplify 归一（链式法则产物 Exp(c)·Exp(u) 双层积曾让塔
+  构建拒绝）。defint 联动：∫₀¹e^(-x²) = √π/2·erf(1) VERIFIED
+  （旧 unsupported 拒答退役）
+  → **M5.6 符号参数积分 ✓（收官批余项清账）**：x^a 符号指数幂
+  generic 通道（u^(a+1)/((a+1)·slope) + [a+1≠0] proviso；退化点
+  a=-1 的 ln 路径由 proviso 框架声明；principal 承诺下符号指数合并
+  ——_merge_ratpow 从 Int/Rat 放宽到任意项——升级 VERIFIED；
+  (c·x)^a c≠1 类跨项指数归一为诚实 PROBABLE 边界）。常量项系数
+  ✓（_collect_const_params：根式+命名常数+函数头复合项三类极大子项
+  局部参数化，π/sin(1)/e²/log(3)/atan(1/2) 作系数全通 + 数值回验）。
+  剩余：参数 RootOf 分支化（1/(x³+a) 判别式 case split——CAD 类，
+  M7d 地盘）。
+  → **M5.6 续（既有 ✓ 内容存档）**：常数 pi,e,gamma/根式 b^(p/q)
+  统一参数化进 ℚ(params) 系数域
   （_parametrize_const_logs + ALG_RELATIONS 登记，出口回代；
   Richardson 安全——独立超越性假设）；ℚ(i,params) 混合轨道
   （_parts Ga 提升 + _mk_rat 混合叶跳过规范化 + ratfunc all_fr 门控 +

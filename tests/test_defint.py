@@ -83,13 +83,21 @@ class TestDefintSymmetryAndBoundaries(unittest.TestCase):
     """对称性预检 + 无原函数边界 + spec anti 补全（Log/Atan）。"""
 
     def test_no_antiderivative_honest_refusal(self):
-        # exp(-x^2) 无初等原函数：Risch 证明性拒答（M5.1b 起带 proved 标记）
+        # M5.5 能力升级：exp(-x^2) 无初等原函数——不定积分经特殊
+        # 函数出口给 erf 形态 VERIFIED；定积分 Newton-Leibniz 精确
+        # 求值（旧期望"unsupported"退役）
         from cas.session import Session
 
         s = Session()
-        out = s.handle("!defint exp(-x^2) x 0 1")
-        self.assertIn("unsupported", out)
-        self.assertIn("proved", out)
+        out_undef = s.handle("!integrate exp(-x^2)")
+        self.assertIn("VERIFIED", out_undef)
+        self.assertIn("erf", out_undef)
+        out_def = s.handle("!defint exp(-x^2) x 0 1")
+        self.assertIn("VERIFIED", out_def)
+        self.assertIn("erf", out_def)
+        # 无特殊函数覆盖的不可积类仍诚实拒答
+        out_li = s.handle("!defint exp(x^2+x) x 0 1")
+        self.assertTrue(("unsupported" in out_li) or ("proved" in out_li))
 
     def test_log_anti_and_improper_endpoint(self):
         # Log anti 表项（分部积分标准结果）+ 端点瑕点单侧极限

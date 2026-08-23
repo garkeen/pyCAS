@@ -218,65 +218,84 @@ def set_principal_branch(on):
 
 
 def _merge_ratpow(t):
-    """同底有理指数幂合并（验证专用域阶段；L0 裁定不动）。
+    """同底幂合并（验证专用域阶段；L0 裁定不动）。
 
     仅在 principal 承诺开启时由 verify 管线调用——语义依据：
-    本系统 diff 幂规则已承诺单值主支 Log，合并与微分语义一致。"""
+    本系统 diff 幂规则已承诺单值主支 Log，合并与微分语义一致。
+    M5.6 扩展：指数从 Int/Rat 放宽到任意项——x^(a+1)·x^(-1) 类
+    微分产物需要符号指数合并才能精确判零（L0 对非整指数永不合并
+    的保守裁定在验证域由本阶段解除）。"""
     head = getattr(t, "head", None)
     if head is None:
         return t
-    args = tuple(_merge_ratpow(a) for a in t.args)
+    from fractions import Fraction as Fr
+
+    def _as_exp(e_):
+        if isinstance(e_, T.Rat):
+            return e_.f
+        if isinstance(e_, T.Int):
+            return Fr(e_.v)
+        return None
+
+    def _merge_in(u):
+        head_ = getattr(u, "head", None)
+        if head_ is None:
+            return u
+        if head_.name != "Times":
+            return T.mk(head_, tuple(_merge_in(a_) for a_ in u.args))
+        coeff = Fr(1)
+        groups = {}
+        rest = []
+        for fac in u.args:
+            if T.is_num(fac):
+                coeff *= T.num_val(fac)
+                continue
+            if isinstance(fac, Expr) and fac.head.name == "Power":
+                b_, e_ = fac.args
+                ef = _as_exp(e_)
+                # 数值系数从底数剥出（仅 Int/Rat 指数安全）：Power(c·u,q)=c^q·u^q，
+                # 使 x^{3/2} 与 (2x)^{-1} 的底归一为同一 x
+                while isinstance(b_, Expr) and b_.head.name == "Times" \
+                        and ef is not None:
+                    nums = [f__ for f__ in b_.args if T.is_num(f__)]
+                    others = [f__ for f__ in b_.args if not T.is_num(f__)]
+                    if len(nums) != 1 or not others:
+                        break
+                    cv = T.num_val(nums[0])
+                    if cv < 0 and ef.denominator != 1:
+                        break          # 负底分数幂：主支外不剥（保守）
+                    cnum = others[0] if len(others) == 1 \
+                        else T.mk(S("Times"), tuple(others))
+                    rest.append(T.pw(N(cv), N(ef)))
+                    b_, e_ = cnum, e_
+                key = b_._h
+                g = groups.get(key)
+                if g is None:
+                    groups[key] = [b_, e_]
+                else:
+                    g[1] = T.plus(g[1], e_)
+                continue
+            rest.append(_merge_in(fac))
+        if not groups and coeff == 1:
+            return u
+        out = list(rest)
+        for b_, e_ in groups.values():
+            if T.is_num(e_) and T.num_val(e_) == 0:
+                continue
+            out.append(T.pw(b_, e_))
+        if not out:
+            return N(coeff)
+        u2 = T.mk(S("Times"), tuple(out)) if len(out) > 1 else out[0]
+        if coeff != 1:
+            u2 = T.times(u2, N(coeff))
+        return u2
+
+    args = tuple(_merge_in(a) for a in t.args)
     u = T.mk(head, args)
     uh = getattr(u, "head", None)
     if uh is None or uh.name != "Times":
         return u
-    from fractions import Fraction as Fr
-    coeff = Fr(1)
-    groups = {}
-    rest = []
-    for fac in u.args:
-        if T.is_num(fac):
-            coeff *= T.num_val(fac)
-            continue
-        if isinstance(fac, Expr) and fac.head.name == "Power" \
-                and isinstance(fac.args[1], (T.Int, T.Rat)):
-            b_, e_ = fac.args
-            ef = e_.f if isinstance(e_, T.Rat) else Fr(e_.v)
-            # 数值系数从底数剥出（精确）：Power(c·u,q)=c^q·u^q，
-            # 使 x^{3/2} 与 (2x)^{-1} 的底归一为同一 x
-            while isinstance(b_, Expr) and b_.head.name == "Times":
-                nums = [f_ for f_ in b_.args if T.is_num(f_)]
-                others = [f_ for f_ in b_.args if not T.is_num(f_)]
-                if len(nums) != 1 or not others:
-                    break
-                cv = T.num_val(nums[0])
-                if cv < 0 and ef.denominator != 1:
-                    break          # 负底分数幂：主支外不剥（保守）
-                cnum = others[0] if len(others) == 1 \
-                    else T.mk(S("Times"), tuple(others))
-                rest.append(T.pw(N(cv), N(ef)))
-                b_, e_ = cnum, ef
-            key = b_._h
-            g = groups.get(key)
-            if g is None:
-                groups[key] = [b_, ef]
-            else:
-                g[1] += ef
-            continue
-        rest.append(fac)
-    if not groups:
-        return u
-    out = list(rest)
-    for b_, e_ in groups.values():
-        if e_ == 0:
-            continue
-        out.append(T.pw(b_, N(e_)))
-    if not out:
-        return N(coeff)
-    u2 = T.mk(S("Times"), tuple(out)) if len(out) > 1 else out[0]
-    if coeff != 1:
-        u2 = T.times(u2, N(coeff))
-    return u2
+    return _merge_in(u)
 
 
 # ---------------------------------------------------------------------------

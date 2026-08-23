@@ -312,6 +312,39 @@ n_l==1 时 beta=−(a·Dz+b·z).lc/(z·a.lc)）。验收：双层 log 塔正例�
    上多项式恒等、Galois 稳定 ⇒ 常数域扩张不改变可解性（Bronstein
    结构定理标准推论）；完整构造性版本 = parametric_log_deriv
    （FriCAS parlog.spad 路线，远期项）。518 tests。
+**M5 收官批（M5.5 扩容 + M5.6 余项清账）**：
+   **M5.5 特殊函数出口结构化**：从两条精确模式匹配扩为四候选族——
+   Si/Ci、Ei 线性族（e^(ax+b)/(cx+d) 全参数组合）、li 族、erf 族。
+   每候选 verify 背书（导数塌缩回初等域精确判等）纪律不变。
+   **Ei 系数公式三易其稿的教训**：d(C·Ei(k(cx+d))) 的链式法则里
+   u'/u = kc/(k(cx+d)) 化简后剩 c/(cx+d)——首版漏 c、二版多除 a，
+   两次都被"单案例通过"掩盖（a=1 时两种错误公式退化正确），直到
+   exp(3x+1)/(2x) 数值回验失败才暴露。教训：参数化公式必须多斜率
+   点回验，单例通过≠公式正确。终版：C = coef·e^(b-kd)/c。
+   **sqrt(π) 参数化**：erf 答案 (√π/2)erf(x) 的验证链需要
+   √π/√π 抵消——L0 对非整指数永不合并，环层无法折叠；命名常数幂
+   （Power(pi,±1/2)）经 _npK 独立参数进塔零判定后精确归零。独立性
+   假设 Richardson 安全（同 _nc 语义）。
+   **_tower_zero 入口归一缺口**：Exp(c)·Exp(u) 双层积（链式法则
+   产物）未经 expand+simplify 折叠会让 build_extension 报
+   "not covered"——补入口归一（与 integrate_exp_tower 同款），
+   验证链对任意微分产物形态鲁棒。
+   **M5.6 x^a 符号指数幂**：generic 通道 u^(a+1)/((a+1)·slope) +
+   [a+1≠0] proviso（退化点 a=-1 的 ln 路径由 proviso 框架声明，
+   generic 语义纪律与 e^{ax}/a 一致）。验证缺口：x^{a+1}/x 与 x^a
+   的判等需符号指数合并——_merge_ratpow 从 Int/Rat 放宽到任意项
+   （principal 承诺门控不变：diff 幂规则已承诺单值主支 Log，合并
+   与微分语义一致）。重写时曾破坏递归结构与变量作用域（NameError）
+   ——大函数手术必须每步跑测试 + ast.parse 守门。(c·x)^a c≠1 类
+   需要跨 Plus 项的指数归一，超出同底合并能力，诚实 PROBABLE 边界。
+   **M5.6#1 常量项系数**：∫π·x dx 此前竟拒答——常量参数化只在塔
+   路径做，有理通道不认识 π。_collect_const_params 统一三类极大子项
+   （根式/命名常数/函数头复合项）局部参数化，QxStruct 一个通道全收；
+   根式叶才登记区间+模（非根式常量项无关系语义）。π/sin(1)/e²/
+   log(3)/atan(1/2) 作系数全通 + 数值回验。
+   **defint 联动升级**：∫₀¹e^(-x²) 从 unsupported 拒答变为
+   √π/2·erf(1) VERIFIED（Newton-Leibniz + 特殊函数出口）——测试
+   期望随能力升级更新（诚实标注升级原因）。522 tests。
 - **M5.2b 递归塔（多层 primitive/exp）**：塔构建多层化（参数重写到当前
   塔上 + 工作队列循环处理嵌套依赖；代数依赖守卫：exp base 含既有塔变量
   => 拒绝）；_risch_rec 统一层积分入口 + _integrate_in_K 递归下降 +

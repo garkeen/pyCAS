@@ -223,6 +223,7 @@ def _exp_of(tt):
 # reduce = udivmod 余项——关系感知算术在后续切片接入，登记先行。
 ALG_RELATIONS = {}
 _ALG_RADICAL_COUNTER = [0]
+_NCPOW_COUNTER = [0]
 
 
 def _collect_radical(pterm, subs):
@@ -1739,6 +1740,18 @@ def _parametrize_const_logs(f, x):
                     nc_subs.setdefault(a, S(named[a.name]))
                 elif isinstance(a, Expr) and a.head.name == "Power":
                     _collect_radical(a, nc_subs)
+                    # M5.5 支援切片：命名常数的非整幂（sqrt(pi) 类）
+                    # -> 独立参数。独立性假设 Richardson 安全（同 _nc），
+                    # 使 erf 族答案的验证链（d(F) 与 f 的常数因子
+                    # sqrt(pi)/sqrt(pi) 抵消）在塔上精确归零。
+                    if a not in nc_subs:
+                        b_, e_ = a.args
+                        nm_ = getattr(b_, "name", "")
+                        if isinstance(b_, Const) and nm_ in named \
+                                and isinstance(e_, T.Rat) \
+                                and e_.f.denominator != 1:
+                            _NCPOW_COUNTER[0] += 1
+                            nc_subs.setdefault(a, S(f"_np{_NCPOW_COUNTER[0]}"))
         elif isinstance(u, Const) and getattr(u, "name", "") in named:
             nc_subs[u] = S(named[u.name])
     subs = {}

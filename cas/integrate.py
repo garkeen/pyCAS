@@ -136,6 +136,61 @@ def _poly_re_im(p):
     return Poly(p.vars, re_m), Poly(p.vars, im_m)
 
 
+def _is_named_const(t):
+    """命名常数节点（pi/e/gamma）。"""
+    from cas.term import Const
+    return isinstance(t, Const) and getattr(t, "name", "") in \
+        ("pi", "e", "gamma")
+
+
+_CONST_FUNCT_HEADS = ("Sin", "Cos", "Tan", "Atan", "Exp", "Log",
+                      "Sinh", "Cosh", "Tanh")
+
+
+def _collect_const_params(t, x):
+    """M5.6#1：非有理常数项 -> 局部参数符号映射。
+
+    收集三类极大子项（不含积分变量）：
+    1. 数值底有理指数幂（根式，原 _collect_rad_params 职责）
+    2. 命名常数（pi/e/gamma）
+    3. 函数头复合项整体（sin(1)、e^2、log(3)、atan(1/2) 类）
+    环可构造的 Plus/Times/整幂不收（Poly._build 原生支持）。
+    Richardson 安全性与 Log(常量) 参数化同源：互相超越独立假设
+    只可能保守拒绝。返回 {const_term: Sym}。
+    """
+    out = {}
+
+    def _collectible(u):
+        if x in T.free_vars(u):
+            return False
+        if isinstance(u, T.Expr):
+            n = u.head.name
+            if n in _CONST_FUNCT_HEADS:
+                return True
+            if n == "Power":
+                b_, e_ = u.args
+                if _is_named_const(b_) or isinstance(b_, T.Expr):
+                    return not (T.is_num(b_) and e_.f.denominator == 1) \
+                        if isinstance(e_, T.Rat) else True
+                if T.is_num(b_) and isinstance(e_, T.Rat) \
+                        and e_.f.denominator != 1:
+                    return True          # 根式
+                return False
+            return False
+        return _is_named_const(u)
+
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if _collectible(u) and not any(u is k for k in out):
+            _RC_COUNTER[0] += 1
+            out[u] = Sym(f"_rc{_RC_COUNTER[0]}")
+            continue                     # 极大整叶替换
+        if isinstance(u, T.Expr):
+            stack.extend(u.args)
+    return out
+
+
 def _collect_rad_params(t):
     """数值底有理指数幂叶 -> 局部参数符号映射（M5.4-c 有理通道投影）。
 
@@ -651,6 +706,31 @@ def integrate(t, x, principal=None):
     return F, ok, method, provisos
 
 
+def _symbol_power_antideriv(t, x):
+    """∫u^a dx（a 为不含 x 的符号指数）：u^(a+1)/((a+1)·slope)。
+
+    M5.6 退化分支：generic 公式在 a=-1 处无定义而原函数（ln u/slope）
+    存在——静默输出即撒谎，proviso 强制声明 [a+1≠0]。数值指数
+    （含 -1）不走此通道（spec 表/既有有理幂通道已覆盖）。
+    """
+    if not (isinstance(t, T.Expr) and t.head.name == "Power"):
+        return None
+    u, e = t.args
+    if x in T.free_vars(e):
+        return None
+    if T.is_num(e):
+        return None
+    from cas.solve import _linear_split
+    sp = _linear_split(u, x)
+    if sp is None:
+        return None
+    slope, _intercept = sp
+    new_e = T.plus(e, N(1))
+    F = T.div(T.pw(u, new_e), T.times(new_e, slope))
+    proviso = T.mk(S("Ne"), (new_e, T.ZERO))
+    return F, proviso
+
+
 def _power_antideriv(t, x):
     """有理幂单项式 f(u)^q（q∈ℚ 非整，u 线性）：代数诚实路线。
 
@@ -725,6 +805,14 @@ def _integrate_core(t, x, a=None, principal=None):
         ok = _verify(pw_, x, t,
                      principal=principal) == "VERIFIED"
         return pw_, ok, "rational power rule (algebraic form)", []
+    spw = _symbol_power_antideriv(t, x)
+    if spw is not None:
+        from cas.diff import verify as _verify
+
+        F_sp, proviso = spw
+        ok = _verify(F_sp, x, t,
+                     principal=principal) == "VERIFIED"
+        return F_sp, ok, "symbolic power rule (generic form)", [proviso]
     # 结构序列（P3）：分析-投影-计算-回写-验证 的声明式实例化。
     # Qx → TanHalf → Tower；投影 FAIL 跳过，域内无解/超界记录原因，
     # RischNonElementary（证明性拒答）原样上抛。
@@ -767,21 +855,117 @@ def _integrate_core(t, x, a=None, principal=None):
 
 
 def _special_output(t, x):
-    """M5.5：特殊函数出口（模式匹配 + verify 背书）。"""
+    """M5.5：特殊函数出口（结构化候选族 + verify 背书）。
+
+    Risch 证明不可积后，按形状匹配生成候选原函数；每个候选必须过
+    diff.verify（导数塌缩回初等域后精确判等）——未验证的候选绝不
+    出门（启发式探测必须回验裁决纪律）。
+
+    候选族（FriCAS rdeefx ei_int primpart 形态的产品级对应）：
+    - Si 族：sin(x)/x -> Si(x)
+    - Ei 线性族：e^(ax+b)/(cx+d) -> (c/a)·e^(b-ad/c)·Ei((a/c)(cx+d))
+    - li 族：1/Log(x) -> Li(x)；1/Log(cx+d) -> Li(cx+d)/c
+    - Ci 族：cos(x)/x -> Ci(x)
+    - erf 族：e^(-x^2) -> sqrt(pi)/2 · erf(x)（sqrt(pi) 经命名常数幂
+      参数化进塔零判定，验证链精确归零）
+    """
     from cas.diff import verify as _vf
 
     def _mk(name, arg):
         return T.mk(S(name), (arg,))
 
+    def _is_inv(t_):
+        """t_ 是否形如 u^(-1)，返回 u 或 None。"""
+        if isinstance(t_, T.Expr) and t_.head.name == "Power" \
+                and isinstance(t_.args[1], T.Int) and t_.args[1].v == -1:
+            return t_.args[0]
+        return None
+
+    def _lin_split(u):
+        from cas.solve import _linear_split as _ls
+
+        return _ls(u, x)
+
     cands = []
+
+    # --- Si / Ci 族：sin(x)/x、cos(x)/x ---
     if t == T.div(T.sin(x), x):
         cands.append(_mk("Si", x))
-    elif t == T.div(T.exp(x), x):
-        cands.append(_mk("Ei", x))
+    if t == T.div(T.cos(x), x):
+        cands.append(_mk("Ci", x))
+
+    # --- li 族：1/Log(u) ---
+    inv = _is_inv(t)
+    if inv is not None and isinstance(inv, T.Expr) \
+            and inv.head.name == "Log":
+        sp = _lin_split(inv.args[0])
+        if sp is not None:
+            c_, d_ = sp
+            c_v = T.num_val(c_) if T.is_num(c_) else None
+            if c_v is not None and c_v != 0:
+                F = T.div(_mk("Li", inv.args[0]),
+                          N(c_v) if c_v.denominator != 1 or True else c_)
+                cands.append(F)
+
+    # --- erf 族：e^(-x^2)（含常数倍）---
+    if t == T.exp(T.neg(T.pw(x, N(2)))):
+        cands.append(T.times(T.div(T.sqrt(T.PI), N(2)), _mk("Erf", x)))
+
+    # --- Ei 线性族：num/den 形，num 含 e^(ax+b)、den 线性 ---
+    num_t, den_t = None, None
+    inv2 = _is_inv(t)
+    if inv2 is not None:
+        den_t, num_t = inv2, N(1)
+    elif isinstance(t, T.Expr) and t.head.name == "Times":
+        nums = []
+        dens = []
+        for fac in t.args:
+            d3 = _is_inv(fac)
+            if d3 is not None:
+                dens.append(d3)
+            else:
+                nums.append(fac)
+        if len(dens) == 1:
+            den_t = dens[0]
+            num_t = T.mk(S("Times"), tuple(nums)) if len(nums) > 1 \
+                else (nums[0] if nums else N(1))
+    if den_t is not None:
+        inner = None
+        coef = N(1)
+        if isinstance(num_t, T.Expr) and num_t.head.name == "Exp":
+            inner = num_t.args[0]
+        elif isinstance(num_t, T.Expr) and num_t.head.name == "Times":
+            exps = [f_ for f_ in num_t.args
+                    if isinstance(f_, T.Expr) and f_.head.name == "Exp"]
+            rest = [f_ for f_ in num_t.args
+                    if not (isinstance(f_, T.Expr) and f_.head.name == "Exp")]
+            if len(exps) == 1:
+                inner = exps[0].args[0]
+                coef = T.mk(S("Times"), tuple(rest)) if rest else N(1)
+        if inner is not None:
+            sp_n = _lin_split(inner)
+            sp_d = _lin_split(den_t)
+            if sp_n is not None and sp_d is not None:
+                a_, b_ = sp_n
+                c_, d_ = sp_d
+                a_v = T.num_val(a_) if T.is_num(a_) else None
+                c_v = T.num_val(c_) if T.is_num(c_) else None
+                if a_v is not None and a_v != 0 \
+                        and c_v is not None and c_v != 0:
+                    k = T.div(a_, c_)
+                    phase = T.plus(b_, T.neg(T.times(k, d_)))
+                    # d(C·Ei(k(cx+d))) = C·c·e^(k(cx+d))/(cx+d)
+                    # => 需 C·c·e^(kd)=e^b => C = e^(b-kd)/c
+                    F = T.times(coef, T.div(N(1), c_), T.exp(phase),
+                                _mk("Ei", T.times(k, den_t)))
+                    cands.append(F)
 
     for F in cands:
-        if _vf(F, x, t) == "VERIFIED":
-            return F, True, "special function output", []
+        try:
+            if _vf(F, x, t) == "VERIFIED":
+                return F, True, "special function output", []
+        except Exception:
+            continue
     return None
 
 

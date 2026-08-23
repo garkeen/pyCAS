@@ -194,6 +194,21 @@ register(FunctionSpec(
     "Ei", 1, print_name="Ei",
     deriv=lambda a: T.div(T.exp(a), a),
 ))
+register(FunctionSpec(
+    "Li", 1, print_name="li",
+    deriv=lambda a: T.div(N(1), T.log(a)),
+))
+register(FunctionSpec(
+    "Ci", 1, print_name="Ci",
+    deriv=lambda a: T.div(T.cos(a), a),
+))
+# d(erf(u)) = 2/sqrt(pi) * e^(-u^2) * u'——sqrt(pi) 经命名常数幂
+# 参数化进塔（M5.5 支援切片），验证链精确归零
+register(FunctionSpec(
+    "Erf", 1, print_name="erf",
+    deriv=lambda a: T.div(T.times(N(2), T.exp(T.neg(T.pw(a, N(2))))),
+                          T.sqrt(T.PI)),
+))
 
 
 def gen_rules(ruleset):
