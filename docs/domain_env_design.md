@@ -93,4 +93,7 @@ c. 阶段的假设需求不可声明（主支承诺藏在天知道哪里）。
 FriCAS 用类型系统把域绑定到值上（编译期）；pyCAS 用"安全交集 L0 +
 内容检测的阶段管线 + 三值诚实"达到同一目的（运行期）。这是动态
 语言 + 既有驻留架构下的等价物，不是妥协：代价是某些验证从结构级
-降到采样级（如实显示），收益是不需要重写整个 L0。
+降到采样级（如实显示），收益是不需要重写整个 L0。3. P3 ✅（5cd1971）Struct 协议落地 cas/structs.py：
+   QxStruct/TanHalfStruct/TowerStruct 三实例 + SOLVERS 声明式序列
+   替代瀑布尾部；混合域门控改为 TowerStruct.project 的 FAIL 前置；
+   integrate_exp_tower 保留为旧薄壳供直连调用方
