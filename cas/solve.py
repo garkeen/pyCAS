@@ -359,6 +359,30 @@ def solve(f, var, budget=100000):
     try:
         p = Poly.from_term(lhs, (var,))
     except PolyError:
+        # Phase α①：根式系数参数化（√2 类 -> _ak + 模登记）。求解递归
+        # 在"挂起约简"作用域内进行——自由参数语义，判别式保持符号
+        # 形态（_a1²-4 不塌缩），出口对根回代还原根式。
+        from cas.risch import _collect_radical
+        from cas.poly import alg_suspend
+        rsubs = {}
+        stack = [lhs]
+        while stack:
+            u = stack.pop()
+            h = getattr(u, "head", None)
+            if h is None:
+                continue
+            if h.name == "Power":
+                if var not in T.free_vars(u.args[0]):
+                    _collect_radical(u, rsubs)
+            stack.extend(getattr(u, "args", ()) or ())
+        if rsubs:
+            lifted = T.subst(lhs, rsubs)
+            with alg_suspend():
+                res = solve(lifted, var, budget)
+            inv = {sym: orig for orig, sym in rsubs.items()}
+            sols2 = [T.subst(rt, inv) for rt in res.solutions]
+            return SolveResult(sols2, list(res.provisos), res.status,
+                               note=res.note)
         return _solve_param_lowdeg(lhs, var)
     # 系数域 ℚ(params) 走 term 层参数求解（proviso 机制在 _solve_param_lowdeg）
     from cas.poly import is_param_poly

@@ -11,9 +11,26 @@ from cas.errors import PolyError
 ALG_MODULI = {}
 
 
+ALG_REDUCE_SUSPENDED = [False]
+
+
+class alg_suspend:
+    """挂起关系约简（作用域化域语义）：自由参数轨道的消费者
+    （solve 参数路径等）在投影/求解期间声明"我在无关系语义下工作"，
+    出口约简随之停用——半吊子语义的根治。"""
+
+    def __enter__(self):
+        ALG_REDUCE_SUSPENDED[0] = True
+        return self
+
+    def __exit__(self, *exc):
+        ALG_REDUCE_SUSPENDED[0] = False
+        return False
+
+
 def _alg_reduce_out(p):
     """乘积出口：对含已登记代数变量的结果逐变量做模余式。"""
-    if not ALG_MODULI:
+    if not ALG_MODULI or ALG_REDUCE_SUSPENDED[0]:
         return p
     mods = [(v, ALG_MODULI[v]) for v in p.vars if v in ALG_MODULI]
     if not mods:
