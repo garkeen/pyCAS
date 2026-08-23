@@ -648,7 +648,11 @@ def _coef_to_term(c):
 def _parts(x):
     if isinstance(x, SymRat):
         return x.num, x.den
-    return Poly((), {(): Fr(x)}), Poly.one(())
+    if isinstance(x, (Fr, int)):
+        return Poly((), {(): Fr(x)}), Poly.one(())
+    # 命名常数（π/e/γ）等不在任何已支持系数域——诚实拒绝而非崩溃
+    from cas.errors import PolyError
+    raise PolyError(f"coefficient outside supported domains: {x!r}")
 
 
 def _extend(p, vs):

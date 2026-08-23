@@ -464,5 +464,37 @@ class TestGaRationalInt(unittest.TestCase):
         self.assertIn("VERIFIED", out)
 
 
+class TestLogPairingRealify(unittest.TestCase):
+    """M5.3.2 出口实化切片二：Laurent 共轭自反 log 配对。
+
+    Log(u)（u 为单虚频率指数多项式）满足 cₙ = conj(c_{d+m−n}) 时
+    精确剥出线性项 + 实三角 log；候选整体 verify 背书后才接受。
+    """
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().integrate(s)
+
+    def test_tan_real_form(self):
+        # 旗舰：∫tan x = -log(2 cos x)（差常数意义下与 -log cos x 同）
+        out = self._int("tan(x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("cos(x)", out)
+        self.assertNotIn("exp(", out)
+
+    def test_nonelementary_unaffected(self):
+        # 证明性拒答路径不受出口实化影响
+        out = self._int("x*tan(x)")
+        self.assertIn("NOT ELEMENTARY", out)
+        self.assertIn("proved", out)
+
+    def test_real_slice1_regression(self):
+        # 切片一共轭对实化回归：eˣsin 保持实形态
+        out = self._int("exp(x)*sin(x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("sin(x)", out)
+
+
 if __name__ == "__main__":
     unittest.main()

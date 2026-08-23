@@ -191,6 +191,187 @@ def _exp_of(tt):
     return T.mk(S("Exp"), (tt,))
 
 
+def _const_blockage_hint(f):
+    """被积函数含命名常数/非常量域超越常量时的 Richardson 卡点提示。
+
+    π、e、γ 类命名常数与 sin(1)、e² 类未求值超越项目前不在任何精确
+    常数域中（零等价不可判定，Richardson）——塔覆盖失败时如实点名：
+    这是数学边界而非实现缺陷；M5.6#1 参数化通道可部分解锁。
+    """
+    from cas.pprint import to_str
+
+    names = []
+    tconsts = set()
+    seen = set()
+    stack = [f]
+    while stack:
+        v = stack.pop()
+        if id(v) in seen:
+            continue
+        seen.add(id(v))
+        if isinstance(v, Const):
+            nm = getattr(v, "name", "")
+            if nm in ("pi", "e", "gamma") and nm not in names:
+                names.append(nm)
+            continue
+        if isinstance(v, Expr) and getattr(v, "head", None) is not None:
+            n = v.head.name
+            if n in ("Sin", "Cos", "Tan", "Atan") and not T.free_vars(v):
+                tconsts.add(to_str(simplify(v)))
+            stack.extend(v.args)      # 深入找嵌套常数（如 e^{πx} 里的 π）
+    if not names and not tconsts:
+        return ""
+    parts = []
+    if names:
+        parts.append("named constants {" + ",".join(names) + "}")
+    if tconsts:
+        parts.append("transcendent terms {"
+                     + ",".join(sorted(tconsts)) + "}")
+    return (" [constant problem: " + "; ".join(parts)
+            + " outside exact coefficient domains; zero-equivalence "
+            "undecidable in general (Richardson); partial unlock via "
+            "M5.6#1 parametrization]")
+
+
+# ---------------------------------------------------------------------------
+# M5.3.2 出口实化切片二：log 配对（Laurent 共轭自反分解）
+#
+# 塔答案中的 Log(u)，u 为单一虚频率指数多项式（如 1+e^{−2ix}）：替换
+# z = e^{γx} 得 Laurent 多项式 L(z)；若系数满足共轭自反性
+# cₙ = conj(c_{d+m−n})，则 L(e^{γx}) = e^{sγx}·Θ(x)，Θ 为实三角多项式
+# ——log u 精确重写为 s·γ·x + log Θ（差常数不影响原函数；整体出口
+# 经 verify 背书后才接受，失败保留复形态）。tan 类由此出真实形态。
+# --------------------------------------------------------------------
+
+
+def _lin_exp_freq(tt, x):
+    """Exp 参数 tt -> 频率 γ（常数项 × x 的 γ），非该形态返回 None。
+
+    保留名 i（虚单位）不算自由变量——塔内复指数系数天然含它。
+    """
+    fv = T.free_vars(tt) - {S("i")}
+    if fv != {x}:
+        return None
+    # γ = tt / x：用 RatFunc 除法取常数商
+    from cas.ratfunc import RatFunc
+    try:
+        rf = RatFunc.from_term(tt, (x,)) / RatFunc.from_term(x, (x,))
+    except Exception:
+        return None
+    if not rf.is_const():
+        return None
+    cv = rf.const_val()
+    if isinstance(cv, Fr):
+        cv = Ga(cv, Fr(0))
+    return cv
+
+
+def _realify_one_log(u, x, zsym):
+    """Log 参数 u -> (线性校正项, 实三角 Θ term) 或 None。"""
+    exps = []
+    stack = [u]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, Expr) and getattr(v, "head", None) is not None:
+            if v.head.name == "Exp" and len(v.args) == 1:
+                exps.append(v)
+                continue
+            stack.extend(v.args)
+    if not exps:
+        return None
+    freqs = {}
+    for e_ in exps:
+        g = _lin_exp_freq(e_.args[0], x)
+        if g is None or g.im == 0:
+            return None          # 本切片仅纯虚频率
+        freqs[e_] = True
+    gamma = _lin_exp_freq(exps[0].args[0], x)
+    usub = T.subst(u, {e_: zsym for e_ in exps})
+    if x in T.free_vars(usub):
+        return None              # Log 参数含裸 x——本切片不处理
+    try:
+        lp = Poly.from_term(usub, (zsym,))
+    except PolyError:
+        return None
+    monos = {k[0]: c for k, c in lp.monos.items()}
+    degs = [n for n, c in monos.items() if c != 0]
+    if not degs:
+        return None
+    d, m = max(degs), min(degs)
+    tot = d + m
+    if tot % 2 != 0:
+        return None
+    s = tot // 2
+
+    def coef(n):
+        return monos.get(n, Fr(0))
+
+    for n in range(m, d + 1):
+        cn, cm = coef(n), coef(tot - n)
+        if isinstance(cn, Fr):
+            cn = Ga(cn, Fr(0))
+        if isinstance(cm, Fr):
+            cm = Ga(cm, Fr(0))
+        if cn != cm.conjugate():
+            return None
+    # Θ = z^{-s} L(z)：Hermitian 对称 -> 实三角组合
+    beta = gamma.im           # z = e^{i·beta·x}
+    parts = []
+    cs = coef(s)
+    if isinstance(cs, Fr):
+        cs = Ga(cs, Fr(0))
+    if cs.re != 0:
+        parts.append(N(cs.re))
+    hmax = max(abs(d - s), abs(s - m))
+    for k in range(1, hmax + 1):
+        bk = coef(s + k)
+        if isinstance(bk, Fr):
+            bk = Ga(bk, Fr(0))
+        if bk == Ga(0, 0):
+            continue
+        re2 = bk.re + bk.re
+        im2 = bk.im + bk.im
+        # 三角参数折正（cos 偶 / sin 奇吸收符号）
+        a_ = Fr(k) * beta
+        argn = T.times(N(-a_ if a_ < 0 else a_), x)
+        if re2 != 0:
+            parts.append(T.times(N(re2), T.fn("Cos")(argn)))
+        if im2 != 0:
+            base = im2 if a_ < 0 else (-im2)
+            parts.append(T.times(N(base), T.fn("Sin")(argn)))
+    theta = T.mk(S("Plus"), tuple(parts)) if len(parts) > 1 \
+        else (parts[0] if parts else N(Fr(1)))
+    # 线性项 = s·γ·x（γ 经 Ga.to_term 以 i 精确重建）
+    lin = T.times(N(Fr(s)), T.times(gamma.to_term(), x))
+    return lin, theta
+
+
+def _realify_log_pairing(expr, x):
+    """出口扫描：逐个尝试 Log 配对实化；无变化返回 None。"""
+    logs = []
+    stack = [expr]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, Expr) and getattr(v, "head", None) is not None:
+            if v.head.name == "Log" and len(v.args) == 1:
+                logs.append(v)
+                continue
+            stack.extend(v.args)
+    subs = {}
+    zid = [0]
+    for lg in logs:
+        zid[0] += 1
+        zs = S(f"_rz{zid[0]}")
+        r = _realify_one_log(lg.args[0], x, zs)
+        if r is None:
+            continue
+        lin, theta = r
+        subs[lg] = T.plus(lin, T.fn("Log")(theta))
+    if not subs:
+        return None
+    return T.subst(expr, subs)
+
+
 def _neg_term(tt):
     return T.mk(S("Times"), (N(-1), tt))
 
@@ -423,10 +604,13 @@ def build_extension(f, x):
             full_subs[T.mk(S("Exp"), (arg,))] = T.pw(tv, N(m)) if m != 1 else tv
     g = T.subst(f, full_subs) if full_subs else f
 
-    # 残留检查：漏网的 Exp/Log = 塔覆盖不全（诚实拒绝）
+    # 残留检查：漏网的 Exp/Log = 塔覆盖不全（诚实拒绝；含命名/超越
+    # 常数时附 Richardson 卡点提示）
     rexp, rlog = _collect_exts(g)
     if rexp or rlog:
-        raise RischUnsupported("expression not covered by the differential extension")
+        raise RischUnsupported(
+            "expression not covered by the differential extension"
+            + _const_blockage_hint(f))
 
     try:
         fa, fd = _frac_from_term(g, de.vars)
@@ -1425,6 +1609,19 @@ def integrate_exp_tower(f, x):
         expr = T.subst(expr, subs)
     if backsub:
         expr = T.subst(expr, backsub)
+    # M5.3.2 出口实化切片二：log 配对（候选重写先规范化再整体
+    # verify 背书，失败保留复形态——诚实纪律）
+    try:
+        from cas.simplify import simplify as _simp, expand as _exp
+        e2 = _realify_log_pairing(expr, x)
+        if e2 is not None:
+            # expand 先分配（mk 不做 Times-over-Plus），环规范折叠线性项
+            e2 = _simp(_exp(e2))
+            from cas.diff import verify as _vf
+            if _vf(e2, x, f) == "VERIFIED":
+                expr = e2
+    except Exception:
+        pass
     return expr, de
 
 

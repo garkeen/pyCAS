@@ -482,8 +482,8 @@ def integrate(t, x):
         F, _de = _risch(t, x)
     except RischNonElementary:
         raise   # 证明性拒答（session 层专属输出，区别于 unsupported）
-    except RischUnsupported:
-        raise PolyError("unsupported integrand")
+    except RischUnsupported as _ru:
+        raise PolyError(f"unsupported integrand: {_ru}")
     from cas.diff import verify as _verify
 
     ok = _verify(F, x, t) == "VERIFIED"
