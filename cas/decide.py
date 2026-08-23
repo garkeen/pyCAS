@@ -856,9 +856,26 @@ def eval_guard(guard, sub, ctx):
     return r.value
 
 
+# 判等阶段注册表（Step 4：管线分派从硬编码变为声明式数据）。
+# 阶段契约：run(r, a, b, ctx) -> T3 结论 | None（无结论则继续下阶段）。
+# 内置序 = 原硬编码顺序；外部（如 diff.py 的塔零判定/分数幂合并）
+# 经 register_eq_stage 追加——三处重复分派的最后一份消除。
+_EQ_STAGES = []
+
+
+def register_eq_stage(name, run, prepend=False):
+    entry = (name, run)
+    if prepend:
+        _EQ_STAGES.insert(0, entry)
+    else:
+        _EQ_STAGES.append(entry)
+    return name
+
+
 def equivalent(a, b, ctx=None, budget=100000):
-    """统一判等管线（设计调研见 docs/notes.md §2.2）：指针 -> 环层归零 -> 三角层 -> 账本/多项式片段
-    -> 数值采样 PROBABLE -> 诚实 UNKNOWN。"""
+    """统一判等管线（设计调研见 docs/notes.md §2.2）：指针 -> 数值常量
+    -> 环层归零 -> 注册阶段序列（三角层 / 账本·多项式 / 数值采样…）
+    -> 诚实 UNKNOWN。"""
     from cas.simplify import simplify
     from cas.context import Context
 
@@ -869,26 +886,45 @@ def equivalent(a, b, ctx=None, budget=100000):
     r = simplify(T.plus(a, T.neg(b)), budget)
     if r is T.ZERO:
         return T3.YES
-    # 三角层：单变量三角多项式多角度基归零（层内决策过程）
-    vs = sorted(T.free_vars(r), key=lambda s: s.name)
-    if len(vs) == 1:
-        from cas.trig import trig_reduce
-
-        if trig_reduce(r, vs[0]) is T.ZERO:
-            return T3.YES
     if ctx is None:
         ctx = Context()
+    for _name, run in _EQ_STAGES:
+        try:
+            d = run(r, a, b, ctx)
+        except Exception:
+            continue          # 阶段内部失败 = 无结论（绝不污染判等）
+        if d is not None and d is not T3.UNKNOWN:
+            return d
+    return T3.UNKNOWN
+
+
+def _stage_trig(r, a, b, ctx):
+    # 三角层：单变量三角多项式多角度基归零（层内决策过程）
+    vs = sorted(T.free_vars(r), key=lambda s: s.name)
+    if len(vs) != 1:
+        return None
+    from cas.trig import trig_reduce
+    return T3.YES if trig_reduce(r, vs[0]) is T.ZERO else None
+
+
+def _stage_decide(r, a, b, ctx):
     d = decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
-    if d is not T3.UNKNOWN:
-        return d
+    return None if d is T3.UNKNOWN else d
+
+
+def _stage_sampling(r, a, b, ctx):
     # 数值采样 PROBABLE 通道（探测器，不是证明；否证必须走符号通道）
-    # 域感知：公共定义域（dom_condition(a) ∪ dom_condition(b)）内采样，
-    # 避免在定义域边界/外部误判（域外点不参与）。
+    # 域感知：公共定义域内采样，避免边界/域外误判。
     from cas.evalnum import sample_agrees
     from cas.domain import dom_condition
 
     allv = sorted(T.free_vars(a) | T.free_vars(b), key=lambda s: s.name)
     dom = list(dom_condition(a)) + list(dom_condition(b))
-    if sample_agrees(a, b, allv, dom=dom):
-        return T3.PROBABLE
-    return T3.UNKNOWN
+    return T3.PROBABLE if sample_agrees(a, b, allv, dom=dom) else T3.UNKNOWN
+
+
+register_eq_stage("trig_basis", _stage_trig)
+register_eq_stage("ledger_decide", _stage_decide)
+register_eq_stage("sampling", _stage_sampling)
+
+

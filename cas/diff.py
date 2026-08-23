@@ -99,3 +99,64 @@ def verify(F, x, f, budget=100000, principal=None):
     if r is T3.PROBABLE:
         return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"
+
+
+# ---------------------------------------------------------------------------
+# 判等阶段注册（Step 4 收官）：塔零判定与分数幂合并进入 equivalent()
+# 的声明式阶段序列——三处重复分派的最后一份消除。
+# ---------------------------------------------------------------------------
+
+
+def _eq_has_elfold(t):
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        h = getattr(u, "head", None)
+        if h is None:
+            continue
+        if h.name in ("Exp", "Log"):
+            return True
+        stack.extend(getattr(u, "args", ()) or ())
+    return False
+
+
+def _eq_single_var(r):
+    from cas import term as T
+    vs = T.free_vars(r)
+    return vs[0] if len(vs) == 1 else None
+
+
+def _eq_stage_tower(r, a, b, ctx):
+    """形式塔零判定：两侧投影进同一核分式做精确零判定（Risch 结构定理）。"""
+    from cas import term as T
+    from cas.decide import T3
+    if not _eq_has_elfold(r):
+        return None
+    xv = _eq_single_var(r)
+    if xv is None:
+        return None
+    return T3.YES if _tower_zero(r, T.ZERO, xv) else None
+
+
+def _eq_stage_ratpow(r, a, b, ctx):
+    """分数幂合并（principal 承诺门控，P4 语义）。"""
+    from cas import term as T
+    from cas.decide import T3
+    from cas.structure import principal_branch, _merge_ratpow
+    if not principal_branch():
+        return None
+    m = _merge_ratpow(r)
+    if m is r:
+        return None
+    if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
+        return T3.YES
+    xv = _eq_single_var(m)
+    if xv is None:
+        return None
+    return T3.YES if _tower_zero(m, T.ZERO, xv) else None
+
+
+from cas.decide import register_eq_stage
+
+register_eq_stage("tower_zero", _eq_stage_tower, prepend=True)
+register_eq_stage("ratpow_merge", _eq_stage_ratpow, prepend=True)
