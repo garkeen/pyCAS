@@ -524,6 +524,7 @@ def _fgcd(a, b):
     （约分会回调本函数，互递归；结果单位元差异不影响整除语义）。"""
     from cas.ratfunc import RatFunc
 
+    print('_FGCD called, a.vars:', a.vars, 'b.vars:', b.vars, flush=True)
     with RatFunc.raw_norm():
 
         vs = a.vars
@@ -558,6 +559,8 @@ def _fgcd(a, b):
         r1 = split_to_rf(b)
 
         while any(not c.is_zero() for c in r1.values()):
+            print('R0:', {e: (str(c.p.monos), str(c.q.monos)) for e, c in r0.items() if not c.is_zero()})
+            print('R1:', {e: (str(c.p.monos), str(c.q.monos)) for e, c in r1.items() if not c.is_zero()})
             r1 = rf_monic(r1)
             if not r1:
                 break
