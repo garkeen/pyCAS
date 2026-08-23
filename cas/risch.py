@@ -18,7 +18,7 @@ from math import gcd
 
 from cas import term as T
 from cas.term import S, N, Expr, Sym, Const
-from cas.poly import Poly
+from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
 
@@ -438,6 +438,30 @@ def trigs_to_exp(t):
     return t
 
 
+def _as_real_rat(q):
+    """q -> 纯实有理数 Fr（可作指数幂次归组），否则 None。
+
+    域感知：Fr/int 直取；Ga 仅实部纯 ℚ 时取 re；SymRat 仅常数且
+    两端纯 ℚ 时相除。参数依赖比值（如 γ 与 2γ 的 2）经常数退化
+    自然到达，真参数比（γ/δ 类）诚实 None——独立基处理。
+    """
+    if isinstance(q, Fr):
+        return q
+    if isinstance(q, int):
+        return Fr(q)
+    if isinstance(q, Ga):
+        if q.is_real() and isinstance(q.re, Fr):
+            return q.re
+        return None
+    if isinstance(q, SymRat):
+        if q.num.is_const() and q.den.is_const():
+            n_, d_ = q.num.const_val(), q.den.const_val()
+            if isinstance(n_, Fr) and isinstance(d_, Fr):
+                return n_ / d_
+        return None
+    return None
+
+
 def _group_integer_powers(args):
     """Fr 倍数关系归组（sympy integer_powers 同款）。
 
@@ -451,12 +475,10 @@ def _group_integer_powers(args):
             q = _ratio(a, base)
             if q is None:
                 continue
-            if isinstance(q, Ga):
-                # ℚ(i) 比值：仅实有理数可作幂次归组（i 倍数 = 独立基）
-                if not q.is_real():
-                    continue
-                q = q.re
-            members.append((a, q))
+            qr = _as_real_rat(q)
+            if qr is None:
+                continue      # 非实有理倍数（i 倍/参数比）= 独立基
+            members.append((a, qr))
             placed = True
             break
         if not placed:

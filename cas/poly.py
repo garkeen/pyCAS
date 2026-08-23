@@ -650,7 +650,11 @@ def _parts(x):
         return x.num, x.den
     if isinstance(x, (Fr, int)):
         return Poly((), {(): Fr(x)}), Poly.one(())
-    # 命名常数（π/e/γ）等不在任何已支持系数域——诚实拒绝而非崩溃
+    if hasattr(x, "norm"):
+        # Ga（ℚ(i)）常量：升入混合参数多项式轨道（ℚ(i,params)，
+        # M5.6#1）——叶系数 Ga 的 Poly 分式，_mk_rat 混合叶跳过规范化
+        return Poly((), {(): x}), Poly.one(())
+    # 其余（命名常数 Const 等）不在任何已支持系数域——诚实拒绝
     from cas.errors import PolyError
     raise PolyError(f"coefficient outside supported domains: {x!r}")
 
@@ -684,13 +688,29 @@ def _unify_vs(p, q):
     return _extend(p, vs), _extend(q, vs)
 
 
+def _all_fr_leaves(p):
+    """Poly 叶系数是否全为 ℚ（int/Fr）。"""
+    for v in p.monos.values():
+        if isinstance(v, (SymRat, Fr, int)):
+            continue
+        return False
+    return True
+
+
 def _mk_rat(num, den):
-    """规范：约分 + 分母符号规范；常数退化回 Fr。"""
+    """规范：约分 + 分母符号规范；常数退化回 Fr。
+
+    ℚ(i,params) 混合叶（Ga×SymRat 轨道，M5.6#1 扩展）：content-gcd
+    与符号规范无 ℚ-content 概念——跳过规范化（值恒等不受影响，
+    is_zero/inv 仍精确；仅同值异形不保证 ==）。纯 ℚ 叶走既有规范。
+    """
     num, den = _unify_vs(num, den)
     if num.is_zero():
         return Fr(0)
     if num.is_const() and den.is_const():
         return num.const_val() / den.const_val()
+    if not (_all_fr_leaves(num) and _all_fr_leaves(den)):
+        return SymRat(num, den)
     g = mgcd(num, den)
     if not g.is_zero() and not (g.is_const() and abs(g.const_val()) == 1):
         num = div_exact(num, g)

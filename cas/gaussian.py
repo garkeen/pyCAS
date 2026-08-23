@@ -17,13 +17,19 @@ from cas.term import S, N
 
 
 class Ga:
-    """a + b·i（Gaussian rational）。"""
+    """a + b·i（高斯有理数；分量泛型——ℚ(i,params) 混合轨道时分量
+    为 SymRat，M5.6#1）。"""
 
     __slots__ = ("re", "im")
 
     def __init__(self, re, im=0):
-        self.re = Fr(re)
-        self.im = Fr(im)
+        self.re = self._comp(re)
+        self.im = self._comp(im)
+
+    @staticmethod
+    def _comp(v):
+        """分量域元素化：int/Fr -> Fr；SymRat 等已是一阶域元素原样。"""
+        return Fr(v) if isinstance(v, (int, Fr)) else v
 
     # -- 构造 --------------------------------------------------------------
     @classmethod
@@ -120,12 +126,20 @@ class Ga:
 
     # -- 出口 --------------------------------------------------------------
     def to_term(self):
-        """a + b·i 的 term 形态（规范：去零项、系数归一）。"""
+        """a + b·i 的 term 形态（规范：去零项、系数归一；SymRat 分量
+        经其自身 to_term 出口——ℚ(i,params) 混合轨道）。"""
+        from cas.poly import SymRat
+
+        def _ct(v):
+            if isinstance(v, SymRat):
+                return v.to_term()
+            return N(v)
+
         parts = []
         if self.re != 0:
-            parts.append(N(self.re))
+            parts.append(_ct(self.re))
         if self.im != 0:
-            ic = T.times(N(self.im), T.S("i")) if self.im != 1 \
+            ic = T.times(_ct(self.im), T.S("i")) if self.im != 1 \
                 else T.S("i")
             parts.append(ic)
         if not parts:

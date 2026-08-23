@@ -79,6 +79,7 @@ register(FunctionSpec(
     deriv=lambda a: T.plus(ONE, T.pw(T.tan(a), N(2))),
     special={ZERO: ZERO, PI: ZERO, _QUARTER_PI: ONE, T.neg(_QUARTER_PI): MONE},
     numeric=math.tan,
+    anti=lambda a: T.neg(T.fn("Log")(T.fn("Cos")(a))),
     inv="Atan",
     injective=False,
     period=T.PI,
@@ -157,6 +158,7 @@ register(FunctionSpec(
     deriv=lambda a: T.plus(ONE, T.neg(T.pw(T.tanh(a), N(2)))),
     special={ZERO: ZERO},
     numeric=math.tanh,
+    anti=lambda a: T.fn("Log")(T.fn("Cosh")(a)),
     injective=True,
 ))
 

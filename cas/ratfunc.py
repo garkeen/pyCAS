@@ -41,10 +41,18 @@ class RatFunc:
             self.p = Poly.zero(p.vars)
             self.q = Poly.one(p.vars)
             return
+        all_fr = (all(isinstance(v, Fr) for v in _iter_leaf_coefs(p))
+                  and all(isinstance(v, Fr) for v in _iter_leaf_coefs(q)))
         if len(p.vars) == 1:
-            g = ugcd(p, q)
-            p2 = p.udivmod(g)[0] if not g.is_zero() else p
-            q2 = q.udivmod(g)[0] if not g.is_zero() else q
+            # 域/混合系数（Ga、SymRat 混合叶，ℚ(i,params) 轨道）时
+            # ugcd 的 content 算术无定义——跳过 gcd 约化（分数不约，
+            # 正确性不受影响）
+            if all_fr:
+                g = ugcd(p, q)
+                p2 = p.udivmod(g)[0] if not g.is_zero() else p
+                q2 = q.udivmod(g)[0] if not g.is_zero() else q
+            else:
+                p2, q2 = p, q
         else:
             # 多变量：mgcd + 精确除法；域系数（Ga 等）时 content/符号
             # 规范无定义——跳过 gcd 约化（分数不约，正确性不受影响，
