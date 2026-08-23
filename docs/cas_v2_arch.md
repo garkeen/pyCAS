@@ -251,9 +251,10 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   → M5.3 三角经复指数 ✓（trigs_to_exp 重写 + exp 视角 special 分母的
   Laurent 对角下降；tan/eˣsin/eˣcos VERIFIED、sin(x)/x proved；
   复形态出口实化回 sin/cos 待做）
-  → **M5.2c-iii** prde 判定件移植 ✓（is_logderiv_radical/_pld_heu/
-  limited_integrate 探测版/S-b lam=0 下降；守卫换精确代数相关性判定、
-  嵌套塔解锁、√log x 拒绝、∫x^x dx proved）
+  → **M5.2c-iii** prde 判定件移植 ✓（is_logderiv_radical/_pld_solve 三态参数化
+  判定/limited_integrate 探测版/S-b lam=0 下降；守卫换精确代数相关性判定、
+  嵌套塔解锁、√log x 拒绝、∫x^x dx proved；收官批：heu 退役换完备化
+  三态版——零空间线性代数+结构定理下降+基级兜底，'und' 上抛绝不伪装证明）
   → **M5.3.1 ℚ(i) 积分链收尾 ✓**（40595e2：共轭分母展开实虚拆分归约
   ℚ 双通道——q·q̄ 自共轭⟹实分母，分子劈 f+i·h 各走全 ℚ 链；
   Const-IU 内建 Ga 修用户 'i' 入塔；x+sin x 类 k=0 分量解锁）

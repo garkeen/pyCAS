@@ -2253,18 +2253,15 @@ def _normal_part(p, der_fn, zero):
 
 
 def _make_der_fn(de, jv):
-    """视图层 jv 的 K[t]-导子 der1：D(Σcᵢτⁱ)。jv==0 时 D=d/dx、dk=1。"""
+    """视图层 jv 的 K[t]-导子 der1：D(Σcᵢτⁱ)。jv==0 时 D=d/dx、dk=1。
+
+    基级系数为纯常数（子变量集空），自身导数项恒零——只保留
+    i·cᵢτ^{i-1} 移位项（旧版对常数 RatFunc 求 levels[0]-导会炸）。"""
     if jv == 0:
         def der_fn(cs):
             out = []
-            nn = len(cs)
-            for i in range(nn):
-                a = cs[i]
-                term = a.deriv(de.levels[0]) if not a.is_zero() \
-                    else a * Fr(0)
-                if i + 1 < nn and not cs[i + 1].is_zero():
-                    term = term + cs[i + 1] * Fr(i + 1)
-                out.append(term)
+            for i in range(1, len(cs)):
+                out.append(cs[i] * Fr(i))
             return _u_trim(out)
         return der_fn
     return lambda cs: _derive_ut(cs, de, jv)
@@ -2340,15 +2337,27 @@ def _dk_pair(de, jv):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# M5.2c-iii #1：对数导数-根式判定（sympy prde.is_log_deriv_k_t_radical_in_field
-# + parametric_log_deriv_heu 忠实移植，非参数化特化到 ℚ(i) 常数域）。
+# M5.2c-iii #1：对数导数-根式判定（is_logderiv_radical + 参数化对数导数
+# 判定 _pld_solve，非参数化特化到 ℚ(i) 常数域）。
 #
 # 判定：∃n∈ℤ\{0}, u∈K*: n·f = D(u)/u ？返回 (n, u)|None。
 # 用途：(a) 塔构建守卫的精确代数相关性判定；(b) primitive db==da 界修正；
 #       (c) cancel_primitive 完整化的前置。
-# 结构：base/primitive/exp 三 case；exp 经 parametric 启发式（解出整数比
-# c1=m/n 后在低一层做 radical 判定——DecrementLevel 语义对应）；互递归
-# 层严格下降保证终止。出口全量精确验证 D(U)==N·f·U 兜底。
+# 结构：base/primitive/exp 三 case；exp 经参数化判定（解出整数比后在低
+# 一层做 radical 判定——DecrementLevel 语义对应）；互递归层严格下降保证
+# 终止。出口全量精确验证 D(U)==N·f·U 兜底。
+#
+# M5 收官批 #1（参数化对数导数完备化）：_pld_heu 启发式退役，换三态
+# _pld_solve——('ok',n,ms,v) / ('no',证明理由) / ('und',卡点)。关键升级：
+#   1. 系数约束统一为零空间线性代数（旧版单比值除法只能处理秩 1 且
+#      放弃高维候选）；
+#   2. 全 τ-free 目标的结构定理下降：exp 层 v=c·τ^j·u 分解，j 并入
+#      幂因子（旧版在此直接放弃——多级塔下例行动否，喂给塔守卫即成
+#      无证明放行依赖层，方向性隐患）；
+#   3. 基级 z-常数兜底：有界本原对枚举 + _ldrad_base 逐个精确验证
+#      （旧版 jl==0 一律拒答，扔掉已有的完备基级判定器）；
+#   4. 'und' 显式上抛 RischUnsupported——调用方保守处理，绝不把
+#      启发失败伪装成证明否定。
 # ---------------------------------------------------------------------------
 
 def _const_to_term(c):
@@ -2417,7 +2426,7 @@ def _ldrad_base(f_rf, de):
     a = _uni_strip(f_rf.p)
     b = _uni_strip(f_rf.q)
     if a.is_zero():
-        return 1, f_rf
+        return 1, RatFunc.one((xv,))
     if b.degree(xv) == 0:
         return None                    # 无极点：非常数 f 不可能是 dlog
     if a.degree(xv) >= b.degree(xv):
@@ -2470,15 +2479,24 @@ def _ldrad_base(f_rf, de):
     n = 1
     for _, _, dn_ in residueterms:
         n = _lcm3(n, dn_)
-    u = Poly.one((xv,))
+    # u = Π g^{n·c}：负指数残数进分母（对数导数的极点合法形态；
+    # 旧版一律乘分子，遇负残数 Poly 负幂直接炸——休眠 bug）
+    u_num = Poly.one((xv,))
+    u_den = Poly.one((xv,))
     for g, c, _dn in residueterms:
         ee = n * c
         if isinstance(ee, Ga):
             if ee.im != 0 or ee.re.denominator != 1:
                 return None
-            ee = int(ee.re)
-        u = u * g ** int(ee)
-    return _ld_finish(n, RatFunc(u, Poly.one((xv,))), f_rf, de)
+            ee = ee.re
+        if not isinstance(ee, int) and ee.denominator != 1:
+            return None
+        ee = int(ee)
+        if ee >= 0:
+            u_num = u_num * g ** ee if ee > 0 else u_num
+        else:
+            u_den = u_den * g ** (-ee)
+    return _ld_finish(n, RatFunc(u_num, u_den), f_rf, de)
 
 
 def _term_within_field(val_t, de, jl):
@@ -2680,10 +2698,14 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
                              if EE < 0 else
                              RatFunc(Poly.one(allv), Poly.one(allv)))
                     return _ld_finish(nn, tau_u, f_rf, de)
-        rec = _pld_heu(P_rf, eta, de, jv - 1, depth + 1)
-        if rec is None:
-            return None
-        n_l, m_l, v = rec
+        rec = _pld_solve(P_rf, [eta], de, jv - 1, depth + 1)
+        if rec[0] == "no":
+            return None          # 子判定完备证明否定
+        if rec[0] == "und":
+            raise RischUnsupported(
+                "parametric log derivative undecided: " + str(rec[1]))
+        _n2, n_l, ms_l, v = rec
+        m_l = ms_l[0]
         N = _lcm2(n_l, dens_lcm())
         mm = N // n_l
         uacc = v ** mm
@@ -2722,121 +2744,417 @@ def _ld_finish(N, U, f_rf, de):
     return N, U
 
 
-def _pld_heu(f_rf, w_rf, de, jl, depth=0):
-    """参数化启发式（sympy parametric_log_deriv_heu 移植）：
-    解 n·f = D(v)/v + m·w（n,m∈ℤ, v∈levels[:jl+1]*）。
-    返回 (n, m, v)|None。f,w ∈ levels[:jl+1]，视图 τ'=levels[jl]。"""
+def _poly_dep(p, v):
+    """Poly 对变量 v 是否实际依赖（指数非零；成员≠依赖）。"""
+    try:
+        j = p.vars.index(v)
+    except ValueError:
+        return False
+    return any(k[j] != 0 for k in p.monos)
+
+
+def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
+    """参数化对数导数判定（三态，M5 收官批 #1 完备化版）：
+
+    解 n·f = D(v)/v + Σ mᵢ·wᵢ（n,mᵢ∈ℤ, v∈levels[:jl+1]*）。
+
+    返回：
+      ('ok', n, ms, v)   ms 与 ws_rf 对齐；恒等式经出口精确验证
+      ('no', reason)     无解的机器证明（必要条件矛盾/唯一候选被
+                         低层完备判定否证）
+      ('und', reason)    当前理论不可判——调用方保守处理，绝不猜测
+
+    算法（Bronstein z-归约 + 结构定理下降）：
+      1. 全目标 τ-free => 本层无约束：exp 层按 v=c·τ^j·u 分解把 j 吸收
+         为幂因子后降层；primitive 层 τ-含量被迫平凡直接降层；基级落
+         通用路径。
+      2. 通用路径：多项式部分系数行（i>B 区，B=deg Dτ−1 上界）∪
+         z-余数行（z=special(l)·gcd(normal,D(normal))，l=分母 lcm）
+         联合零空间。dim 0 => 'no'；每个本原整候选递归低层验证。
+      3. z 常数且高区无行 => 'und'（中间层残数域约束，诚实放弃）；
+         基级 => 有界枚举兜底。
+    """
     from cas.ratfunc import RatFunc
 
-    if depth > 8:
-        return None
+    if depth > 12:
+        return "und", "depth exhausted"
     tp = de.levels[jl]
-    allv = tuple(de.levels[:jl + 1])
     sub2 = tuple(de.levels[:jl])
     zero = RatFunc.zero(sub2)
+    one_c = zero.one(zero.p.vars)
     der_fn = _make_der_fn(de, jl)
 
-    f_cs_n = _univar(f_rf.p, tp)
-    f_cs_d = _univar(f_rf.q, tp)
-    w_cs_n = _univar(w_rf.p, tp)
-    w_cs_d = _univar(w_rf.q, tp)
+    if f_rf.is_zero():
+        return "ok", 1, [0 for _ in ws_rf], \
+            RatFunc.one(tuple(de.levels[:jl + 1]))
+
+        # ---- 0b. 变量集收紧：投影到实际依赖的塔变量（冗余零指数维度
+    #         会让跨层递归的 RatFunc 算术 var-mismatch）----
+    used = set()
+    for pp in [f_rf.p, f_rf.q] + [c for w_ in ws_rf
+                                  for c in (w_.p, w_.q)]:
+        for kk in pp.monos:
+            for vi, ee in enumerate(kk):
+                if ee:
+                    used.add(pp.vars[vi])
+    order = tuple(v for v in de.levels[:jl + 1] if v in used)
+
+    def _proj(rf):
+        if rf.p.vars == order:
+            return rf
+
+        def _shrink(p):
+            ki = [p.vars.index(v) for v in order]
+            return Poly(order, {tuple(k[i] for i in ki): c
+                                for k, c in p.monos.items()})
+        return RatFunc(_shrink(rf.p), _shrink(rf.q))
+
+    f_rf = _proj(f_rf)
+    ws_rf = [_proj(w_) for w_ in ws_rf]
+
+    def _emb_full(v):
+        allv = tuple(de.levels[:jl + 1])
+        if v.p.vars == allv:
+            return v
+        return RatFunc(_embed(v.p, allv), _embed(v.q, allv))
+
+    # ---- 0. 目标归并：零目标丢弃；Ga 常数倍目标合并（系数相加，
+    #         恒等式等价；返回时按映射展开保持与调用方对齐）----
+    groups = []                      # [w_kept, [(orig_idx, scale)]]
+    for idx0, w0 in enumerate(ws_rf):
+        if w0.is_zero():
+            continue
+        placed = False
+        for g in groups:
+            cv0 = _rf_const_ga(w0 / g[0])
+            if cv0 is not None and cv0.im == 0:
+                g[1].append((idx0, cv0.re))
+                placed = True
+                break
+        if not placed:
+            groups.append([w0, [(idx0, Fr(1))]])
+    ws_m = [g[0] for g in groups]
+
+    def _expand(ms_kept):
+        # 首成员全担系数（其余置 0）：Σmᵢwᵢ = m_kept·w_kept 等价保持。
+        # 旧版逐成员重复分摊会把系数翻倍（假见证教训）
+        out = [Fr(0) for _ in ws_rf]
+        for g, mk in zip(groups, ms_kept):
+            oi0, sc0 = g[1][0]
+            out[oi0] = out[oi0] + mk / sc0
+        return out
+
+    def _pld_end_verify(n_v, ms_v, v_v):
+        """端到端精确验证 D(v)/v == n·f − Σm·w（下降路径也过闸）。"""
+        lhs = _tower_deriv_frac(v_v.p, v_v.q, de) / v_v
+        rhs = f_rf * n_v
+        for m_v, w_v in zip(ms_v, ws_rf):
+            rhs = rhs - w_v * m_v
+        if lhs.p.vars != rhs.p.vars:
+            rhs = RatFunc(_embed(rhs.p, lhs.p.vars),
+                          _embed(rhs.q, lhs.p.vars))
+        if not (lhs - rhs).p.is_zero():
+            raise RischUnsupported(
+                "internal: parametric log deriv descent witness failed "
+                "exact verify (bug, not honest refusal)")
+
+
+
+
+    f_free = not _poly_dep(f_rf.p, tp) and not _poly_dep(f_rf.q, tp)
+    ws_free = all(not _poly_dep(w.p, tp) and not _poly_dep(w.q, tp)
+                  for w in ws_m)
+
+    # ---- 1. 全 τ-free：结构定理下降 ----
+    if f_free and ws_free:
+        if jl == 0:
+            rec0 = _pld_base_pair(f_rf, list(ws_m), de)
+            if rec0[0] != "ok":
+                return rec0
+            ms_x = _expand(rec0[2])
+            v_x = _emb_full(rec0[3])
+            _pld_end_verify(rec0[1], ms_x, v_x)
+            return "ok", rec0[1], ms_x, v_x
+        if de.cases[jl] == "exp":
+            # v = c·τ^j·u ⟹ n·f = D(u)/u + Σm·w + j·η；追加 η 为目标，
+            # 返回后把该系数折进幂因子（D(τ^j)/τ^j = j·η 精确恒等）
+            rec = _pld_solve(f_rf, list(ws_m) + [de.ws[jl]],
+                             de, jl - 1, depth + 1)
+            if rec[0] != "ok":
+                return rec
+            _n, ms_full, v = rec[1], rec[2], rec[3]
+            own, j_extra = ms_full[:len(ws_m)], ms_full[len(ws_m):]
+            allv = tuple(de.levels[:jl + 1])
+            if v.p.vars != allv:
+                v = RatFunc(_embed(v.p, allv), _embed(v.q, allv))
+            j_eff = sum(j_extra)
+            if j_eff > 0:
+                v = v * RatFunc(Poly.mono(allv, tp, j_eff),
+                                Poly.one(allv))
+            elif j_eff < 0:
+                v = v / RatFunc(Poly.mono(allv, tp, -j_eff),
+                                Poly.one(allv))
+            ms_x = _expand(own)
+            v_x = _emb_full(v)
+            _pld_end_verify(_n, ms_x, v_x)
+            return "ok", _n, ms_x, v_x
+        rec = _pld_solve(f_rf, list(ws_m), de, jl - 1, depth + 1)
+        if rec[0] != "ok":
+            return rec
+        ms_x = _expand(rec[2])
+        v_x = _emb_full(rec[3])
+        _pld_end_verify(rec[1], ms_x, v_x)
+        return "ok", rec[1], ms_x, v_x
+
+    # ---- 2. 通用路径：系数行零空间 ----
+    k = len(ws_m)
+    f_n = _univar(f_rf.p, tp)
+    f_d = _univar(f_rf.q, tp)
+    ws_nd = [(_univar(w.p, tp), _univar(w.q, tp)) for w in ws_m]
+
+    def _coef(cs, i):
+        return cs[i] if i < len(cs) else zero
 
     dk_cs, _dkd = _dk_pair(de, jl)
-    dk_deg = _u_deg(dk_cs)
-    B = max(0, dk_deg - 1)
+    B = max(0, _u_deg(dk_cs) - 1)
 
-    p_part, _ = _u_divmod(f_cs_n, f_cs_d, zero)
-    q_part, _ = _u_divmod(w_cs_n, w_cs_d, zero)
-    C = max(_u_deg(p_part), _u_deg(q_part))
-    q_deg = _u_deg(q_part)
+    pparts = [_u_divmod(f_n, f_d, zero)[0]]
+    for n_, d_ in ws_nd:
+        pparts.append(_u_divmod(n_, d_, zero)[0])
+    C = max(_u_deg(q) for q in pparts)
 
-    c1 = None
-    if q_deg > B:
-        rat = None
-        ok = True
+    rows = []
+    if C > B:
         for i in range(B + 1, C + 1):
-            qi = q_part[i] if i < len(q_part) else zero
-            pi_ = p_part[i] if i < len(p_part) else zero
-            if qi.is_zero():
-                if not pi_.is_zero():
-                    ok = False
-                    break
-                continue
-            r_i = pi_ / qi
-            if rat is None:
-                rat = r_i
-            elif not (r_i - rat).p.is_zero():
-                ok = False
-                break
-        if not ok or rat is None:
-            return None
-        c1 = _rf_const_ga(rat)
-        if c1 is None or c1.im != 0:
-            return None
-    elif _u_deg(p_part) > B:
-        return None
+            rows.append([_coef(pparts[0], i)] +
+                        [_coef(pparts[j + 1], i) * Fr(-1)
+                         for j in range(k)])
+
+    # l = 分母 monic lcm；z = special(l)·gcd(normal(l), D(normal(l)))
+    dens = [f_d] + [d_ for _, d_ in ws_nd]
+    l_cs = None
+    for d_ in dens:
+        dm = _u_divmod(d_, [_u_trim(list(d_))[-1]], zero)[0]
+        if l_cs is None:
+            l_cs = dm
+        else:
+            g2 = _u_gcd(l_cs, dm, zero)
+            l_cs = _u_mul(l_cs, _u_divmod(dm, g2, zero)[0], zero)
+    ln_, ls_ = _split_ns(l_cs, der_fn, zero)
+    z_const_case = False
+    if _u_is_zero(ln_):
+        z_const_case = True
     else:
-        # l = lcm(monic(f_den), monic(w_den))；z = special(l)·gcd(normal, normal')
-        fdm = _u_divmod(f_cs_d,
-                        [_u_trim(list(f_cs_d))[-1]], zero)[0]
-        wdm = _u_divmod(w_cs_d,
-                        [_u_trim(list(w_cs_d))[-1]], zero)[0]
-        g_ = _u_gcd(fdm, wdm, zero)
-        l_cs = _u_mul(fdm, _u_divmod(wdm, g_, zero)[0], zero)
-        ln_, ls_ = _split_ns(l_cs, der_fn, zero)
-        if _u_is_zero(ln_):
-            return None
         gg = _u_gcd(ln_, der_fn(ln_), zero)
         z_cs = _u_mul(ls_, gg, zero)
-        if _u_deg(_u_formal_deriv(z_cs)) < 0 and _u_deg(z_cs) <= 0:
-            return None          # z 无 τ'：需结构定理（诚实放弃）
-        lf = _u_mul(f_cs_n,
-                    _u_divmod(l_cs, f_cs_d, zero)[0], zero)
-        lw = _u_mul(w_cs_n,
-                    _u_divmod(l_cs, w_cs_d, zero)[0], zero)
-        _q1, r1 = _u_divmod(lf, z_cs, zero)
-        _q2, r2 = _u_divmod(lw, z_cs, zero)
-        zdeg = max(len(z_cs) - 1, 1)
-        rat = None
-        ok = True
-        for i in range(zdeg):
-            ri1 = r1[i] if i < len(r1) else zero
-            ri2 = r2[i] if i < len(r2) else zero
-            if ri2.is_zero():
-                if not ri1.is_zero():
-                    ok = False
-                    break
+        if _u_deg(z_cs) < 1:
+            z_const_case = True
+        else:
+            lfs = [_u_mul(f_n, _u_divmod(l_cs, f_d, zero)[0], zero)]
+            for n_, d_ in ws_nd:
+                lfs.append(_u_mul(n_, _u_divmod(l_cs, d_, zero)[0], zero))
+            rems = [_u_divmod(h_, z_cs, zero)[1] for h_ in lfs]
+            zdeg = len(_u_trim(list(z_cs))) - 1
+            for i in range(max(len(r) for r in rems)):
+                rows.append([_coef(rems[0], i)] +
+                            [_coef(rems[j + 1], i) * Fr(-1)
+                             for j in range(k)])
+
+    if not rows:
+        if jl == 0:
+            rec0 = _pld_base_pair(f_rf, list(ws_m), de)
+            if rec0[0] != "ok":
+                return rec0
+            ms_x = _expand(rec0[2])
+            v_x = _emb_full(rec0[3])
+            _pld_end_verify(rec0[1], ms_x, v_x)
+            return "ok", rec0[1], ms_x, v_x
+        return "und", "no constraints at level (z constant)"
+
+    basis = _rf_nullspace(rows, k + 1, zero, one_c)
+
+    if not basis:
+        return "no", "coefficient null space empty (necessary " \
+                      "conditions contradictory)"
+
+    # 候选枚举：dim 1 直接取；dim ≥2 小系数组合封顶（超限诚实 und）
+    cands = []
+    if len(basis) == 1:
+        cands.append(basis[0])
+    else:
+        from itertools import product as _iproduct
+        small = [-2, -1, 0, 1, 2]
+        for combo in _iproduct(small, repeat=len(basis)):
+            if all(c_ == 0 for c_ in combo):
                 continue
-            rr = ri1 / ri2
-            if rat is None:
-                rat = rr
-            elif not (rr - rat).p.is_zero():
-                ok = False
+            vec = None
+            for c_, bvec in zip(combo, basis):
+                if c_ == 0:
+                    continue
+                scaled = [e * Fr(c_) for e in bvec]
+                vec = scaled if vec is None else \
+                    [a + b for a, b in zip(vec, scaled)]
+            cands.append(vec)
+            if len(cands) >= 24:
                 break
-        if not ok or rat is None:
-            return None
-        c1 = _rf_const_ga(rat)
-        if c1 is None or c1.im != 0:
-            return None
+        if len(basis) > 3 and len(cands) >= 24:
+            return "und", "null space dimension too large"
 
-    # c1 = M/N（有理数）
-    cv = c1
-    den = _lcm2(cv.re.denominator, cv.im.denominator)
-    int((cv.re * den))
-    Nn = den
-    if cv.im != 0:
-        return None
-    M = int(cv.re * Nn)
+    allv = tuple(de.levels[:jl + 1])
+    saw_alive = False
+    for vec in cands:
+        ints = _ga_vec_to_ints(vec)
+        if ints is None:
+            saw_alive = True          # 非整数常数向量：不可判死也不可用
+            continue
+        n_i = ints[0]
+        if n_i <= 0:
+            ints = [-v2 for v2 in ints]
+            n_i = -n_i
+        if n_i == 0:
+            continue                  # 全零或 n=0：非正规化解
+        ms_i = ints[1:]
+        h = f_rf * n_i
+        for m_j, w_j in zip(ms_i, ws_m):
+            h = h - w_j * m_j
+        # 上层 τ 残留 => 恒等式两端 τ-含量必不匹配（RHS D(v)/v 对
+        # 子塔 v 无本层含量）=> 此候选证明性判死，绝不流向下层
+        if _poly_dep(h.p, tp) or _poly_dep(h.q, tp):
+            continue
+        if h.is_zero():
+            # 平凡恒等：v = 1
+            ms_x = _expand(ms_i)
+            v_x = RatFunc.one(tuple(de.levels[:jl + 1]))
+            _pld_end_verify(n_i, ms_x, v_x)
+            return "ok", n_i, ms_x, v_x
+        try:
+            if jl == 0:
+                rad = _ldrad_base(h, de)
+            else:
+                rad = _is_logderiv_radical(h, de, jl - 1, depth + 1)
+        except RischUnsupported as _ru:
+            return "und", str(_ru)
+        except Exception:
+            rad = None                # 该候选证伪/不可判——继续其余
+        if rad is None:
+            continue                  # 此比例证明无解
+        saw_alive = True
+        Qn, u_v = rad
+        v_fin = u_v
+        if v_fin.p.vars != h.p.vars:
+            v_fin = RatFunc(_embed(v_fin.p, h.p.vars),
+                            _embed(v_fin.q, h.p.vars))
+        # 出口精确验证：D(v)/(v·Q) == h（内部错误绝不静默）
+        DU = _tower_deriv_frac(v_fin.p, v_fin.q, de)
+        lhs = DU / (v_fin * Fr(Qn))
+        if not (lhs - h).p.is_zero():
+            raise RischUnsupported(
+                "internal: parametric log deriv witness failed exact "
+                "verify (bug, not honest refusal)")
+        ms_x = _expand([Qn * m_j for m_j in ms_i])
+        v_x = _emb_full(v_fin)
+        return "ok", Qn * n_i, ms_x, v_x
+    if saw_alive:
+        return "und", "candidates alive but unverifiable"
+    return "no", "all projective candidates proved dead"
 
-    # h = N·f − M·w 在更低层做 radical 判定（DecrementLevel 语义）
-    h = f_rf * Nn - w_rf * M
-    if jl == 0:
-        return None                 # 无更低层承载（ℚ(i)(x) 内非平凡参数化）
-    rad = _is_logderiv_radical(h, de, jl - 1, depth + 1)
-    if rad is None:
+
+def _ga_vec_to_ints(vec):
+    """Ga 常数向量 -> 本原整向量 | None（含非常数/非有理分量）。"""
+    gs = []
+    for e in vec:
+        g = _rf_const_ga(e)
+        if g is None:
+            return None
+        gs.append(g)
+    den = 1
+    for g in gs:
+        den = _lcm2(den, _ga_den(g))
+    ints = []
+    for g in gs:
+        val = g * den
+        if val.im != 0 or val.re.denominator != 1:
+            return None
+        ints.append(int(val.re))
+    from math import gcd as _g2
+    acc = 0
+    for v2 in ints:
+        acc = _g2(acc, abs(v2))
+    if acc == 0:
         return None
-    Qn, v = rad
-    return Qn * Nn, Qn * M, v
+    return [v2 // acc for v2 in ints]
+
+
+def _rf_nullspace(rows, ncols, zero, one_c):
+    """RatFunc 系数齐次系统零空间基（行主元消元）；空表 = 仅零解。"""
+    mat = [list(r) for r in rows]
+    pivots = []
+    r = 0
+    for c in range(ncols):
+        pr = None
+        for i in range(r, len(mat)):
+            if not mat[i][c].is_zero():
+                pr = i
+                break
+        if pr is None:
+            continue
+        mat[r], mat[pr] = mat[pr], mat[r]
+        inv = one_c / mat[r][c]
+        mat[r] = [x * inv for x in mat[r]]
+        for i in range(len(mat)):
+            if i != r and not mat[i][c].is_zero():
+                fac = mat[i][c]
+                mat[i] = [a - fac * b for a, b in zip(mat[i], mat[r])]
+        pivots.append((r, c))
+        r += 1
+        if r == len(mat):
+            break
+    free_cols = [c for c in range(ncols) if c not in
+                 {pc for _pr, pc in pivots}]
+    basis = []
+    for fc in free_cols:
+        vec = [_mk_zero_like(one_c) for _ in range(ncols)]
+        vec[fc] = one_c
+        for ri, pc in pivots:
+            vec[pc] = mat[ri][fc] * Fr(-1)
+        basis.append(vec)
+    return basis
+
+
+def _mk_zero_like(one_c):
+    """与 one_c 同变量集的零 RatFunc（算术构造，免依赖构造器细节）。"""
+    return one_c - one_c
+
+
+def _pld_base_pair(f_rf, ws_rf, de):
+    """基级 z-常数兜底：有界本原对枚举 + _ldrad_base 精确验证。
+
+    完备性边界：窗口（|n| ≤ 6、|m| ≤ 6、单目标）内穷尽；窗口外/
+    多目标诚实 'und'。方向安全：漏枚举只损失覆盖，_ldrad_base 验证
+    背书杜绝假阳性。"""
+    from cas.ratfunc import RatFunc
+    from math import gcd as _g3
+
+    if len(ws_rf) != 1:
+        return "und", "base fallback limited to single target"
+    w_rf = ws_rf[0]
+    for n_i in range(1, 7):
+        for m_i in range(-6, 7):
+            if m_i != 0 and _g3(abs(n_i), abs(m_i)) != 1:
+                continue          # 非本原对与约简对同解，跳过
+            h = f_rf * n_i - w_rf * m_i
+            if h.is_zero():
+                return "ok", n_i, [m_i], \
+                    RatFunc.one(tuple(de.levels[:1]))
+            try:
+                rad = _ldrad_base(h, de)
+            except Exception:
+                continue
+            if rad is None:
+                continue
+            Qn, u_v = rad
+            return "ok", Qn * n_i, [Qn * m_i], u_v
+    return "und", "bounded base enumeration exhausted"
 
 
 # ---------------------------------------------------------------------------
@@ -3385,7 +3703,10 @@ def _rde_tower_solve(f, g, de, j):
                 # S-a 第二阶修正（sympy bound_degree primitive db==da 分支）：
                 # α 为对数导数-根式（n_l==1）时经 beta 公式再探 limited
                 al = (bbr[db] * Fr(-1)) / aa[da]
-                rec = _is_logderiv_radical(al, de, jv - 1)
+                try:
+                    rec = _is_logderiv_radical(al, de, jv - 1)
+                except RischUnsupported:
+                    return None, 'undecided'          # S-a（保守）
                 if rec is None:
                     return None, 'undecided'          # S-a（保守）
                 n_l, z_rf = rec
@@ -3406,17 +3727,19 @@ def _rde_tower_solve(f, g, de, j):
         else:  # exp
             n = max(0, dc - max(da, db))
             if da == db and da != 0:
-                # 共振界修正（sympy bound_degree exp 分支）：α=m·η+D(v)/v
-                # 型判定经 _pld_heu；成功且 n_lower==1 时以 m 抬界。
-                # heu 的 None 混合"证明否定/启发受限"，保守取 undecided。
+                # 共振界修正：α = m·η + D(v)/v 型判定经 _pld_solve。
+                # 仅干净形态（n==1、无中间层幂因子、m>0）抬界；
+                # 'no'/'und'/异形一律保守 undecided（欠界会误证不可积，
+                # 方向安全压倒覆盖）。
                 al = (bbr[db] * Fr(-1)) / aa[da]
-                rec = _pld_heu(al, de.ws[jv], de, jv - 1)
-                if rec is not None:
-                    nn_, mm_, _v_ = rec
-                    if nn_ == 1 and mm_ > 0:
-                        n = max(n, mm_)
+                try:
+                    rec = _pld_solve(al, [de.ws[jv]], de, jv - 1)
+                except RischUnsupported:
+                    return None, 'undecided'
+                if rec[0] == "ok" and rec[1] == 1 and rec[2][0] > 0:
+                    n = max(n, rec[2][0])
                 else:
-                    return None, 'undecided'          # S-c（保守）
+                    return None, 'undecided'
             # da==db==0：exp 对角下降同理安全
 
         # ---- Step 5: spde 归约核（sympy spde 忠实移植）----
