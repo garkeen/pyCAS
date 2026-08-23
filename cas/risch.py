@@ -217,6 +217,41 @@ def _exp_of(tt):
     return T.mk(S("Exp"), (tt,))
 
 
+# 代数常数关系登记（M5.4 切片 a）：符号 -> monic 极小多项式
+# （Poly over ()，Fr 系数）。SAE 语义：元素 = 次数<deg(m) 的多项式，
+# reduce = udivmod 余项——关系感知算术在后续切片接入，登记先行。
+ALG_RELATIONS = {}
+_ALG_RADICAL_COUNTER = [0]
+
+
+def _collect_radical(pterm, subs):
+    """数值底正有理指数幂 b^(p/q)（b>0 整数）-> 新代数常数符号。
+
+    极小多项式 X^q − b^p（monic，不可约当 b 非完全幂——完全幂已被
+    mk 数值折叠）。同形幂共享符号；√2·√2 经 SymRat 算术自然产生
+    _a1² 叶——关系约简在 M5.4 后续切片接入 reduce_mod_m。
+    """
+    b, e = pterm.args
+    if not (T.is_num(b) and isinstance(e, T.Rat)):
+        return
+    bv = T.num_val(b)
+    if bv <= 0 or e.v <= 0 or e.v == 1:
+        return
+    p_, q_ = e.v.numerator, e.v.denominator
+    if q_ == 1:
+        return
+    key = (bv, p_, q_)
+    for sym, (mkey, _m) in ALG_RELATIONS.items():
+        if mkey == key:
+            subs[pterm] = sym
+            return
+    _ALG_RADICAL_COUNTER[0] += 1
+    sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
+    mp = Poly((), {(1,): Fr(1), (0,): Fr(-(bv ** p_))})
+    ALG_RELATIONS[sym] = ((bv, p_, q_), mp)
+    subs[pterm] = sym
+
+
 def _const_blockage_hint(f):
     """被积函数含命名常数/非常量域超越常量时的 Richardson 卡点提示。
 
@@ -1628,6 +1663,8 @@ def _parametrize_const_logs(f, x):
             for a in u.args:
                 if isinstance(a, Const) and getattr(a, "name", "") in named:
                     nc_subs.setdefault(a, S(named[a.name]))
+                elif isinstance(a, Expr) and a.head.name == "Power":
+                    _collect_radical(a, nc_subs)
         elif isinstance(u, Const) and getattr(u, "name", "") in named:
             nc_subs[u] = S(named[u.name])
     subs = {}

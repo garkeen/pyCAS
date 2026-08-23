@@ -542,5 +542,41 @@ class TestParamProvisos(unittest.TestCase):
         self.assertEqual(len(provisos), 1)
 
 
+class TestAlgebraicConstants(unittest.TestCase):
+    """M5.4 切片 a：根式/命名常数进系数域（参数化 + 关系登记）。
+
+    sqrt(2)/2^(1/3) 类代数常数与 pi/gamma 命名常数同走独立超越参数
+    通道（Richardson 安全），关系 monic 多项式入 ALG_RELATIONS 登记
+    （SAE 语义：元素=次数<deg(m) 多项式，reduce=udivmod 余项——
+    关系感知算术后续切片接入）。
+    """
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().handle(f"!integrate {s} x")
+
+    def test_exp_sqrt2_x(self):
+        out = self._int("exp(sqrt(2)*x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("2^(1/2)", out)
+
+    def test_sqrt2_power_x(self):
+        # 底含根式：变指数幂归一 + Log(sqrt(2)) 参数化双机联动
+        out = self._int("sqrt(2)^x")
+        self.assertIn("VERIFIED", out)
+
+    def test_cube_root_slope(self):
+        # 三次根斜率：q=3 极小多项式 X^3-2 登记
+        out = self._int("cos(2^(1/3)*x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("2^(1/3)", out)
+
+    def test_quadratic_split_conservative(self):
+        # x^2-2 在 Q 上不分裂：保守 RootOf-log 形态（值正确）
+        out = self._int("1/(x^2-2)")
+        self.assertIn("VERIFIED", out)
+
+
 if __name__ == "__main__":
     unittest.main()
