@@ -1243,6 +1243,7 @@ class Session:
         from cas.integrate import integrate as zz_int
         from cas.risch import RischNonElementary
         from cas.pprint import to_str as ps
+        from cas.structure import analyze
 
         t = self._parse_in(s)
         if var_s:
@@ -1255,6 +1256,8 @@ class Session:
                 n = str(len(vs)) if vs else "no"
                 return f"integrate: specify the integration variable (expr has {n} free variable)"
             x = vs[0]
+        # 统一管线 P1：入口单次结构分析（结果一等对象，随 step log 留痕）
+        self._last_analysis = analyze(t, x)
         try:
             res, ok, method, provisos = zz_int(t, x)
         except RischNonElementary as e:
