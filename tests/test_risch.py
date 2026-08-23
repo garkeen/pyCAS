@@ -496,5 +496,51 @@ class TestLogPairingRealify(unittest.TestCase):
         self.assertIn("sin(x)", out)
 
 
+class TestParamProvisos(unittest.TestCase):
+    """M5.6#4 阶段一：参数分母 proviso（generic 答案的成立条件）。
+
+    e^{ax}/a 在 a=0 无定义而原函数存在——静默输出即撒谎；答案中的
+    纯参数分母必须声明 Ne(D,0)。Log(常量) 分母是真实非零常数，
+    不产生 proviso。
+    """
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().handle(f"!integrate {s} x")
+
+    def test_exp_ax(self):
+        out = self._int("exp(a*x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("proviso", out)
+        self.assertIn("a != 0", out)
+
+    def test_a_power_x(self):
+        # 退化点 log(a)=0（即 a=1：此时被积函数退化为 1）
+        out = self._int("a^x")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("log(a) != 0", out)
+
+    def test_parts_ax(self):
+        out = self._int("x*exp(a*x)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("a != 0", out)
+
+    def test_const_log_no_proviso(self):
+        # log(2) 是真实非零常数——不得误报
+        out = self._int("2^x")
+        self.assertIn("VERIFIED", out)
+        self.assertNotIn("proviso", out)
+
+    def test_direct_api_provisos_slot(self):
+        from cas.integrate import integrate
+        from cas.parser import parse
+
+        _F, _ok, _m, provisos = integrate(parse("exp(a*x)"), parse("x"))
+        self.assertTrue(any("Ne" in str(type(p)) or p is not None
+                            for p in provisos))
+        self.assertEqual(len(provisos), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -424,6 +424,20 @@ def _try_usub(t, x):
 
 
 def integrate(t, x):
+    """∫ t dx（外层）：各通道结果统一过参数分母 proviso 扫描。
+
+    M5.6#4 阶段一：generic 答案在参数退化点（e^{ax}/a 的 a=0 类）
+    无定义而原函数存在——静默输出即撒谎，此处强制声明成立条件。
+    """
+    F, ok, method, provisos = _integrate_core(t, x)
+    from cas.risch import _param_provisos
+    for p in _param_provisos(F, x):
+        if p not in provisos:
+            provisos.append(p)
+    return F, ok, method, provisos
+
+
+def _integrate_core(t, x):
     """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method, provisos)。
 
     裸 spec 函数走 anti 表（连续原函数，定积分友好）；

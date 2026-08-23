@@ -187,6 +187,32 @@ def _collect_exts(t):
 _TRIG_HEADS = ("Sin", "Cos", "Tan", "Sinh", "Cosh", "Tanh")
 
 
+def _param_provisos(expr, x):
+    """答案中纯参数分母 -> [Ne(D,0)] 条件声明（M5.6#4 阶段一）。
+
+    generic 答案在参数退化点（如 e^{ax}/a 的 a=0）无定义而原函数
+    存在——静默输出即撒谎，必须声明成立条件。参数 = 分母中非 x、
+    非保留名 i 的自由符号；含 x 的分母属有理积分极点语义不在此列；
+    Log(常量)/数值分母是真实非零常数亦排除。
+    """
+    provs = []
+    seen = set()
+    stack = [expr]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, Expr) and getattr(v, "head", None) is not None:
+            n = v.head.name
+            if n == "Power" and isinstance(v.args[1], T.Int) \
+                    and v.args[1].v < 0:
+                base = v.args[0]
+                fv = T.free_vars(base) - {S("i")}
+                if fv and x not in fv and base not in seen:
+                    seen.add(base)
+                    provs.append(T.mk(S("Ne"), (base, T.ZERO)))
+            stack.extend(v.args)
+    return provs
+
+
 def _exp_of(tt):
     return T.mk(S("Exp"), (tt,))
 
