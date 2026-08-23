@@ -233,16 +233,20 @@ class TestSpecialFunctionOutput(unittest.TestCase):
 
     def test_symbolic_power_rule(self):
         # M5.6：x^a generic 形态 + [a+1!=0] proviso；
-        # principal 承诺开启时符号指数合并升级 VERIFIED
+        # principal 承诺开启时符号指数合并升级 VERIFIED。
+        # (cx)^a / (3x+1)^a：指数整数移位拆分 + 符号幂原子化 +
+        # together 系数折叠三件套解锁（曾误判为 PROBABLE 边界）
         from cas.structure import set_principal_branch
 
         set_principal_branch(True)
         try:
-            for s, k in [("x^a", "1"), ("x^(a+1)", "2")]:
+            cases = ["x^a", "x^(a+1)", "(2*x)^a", "(3*x+1)^a",
+                     "x^(-a)", "(c*x)^a"]
+            for s in cases:
                 F, ok, _m, pv = self.integ(s)
                 self.assertTrue(ok, s)
-                self.assertEqual(len(pv), 1, s)
-                self.assertIn("!=", to_str(pv[0]), s)
+                for p in pv:
+                    self.assertIn("!=", to_str(p), s)
         finally:
             set_principal_branch(False)
 

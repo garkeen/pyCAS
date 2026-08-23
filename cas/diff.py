@@ -100,6 +100,26 @@ def verify(F, x, f, budget=100000, principal=None):
                 return "VERIFIED"
             if _tower_zero(m, T.ZERO, x):
                 return "VERIFIED"
+        else:
+            m = d0
+        # M5.6：符号幂原子化——x^(a+1)/((a+1)·c) 与 x^a 类差值需要
+        # 指数整数移位拆分 + 原子化后才能在环层精确判零。
+        # 判零用 together（有理函数规范形）：simplify 不做跨项通分，
+        # c(a+1)/(c(a+1)) 型系数分式只有 together 能折叠
+        from cas.structure import _atomize_sym_powers
+        m2 = _atomize_sym_powers(m)
+        if m2 is not m:
+            from cas.ops import together as _tg
+            from cas.errors import PolyError
+            try:
+                m2 = _tg(m2)
+            except PolyError:
+                pass
+            if m2 is T.ZERO or (T.is_num(m2) and T.num_val(m2) == 0):
+                return "VERIFIED"
+            r3 = equivalent(m2, T.ZERO, budget=budget)
+            if r3 is T3.YES:
+                return "VERIFIED"
     if r is T3.PROBABLE:
         return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"

@@ -209,6 +209,71 @@ def run_pre_passes(t, x):
 BRANCH_POLICY = {"principal": False}
 
 
+def _atomize_sym_powers(d0):
+    """符号幂原子化（M5.6：principal 承诺域的验证归一化）。
+
+    两步：
+    1. 指数整数移位拆分：Power(b, e₀+n)（e₀ 含符号核、n 整数字面量）
+       -> Power(b, e₀)·bⁿ——x^(a+1) 与 x^a·x 的跨项对齐；
+    2. 非数值指数幂 -> 独立超越原子（同形同原子，驻留指针保证）。
+    差值环约简在 {参数 ∪ 原子} 多项式上判定：形式恒等 ⇒ 特化保真
+    （原子间无关系假设，只可能保守拒绝）。"""
+    head = getattr(d0, "head", None)
+    if head is None:
+        return d0
+
+    def _split_int(e_):
+        """e_ = 核 + 整数字面量 -> (核, n)；无整字面量返回 (e_, 0)。"""
+        if isinstance(e_, T.Expr) and e_.head.name == "Plus":
+            core = []
+            n = 0
+            for a_ in e_.args:
+                if isinstance(a_, T.Int):
+                    n += a_.v
+                else:
+                    core.append(a_)
+            if n != 0:
+                if len(core) == 1:
+                    return core[0], n
+                if core:
+                    return T.mk(S("Plus"), tuple(core)), n
+                return N(0), n
+        return e_, 0
+
+    def _rec(u, subs):
+        head_ = getattr(u, "head", None)
+        if head_ is None:
+            return u
+        if head_.name == "Power":
+            b_, e_ = u.args
+            # 数值指数幂不原子化（Poly 原生支持；负整幂参与跨项相消）
+            if isinstance(e_, (T.Int, T.Rat)):
+                return T.pw(_rec(b_, subs), e_)
+            nb_ = _rec(b_, subs)
+            ne_ = _rec(e_, subs)
+            core, n = _split_int(ne_)
+            key = (nb_._h, getattr(core, "_h", core))
+            atom = subs.get(key)
+            if atom is None:
+                _ATOM_COUNTER[0] += 1
+                atom = S(f"_pwa{_ATOM_COUNTER[0]}")
+                subs[key] = atom
+            # 核心幂由原子承载；仅整数移位保留真实幂
+            if n > 0:
+                return T.times(atom, T.pw(nb_, N(n)))
+            if n < 0:
+                return T.times(atom, T.div(N(1), T.pw(nb_, N(-n))))
+            return atom
+        return T.mk(head_, tuple(_rec(a_, subs) for a_ in u.args))
+
+    subs = {}
+    out = _rec(d0, subs)
+    return out
+
+
+_ATOM_COUNTER = [0]
+
+
 def principal_branch():
     return BRANCH_POLICY["principal"]
 

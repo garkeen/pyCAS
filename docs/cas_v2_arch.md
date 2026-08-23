@@ -302,7 +302,9 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   generic 通道（u^(a+1)/((a+1)·slope) + [a+1≠0] proviso；退化点
   a=-1 的 ln 路径由 proviso 框架声明；principal 承诺下符号指数合并
   ——_merge_ratpow 从 Int/Rat 放宽到任意项——升级 VERIFIED；
-  (c·x)^a c≠1 类跨项指数归一为诚实 PROBABLE 边界）。常量项系数
+  (c·x)^a 全参数组合 VERIFIED（指数整数移位拆分 + 符号幂原子化
+  _atomize_sym_powers + together 系数折叠三件套；曾误判 PROBABLE
+  边界——用户质询后攻克）。常量项系数
   ✓（_collect_const_params：根式+命名常数+函数头复合项三类极大子项
   局部参数化，π/sin(1)/e²/log(3)/atan(1/2) 作系数全通 + 数值回验）。
   剩余：参数 RootOf 分支化（1/(x³+a) 判别式 case split——CAD 类，
