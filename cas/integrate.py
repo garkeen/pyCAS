@@ -483,7 +483,8 @@ def _integrate_core(t, x, a=None, principal=None):
     if F0 is not None:
         from cas.diff import verify as _verify
 
-        ok = _verify(F0, x, t) == "VERIFIED"
+        ok = _verify(F0, x, t,
+                     principal=principal) == "VERIFIED"
         return F0, ok, "spec antiderivative table", []
     # 三角多项式：多角度基线性化后逐项积分（连续原函数，无 tan-half 分支切）。
     # sin^2 -> (1-cos(2x))/2 类；线性组合经 spec anti 表（含线性复合）逐项原函数。
@@ -517,7 +518,8 @@ def _integrate_core(t, x, a=None, principal=None):
     if pw_ is not None:
         from cas.diff import verify as _verify
 
-        ok = _verify(pw_, x, t) == "VERIFIED"
+        ok = _verify(pw_, x, t,
+                     principal=principal) == "VERIFIED"
         return pw_, ok, "rational power rule (algebraic form)", []
     # 结构序列（P3）：分析-投影-计算-回写-验证 的声明式实例化。
     # Qx → TanHalf → Tower；投影 FAIL 跳过，域内无解/超界记录原因，
