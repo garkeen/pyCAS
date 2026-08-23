@@ -184,7 +184,8 @@ def _collect_exts(t):
 # 关系由此保留——升参数会破坏它）。
 # ---------------------------------------------------------------------------
 
-_TRIG_HEADS = ("Sin", "Cos", "Tan", "Sinh", "Cosh", "Tanh")
+_TRIG_HEADS = ("Sin", "Cos", "Tan", "Cot", "Sec", "Csc",
+               "Sinh", "Cosh", "Tanh")
 
 
 def _param_provisos(expr, x):
@@ -504,7 +505,7 @@ def trigs_to_exp(t):
     n = t.head.name
     if len(t.args) == 1 and n in _TRIG_HEADS:
         u = trigs_to_exp(t.args[0])
-        if n in ("Sin", "Cos", "Tan"):
+        if n in ("Sin", "Cos", "Tan", "Cot", "Sec", "Csc"):
             iu, niu = _iu(u)
             e1, e2 = _exp_of(iu), _exp_of(niu)
             if n == "Sin":
@@ -515,7 +516,13 @@ def trigs_to_exp(t):
             c1 = T.div(T.plus(e1, _neg_term(e2)),
                        T.times(N(2), T.S("i")))
             c2 = T.div(T.plus(e1, e2), N(2))
-            return T.div(c1, c2)
+            if n == "Tan":
+                return T.div(c1, c2)
+            if n == "Cot":
+                return T.div(c2, c1)
+            if n == "Sec":
+                return T.pw(c2, N(-1))
+            return T.pw(c1, N(-1))       # Csc
         eu, enu = _exp_of(u), _exp_of(_neg_term(u))
         if n == "Sinh":
             return T.div(T.plus(eu, _neg_term(enu)), N(2))
@@ -1687,6 +1694,12 @@ def _norm_const_base_powers(t, x):
         b, e = u.args
         if x in T.free_vars(e):
             return T.mk(S("Exp"), (T.times(e, T.fn("Log")(b)),))
+        # 数值非整指数且底含变量（sqrt/x^(p/q) 类）：代数核 ->
+        # exp-log 超越通道。初等可积性优先（int x^(p/q) 全族解锁）；
+        # 代数核追踪（Trager/M7a）后续再选道——语义与 diff 幂规则一致。
+        if isinstance(e, T.Rat) and e.f.denominator != 1 \
+                and x in T.free_vars(b):
+            return T.mk(S("Exp"), (T.times(e, T.fn("Log")(b)),))
     return u
 
 
@@ -1735,6 +1748,20 @@ def _parametrize_const_logs(f, x):
     return T.subst(f, subs), backsub
 
 
+def _mixed_domain_leaf(c):
+    """叶是否属于 Q(i,x_params) 混合轨道（SymRat 内含 Ga 叶，或 Ga
+    分量为 SymRat）。"""
+    if isinstance(c, SymRat):
+        for pp in (c.num, c.den):
+            for cc in pp.monos.values():
+                if hasattr(cc, "norm") and not isinstance(cc, Fr):
+                    return True
+        return False
+    if hasattr(c, "norm") and isinstance(c, Ga):
+        return isinstance(c.re, SymRat) or isinstance(c.im, SymRat)
+    return False
+
+
 def integrate_exp_tower(f, x):
     """顶层 API：term -> (term, de)（初等原函数）或异常。
 
@@ -1751,6 +1778,14 @@ def integrate_exp_tower(f, x):
     # M5.6 首项：变指数幂归一 + Log(常量) 参数化（∫a^x 全族解锁）
     f, backsub = _parametrize_const_logs(_norm_const_base_powers(f, x), x)
     de, fa, fd = build_extension(f, x)
+    # M5.4c 前置门控：Q(i,params) 混合轨道的塔上 RDE 需要域泛化
+    # gcd（无它则度数爆炸）——诚实拒绝而非挂死/误算
+    _bad = any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fa)) or \
+        any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fd))
+    if _bad:
+        raise RischUnsupported(
+            "tower over Q(i,params) mixed domain pending M5.4-c "
+            "(field-generic gcd)")
     j = len(de.levels) - 1
     if j == 0:
         raise RischUnsupported("no extension layer in expression")
@@ -3086,6 +3121,16 @@ def _rde_tower_solve(f, g, de, j):
 
     if j < 1:
         return None, 'undecided'
+    # M5.4c 前置门控：混合域（Q(i,params)）分式进入 Fr-Euclid 链会
+    # 度数爆炸——诚实拒绝，待域泛化 gcd
+    for rf in (f, g):
+        if any(_mixed_domain_leaf(c)
+               for c in _iter_leaf_coefs_m(rf.p)) or \
+           any(_mixed_domain_leaf(c)
+               for c in _iter_leaf_coefs_m(rf.q)):
+            raise RischUnsupported(
+                "RDE over Q(i,params) mixed domain pending M5.4-c "
+                "(field-generic gcd)")
     if j == 1:
         return _rde_base_rde(f, g, de)
     tview = de.levels[j - 1]

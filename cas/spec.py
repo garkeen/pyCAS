@@ -161,6 +161,29 @@ register(FunctionSpec(
     anti=lambda a: T.fn("Log")(T.fn("Cosh")(a)),
     injective=True,
 ))
+register(FunctionSpec(
+    "Cot", 1, print_name="cot", parity="odd",
+    deriv=lambda a: T.neg(T.plus(ONE, T.pw(T.fn("Cot")(a), N(2)))),
+    numeric=lambda v: math.cos(v) / math.sin(v) if math.sin(v) else 1e308,
+    anti=lambda a: T.fn("Log")(T.fn("Sin")(a)),
+    period=T.PI,
+))
+register(FunctionSpec(
+    "Sec", 1, print_name="sec", parity="even",
+    deriv=lambda a: T.times(T.fn("Sec")(a), T.tan(a)),
+    numeric=math.sec if hasattr(math, "sec") else
+        (lambda v: 1.0 / math.cos(v)),
+    anti=lambda a: T.plus(T.fn("Log")(T.fn("Sec")(a)),
+                          T.fn("Log")(T.fn("Tan")(a))),
+    period=T.times(N(2), T.PI),
+))
+register(FunctionSpec(
+    "Csc", 1, print_name="csc", parity="odd",
+    deriv=lambda a: T.neg(T.times(T.fn("Csc")(a), T.fn("Cot")(a))),
+    numeric=lambda v: 1.0 / math.sin(v) if math.sin(v) else 1e308,
+    anti=lambda a: T.fn("Log")(T.tan(T.div(a, N(2)))),
+    period=T.times(N(2), T.PI),
+))
 
 
 def gen_rules(ruleset):

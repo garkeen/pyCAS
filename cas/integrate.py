@@ -451,6 +451,30 @@ def integrate(t, x):
     return F, ok, method, provisos
 
 
+def _power_antideriv(t, x):
+    """有理幂单项式 f(u)^q（q∈ℚ 非整，u 线性）：代数诚实路线。
+
+    ∫ u^q dx = u^{q+1}/(a(q+1))——答案保持根式/幂形态（不折算
+    exp-log 通道，代数核追踪留给 M7a）。"""
+    if not (isinstance(t, T.Expr) and t.head.name == "Power"
+            and len(t.args) == 2):
+        return None
+    u, e = t.args
+    if not isinstance(e, T.Rat) or e.f.denominator == 1:
+        return None
+    from cas.solve import _linear_split
+    sp = _linear_split(u, x)
+    if sp is None:
+        return None
+    a_, b_ = sp
+    if T.is_num(a_) and T.num_val(a_) == 0:
+        return None
+    new_e = e.f + 1
+    F = T.div(T.pw(u, N(new_e)), T.times(a_ if not T.is_num(a_)
+                                         else T.N(T.num_val(a_)), N(new_e)))
+    return F
+
+
 def _integrate_core(t, x):
     """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method, provisos)。
 
@@ -493,6 +517,12 @@ def _integrate_core(t, x):
         if us is not None:
             F, ok, g, _h, _H = us
             return F, ok, f"u-substitution u={to_str(g)}", []
+    pw_ = _power_antideriv(t, x)
+    if pw_ is not None:
+        from cas.diff import verify as _verify
+
+        ok = _verify(pw_, x, t) == "VERIFIED"
+        return pw_, ok, "rational power rule (algebraic form)", []
     try:
         P, Q = _rat_pair(t, x)
         term, ok, provisos = integrate_rational(P, Q, x)
