@@ -260,14 +260,23 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   ——tan 出 -log(2cos x) 教科书形态，候选整体 verify 背书；Richardson
   卡点消息模板：命名常数/超越项点名 + 原因透传）
   → **M5.4 代数
-  常数域泛化**（ℚ(i) 基建参数化极小多项式 → 任意 ℚ(α) 单/多扩张；因子分解
-  经 Trager 归约回 ℚ——**代数数完全可判定，非 Richardson 障碍**；不可判定性
-  仅出现于超越常数符号（e/π 不透明组合的零等价，Richardson 定理），届时按
-  三态纪律输出 undecidable 并注明卡点）→ **M5.5 特殊函数输出层**（Ei/erf/Li₂
-  作为答案而非 proved 拒答——FriCAS rdeefx ei_int primpart 形态；判定逻辑
-  不变，产品级增量）→ **M5.6 符号参数积分**（参数并入常数域 ℚ(a)：零等价 =
-  有理函数恒等式，精确可判；generic 答案 + **条件标注/退化分支**——∫x^a 在
-  a=−1、∫e^{ax} 在 a=0 时塔结构塌缩，答案须声明成立条件，绝不静默）。
+  常数域泛化（切片 a ✓ 51acd05）**：根式 b^(p/q) 参数化 + ALG_RELATIONS
+  极小多项式登记（SAE 语义对齐 algext.spad：元素=次数<deg(M) 多项式、
+  reduce=monicDivide 余项；udivmod/inv_mod/uexgcd 已备）。剩余：关系感知
+  算术（reduce_mod_m 接入塔运算零判定）、Trager 范数因子分解 over AN
+  （参照 algfact.spad）——**代数数完全可判定，非 Richardson 障碍**；
+  不可判定性仅出现于超越常数符号组合的零等价，按三态纪律输出。  → **M5.5 特殊函数输出层**（Ei/erf/Li₂ 作为答案而非 proved 拒答
+  ——FriCAS rdeefx ei_int primpart 形态；判定逻辑不变，产品级增量）
+  → **M5.6 符号参数积分（大部分 ✓，2026-08 冲刺）**：Log(常量)/命名
+  常数 pi,e,gamma/根式 b^(p/q) 统一参数化进 ℚ(params) 系数域
+  （_parametrize_const_logs + ALG_RELATIONS 登记，出口回代；
+  Richardson 安全——独立超越性假设）；ℚ(i,params) 混合轨道
+  （_parts Ga 提升 + _mk_rat 混合叶跳过规范化 + ratfunc all_fr 门控 +
+  _as_real_rat 幂次归组域感知 + Ga 分量泛型化）；变指数幂归一
+  （b^e→Exp(e·log b)，底任意）；线性复合斜率放宽至符号常量；
+  Tan/Tanh 反导条目；参数分母 proviso 框架阶段一
+  （e^{ax}/a [a≠0] 类全通道覆盖）。剩余：x^a 参数指数幂的退化分支、
+  参数 RootOf 分支化（1/(x³+a) 需按判别式 case split——CAD 类）。
   终点 = 超越函数范围内完整 Risch 决策程序，含不可初等证明（e^{-x²}、li(x)、
    Si(x) 类带证明拒答——sympy 全缺）。接线裁定：Risch 为 **!integrate 黑盒
   通道**判定终点站（初等原函数 VERIFIED / NOT ELEMENTARY proved + 各层
