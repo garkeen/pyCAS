@@ -388,6 +388,13 @@ def _k_solveineq(s, rest):
         return "need a comparison like x^2-1 > 0"
     if f.args[1] is not T.ZERO:
         return "right side must be 0"
+    # Step 3：域守卫——Sturm 链假设 Fr 系数，超域结构化拒绝而非崩溃
+    from cas.structure import analyze, CoeffBase
+    _a = analyze(f.args[0], T.S(parts[1]))
+    if _a.coeff is not CoeffBase.Q:
+        return (f"solveineq: coefficient domain {_a.coeff} not supported "
+                "(Sturm chain requires Q; parametric inequalities need "
+                "CAD/VTS, pending M7d)")
     _ivs, out = solve_poly_ineq(f.args[0], f.head.name, T.S(parts[1]))
     return f"{parts[1]} in {out}"
 

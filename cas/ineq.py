@@ -60,6 +60,15 @@ def solve_poly_ineq(term_, op, x):
     区间元素：(lo, hi, lo_incl, hi_incl)，lo/hi 为 Fr、None(±∞) 或
     根描述子 ("root", 因子串, lo, hi)。
     """
+
+    # 域守卫（Step 3）：非 Fr 系数诚实拒绝（SymRat numerator 崩溃修复）
+    from fractions import Fraction as _Fr
+    from cas.errors import PolyError as _PE
+    from cas.structure import analyze as _analyze, CoeffBase as _CB
+    if _analyze(term_, x).coeff is not _CB.Q:
+        raise _PE("solve_poly_ineq: coefficient domain beyond Q "
+                  "not supported (Sturm chain requires Q; "
+                  "CAD/VTS pending M7d)")
     p = Poly.from_term(expand(term_), (x,))
     if p.is_zero():
         ivs = [(None, None, False, False)] if op in ("Ge", "Le") else []
