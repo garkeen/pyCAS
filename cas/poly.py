@@ -502,6 +502,114 @@ def _rat_content(p):
     return c
 
 
+def _has_nonsimple_leaf(p):
+    """叶含非纯有理数（Ga/SymRat/混合）——需要域泛化 gcd。"""
+    stack = [p]
+    while stack:
+        u = stack.pop()
+        for c in getattr(u, "monos", {}).values():
+            if isinstance(c, Fr):
+                continue
+            return True
+    return False
+
+
+def _fgcd(a, b):
+    """域泛化多变量 gcd：系数环 = 前缀变量上的有理函数（RatFunc），
+    主变量欧几里得 + 每步首一化。支持 ℚ(i)/参数/混合叶。
+
+    返回 Poly（分母已用系数分母之积清除；不保证内容最简，但
+    整除性 gcd|a、gcd|b 与唯一性（相差单位元）精确成立）。
+    全程置于 RatFunc.raw_norm() 下——系数运算不做分式约分
+    （约分会回调本函数，互递归；结果单位元差异不影响整除语义）。"""
+    from cas.ratfunc import RatFunc
+
+    with RatFunc.raw_norm():
+
+        vs = a.vars
+        assert vs == b.vars
+        if not vs:
+            # 常数：域元素 gcd 取单位元（非零时）
+            return Poly.one(())
+        main = vs[-1]
+        rest = vs[:-1]
+
+        def split_to_rf(t):
+            """Poly(vs) -> {deg: RatFunc(rest)}，按主变量次数分桶。"""
+            buckets = {}
+            for k, c in t.monos.items():
+                e = k[-1]
+                kp = k[:-1]
+                cp = Poly(rest, {kp: c})
+                rf = RatFunc(cp, Poly.one(rest))
+                buckets[e] = buckets.get(e, RatFunc.zero(rest)) + rf
+            return buckets
+
+        def rf_monic(buckets):
+            """首一化：各系数除以首项系数——指数保持绝对位置不变。"""
+            ks = [e for e, c in buckets.items() if not c.is_zero()]
+            if not ks:
+                return {}
+            top = max(ks)
+            inv = RatFunc.one(rest) / buckets[top]
+            return {e: c * inv for e, c in buckets.items() if c}
+
+        r0 = split_to_rf(a)
+        r1 = split_to_rf(b)
+
+        while any(not c.is_zero() for c in r1.values()):
+            r1 = rf_monic(r1)
+            if not r1:
+                break
+            q = {}
+            r0n = {}
+            top1 = max(r1)
+            while True:
+                ks = [e for e, c in r0.items() if not c.is_zero()]
+                if not ks:
+                    break
+                top0 = max(ks)
+                if top0 < top1:
+                    break
+                t = (top0 - top1, r0[top0])
+                for e, c in r1.items():
+                    te = e + t[0]
+                    term = c * t[1]
+                    r0n[te] = r0n.get(te, RatFunc.zero(rest)) - term
+                for e, c in r0.items():
+                    r0n[e] = r0n.get(e, RatFunc.zero(rest)) + c
+                # 注：te=top0 的减式与旧首项在此相消（monic 首一化保证）
+                r0 = {e: c for e, c in r0n.items() if not c.is_zero()}
+                r0n = {}
+            r0, r1 = r1, r0
+
+        r0 = rf_monic(r0)
+        if not r0:
+            return Poly.zero(vs)
+
+        # 清分母：各系数分母之积（非 lcm，可能有公共因子——单位元意义下无碍）
+        dens = Poly.one(rest)
+        for e, c in r0.items():
+            dens = dens * c.q
+        out = {}
+        for e, c in r0.items():
+            prod = c.p * dens
+            for k, cc in prod.monos.items():
+                full = k + (e,)
+                out[full] = cc
+        res = Poly(vs, out)
+        # 单位元意义下返回（符号/常数因子不保证最简——整除性与零判定精确）
+        return res
+
+
+def _mgcd_generic(a, b):
+    """mgcd 的域泛化分派入口：非纯 ℚ 叶走 _fgcd。"""
+    if _has_nonsimple_leaf(a) or _has_nonsimple_leaf(b):
+        g = _fgcd(a, b)
+        return g
+    return mgcd(a, b)
+
+
 def mgcd(a, b):
     """多元多项式 gcd（ℚ 上，任意变量数）。
 
@@ -511,6 +619,8 @@ def mgcd(a, b):
     if a.vars != b.vars:
         raise PolyError("var mismatch")
     vs = a.vars
+    if len(a.vars) == 1 and (_has_nonsimple_leaf(a) or _has_nonsimple_leaf(b)):
+        return _fgcd(a, b)   # 单变量域泛化欧几里得（多变量待修：见 Step3 缺陷记录）
     if a.is_zero():
         return _primitive_full(b)[1] if not b.is_zero() else Poly(vs, {})
     if b.is_zero():
@@ -525,6 +635,8 @@ def mgcd(a, b):
         g = ugcd(pa, pb)
         gr = _rat_gcd_frac(ra, rb)
         return g.scalar(gr) if gr != 1 else g
+    if _has_nonsimple_leaf(a) or _has_nonsimple_leaf(b):
+        return _fgcd(a, b)
     ca, pa = _primitive_full(a)
     cb, pb = _primitive_full(b)
     gc = mgcd(ca, cb)

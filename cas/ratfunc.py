@@ -32,11 +32,33 @@ def _coef_inv(c):
 class RatFunc:
     __slots__ = ("p", "q")
 
+    _RAW_NORM = [False]
+
+    @classmethod
+    def raw_norm(cls):
+        """上下文开关：构造时跳过约分（域泛化 gcd 内部专用，
+        避免 RatFunc 规范化回调 mgcd/_fgcd 的互递归）。"""
+
+        class _Ctx:
+            def __enter__(self2):
+                cls._RAW_NORM[0] = True
+                return self2
+
+            def __exit__(self2, *e):
+                cls._RAW_NORM[0] = False
+                return False
+
+        return _Ctx()
+
     def __init__(self, p, q):
         if p.vars != q.vars:
             raise PolyError("var mismatch")
         if q.is_zero():
             raise PolyError("zero denominator")
+        if RatFunc._RAW_NORM[0]:
+            self.p = p
+            self.q = q
+            return
         if p.is_zero():
             self.p = Poly.zero(p.vars)
             self.q = Poly.one(p.vars)
