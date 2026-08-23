@@ -448,22 +448,21 @@ def _ef_contract(t):
     args = tuple(_ef_contract(a) for a in t.args)
     if head.name == "Exp":
         u = args[0]
-        # 拆因子找整数倍 Log
+        # 拆因子找有理数倍 Log（k∈ℚ 与本系统 Power 主支语义一致——
+        # 变指数幂归一本就把 b^e 定义为 Exp(e·Log b)，往返恒等）
         if isinstance(u, Expr) and u.head.name == "Times":
-            k = 1
+            k = Fr(1)
             logs = []
             rest = []
-            okflag = True
             for fac in u.args:
-                if isinstance(fac, Int):
-                    k *= fac.v
+                if isinstance(fac, (Int, T.Rat)):
+                    k *= fac.f if isinstance(fac, T.Rat) else Fr(fac.v)
                 elif isinstance(fac, Expr) and fac.head.name == "Log":
                     logs.append(fac.args[0])
                 else:
                     rest.append(fac)
             if logs and not rest and len(logs) == 1 and k != 0:
-                return T.pw(logs[0], N(Fr(k)))
-            _ = okflag
+                return T.pw(logs[0], N(k))
         if isinstance(u, Expr) and u.head.name == "Log":
             return T.pw(u.args[0], ONE)
     return T.mk(head, args)
