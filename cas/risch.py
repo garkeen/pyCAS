@@ -17,7 +17,7 @@ from fractions import Fraction as Fr
 from math import gcd
 
 from cas import term as T
-from cas.term import S, N, Expr, Sym
+from cas.term import S, N, Expr, Sym, Const
 from cas.poly import Poly
 from cas.errors import PolyError
 from cas.gaussian import Ga
@@ -456,6 +456,12 @@ def _frac_num(t, vars_):
         # ∫2^x 全族；与 Poly._build 同款语义）
         from cas.poly import _mk_param
         return Poly.const(vars_, _mk_param(t)), Poly.one(vars_)
+    if isinstance(t, Const):
+        # parser 把用户输入的 'i' 映射为 Const IU——与 Sym 保留名同语义
+        if t is T.IU:
+            from cas.gaussian import Ga
+            return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
+        raise PolyError("not rational over extension: " + repr(t))
     if isinstance(t, Expr):
         n = t.head.name
         if n == "Plus":
@@ -1433,10 +1439,13 @@ def _integrate_in_K(g, de, j):
             cv = g.const_val()
             ct = cv.to_term() if hasattr(cv, "to_term") else N(cv)
             return T.times(ct, xv)
-        all_fr = all(isinstance(c, Fr) for c in _coef_iter(g))
-        if not all_fr:
+        from cas.poly import SymRat
+        _leaves = list(_coef_iter(g))
+        if any(isinstance(c, SymRat) for c in _leaves):
             raise RischUnsupported(
-                "rational integration over Q(i) pending (M5.3 slice 2)")
+                "rational integration over Q(params) pending (M5.6 #3)")
+        # ℚ(i) 分量（M5.3.1）：integrate_rational 入口共轭分母展开
+        # 实虚拆分归约 ℚ 双通道
         val, ok, _prov = integrate_rational(g.p, g.q, xv)
         if not ok:
             raise RischUnsupported("rational integration failed in base field")

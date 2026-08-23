@@ -50,6 +50,12 @@ def _frac(t, x):
 def _rat_pair(t, x):
     """term 有理函数 -> (P, Q)，约分。"""
     num, den = _frac(t, x)
+    leaves = list(num.monos.values()) + list(den.monos.values())
+    if any(not isinstance(c, (Fr, SymRat)) for c in leaves):
+        # M5.3.1 ℚ(i)：跳过 gcd（ugcd 假设 Fr；共轭分母展开会吸收
+        # 公因子，不约分不影响正确性，只增大次数）。Fr/SymRat 混合
+        # （含参数）走既有主链不动。
+        return num, den
     g = ugcd(num, den)
     if not g.is_zero():
         num = num.udivmod(g)[0]
@@ -256,6 +262,40 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
     return (num * Q).monos == (P * den).monos
 
 
+def _ga_rational_split(P, Q, x):
+    """ℚ(i) 有理函数实虚拆分归约 ℚ（M5.3.1）。
+
+    g = P/Q（系数 Fr/Ga 混合）：Q̄ 为系数共轭，Q·Q̄ 在共轭下不动
+    ⟹ 实系数；分子 P·Q̄ = f + i·h（f,h ∈ ℚ[x]），故 ∫g = ∫f + i·∫h
+    ——两通道各走完整 ℚ 链（Hermite + atan/RootOf log）。答案为实
+    形态（log(x²+1)+i·atan 类，比域内 log(x+i) 更贴出口实化方向）。
+    """
+    from cas.gaussian import Ga
+
+    pg = Poly(P.vars, {m: Ga.promote(c) for m, c in P.monos.items()})
+    qg = Poly(Q.vars, {m: Ga.promote(c) for m, c in Q.monos.items()})
+    qbar = Poly(Q.vars, {m: c.conjugate() for m, c in qg.monos.items()})
+    den = qg * qbar
+    num = pg * qbar
+    for c in den.monos.values():
+        if c.im != 0:
+            raise PolyError("internal: conjugate denominator not real")
+    dr = Poly(den.vars, {m: c.re for m, c in den.monos.items()})
+    re_m, im_m = {}, {}
+    for m, c in num.monos.items():
+        if c.re != 0:
+            re_m[m] = c.re
+        if c.im != 0:
+            im_m[m] = c.im
+    pr = Poly(num.vars, re_m)
+    pi = Poly(num.vars, im_m)
+    v1, ok1, pv1 = integrate_rational(pr, dr, x)
+    if pi.is_zero():
+        return v1, ok1, pv1
+    v2, ok2, pv2 = integrate_rational(pi, dr, x)
+    return T.plus(v1, T.times(S("i"), v2)), ok1 and ok2, pv1 + pv2
+
+
 def integrate_rational(P, Q, x, structured=False):
     """∫ P/Q dx → (term, verified, provisos)。P, Q 单变量，Q 非零。
 
@@ -263,6 +303,14 @@ def integrate_rational(P, Q, x, structured=False):
     rat_term = 纯有理部分（poly + 有理式项），extra_term = log/atan/
     RootOf 对数项之和（M5.2 primitive 层逐阶剥离用）。
     """
+    coeffs = list(P.monos.values()) + list(Q.monos.values())
+    if any(not isinstance(c, (Fr, SymRat)) for c in coeffs):
+        # ℚ(i) 分量（M5.3.1）：共轭分母展开实虚拆分归约 ℚ。
+        # Ga 与 SymRat 混合（ℚ(i,params)）尚不支持——诚实拒绝
+        if any(isinstance(c, SymRat) for c in coeffs):
+            raise PolyError(
+                "rational integration over Q(i,params) pending")
+        return _ga_rational_split(P, Q, x)
     q_poly, r = P.udivmod(Q)
     poly_int = _integrate_poly(q_poly, x)
     rat_terms = []

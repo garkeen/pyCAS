@@ -1,7 +1,7 @@
 from fractions import Fraction as Fr
 
 from cas import term as T
-from cas.term import Expr, Int, Rat, Sym, S, N
+from cas.term import Expr, Int, Rat, Sym, Const, S, N
 from cas.errors import PolyError
 
 
@@ -86,6 +86,14 @@ class Poly:
                 if isinstance(e, Int) and e.v >= 0:
                     return cls._build(b, vars_) ** e.v
                 raise PolyError("non-integer power")
+        if isinstance(t, Const):
+            # 命名常量：仅虚单位 i 内建为 ℚ(i) 域元素（parser 把 'i'
+            # 映射为 Const IU——与 Sym 保留名同语义；π/e/γ 待 M5.6#1
+            # 符号常数通道，此处诚实拒绝）
+            if t is T.IU:
+                from cas.gaussian import Ga
+                return Poly.const(vars_, Ga(0, 1))
+            raise PolyError(f"not polynomial: {t!r}")
         raise PolyError(f"not polynomial: {t!r}")
 
     def to_term(self):

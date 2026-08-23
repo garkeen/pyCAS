@@ -430,5 +430,39 @@ class TestConstLogParam(unittest.TestCase):
         self.assertIn("VERIFIED", out)
 
 
+class TestGaRationalInt(unittest.TestCase):
+    """M5.3.1：ℚ(i) 有理积分——共轭分母展开实虚拆分归约 ℚ 双通道。
+
+    数学：g = p/q，q̄ 系数共轭；q·q̄ 共轭不动 ⟹ 实系数；分子
+    p·q̄ = f + i·h，∫g = ∫f + i·∫h（各自全 ℚ 链）。状态必须 VERIFIED。
+    """
+
+    def _int(self, s):
+        from cas.session import Session
+
+        return Session().integrate(s)
+
+    def test_const_ga_numerator(self):
+        # (1+i)/(x²+1) = (1+i)·atan(x)
+        out = self._int("(1+i)/(x^2+1)")
+        self.assertIn("VERIFIED", out)
+        self.assertIn("atan", out)
+
+    def test_ga_pole_pair(self):
+        # 1/((x-1)(x+i))：复极点残数实虚拆分，答案为实 log/atan 组合
+        out = self._int("1/((x-1)*(x+i))")
+        self.assertIn("VERIFIED", out)
+
+    def test_real_regression(self):
+        # 回归：纯 ℚ 有理路径不受拆分通道影响
+        out = self._int("1/(x^2+1)")
+        self.assertIn("atan(x)", out)
+
+    def test_quadratic_irreducible(self):
+        # 实二次不可约因子（正判别式）：atan + log 混合
+        out = self._int("x/(x^2-2*x+5)")
+        self.assertIn("VERIFIED", out)
+
+
 if __name__ == "__main__":
     unittest.main()
