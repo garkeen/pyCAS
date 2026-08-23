@@ -185,6 +185,16 @@ register(FunctionSpec(
     period=T.times(N(2), T.PI),
 ))
 
+# 特殊函数（M5.5：Risch 证明不可积后的出口层）
+register(FunctionSpec(
+    "Si", 1, print_name="Si",
+    deriv=lambda a: T.div(T.sin(a), a),
+))
+register(FunctionSpec(
+    "Ei", 1, print_name="Ei",
+    deriv=lambda a: T.div(T.exp(a), a),
+))
+
 
 def gen_rules(ruleset):
     """从 FunctionSpec 自动生成无条件规则（origin='spec'）。

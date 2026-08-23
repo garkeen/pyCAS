@@ -536,7 +536,11 @@ def _integrate_core(t, x, a=None, principal=None):
         try:
             term, ok, provisos = s.retract(s.compute(v))
         except RischNonElementary:
-            raise   # 证明性拒答（session 层专属输出，区别于 unsupported）
+            # M5.5：证明不可积后尝试特殊函数出口
+            sp = _special_output(t, x)
+            if sp is not None:
+                return sp
+            raise   # 无匹配 → 保持 proved 拒答
         except RischUnsupported as _ru:
             last_reason = str(_ru)
             continue
@@ -549,6 +553,25 @@ def _integrate_core(t, x, a=None, principal=None):
         return term, ok, s.method, provisos
     raise PolyError("unsupported integrand"
                     + (": " + last_reason if last_reason else ""))
+
+
+def _special_output(t, x):
+    """M5.5：特殊函数出口（模式匹配 + verify 背书）。"""
+    from cas.diff import verify as _vf
+
+    def _mk(name, arg):
+        return T.mk(S(name), (arg,))
+
+    cands = []
+    if t == T.div(T.sin(x), x):
+        cands.append(_mk("Si", x))
+    elif t == T.div(T.exp(x), x):
+        cands.append(_mk("Ei", x))
+
+    for F in cands:
+        if _vf(F, x, t) == "VERIFIED":
+            return F, True, "special function output", []
+    return None
 
 
 def _trig_linear_integrand(t, x):

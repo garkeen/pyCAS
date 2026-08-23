@@ -345,13 +345,13 @@ class TestTrigViaComplexExp(unittest.TestCase):
         self.assertIn("VERIFIED", out)
 
     def test_sin_over_x_nonelementary(self):
-        # 旗舰不可积：∫sin(x)/x dx = Si(x) 类，频率方程 y'±iy=c/x
-        # 在 Q(i,x) 无有理解——机器证明（session 层转为专属输出串）
+        # M5.5 升级：sin(x)/x 不再拒答，出特殊函数出口 Si(x)
+        # （Risch 证明不可积 → 特殊函数匹配 → verify 背书）
         from cas.session import Session
 
         out = Session().integrate("sin(x)/x")
-        self.assertIn("NOT ELEMENTARY", out)
-        self.assertIn("proved", out)
+        self.assertIn("VERIFIED", out)
+        self.assertIn("Si(", out)
 
     def test_constant_integrand(self):
         # 常被积函数快捷通道：∫c dx = c·x（c 不含积分变量；此处直接
