@@ -3,7 +3,7 @@
 from fractions import Fraction as Fr
 
 from cas.errors import PolyError
-from cas.risch import RischNonElementary
+from cas.risch import RischNonElementary, RischUnsupported
 from cas.poly import Poly, SymRat, ugcd
 from cas.apart import apart
 from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums, tr_eval, coefs
@@ -413,6 +413,10 @@ def _try_usub(t, x):
             H, _ok_inner, _m, _prov = integrate(h, z)
         except PolyError:
             continue
+        except RischNonElementary:
+            continue   # 内层证明无初等原函数=该候选不适用（外层继续）
+        except RischUnsupported:
+            continue   # 内层超界（如代数相关守卫）=放弃候选，非终局
         F = T.subst(H, {z: g})
         # 换元是启发式探测：每候选微分回验，未验证继续试下一候选（永不静默错）
         from cas.diff import verify as _verify

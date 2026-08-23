@@ -5,6 +5,10 @@
 - parse/mk 保持 L0 安全交集不动；本层只做"一次分析、处处使用"
 - 每个求解模块在此登记 DOMAIN 声明——隐藏的域约束上缴为数据
 """
+from fractions import Fraction as Fr
+
+from cas import term as T
+from cas.term import Expr, Sym, S, N
 
 
 class CoeffBase:
@@ -195,6 +199,82 @@ def run_pre_passes(t, x):
             t = t2
             a = analyze(t, x)      # 变更即重分析（层集合可能迁移）
     return t
+
+
+# 分支承诺策略位（Reduce 式诚实开关）：仅影响验证管线的合并阶段，
+# 不改变 L0 规范化。默认关闭——√x 族保持 PROBABLE 级诚实状态；
+# :declare principal-branch on 后按需升级 VERIFIED。
+BRANCH_POLICY = {"principal": False}
+
+
+def principal_branch():
+    return BRANCH_POLICY["principal"]
+
+
+def set_principal_branch(on):
+    BRANCH_POLICY["principal"] = bool(on)
+
+
+def _merge_ratpow(t):
+    """同底有理指数幂合并（验证专用域阶段；L0 裁定不动）。
+
+    仅在 principal 承诺开启时由 verify 管线调用——语义依据：
+    本系统 diff 幂规则已承诺单值主支 Log，合并与微分语义一致。"""
+    head = getattr(t, "head", None)
+    if head is None:
+        return t
+    args = tuple(_merge_ratpow(a) for a in t.args)
+    u = T.mk(head, args)
+    uh = getattr(u, "head", None)
+    if uh is None or uh.name != "Times":
+        return u
+    from fractions import Fraction as Fr
+    coeff = Fr(1)
+    groups = {}
+    rest = []
+    for fac in u.args:
+        if T.is_num(fac):
+            coeff *= T.num_val(fac)
+            continue
+        if isinstance(fac, Expr) and fac.head.name == "Power" \
+                and isinstance(fac.args[1], (T.Int, T.Rat)):
+            b_, e_ = fac.args
+            ef = e_.f if isinstance(e_, T.Rat) else Fr(e_.v)
+            # 数值系数从底数剥出（精确）：Power(c·u,q)=c^q·u^q，
+            # 使 x^{3/2} 与 (2x)^{-1} 的底归一为同一 x
+            while isinstance(b_, Expr) and b_.head.name == "Times":
+                nums = [f_ for f_ in b_.args if T.is_num(f_)]
+                others = [f_ for f_ in b_.args if not T.is_num(f_)]
+                if len(nums) != 1 or not others:
+                    break
+                cv = T.num_val(nums[0])
+                if cv < 0 and ef.denominator != 1:
+                    break          # 负底分数幂：主支外不剥（保守）
+                cnum = others[0] if len(others) == 1 \
+                    else T.mk(S("Times"), tuple(others))
+                rest.append(T.pw(N(cv), N(ef)))
+                b_, e_ = cnum, ef
+            key = b_._h
+            g = groups.get(key)
+            if g is None:
+                groups[key] = [b_, ef]
+            else:
+                g[1] += ef
+            continue
+        rest.append(fac)
+    if not groups:
+        return u
+    out = list(rest)
+    for b_, e_ in groups.values():
+        if e_ == 0:
+            continue
+        out.append(T.pw(b_, N(e_)))
+    if not out:
+        return N(coeff)
+    u2 = T.mk(S("Times"), tuple(out)) if len(out) > 1 else out[0]
+    if coeff != 1:
+        u2 = T.times(u2, N(coeff))
+    return u2
 
 
 # ---------------------------------------------------------------------------

@@ -1719,9 +1719,17 @@ class Session:
             return self.assume(self.expand_history(line[8:]))
         if line.startswith(":declare "):
             parts = line[9:].split()
+            if parts and parts[0] == "principal-branch":
+                from cas import structure as _st
+                on = (parts[1].lower() in ("on", "true", "1")
+                      if len(parts) > 1 else True)
+                _st.set_principal_branch(on)
+                return ("branch policy: principal = "
+                        + ("ON (fractional-power identities active "
+                           "in verification)" if on else "OFF"))
             if len(parts) == 2:
                 return self.declare(parts[0], parts[1])
-            return "usage: :declare <var> <property>"
+            return "usage: :declare <var> <property> | principal-branch on/off"
         if line.startswith(":ans "):
             parts = line[5:].split(None, 1)
             oid = int(parts[0])

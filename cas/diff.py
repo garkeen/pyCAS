@@ -81,6 +81,20 @@ def verify(F, x, f, budget=100000):
     tz = _tower_zero(d(F, x), f, x)
     if tz:
         return "VERIFIED"
+    # 分数幂合并阶段（P4）：仅 principal 承诺开启时启用——对差值树
+    # 做同底有理指数幂合并后判零
+    from cas.structure import principal_branch, _merge_ratpow
+    if principal_branch():
+        d0 = T.plus(d(F, x), T.neg(f))
+        m = _merge_ratpow(d0)
+        if m is not d0:
+            if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
+                return "VERIFIED"
+            r2 = equivalent(m, T.ZERO, budget=budget)
+            if r2 is T3.YES:
+                return "VERIFIED"
+            if _tower_zero(m, T.ZERO, x):
+                return "VERIFIED"
     if r is T3.PROBABLE:
         return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"
