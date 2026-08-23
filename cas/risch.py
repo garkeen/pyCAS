@@ -236,9 +236,9 @@ def _collect_radical(pterm, subs):
     if not (T.is_num(b) and isinstance(e, T.Rat)):
         return
     bv = T.num_val(b)
-    if bv <= 0 or e.v <= 0 or e.v == 1:
+    if bv <= 0 or e.f <= 0 or e.f == 1:
         return
-    p_, q_ = e.v.numerator, e.v.denominator
+    p_, q_ = e.f.numerator, e.f.denominator
     if q_ == 1:
         return
     key = (bv, p_, q_)
