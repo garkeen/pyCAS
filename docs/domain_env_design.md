@@ -65,15 +65,28 @@ c. 阶段的假设需求不可声明（主支承诺藏在天知道哪里）。
 匹配 = detect 在输入上命中；排序 = 管线声明的序列；冲突 = 声明的
 优先级（沿用规则 prio 语义）。
 
-## 4. 迁移分期（每期独立合入，默认行为不变）
+## 4. 迁移分期（实施进度 2026-08）
 
-1. P1 定义 Stage 结构体 + 把 equivalent() 现有分层改造为第一个消费
-   者（纯重构，行为不变）
-2. P2 _tower_zero 与 integrate 入口的公共阶段收编（ef_contract/
-   num_powers/trigs_to_exp 变为 Stage；三处重复消除）
-3. P3 新增 ratpow_merge 阶段（needs=['principal-branch'∨'x>0']）：
-   ∫√x 族按账本状态自动升级 VERIFIED/proviso
-4. P4 integrate 瀑布数据化（M6 地基）；arch 域矩阵改述为 Stage 清单
+1. P1 ✅（866e98e）Analysis 一等对象：analyze(t,x) 单遍扫描
+   （layers/coeff/pmap）+ 13 模块 DOMAIN_DECLS 域声明登记
+2. P2 ✅（a84b71e）Pass 协议 + PRE_PASSES 声明式表收编入口预规范化
+   （NumPowerNorm/EFContract/EFExpandTrans）；TrigToExp/ConstParam
+   暂留塔内（与出口回代耦合，随 P3 迁移）
+3. **P3 精确切分**（下一预算段，需一次做完勿半途）：
+   - structure.py 定义 Struct 协议：project(t,a)->value|FAIL /
+     compute(v)->value / retract(v)->t——Maple frontend 的通用化，
+     一份实现替换五份私有投影管道
+   - 第一实例 TowerStruct：project 包装 build_extension+入口归一
+     （ConstParam/TrigToExp 自 PASSES 迁入），compute 包装 _risch_rec
+     链，retract 包装层回代+pmap 回代；integrate_exp_tower 退化为薄壳
+   - 第二实例 QxStruct：project 包装 _rat_pair，compute 包装 Hermite+RT
+   - SOLVERS 声明式序列替代瀑布硬编码；spec/usub/tan-half 为序列头部
+     快速通道；每包测试锁定后删旧入口胶水
+   - 同段处理混合域门控迁移（现 _rde_tower_solve 的诚实拒绝改为
+     TowerStruct.project 的 FAIL 理由）
+4. P4 分数幂合并规则落地（needs=['principal-branch'∨'x>0']）：
+   ∫√x 族按账本状态自动升级 VERIFIED/proviso；integrate 瀑布数据化
+   （M6 地基）；arch 域矩阵改述为 Stage/Struct 清单
 
 ## 5. 与 FriCAS 的关系（诚实定位）
 
