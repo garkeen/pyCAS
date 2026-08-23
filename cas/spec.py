@@ -207,3 +207,62 @@ def gen_rules(ruleset):
             auto=True,
             origin="spec",
         ))
+
+
+# ---------------------------------------------------------------------------
+# 常数注册表（P5：系统常数与系统函数同构统一——常数=零元语义对象）。
+# 消费者（poly._build / risch._frac_num / 块点提示 / analyze）全部查表；
+# 新增命名常数 = 一条登记，零消费者改动。
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dc
+
+
+@_dc(frozen=True)
+class ConstantSpec:
+    name: str            # 注册名（parser 输入名）
+    atom: object         # 驻留 Const 节点
+    print_name: str
+    numeric: float
+    kind: str            # 'imaginary-unit'（系数域成员，Ga 内建）
+                         # | 'transcendental-named'（M5.6 参数化通道）
+
+
+CONSTANTS = {}
+
+
+def register_constant(cs):
+    CONSTANTS[cs.name] = cs
+    return cs
+
+
+def get_constant(name):
+    return CONSTANTS.get(name)
+
+
+def iter_constants(kind=None):
+    return [c for c in CONSTANTS.values()
+            if kind is None or c.kind == kind]
+
+
+register_constant(ConstantSpec(
+    "i", T.IU, "i", 1j, kind="imaginary-unit"))
+register_constant(ConstantSpec(
+    "pi", T.PI, "π", 3.141592653589793,
+    kind="transcendental-named"))
+register_constant(ConstantSpec(
+    "e", T.E, "e", 2.718281828459045, kind="transcendental-named"))
+register_constant(ConstantSpec(
+    "gamma", T.GAMMA, "γ", 0.5772156649015329,
+    kind="transcendental-named"))
+
+
+def registry_view(user_defs=None):
+    """统一注册视图：系统函数 ∪ 系统常数 ∪ 用户宏（用户遮蔽同名系统项）。"""
+    out = {n: {"kind": "function", "spec": sp}
+           for n, sp in SPECS.items()}
+    for n, c in CONSTANTS.items():
+        out[n] = {"kind": "constant", "spec": c}
+    for n in (user_defs or {}):
+        out[n] = {"kind": "user", "spec": user_defs[n]}
+    return out

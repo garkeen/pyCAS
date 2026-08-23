@@ -264,6 +264,8 @@ def _const_blockage_hint(f):
     """
     from cas.pprint import to_str
 
+    from cas.spec import iter_constants
+    named = {c.name for c in iter_constants("transcendental-named")}
     names = []
     tconsts = set()
     seen = set()
@@ -275,7 +277,7 @@ def _const_blockage_hint(f):
         seen.add(id(v))
         if isinstance(v, Const):
             nm = getattr(v, "name", "")
-            if nm in ("pi", "e", "gamma") and nm not in names:
+            if nm in named and nm not in names:
                 names.append(nm)
             continue
         if isinstance(v, Expr) and getattr(v, "head", None) is not None:
@@ -785,8 +787,10 @@ def _frac_num(t, vars_):
         from cas.poly import _mk_param
         return Poly.const(vars_, _mk_param(t)), Poly.one(vars_)
     if isinstance(t, Const):
-        # parser 把用户输入的 'i' 映射为 Const IU——与 Sym 保留名同语义
-        if t is T.IU:
+        # 命名常数查注册表（P5）：imaginary-unit 内建为域元素
+        from cas.spec import get_constant
+        sp = get_constant(getattr(t, "name", ""))
+        if sp is not None and sp.kind == "imaginary-unit":
             from cas.gaussian import Ga
             return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
         raise PolyError("not rational over extension: " + repr(t))

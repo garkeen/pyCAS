@@ -148,10 +148,11 @@ class Poly:
                     return cls._build(b, vars_) ** e.v
                 raise PolyError("non-integer power")
         if isinstance(t, Const):
-            # 命名常量：仅虚单位 i 内建为 ℚ(i) 域元素（parser 把 'i'
-            # 映射为 Const IU——与 Sym 保留名同语义；π/e/γ 待 M5.6#1
-            # 符号常数通道，此处诚实拒绝）
-            if t is T.IU:
+            # 命名常数查注册表（P5）：imaginary-unit 内建为域元素，
+            # 其余诚实拒绝（参数化通道见 M5.6）
+            from cas.spec import get_constant
+            sp = get_constant(getattr(t, "name", ""))
+            if sp is not None and sp.kind == "imaginary-unit":
                 from cas.gaussian import Ga
                 return Poly.const(vars_, Ga(0, 1))
             raise PolyError(f"not polynomial: {t!r}")
