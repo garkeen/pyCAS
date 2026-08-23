@@ -56,7 +56,7 @@ def _tower_zero(a, b, x):
         if d0 is T.ZERO:
             return True
         if T.is_num(d0) and T.num_val(d0) == 0:
-            return True   # mk 规范化折叠出的数值零（如 exp(x·log2)−2^x）
+            return True   # 防御：环规范化产出的非常驻数值零
         # 与 integrate_exp_tower 同款入口归一（M5.6）：数值底幂 -> 复
         # 指数、Log(常量) -> 独立超越参数——两侧同一常量集按同一排序
         # 编号，替换一致；恒等式在 ℚ(c₁..)(tower) 上判定，对真实
