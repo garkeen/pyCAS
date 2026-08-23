@@ -544,6 +544,22 @@ def _neg_pow_of(t, f):
     return False
 
 
+def _const_exact(v):
+    """纯常数项（数字+虚单位）精确折叠为规范项；含自由变量返回 None。
+
+    msolve 解分量规范化用——ℚ(i) 常数分量 2*i/(-2*i) -> -1 类。"""
+    import cas.term as T
+    from cas.gaussian import Ga
+
+    if T.free_vars(v):
+        return None
+    try:
+        g = Ga.from_term_val(v)
+        return g.to_term()
+    except Exception:
+        return None
+
+
 class Session:
     def __init__(self, budget=100000):
         self.current = None
@@ -1096,11 +1112,19 @@ class Session:
                 acc = T.ZERO
                 for cell, v in zip(row, r.unique):
                     acc = T.plus(acc, T.times(cell, v))
-                if simplify(acc) is not b[i]:
+                acc_s = simplify(acc)
+                acc_c = _const_exact(acc_s)
+                bi_c = _const_exact(b[i])
+                if acc_c is not None and bi_c is not None:
+                    if acc_c != bi_c:      # Ga 精确等词（P5 注册语义）
+                        ok = False
+                        break
+                elif simplify(acc) is not b[i]:
                     ok = False
                     break
             out = ", ".join(
-                f"x{i + 1} = {to_str(v)}" for i, v in enumerate(r.unique)
+                f"x{i + 1} = {to_str(_const_exact(v) or simplify(v))}"
+                for i, v in enumerate(r.unique)
             )
             return out + f"   [{'VERIFIED' if ok else 'UNVERIFIED'}, M*x = b]"
         if r.particular is None:
