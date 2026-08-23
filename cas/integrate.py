@@ -424,11 +424,25 @@ def _try_usub(t, x):
 
 
 def integrate(t, x):
-    """∫ t dx（外层）：各通道结果统一过参数分母 proviso 扫描。
+    """∫ t dx（外层）：EF 收缩 + 各通道结果统一过参数分母 proviso 扫描。
 
+    EF 收缩（FriCAS iiilog 同款）：Exp(k·Log(u)) -> u^k（k∈ℤ 精确）——
+    ln(e^{2ln x}-(x-1)^2) 类伪装式先收缩为 ln(2x-1) 再入管线。
     M5.6#4 阶段一：generic 答案在参数退化点（e^{ax}/a 的 a=0 类）
     无定义而原函数存在——静默输出即撒谎，此处强制声明成立条件。
     """
+    from cas.risch import _ef_contract, _ef_expand_trans
+    from cas.simplify import simplify as _simp, expand as _exp
+
+    t2 = _ef_contract(t)
+    if t2 is not t:
+        t2 = _simp(_exp(t2))
+    t3 = _ef_expand_trans(t2)
+    if t3 is not t2:
+        t3 = _ef_contract(t3)
+        t2 = _simp(_exp(t3)) if True else t3
+    if t2 is not t:
+        t = t2
     F, ok, method, provisos = _integrate_core(t, x)
     from cas.risch import _param_provisos
     for p in _param_provisos(F, x):

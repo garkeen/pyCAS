@@ -17,7 +17,7 @@ from fractions import Fraction as Fr
 from math import gcd
 
 from cas import term as T
-from cas.term import S, N, Expr, Sym, Const
+from cas.term import S, N, Expr, Sym, Const, Int, ONE
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
@@ -433,6 +433,59 @@ def _realify_log_pairing(expr, x):
     if not subs:
         return None
     return T.subst(expr, subs)
+
+
+def _ef_contract(t):
+    """exp-log 收缩（M5.3 出口扩展；FriCAS elemntry.spad iiilog 同款）。
+
+    Exp(k·Log(u)) -> Power(u,k)，k∈ℤ 无条件精确（整数幂单值，
+    e^{Log z}=z 为定义）；k=1 隐式同款。分支敏感的 Log(Exp(u)) 不在此
+    处理（需实性门控，走账本 refine 通道）。
+    """
+    head = getattr(t, "head", None)
+    if head is None:
+        return t
+    args = tuple(_ef_contract(a) for a in t.args)
+    if head.name == "Exp":
+        u = args[0]
+        # 拆因子找整数倍 Log
+        if isinstance(u, Expr) and u.head.name == "Times":
+            k = 1
+            logs = []
+            rest = []
+            okflag = True
+            for fac in u.args:
+                if isinstance(fac, Int):
+                    k *= fac.v
+                elif isinstance(fac, Expr) and fac.head.name == "Log":
+                    logs.append(fac.args[0])
+                else:
+                    rest.append(fac)
+            if logs and not rest and len(logs) == 1 and k != 0:
+                return T.pw(logs[0], N(Fr(k)))
+            _ = okflag
+        if isinstance(u, Expr) and u.head.name == "Log":
+            return T.pw(u.args[0], ONE)
+    return T.mk(head, args)
+
+
+def _ef_expand_trans(t):
+    """超越头的参数做环层展开（expand 不深入非环节点——log 参数内的
+    多项式差不展开则塔看到的是伪装形态）。"""
+    head = getattr(t, "head", None)
+    if head is None:
+        return t
+    args = tuple(_ef_expand_trans(a) for a in t.args)
+    u = T.mk(head, args)
+    if head.name in ("Log", "Sin", "Cos", "Tan", "Atan",
+                     "Sinh", "Cosh", "Tanh"):
+        from cas.simplify import simplify as _s, expand as _e
+
+        try:
+            u = T.mk(head, (_s(_e(u.args[0])),))
+        except Exception:
+            pass
+    return u
 
 
 def _neg_term(tt):
