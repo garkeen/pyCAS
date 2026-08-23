@@ -2745,7 +2745,7 @@ def _pld_heu(f_rf, w_rf, de, jl, depth=0):
     # c1 = M/N（有理数）
     cv = c1
     den = _lcm2(cv.re.denominator, cv.im.denominator)
-    M = int(cv.re * den + cv.im * den) if False else         int((cv.re * den))
+    int((cv.re * den))
     Nn = den
     if cv.im != 0:
         return None
