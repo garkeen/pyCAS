@@ -34,13 +34,14 @@ _ALG_HEADS = ("Sin", "Cos", "Tan", "Atan")
 class Analysis:
     """单次结构分析结果（一等对象，随调用链传递）。"""
 
-    __slots__ = ("layers", "coeff", "pmap", "gens")
+    __slots__ = ("layers", "coeff", "pmap", "gens", "x")
 
-    def __init__(self, layers, coeff, pmap=None, gens=()):
+    def __init__(self, layers, coeff, pmap=None, gens=(), x=None):
         self.layers = frozenset(layers)
         self.coeff = coeff
         self.pmap = pmap or {}
         self.gens = gens
+        self.x = x
 
     def __str__(self):
         return (f"layers={sorted(self.layers)} coeff={self.coeff} "
@@ -125,7 +126,75 @@ def analyze(t, x):
     if ALG_RELATIONS:
         layers.add(Layer.EXPLOG)          # 参数化后以 exp/log 形态入塔
     coeff = _coeff_of(t, x)
-    return Analysis(layers, coeff, consts)
+    return Analysis(layers, coeff, consts, x=x)
+
+
+# ---------------------------------------------------------------------------
+# Pass 协议 + 预规范化表（P2：收编散落的入口转换，声明式顺序）。
+# 每 pass：全树显式重建（带各自预算），绝不进构造器；幂等可重入——
+# 塔内同名前置保留为无操作，回代机制（pmap）仍由塔出口负责。
+# ---------------------------------------------------------------------------
+
+class Pass:
+    name = "?"
+
+    def detect(self, a):
+        return True
+
+    def apply(self, t, a):
+        return t
+
+
+class NumPowerNorm(Pass):
+    """变指数/分数幂归一：b^e -> Exp(e·Log(b))。"""
+    name = "num_power_norm"
+
+    def apply(self, t, a):
+        from cas.risch import _norm_const_base_powers
+        return _norm_const_base_powers(t, a.x)
+
+
+class EFContract(Pass):
+    """exp(k·Log u) -> u^k（k∈ℚ；FriCAS iiilog 同款）。"""
+    name = "ef_contract"
+
+    def apply(self, t, a):
+        from cas.risch import _ef_contract
+        from cas.simplify import simplify as _s, expand as _e
+        t2 = _ef_contract(t)
+        if t2 is not t:
+            return _s(_e(t2))
+        return t
+
+
+class EFExpandTrans(Pass):
+    """超越头参数环层展开后再收缩一轮。"""
+    name = "ef_expand_trans"
+
+    def apply(self, t, a):
+        from cas.risch import _ef_expand_trans, _ef_contract
+        from cas.simplify import simplify as _s, expand as _e
+        t3 = _ef_expand_trans(t)
+        if t3 is not t:
+            t3 = _ef_contract(t3)
+            return _s(_e(t3))
+        return t
+
+
+PRE_PASSES = [NumPowerNorm(), EFContract(), EFExpandTrans()]
+
+
+def run_pre_passes(t, x):
+    """入口预规范化：单次分析 → 逐 pass 检测+应用（变更即重分析）。"""
+    a = analyze(t, x)
+    for p in PRE_PASSES:
+        if not p.detect(a):
+            continue
+        t2 = p.apply(t, a)
+        if t2 is not None and t2 is not t:
+            t = t2
+            a = analyze(t, x)      # 变更即重分析（层集合可能迁移）
+    return t
 
 
 # ---------------------------------------------------------------------------
