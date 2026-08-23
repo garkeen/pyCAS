@@ -551,6 +551,8 @@ def _spec_antideriv(t, x):
     """裸 spec 函数（参数恰为 x）或其线性复合 f(a·x+b) -> 简单原函数。
 
     线性复合：d/dx anti(a x+b) = f(a x+b)·a，故 ∫f(a x+b) = anti(a x+b)/a。
+    斜率 a 放宽为任意不含 x 的非零常量项（M5.6#1：符号/命名常数斜率
+    γ、π、a+1 类；退化点由外层参数分母扫描声明 [a≠0]）。
     """
     from cas import spec as _spec
     from cas.solve import _linear_split
@@ -567,11 +569,17 @@ def _spec_antideriv(t, x):
     if split is None:
         return None   # 非线性复合（如 exp(-x^2)）：spec 线性反导表不覆盖
     a_, b_ = split
-    if not T.is_num(a_) or T.num_val(a_) == 0 or not T.is_num(b_):
+    if x in T.free_vars(a_):
         return None
+    if T.is_num(a_):
+        if T.num_val(a_) == 0:
+            return None
+        a_div = T.N(T.num_val(a_))
+    else:
+        a_div = a_
     if x not in T.free_vars(arg):
         return None
-    return T.div(sp.anti(arg), T.N(T.num_val(a_)))
+    return T.div(sp.anti(arg), a_div)
 
 
 def _trig_check(t, x):

@@ -1580,16 +1580,20 @@ def _norm_const_base_powers(t, x):
 
 
 def _parametrize_const_logs(f, x):
-    """Log(不含积分变量的项) -> 独立超越参数符号（M5.6 首项）。
+    """Log(不含积分变量的项)/命名常数 -> 独立超越参数符号（M5.6）。
 
-    log 2 / log y 类常量须进系数域做线性代数，而此类常量间的数值
-    关系不可判定（Richardson）；积分全程只需"互相超越独立"假设——
-    零等价 = ℚ(params, c₁..cₙ) 上有理恒等（可判定，SymRat 参数机
-    器），出口回代还原。形式恒等 ⇒ 对一致特化（c=真值）成立：
+    log 2 / π / e / γ 类常量须进系数域做线性代数，而此类常量间的
+    数值关系不可判定（Richardson）；积分全程只需"互相超越独立"假设
+    ——零等价 = ℚ(params, c₁..cₙ) 上有理恒等（可判定，SymRat 参数
+    机器），出口回代还原。形式恒等 ⇒ 对一致特化（c=真值）成立：
     独立性假设只可能保守拒绝，不产生误证。
-    返回 (新 f, 回代表 {塔符号 -> 原 Log 项})。
+    命名常数按名字确定编号（pi/e/gamma -> _nc1/_nc2/_nc3）；IU 已由
+    Ga 内建不经此通道。
+    返回 (新 f, 回代表 {塔符号 -> 原 term})。
     """
+    named = {"pi": "_nc1", "e": "_nc2", "gamma": "_nc3"}
     found = {}
+    nc_subs = {}
     stack = [f]
     while stack:
         u = stack.pop()
@@ -1598,14 +1602,23 @@ def _parametrize_const_logs(f, x):
                 found[u] = None      # 整体替换，不再深入 arg
                 continue
             stack.extend(u.args)
-    if not found:
-        return f, {}
+            # 命名常数收集（Log 子树已整体替换，其内部 π 不重复点名）
+            for a in u.args:
+                if isinstance(a, Const) and getattr(a, "name", "") in named:
+                    nc_subs.setdefault(a, S(named[a.name]))
+        elif isinstance(u, Const) and getattr(u, "name", "") in named:
+            nc_subs[u] = S(named[u.name])
     subs = {}
     backsub = {}
     for k, lt in enumerate(sorted(found, key=repr), 1):
         sym = S(f"_cl{k}")
         subs[lt] = sym
         backsub[sym] = lt
+    for c_term, sym in nc_subs.items():
+        subs[c_term] = sym
+        backsub[sym] = c_term
+    if not subs:
+        return f, {}
     return T.subst(f, subs), backsub
 
 
