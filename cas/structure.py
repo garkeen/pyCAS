@@ -117,6 +117,8 @@ def analyze(t, x):
             if isinstance(e_, T.Rat) and e_.f.denominator != 1 \
                     and x in T.free_vars(b_):
                 layers.add(Layer.ALGEBRAIC)
+            elif x in T.free_vars(e_):
+                layers.add(Layer.EXPLOG)   # 变指数幂=超越（归一后入塔）
         stack.extend(u.args)
     # 根式代数常数经 _collect_radical 已登记 ALG_MODULI——此处读出
     from cas.risch import ALG_RELATIONS
