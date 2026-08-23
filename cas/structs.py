@@ -42,7 +42,10 @@ class Struct:
 
 
 class QxStruct(Struct):
-    """有理函数结构 ℚ(x)/ℚ(i)(x)/ℚ(params)(x)：Hermite + atan/RT。"""
+    """有理函数结构 ℚ(x)/ℚ(i)(x)/ℚ(params)(x)：Hermite + atan/RT。
+
+    代数常数（ALG_MODULI 登记）在计算期间挂起约简——保持符号形态，
+    答案经回代还原根式。这确保 ∫1/(x²-√2) 出 log(x-√2) 而非 log(x-2)。"""
     name = "rational"
     method = "Hermite reduction + RootOf log part"
 
@@ -56,8 +59,11 @@ class QxStruct(Struct):
 
     def compute(self, v):
         from cas.integrate import integrate_rational
+        from cas.poly import alg_suspend
         P, Q, x = v
-        term, ok, provisos = integrate_rational(P, Q, x)
+        # 挂起关系约简：代数常数保持符号形态（_a1 不塌缩为数值）
+        with alg_suspend():
+            term, ok, provisos = integrate_rational(P, Q, x)
         return (term, ok, provisos)
 
     def retract(self, v):
