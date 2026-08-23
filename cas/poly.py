@@ -4,6 +4,67 @@ from cas import term as T
 from cas.term import Expr, Int, Rat, Sym, Const, S, N
 from cas.errors import PolyError
 
+# 代数常数模注册表（M5.4b，SAE 语义对齐 FriCAS algext.spad）：
+# 符号 -> monic 极小多项式（单变量 Poly，Fr 系数）。出现该变量的
+# Poly 乘积自动做余式约简——保证零判定精确（未约简的 α²−2 叶会
+# 让 is_zero 误判）。risch 侧在根式参数化时登记。
+ALG_MODULI = {}
+
+
+def _alg_reduce_out(p):
+    """乘积出口：对含已登记代数变量的结果逐变量做模余式。"""
+    if not ALG_MODULI:
+        return p
+    mods = [(v, ALG_MODULI[v]) for v in p.vars if v in ALG_MODULI]
+    if not mods:
+        return p
+    for v, m in mods:
+        if p.is_zero():
+            return p
+        p = _reduce_alg_var(p, v, m)
+    return p
+
+
+def _reduce_alg_var(p, a, m):
+    """p（多变量）中变量 a 模 monic 单变量多项式 m 的余式。
+
+    按 a 的指数分桶（系数=其余变量上的 Poly），monic 首项消去法；
+    系数环算术全走 Poly 反射通道，对混合叶（Ga 等）安全。
+    """
+    idx = p._var_idx(a)
+    rest = tuple(vv for vv in p.vars if vv is not a)
+    dm = max(kk[0] for kk in m.monos)
+    md = {kk[0]: cc for kk, cc in m.monos.items()}
+    cur = {}
+    for k, c in p.monos.items():
+        e = k[idx]
+        ka = k[:idx] + k[idx + 1:]
+        cp = Poly(rest, {ka: c})
+        cur[e] = cur.get(e, Poly.zero(rest)) + cp
+    while True:
+        ks = [e for e, c in cur.items() if not c.is_zero()]
+        if not ks:
+            return Poly.zero(p.vars)
+        top = max(ks)
+        if top < dm:
+            break
+        shift = top - dm
+        topc = cur.pop(top)
+        nxt = dict(cur)
+        for e, cc in md.items():
+            if e == dm:
+                continue          # monic：首项系数 1 已随 top 抵消
+            te = e + shift
+            prod = topc.scalar(cc)
+            nxt[te] = nxt.get(te, Poly.zero(rest)) - prod
+        cur = nxt
+    out = {}
+    for e, c in cur.items():
+        for k, vv in c.monos.items():
+            full = k[:idx] + (e,) + k[idx:]
+            out[full] = vv
+    return Poly(p.vars, out)
+
 
 class Poly:
     __slots__ = ("vars", "monos")
@@ -156,7 +217,7 @@ class Poly:
             for k2, v2 in o.monos.items():
                 k = tuple(a + b for a, b in zip(k1, k2))
                 m[k] = m.get(k, Fr(0)) + v1 * v2
-        return Poly(self.vars, m)
+        return _alg_reduce_out(Poly(self.vars, m))
 
     def __pow__(self, n):
         if n < 0:

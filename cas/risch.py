@@ -249,6 +249,8 @@ def _collect_radical(pterm, subs):
     sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
     mp = Poly((), {(1,): Fr(1), (0,): Fr(-(bv ** p_))})
     ALG_RELATIONS[sym] = ((bv, p_, q_), mp)
+    from cas.poly import ALG_MODULI
+    ALG_MODULI[sym] = mp          # 乘积出口自动模约简（M5.4b）
     subs[pterm] = sym
 
 
