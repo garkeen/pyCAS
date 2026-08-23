@@ -61,14 +61,32 @@ def solve_poly_ineq(term_, op, x):
     根描述子 ("root", 因子串, lo, hi)。
     """
 
-    # 域守卫（Step 3）：非 Fr 系数诚实拒绝（SymRat numerator 崩溃修复）
+    # 域守卫（Step 3 + M5.4 补丁）：非 ℚ 系数诚实拒绝。
+    # analyze 的 coeff 只看数域轴——常数根式叶（x²−√2 类）会被误判
+    # 为 ℚ 后在 Poly 构造处炸出裸 "non-integer power"；此处显式扫描
+    # 根式叶提前拦截，给出结构化拒答消息
     from fractions import Fraction as _Fr
     from cas.errors import PolyError as _PE
     from cas.structure import analyze as _analyze, CoeffBase as _CB
-    if _analyze(term_, x).coeff is not _CB.Q:
+    import cas.term as _T
+
+    def _has_rad_leaf(u_):
+        stack = [u_]
+        while stack:
+            v_ = stack.pop()
+            if isinstance(v_, _T.Expr):
+                if v_.head.name == "Power":
+                    e__ = v_.args[1]
+                    if isinstance(e__, _T.Rat) and e__.f.denominator != 1:
+                        return True
+                stack.extend(v_.args)
+        return False
+
+    res_a = _analyze(term_, x)
+    if res_a.coeff is not _CB.Q or _has_rad_leaf(term_):
         raise _PE("solve_poly_ineq: coefficient domain beyond Q "
                   "not supported (Sturm chain requires Q; "
-                  "CAD/VTS pending M7d)")
+                  "algebraic constants pending; CAD/VTS pending M7d)")
     p = Poly.from_term(expand(term_), (x,))
     if p.is_zero():
         ivs = [(None, None, False, False)] if op in ("Ge", "Le") else []

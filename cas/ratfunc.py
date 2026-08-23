@@ -1,7 +1,7 @@
 from fractions import Fraction as Fr
 
 from cas.errors import PolyError
-from cas.poly import Poly, ugcd, mgcd, div_exact
+from cas.poly import Poly, ugcd, mgcd, div_exact, SymRat
 from cas import term as T
 from cas.term import Expr, Int
 
@@ -146,6 +146,10 @@ class RatFunc:
     def __mul__(self, o):
         if isinstance(o, (int, Fr)):
             return RatFunc(self.p.scalar(Fr(o)), self.q)
+        # M5.4 审计扩容：ℚ(params,α) 标量残数（SymRat/Ga 叶）——
+        # 域泛化算术经 Poly.scalar 直接消化
+        if isinstance(o, SymRat) or hasattr(o, "norm"):
+            return RatFunc(self.p.scalar(o), self.q)
         return RatFunc(self.p * o.p, self.q * o.q)
 
     def __rmul__(self, o):

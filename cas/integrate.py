@@ -148,13 +148,15 @@ _CONST_FUNCT_HEADS = ("Sin", "Cos", "Tan", "Atan", "Exp", "Log",
 
 
 def _collect_const_params(t, x):
-    """M5.6#1：非有理常数项 -> 局部参数符号映射。
+    """M5.6#1：非有理常数项 -> 局部参数符号映射（统一规则）。
 
-    收集三类极大子项（不含积分变量）：
-    1. 数值底有理指数幂（根式，原 _collect_rad_params 职责）
-    2. 命名常数（pi/e/gamma）
-    3. 函数头复合项整体（sin(1)、e^2、log(3)、atan(1/2) 类）
-    环可构造的 Plus/Times/整幂不收（Poly._build 原生支持）。
+    收集判定（极大子项，不含积分变量）：
+    - 命名常数（pi/e/gamma）-> 收
+    - 函数头复合项（sin(1)、e^2、atan(1/2)、嵌套根式 sqrt(1+sqrt(2))
+      类）-> 整体收
+    - Power 非整指数 -> 收（数值底=根式；其他底整体收）
+    - Plus/Times/整幂 -> 不收，下降到子项各自判定
+    环可构造形态由 Poly._build 原生支持；收集仅覆盖构造不了的部分。
     Richardson 安全性与 Log(常量) 参数化同源：互相超越独立假设
     只可能保守拒绝。返回 {const_term: Sym}。
     """
@@ -163,21 +165,17 @@ def _collect_const_params(t, x):
     def _collectible(u):
         if x in T.free_vars(u):
             return False
+        if _is_named_const(u):
+            return True
         if isinstance(u, T.Expr):
             n = u.head.name
             if n in _CONST_FUNCT_HEADS:
                 return True
             if n == "Power":
-                b_, e_ = u.args
-                if _is_named_const(b_) or isinstance(b_, T.Expr):
-                    return not (T.is_num(b_) and e_.f.denominator == 1) \
-                        if isinstance(e_, T.Rat) else True
-                if T.is_num(b_) and isinstance(e_, T.Rat) \
-                        and e_.f.denominator != 1:
-                    return True          # 根式
-                return False
+                e_ = u.args[1]
+                return not isinstance(e_, T.Int)
             return False
-        return _is_named_const(u)
+        return False
 
     stack = [t]
     while stack:

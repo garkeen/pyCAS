@@ -1584,15 +1584,76 @@ def _const_roots_ga_quad(Rz):
     return [(-b1 + s) / (a2 * 2), (-b1 - s) / (a2 * 2)]
 
 
+def _term_to_symrat(t_):
+    """term -> SymRat（参数/AN 轨道）：显式 (num, den) 对算术求值。
+
+    M5.4 审计修复：残数根落在 ℚ(params,α) 时不再误判为不可积。
+    solve 返回的解可能是未规范嵌套分式（如 1/(a²·(-1/a)))——其内部
+    结构与打印同形的 parse 树不同，from_term 分支覆盖不了；此处用
+    自底向上 (num,den) 对算术（加/乘/整幂/取逆）完全可控。不支持
+    形态返回 None。"""
+    from cas.poly import _mk_rat
+
+    vs = tuple(sorted(T.free_vars(t_), key=lambda s_: s_.name))
+    zero_k = tuple(0 for _ in vs)
+
+    def nd(u):
+        # 全部叶子直接在 vs 全空间构造——避免跨空间乘法的 var mismatch
+        if T.is_num(u):
+            return Poly(vs, {zero_k: T.num_val(u)}), Poly.one(vs)
+        if isinstance(u, Sym):
+            k = [0] * len(vs)
+            k[vs.index(u)] = 1
+            return Poly(vs, {tuple(k): Fr(1)}), Poly.one(vs)
+        h = getattr(u, "head", None)
+        if h is None:
+            raise ValueError("atom")
+        n = h.name
+        if n == "Plus":
+            rn = Poly.zero(vs)
+            rd = Poly.one(vs)
+            for a_ in u.args:
+                pn, pd = nd(a_)
+                rn, rd = rn * pd + pn * rd, rd * pd
+            return rn, rd
+        if n == "Times":
+            rn, rd = Poly.one(vs), Poly.one(vs)
+            for a_ in u.args:
+                pn, pd = nd(a_)
+                rn, rd = rn * pn, rd * pd
+            return rn, rd
+        if n == "Power":
+            b_, e_ = u.args
+            if not isinstance(e_, T.Int):
+                raise ValueError("non-int power")
+            pn, pd = nd(b_)
+            bn, bd = Poly.one(vs), Poly.one(vs)
+            if e_.v >= 0:
+                for _ in range(e_.v):
+                    bn, bd = bn * pn, bd * pd
+            else:
+                for _ in range(-e_.v):
+                    bn, bd = bn * pd, bd * pn
+            return bn, bd
+        raise ValueError("head " + n)
+
+    try:
+        num, den = nd(t_)
+        sr = _mk_rat(num, den)
+        return sr if isinstance(sr, (SymRat, Fr)) else None
+    except Exception:
+        return None
+
+
 def _constant_roots(Rz):
     """R(z) ∈ Q(x)[z] 的常数根：转 term 用 solve，含 x 的根丢弃。
 
     含 x 的根被丢弃正是数学语义：非常数 residue 不对应初等对数项。
     solve 无法判定（unsupported）时抛异常——绝不静默漏根（漏根会把
-    可积成分误判为不可初等，违反永不静默错）。ℚ(i) 根（含符号 i 的
-    线性解）经 _term_to_ga 精确收集；更高阶代数根需 Q(alpha) 域——
-    M5.4 前显式异常（不误判为不可积）。
-    """
+    可积成分误判为不可初等，违反永不静默错）。根值表示三级回退：
+    数值 Fr / ℚ(i)（_term_to_ga）/ ℚ(params,α)（_term_to_symrat，
+    M5.4 审计扩容——残数根可安全停留在参数轨道：形式恒等对特化
+    保真）；更高阶代数根（真 RootOf 域）显式异常。"""
     from cas.solve import solve as _solve
 
     z = T.S("_rz")
@@ -1622,8 +1683,12 @@ def _constant_roots(Rz):
             if ga is not None:
                 out.append(ga)
                 continue
+            sr = _term_to_symrat(sol)
+            if sr is not None:
+                out.append(sr)
+                continue
             raise RischUnsupported(
-                "algebraic residue roots beyond Q(i) pending M5.4")
+                "algebraic residue roots beyond Q(i)/Q(params) pending")
         out.append(T.num_val(sol))
     return out
 
@@ -1843,13 +1908,9 @@ def _integrate_in_K(g, de, j):
             cv = g.const_val()
             ct = cv.to_term() if hasattr(cv, "to_term") else N(cv)
             return T.times(ct, xv)
-        from cas.poly import SymRat
-        _leaves = list(_coef_iter(g))
-        if any(isinstance(c, SymRat) for c in _leaves):
-            raise RischUnsupported(
-                "rational integration over Q(params) pending (M5.6 #3)")
-        # ℚ(i) 分量（M5.3.1）：integrate_rational 入口共轭分母展开
-        # 实虚拆分归约 ℚ 双通道
+        # 基域有理积分：Fr/ℚ(params)（M5.6 参数轨道完备）/ℚ(i) 及
+        # ℚ(i,params) 混合（A4 共轭拆分）全部由 integrate_rational
+        # 入口统一路由——旧 "pending" 守卫是参数轨道完备前的遗留
         val, ok, _prov = integrate_rational(g.p, g.q, xv)
         if not ok:
             raise RischUnsupported("rational integration failed in base field")

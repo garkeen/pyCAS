@@ -191,6 +191,93 @@ class TestAlgebraicRational(unittest.TestCase):
             ALG_MODULI.pop(sym, None)
 
 
+class TestTowerANAudit(unittest.TestCase):
+    """P1 审计：塔 RDE × ℚ(α) 全分支回归。
+
+    战果：_integrate_in_K 过时守卫拆除（参数/AN 基域有理积分解锁）、
+    残数根表示三级回退（Fr/Ga/SymRat）、RatFunc 标量乘泛化。"""
+
+    def setUp(self):
+        self.x = parse("x")
+
+    def integ(self, s):
+        from cas.integrate import integrate
+
+        return integrate(parse(s), parse("x"))
+
+    def test_base_field_param_rational_unlocked(self):
+        # 过时守卫拆除：基域有理积分接受 SymRat 系数
+        from cas.diff import d
+        from cas.evalnum import eval_approx
+
+        for s in ["sqrt(2)*log(x)", "a*log(x)", "log(x)/a",
+                  "(sqrt(2)*x+1)*log(x)"]:
+            F, ok, _m, _pv = self.integ(s)
+            self.assertTrue(ok, s)
+            dF = d(F, self.x)
+            env = {parse("a"): 1.7}
+            good = all(abs(eval_approx(dF, {self.x: p, **env}) -
+                           eval_approx(parse(s), {self.x: p, **env})) < 1e-8
+                       for p in (0.51, 1.33))
+            self.assertTrue(good, s)
+
+    def test_residue_roots_symrat(self):
+        # 残数根 ±(param/radical)：RT 提取不再误判不可积
+        from cas.diff import d
+        from cas.evalnum import eval_approx
+
+        for s in ["1/(exp(x)+a)", "a/(exp(x)-b)",
+                  "sqrt(2)/(exp(x)+1)", "exp(2*x)/(exp(x)+sqrt(2))"]:
+            F, ok, _m, _pv = self.integ(s)
+            self.assertTrue(ok, s)
+            dF = d(F, self.x)
+            env = {parse("a"): 1.7, parse("b"): 2.3}
+            good = all(abs(eval_approx(dF, {self.x: p, **env}) -
+                           eval_approx(parse(s), {self.x: p, **env})) < 1e-8
+                       for p in (0.37, 0.79))
+            self.assertTrue(good, s)
+
+    def test_proved_refusals_preserved(self):
+        # 误证不可积防线：这些案例的 proved 拒答经手算确认正确
+        import contextlib
+
+        for s in ["exp(exp(x))",
+                  "exp(sqrt(2)*x)/(x^2+1)",
+                  "1/(x*log(x-sqrt(2)))"]:
+            with contextlib.suppress(Exception):
+                continue_marker = None
+            raised = False
+            try:
+                self.integ(s)
+            except Exception:
+                raised = True
+            self.assertTrue(raised, f"{s} 应 proved 拒答")
+
+    def test_nested_radical_coefficients(self):
+        # P3 兜底收集：嵌套代数常数作系数（不透明参数，无关系语义）
+        from cas.diff import d
+        from cas.evalnum import eval_approx
+
+        for s in ["1/(x^2-(1+sqrt(2)))",
+                  "1/((x-sqrt(1+sqrt(2)))*(x+sqrt(2)))"]:
+            F, ok, _m, _pv = self.integ(s)
+            self.assertTrue(ok, s)
+            dF = d(F, self.x)
+            good = all(abs(eval_approx(dF, {self.x: p}) -
+                           eval_approx(parse(s), {self.x: p})) < 1e-9
+                       for p in (0.43, 0.91, 1.71))
+            self.assertTrue(good, s)
+
+    def test_solveineq_structured_refusal(self):
+        # P4：AN 系数不等式给结构化拒答（曾炸裸 non-integer power）
+        from cas.session import Session
+
+        s_ = Session()
+        out = s_.handle("!solveineq x^2-sqrt(2)>0 x")
+        self.assertIn("error", out)
+        self.assertIn("coefficient domain", out)
+
+
 class TestSpecialFunctionOutput(unittest.TestCase):
     """M5.5：Risch proved 拒答后的特殊函数出口层。
 

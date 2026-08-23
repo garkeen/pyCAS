@@ -204,7 +204,8 @@ latex/refine 零递归）；预算按节点计。
 | 方程求解 solve | ✓ 1-2次根式/≥3次实 RootOf | 复根✓(i 形) | 输出侧✓ | ✓ 求根公式(回代 UNVERIFIED 诚实标注) | ✗ "not polynomial" | 复根≥3次只计数不枚举 |
 | 线性方程组 msolve | ✓ VERIFIED | ⚠ 能解但输出未约简+UNVERIFIED | — | ✓ VERIFIED | 未测 | ℚ(i) 路径脆 |
 | Gröbner gsolve | ✓ 基 | ✗ | ✗ | 未系统验证 | ✗ | 解枚举限有理 |
-| 不等式 solveineq | ✓ Sturm+RootOf 端点比较 | ✗ | 端点✓ | ✗ **崩溃**(SymRat numerator bug 已定位) | ✗ | Sturm 假设 Fr |
+| 不等式 solveineq | ✓ Sturm+RootOf 端点比较 | ✗ | 端点✓ | ✗ 结构化拒答(Sturm 需 ℚ，AN pending；曾裸崩溃已修) | ✗ | Sturm 假设 Fr |
+| 塔内基域有理积分（_integrate_in_K） | ✓ params/ℚ(i)/混合全轨道（M5 收官批：过时守卫拆除） | ✓ 同左 | ✓ 残数根 SymRat 表示（审计扩容） | ✓ params | — | RT 残数根三级回退 Fr/Ga/SymRat |
 | ODE dsolve | ✓ direct/separable/linear1/constcoef2(特征方程→代数根) | ✗ | 输出侧✓ | 未系统验证 | ✗ | 题型分类制 |
 | **不定积分** | ✓ Risch 三态全链 | ✓ 塔+实化全链 | 有理通道✓(M5.4-c 全链)+特殊函数出口✓(Si/Ei 线性族/li/Ci/erf, M5.5 扩容) | ⚠ 塔内✓(a^x 族+x^a 符号幂 generic+proviso)/ℚ(i,params) 混合有理✓(A4)/混合塔 RDE 仍门控/常量项系数✓(M5.6#1: π/sin(1)/e² 类) | ⚠ Log(常量)✓/π 作系数✓/sqrt(π) 参数化✓(erf 解锁) | 最深审计见下 |
 | 定积分 defint | ✓ NL+奇点分割 | 同左 | — | 界✗ 诚实拒("不可数值比较") | **界✓ 精确**(sin(1)³) | 无原函数→诚实 unsupported，无数值积分通道 |
