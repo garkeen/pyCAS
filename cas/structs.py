@@ -71,6 +71,9 @@ class TanHalfStruct(Struct):
 
     def project(self, t, x, a):
         from cas.integrate import _trig_check
+        from cas.structure import Layer
+        if a is not None and Layer.TRIG not in a.layers:
+            return FAIL              # 分析层分派：无三角层直接跳过
         return (t, x) if _trig_check(t, x) else FAIL
 
     def compute(self, v):

@@ -437,8 +437,8 @@ def integrate(t, x):
     """
     from cas.structure import run_pre_passes
 
-    t = run_pre_passes(t, x)
-    F, ok, method, provisos = _integrate_core(t, x)
+    t, a = run_pre_passes(t, x)
+    F, ok, method, provisos = _integrate_core(t, x, a)
     from cas.risch import _param_provisos
     for p in _param_provisos(F, x):
         if p not in provisos:
@@ -470,7 +470,7 @@ def _power_antideriv(t, x):
     return F
 
 
-def _integrate_core(t, x):
+def _integrate_core(t, x, a=None):
     """∫ t dx（t 为 term，x 为 Sym）→ (term, verified, method, provisos)。
 
     裸 spec 函数走 anti 表（连续原函数，定积分友好）；
@@ -527,7 +527,7 @@ def _integrate_core(t, x):
 
     last_reason = ""
     for s in STRUCTS:
-        v = s.project(t, x, None)
+        v = s.project(t, x, a)
         if v is FAIL:
             continue
         try:

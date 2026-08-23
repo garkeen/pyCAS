@@ -189,7 +189,9 @@ PRE_PASSES = [NumPowerNorm(), EFContract(), EFExpandTrans()]
 
 
 def run_pre_passes(t, x):
-    """入口预规范化：单次分析 → 逐 pass 检测+应用（变更即重分析）。"""
+    """入口预规范化：单次分析 → 逐 pass 检测+应用（变更即重分析）。
+
+    返回 (t, a)：最终树 + 最终分析结果（供 SOLVERS 分派消费）。"""
     a = analyze(t, x)
     for p in PRE_PASSES:
         if not p.detect(a):
@@ -198,7 +200,7 @@ def run_pre_passes(t, x):
         if t2 is not None and t2 is not t:
             t = t2
             a = analyze(t, x)      # 变更即重分析（层集合可能迁移）
-    return t
+    return t, a
 
 
 # 分支承诺策略位（Reduce 式诚实开关）：仅影响验证管线的合并阶段，
