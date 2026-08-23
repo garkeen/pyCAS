@@ -14,6 +14,8 @@ Struct 协议：project / compute / retract 三段——
 
 from fractions import Fraction as Fr
 
+from cas import term as T
+
 
 class _Fail:
     """投影失败哨兵（不适用≠错误）。"""
@@ -42,32 +44,89 @@ class Struct:
 
 
 class QxStruct(Struct):
-    """有理函数结构 ℚ(x)/ℚ(i)(x)/ℚ(params)(x)：Hermite + atan/RT。
+    """有理函数结构 ℚ(x)/ℚ(i)(x)/ℚ(params)(x)/ℚ(params,α)(x)：
+    Hermite + atan/RT。
 
-    代数常数（ALG_MODULI 登记）在计算期间挂起约简——保持符号形态，
-    答案经回代还原根式。这确保 ∫1/(x²-√2) 出 log(x-√2) 而非 log(x-2)。"""
+    根式代数常数（√2 类数值底有理指数幂叶）在投影时局部参数化为
+    不透明符号 _rcN：通道内按互相超越独立参数做全部判定与验证——
+    形式恒等对一致特化保真，故内部多项式恒等证书在回代后依然成立
+    （只可能少化简，不可能错）。出口回代还原根式形态；回代不完整
+    （残留 _rc 符号）诚实降级 UNVERIFIED。全程不触碰全局
+    ALG_MODULI/ALG_RELATIONS（注册表泄漏曾致假 VERIFIED——作用域
+    声明而非全局状态是本切片的架构裁定）。"""
+
     name = "rational"
     method = "Hermite reduction + RootOf log part"
 
     def project(self, t, x, a):
-        from cas.integrate import _rat_pair
+        from cas.integrate import _rat_pair, _collect_rad_params
         try:
             P, Q = _rat_pair(t, x)
+            return (P, Q, x, {})
+        except Exception:
+            pass
+        # M5.4-c：根式代数常数 -> 局部不透明参数（无全局关系语义）
+        try:
+            rmap = _collect_rad_params(t)
+            if not rmap:
+                return FAIL
+            t2 = T.subst(t, rmap)
+            P, Q = _rat_pair(t2, x)
+            back = {sym: rad for rad, sym in rmap.items()}
+            # A2：登记隔离区间（符号全局唯一，跨调用无碰撞；
+            # retract 清除——泄漏仅冗余不致错）
+            # A3：登记极小多项式（apart 的 Trager 范数分解消费）
+            from cas.integrate import (AN_INTERVALS, AN_RELATIONS,
+                                       _radical_bracket)
+            registered = []
+            try:
+                for rad, sym in rmap.items():
+                    b_, e_ = rad.args
+                    bv = T.num_val(b_)
+                    lo, hi = _radical_bracket(bv, e_.f.numerator,
+                                              e_.f.denominator)
+                    AN_INTERVALS[sym] = (lo, hi)
+                    from fractions import Fraction as _Fr
+                    from cas.poly import Poly as _Poly
+                    qd_ = e_.f.denominator
+                    mp = _Poly((sym,), {(qd_,): _Fr(1),
+                                        (0,): _Fr(-(bv ** e_.f.numerator))})
+                    AN_RELATIONS[sym] = mp
+                    registered.append(sym)
+                return (P, Q, x, back)
+            except Exception:
+                for sym in registered:
+                    AN_INTERVALS.pop(sym, None)
+                    AN_RELATIONS.pop(sym, None)
+                raise
         except Exception:
             return FAIL
-        return (P, Q, x)
 
     def compute(self, v):
         from cas.integrate import integrate_rational
         from cas.poly import alg_suspend
-        P, Q, x = v
-        # 挂起关系约简：代数常数保持符号形态（_a1 不塌缩为数值）
+        P, Q, x, back = v
+        # 挂起全局关系约简：本通道的 α 是局部参数（防御性——投影层
+        # 已保证不登记任何模，双保险防外部残留注册表干扰）
         with alg_suspend():
             term, ok, provisos = integrate_rational(P, Q, x)
-        return (term, ok, provisos)
+        return (term, ok, provisos, back)
 
     def retract(self, v):
-        return v
+        term, ok, provisos, back = v
+        if back:
+            from cas.integrate import AN_INTERVALS, AN_RELATIONS
+            for sym in back:
+                AN_INTERVALS.pop(sym, None)
+                AN_RELATIONS.pop(sym, None)
+            term = T.subst(term, back)
+        provisos = [T.subst(p, back) for p in provisos]
+        # 回代完整性守卫：残留 _rc 符号 = 上次事故的失效形态，
+        # 绝不带病出 VERIFIED（诚实降级）
+        leaked = T.free_vars(term) & set(back.keys())
+        if leaked:
+            return (term, False, provisos)
+        return (term, ok, provisos)
 
 
 class TanHalfStruct(Struct):

@@ -51,16 +51,116 @@ def _rat_pair(t, x):
     """term 有理函数 -> (P, Q)，约分。"""
     num, den = _frac(t, x)
     leaves = list(num.monos.values()) + list(den.monos.values())
-    if any(not isinstance(c, (Fr, SymRat)) for c in leaves):
-        # M5.3.1 ℚ(i)：跳过 gcd（ugcd 假设 Fr；共轭分母展开会吸收
-        # 公因子，不约分不影响正确性，只增大次数）。Fr/SymRat 混合
-        # （含参数）走既有主链不动。
+    if any(not isinstance(c, (Fr, SymRat)) for c in leaves) \
+            or any(isinstance(c, SymRat) and _symrat_has_ga(c)
+                   for c in leaves):
+        # M5.3.1 ℚ(i) / M5.4-c ℚ(i,params) 混合：跳过 gcd（ugcd 的伪除
+        # 对内嵌 Ga 的分数塔会指数爆炸——实测挂死）。不约分不影响正确性，
+        # 只增大次数；混合拆分在 _ga_rational_split 统一处理。
         return num, den
     g = ugcd(num, den)
     if not g.is_zero():
         num = num.udivmod(g)[0]
         den = den.udivmod(g)[0]
     return num, den
+
+
+def _leaf_has_ga(c):
+    """叶系数是否携带 Ga 分量（递归穿 SymRat）。"""
+    if isinstance(c, SymRat):
+        return _symrat_has_ga(c)
+    if isinstance(c, Fr):
+        return False
+    return hasattr(c, "norm")           # Ga（ℚ(i) 域元素）
+
+
+def _symrat_has_ga(c):
+    """SymRat 是否内嵌 Ga 叶（ℚ(i,params) 混合轨道标志）。"""
+    for pp in (c.num, c.den):
+        for cc in pp.monos.values():
+            if _leaf_has_ga(cc):
+                return True
+    return False
+
+
+def _coef_zero(c):
+    if isinstance(c, Fr):
+        return c == 0
+    if isinstance(c, SymRat):
+        return c.is_zero()
+    return bool(c.re == 0 and c.im == 0) if hasattr(c, "norm") else c == 0
+
+
+def _coef_re_im(c):
+    """系数 -> (re, im) 纯参数 SymRat 对（ℚ(i,params) 规范化）。
+
+    SymRat 内嵌 Ga 时分母有理化：(nr+i·ni)/(dr+i·di) 乘 (dr-i·di)——
+    全程 Poly 有限运算，无分数塔增长。"""
+    if isinstance(c, Fr):
+        return c, Fr(0)
+    if isinstance(c, SymRat):
+        if not _symrat_has_ga(c):
+            return c, Fr(0)
+        nr, ni = _poly_re_im(c.num)
+        dr, di = _poly_re_im(c.den)
+        dd = dr * dr + di * di
+        if dd.is_zero():
+            raise PolyError("zero coefficient denominator")
+        ren = nr * dr + ni * di
+        imn = ni * dr - nr * di
+        return SymRat(ren, dd), SymRat(imn, dd)
+    if hasattr(c, "norm"):
+        # Ga：分量递归取复数对后组合。value = re + i·im，
+        # (re_r+i·re_i) + i·(im_r+i·im_i) = (re_r - im_i) + i·(re_i + im_r)
+        if isinstance(c.re, Fr):
+            rr, ri = c.re, Fr(0)
+        else:
+            rr, ri = _coef_re_im(c.re)
+        if isinstance(c.im, Fr):
+            ir, ii = c.im, Fr(0)
+        else:
+            ir, ii = _coef_re_im(c.im)
+        return rr - ii, ri + ir
+    raise PolyError(f"coefficient outside supported domains: {c!r}")
+
+
+def _poly_re_im(p):
+    """Poly -> (re, im)：逐系数实虚拆分，结果叶仅 Fr/纯参数 SymRat。"""
+    re_m, im_m = {}, {}
+    for k, c in p.monos.items():
+        r, i_ = _coef_re_im(c)
+        if not _coef_zero(r):
+            re_m[k] = r
+        if not _coef_zero(i_):
+            im_m[k] = i_
+    return Poly(p.vars, re_m), Poly(p.vars, im_m)
+
+
+def _collect_rad_params(t):
+    """数值底有理指数幂叶 -> 局部参数符号映射（M5.4-c 有理通道投影）。
+
+    与 risch._collect_radical 的本质差别：纯局部映射，不登记全局
+    ALG_MODULI/ALG_RELATIONS——有理通道全程把 α 当互相超越独立的
+    不透明参数（形式恒等 ⇒ 一致特化下成立：只可能少化简，不可能
+    错），出口由 QxStruct.retract 回代还原根式形态。
+    返回 {rad_term: Sym}（同形幂共享符号）；无根式叶返回 {}。
+    """
+    out = {}
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, T.Expr):
+            if u.head.name == "Power":
+                b, e = u.args
+                if isinstance(e, T.Rat) and e.f.denominator != 1 \
+                        and T.is_num(b) and T.num_val(b) > 0 \
+                        and not any(u is k for k in out):
+                    # 全局唯一编号：跨调用不复用（残留区间表只冗余不致错）
+                    _RC_COUNTER[0] += 1
+                    out[u] = Sym(f"_rc{_RC_COUNTER[0]}")
+                    continue          # 整叶替换，不再深入
+            stack.extend(u.args)
+    return out
 
 
 def _qa_to_term(c, beta):
@@ -101,9 +201,16 @@ def _hermitte_power(a, p, k, x):
 def _classify_discriminant(D):
     """参数判别式（SymRat）符号分类：pos / neg / unknown。
 
-    decide 区间通道判 D>0 / D<0（平方和+常数等结构显然情形可判；
+    A2 通道优先：若判别式的全部自由符号都在本调用作用域的代数常数
+    隔离区间表（AN_INTERVALS）中，则做精确区间求值——端点全为 Fr、
+    四则向外取界，结果区间不跨零即为穷举证明（这是隔离判定而非数值
+    采样，不违反"采样永不进 YES 通道"纪律）。
+    否则走 decide 区间通道（平方和+常数等结构显然情形可判；
     自由符号一般情形诚实返回 unknown）。
     """
+    sig = _an_interval_sign(D)
+    if sig is not None:
+        return sig
     from cas.decide import decide, T3
     from cas.context import Context
 
@@ -114,6 +221,84 @@ def _classify_discriminant(D):
     if decide(T.mk(S("Lt"), (Dt, T.ZERO)), ctx) is T3.YES:
         return "neg"
     return "unknown"
+
+
+AN_INTERVALS = {}
+AN_RELATIONS = {}            # _rc 符号 -> monic 极小多项式（A3 作用域登记）
+_RC_COUNTER = [0]
+
+
+def _radical_bracket(bv, pn, qd):
+    """正有理底 b 的 pn/qd 次幂的严格隔离区间 [lo, hi]（Fr 端点）。
+
+    v = b^(pn/qd) > 0：整数缩放后二分求 floor(v·M)，区间宽 1/M。
+    """
+    from math import isqrt
+
+    M = 10 ** 14
+    bn, bd = bv.numerator, bv.denominator
+    if pn < 0:
+        bn, bd = bd, bn
+        pn = -pn
+    # v^qd = bn^pn / bd^pn；floor(v·M)：解 k^qd ≤ bn^pn·M^qd/bd^pn < (k+1)^qd
+    num = bn ** pn * M ** qd
+    den = bd ** pn
+    target = num // den
+    k = int(round(target ** (1.0 / qd)))
+    while k > 0 and k ** qd > target:
+        k -= 1
+    while (k + 1) ** qd <= target:
+        k += 1
+    return Fr(k, M), Fr(k + 1, M)
+
+
+def _iv_mul(a, b):
+    (a0, a1), (b0, b1) = a, b
+    ps = (a0 * b0, a0 * b1, a1 * b0, a1 * b1)
+    return min(ps), max(ps)
+
+
+def _poly_interval_sign(p, env):
+    """Poly 在变量区间环境下的精确符号：'pos'/'neg'/None（跨零）。"""
+    tot_lo, tot_hi = Fr(0), Fr(0)
+    for k, c in p.monos.items():
+        if not isinstance(c, Fr):
+            return None
+        iv = (Fr(1), Fr(1))
+        for v, e in zip(p.vars, k):
+            if e == 0:
+                continue
+            if v not in env:
+                return None
+            for _ in range(e):
+                iv = _iv_mul(iv, env[v])
+        lo, hi = iv
+        if c >= 0:
+            tot_lo += c * lo
+            tot_hi += c * hi
+        else:
+            tot_lo += c * hi
+            tot_hi += c * lo
+    if tot_lo > 0:
+        return "pos"
+    if tot_hi < 0:
+        return "neg"
+    return None
+
+
+def _an_interval_sign(D):
+    """SymRat 判别式的 AN 区间精确符号：'pos'/'neg'/None。"""
+    if not isinstance(D, SymRat):
+        return None
+    ns = _poly_interval_sign(D.num, AN_INTERVALS)
+    if ns is None:
+        return None
+    ds = _poly_interval_sign(D.den, AN_INTERVALS)
+    if ds is None:
+        return None
+    if ds == "pos":
+        return ns
+    return "neg" if ns == "pos" else ("pos" if ns == "neg" else None)
 
 
 def _log_terms(f, p, x):
@@ -228,6 +413,38 @@ def _assemble(poly_int, rat_terms, lin_logs, root_logs, x):
     return T.mk(S("Plus"), tuple(parts))
 
 
+def _poly_eq_relaware(A, B):
+    """多项式恒等判定（AN 关系感知，M5.4-c A3 配套）。
+
+    纯 Fr 时退化为结构相等；含 AN 符号时结构相等过强——1/(2α) 与
+    α/4 语义同、结构异（关系约简不改变分数形态），差值叶系数经
+    模约简后判零才是精确等词。"""
+    D = A - B
+    if D.is_zero():
+        return True
+    from cas.poly import _reduce_alg_var, ALG_MODULI
+    regs = {**ALG_MODULI, **AN_RELATIONS}
+    if not regs:
+        return False
+    out = {}
+    for k, c in D.monos.items():
+        if isinstance(c, SymRat):
+            n_, d_ = c.num, c.den
+            for v, m in regs.items():
+                if v in n_.vars:
+                    n_ = _reduce_alg_var(n_, v, m)
+                if v in d_.vars:
+                    d_ = _reduce_alg_var(d_, v, m)
+            if not n_.is_zero():
+                out[k] = SymRat(n_, d_)
+        elif isinstance(c, Fr):
+            if c != 0:
+                out[k] = c
+        else:
+            return False
+    return not out
+
+
 def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
     """符号验证：D(Σ 项) == P/Q（精确 ℚ 运算）。"""
     num = poly_int.deriv(x)
@@ -259,40 +476,28 @@ def _verify(poly_int, rat_terms, lin_logs, root_logs, P, Q, x):
                 nco[(deg - 1 - r,)] = (-1) ** r * acc
         Np = Poly((x,), nco)
         num, den = num * p + Np * den, den * p
-    return (num * Q).monos == (P * den).monos
+    return _poly_eq_relaware(num * Q, P * den)
 
 
 def _ga_rational_split(P, Q, x):
-    """ℚ(i) 有理函数实虚拆分归约 ℚ（M5.3.1）。
+    """ℚ(i)/ℚ(i,params) 有理函数共轭展开实虚拆分（M5.3.1 + A4 泛化）。
 
-    g = P/Q（系数 Fr/Ga 混合）：Q̄ 为系数共轭，Q·Q̄ 在共轭下不动
-    ⟹ 实系数；分子 P·Q̄ = f + i·h（f,h ∈ ℚ[x]），故 ∫g = ∫f + i·∫h
-    ——两通道各走完整 ℚ 链（Hermite + atan/RootOf log）。答案为实
-    形态（log(x²+1)+i·atan 类，比域内 log(x+i) 更贴出口实化方向）。
-    """
-    from cas.gaussian import Ga
-
-    pg = Poly(P.vars, {m: Ga.promote(c) for m, c in P.monos.items()})
-    qg = Poly(Q.vars, {m: Ga.promote(c) for m, c in Q.monos.items()})
-    qbar = Poly(Q.vars, {m: c.conjugate() for m, c in qg.monos.items()})
-    den = qg * qbar
-    num = pg * qbar
-    for c in den.monos.values():
-        if c.im != 0:
-            raise PolyError("internal: conjugate denominator not real")
-    dr = Poly(den.vars, {m: c.re for m, c in den.monos.items()})
-    re_m, im_m = {}, {}
-    for m, c in num.monos.items():
-        if c.re != 0:
-            re_m[m] = c.re
-        if c.im != 0:
-            im_m[m] = c.im
-    pr = Poly(num.vars, re_m)
-    pi = Poly(num.vars, im_m)
-    v1, ok1, pv1 = integrate_rational(pr, dr, x)
-    if pi.is_zero():
+    系数级规范化：P,Q 逐系数取 (re, im) 对——SymRat 内嵌 Ga 分母
+    有理化，全部化为纯参数叶。Q̄=(Qre,-Qim) ⟹ Q·Q̄=Qre²+Qim² 实；
+    P·Q̄ = (Pre·Qre+Pim·Qim) + i·(Pim·Qre-Pre·Qim)，两通道各走完整
+    纯参数链（Hermite + atan/RootOf log）。答案为实形态（log(x²+1)+
+    i·atan 类）。"""
+    pre, pim = _poly_re_im(P)
+    qre, qim = _poly_re_im(Q)
+    den = qre * qre + qim * qim
+    if den.is_zero():
+        raise PolyError("zero denominator after conjugate expansion")
+    num_re = pre * qre + pim * qim
+    num_im = pim * qre - pre * qim
+    v1, ok1, pv1 = integrate_rational(num_re, den, x)
+    if num_im.is_zero():
         return v1, ok1, pv1
-    v2, ok2, pv2 = integrate_rational(pi, dr, x)
+    v2, ok2, pv2 = integrate_rational(num_im, den, x)
     return T.plus(v1, T.times(S("i"), v2)), ok1 and ok2, pv1 + pv2
 
 
@@ -304,12 +509,11 @@ def integrate_rational(P, Q, x, structured=False):
     RootOf 对数项之和（M5.2 primitive 层逐阶剥离用）。
     """
     coeffs = list(P.monos.values()) + list(Q.monos.values())
-    if any(not isinstance(c, (Fr, SymRat)) for c in coeffs):
-        # ℚ(i) 分量（M5.3.1）：共轭分母展开实虚拆分归约 ℚ。
-        # Ga 与 SymRat 混合（ℚ(i,params)）尚不支持——诚实拒绝
-        if any(isinstance(c, SymRat) for c in coeffs):
-            raise PolyError(
-                "rational integration over Q(i,params) pending")
+    if any(not isinstance(c, (Fr, SymRat)) for c in coeffs) \
+            or any(isinstance(c, SymRat) and _symrat_has_ga(c)
+                   for c in coeffs):
+        # ℚ(i) / ℚ(i,params) 混合（M5.3.1 + A4）：共轭展开实虚拆分
+        # 归约纯参数链。旧 "pending" 诚实拒绝退役。
         return _ga_rational_split(P, Q, x)
     q_poly, r = P.udivmod(Q)
     poly_int = _integrate_poly(q_poly, x)
@@ -530,7 +734,14 @@ def _integrate_core(t, x, a=None, principal=None):
 
     last_reason = ""
     for s in STRUCTS:
-        v = s.project(t, x, a)
+        try:
+            v = s.project(t, x, a)
+        except RischUnsupported as _ru:
+            last_reason = str(_ru)
+            continue
+        except PolyError as _pe:
+            last_reason = str(_pe)
+            continue
         if v is FAIL:
             continue
         try:

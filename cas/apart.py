@@ -121,6 +121,192 @@ def _param_factors(g, x):
     raise PolyError(f"parameter-domain factorization: degree {n} unsupported")
 
 
+# ---------------------------------------------------------------------------
+# A3：Trager 范数因子分解 over 单代数扩张 Q(alpha)。
+#
+# p in Q(alpha)[x]：Norm(p) = det(p 在 Q[x][alpha]/(m) 自由模上的乘法
+# 矩阵) in Q[x]（m 为 alpha 的 monic 极小多项式）。Norm 的 Q 因子给出
+# p 的共轭轨道积——对每个不可约 F|Norm 取 gcd_{Q(alpha)[x]}(p, F)
+# 提取真因子。系数域算术全走 SymRat 分数形态（Poly 乘积出口的模约简
+# 保证 alpha 次数有界）。适用边界：单 AN 符号、无自由参数混合、
+# alpha 次数 <=5；不满足则诚实返回 None 回退既有路径。
+# ---------------------------------------------------------------------------
+
+
+def _an_detect(g):
+    """g 的系数中的代数常数符号（经作用域/全局关系表）。
+
+    返回唯一 AN 符号（列表单元素）或 None（无 AN / 多符号 / 自由
+    参数混合 / 叶域不支持）。"""
+    from cas.integrate import AN_RELATIONS
+    from cas.poly import ALG_MODULI
+
+    syms = set()
+    for c in g.monos.values():
+        if isinstance(c, Fr):
+            continue
+        if isinstance(c, SymRat):
+            for pp in (c.num, c.den):
+                syms.update(pp.vars)
+                for cc in pp.monos.values():
+                    if not isinstance(cc, Fr):
+                        return None
+        else:
+            return None
+    if not syms:
+        return None
+    rel = [v for v in syms if v in AN_RELATIONS or v in ALG_MODULI]
+    if len(rel) == 1 and syms == set(rel):
+        return rel[0]
+    return None
+
+
+def _det_poly(mat):
+    """Poly 条目行列式（余子式展开 + 零元剪枝）。"""
+    n = len(mat)
+    if n == 1:
+        return mat[0][0]
+    if n == 2:
+        return mat[0][0] * mat[1][1] - mat[0][1] * mat[1][0]
+    total = None
+    for j in range(n):
+        a = mat[0][j]
+        if a.is_zero():
+            continue
+        minor = [row[:j] + row[j + 1:] for row in mat[1:]]
+        sub = _det_poly(minor)
+        term = a * sub
+        if total is None:
+            total = -term if j % 2 else term
+        else:
+            total = total - term if j % 2 else total + term
+    if total is None:
+        total = Poly.zero(mat[0][0].vars)
+    return total
+
+
+def _norm_det(p2, alpha, m):
+    """p2 in Q[x,alpha] -> Norm(p2) in Q[x]。
+
+    M[j][k] = (p2*alpha^j mod m) 的 alpha^k 系数；行列式 = 范数。
+    """
+    from cas.poly import _reduce_alg_var
+
+    n = m.degree(alpha)
+    ai = p2.vars.index(alpha)
+    amono = tuple(1 if i == ai else 0 for i in range(len(p2.vars)))
+    alpha_p2 = Poly(p2.vars, {amono: Fr(1)})
+    zero_m = {tuple(0 for _ in p2.vars): Fr(0)}
+
+    def coef_in(q, k):
+        idx = q._var_idx(alpha)
+        out = {}
+        for kk, vv in q.monos.items():
+            if kk[idx] == k:
+                rest = kk[:idx] + kk[idx + 1:]
+                out[rest] = out.get(rest, Fr(0)) + vv
+        vs = tuple(v for v in q.vars if v is not alpha)
+        return Poly(vs, out)
+
+    pw = Poly(p2.vars, dict(zero_m))
+    pw.monos[tuple(0 for _ in p2.vars)] = Fr(1)
+    mat = []
+    for _j in range(n):
+        col = _reduce_alg_var(p2 * pw, alpha, m)
+        mat.append([coef_in(col, k) for k in range(n)])
+        pw = pw * alpha_p2
+    return _det_poly(mat)
+
+
+def _kx_gcd(a, b, alpha, m):
+    """K[x] 欧几里得 gcd（K 系数走 SymRat 分数域）。
+
+    每步余式的 α 部分显式模约简（_reduce_alg_var）——外层通道在
+    alg_suspend 下运行（保持参数语义与答案形态），gcd 的零判定
+    必须用关系语义（α²−2 折叠为零），此处局部开启。
+    返回 monic 化 gcd；平凡（零/常量）返回 None。"""
+    from cas.poly import _reduce_alg_var
+
+    def kred(p):
+        out = {}
+        for k, c in p.monos.items():
+            if isinstance(c, SymRat):
+                out[k] = SymRat(_reduce_alg_var(c.num, alpha, m),
+                                _reduce_alg_var(c.den, alpha, m))
+            else:
+                out[k] = c
+        return Poly(p.vars, out)
+
+    r0, r1 = kred(a), kred(b)
+    while not r1.is_zero():
+        _, rr = r0.udivmod(r1)
+        rr = kred(rr)
+        r0, r1 = r1, rr
+    if r0.is_zero() or r0.degree(r0.vars[0]) < 1:
+        return None
+    lc = r0.lc(r0.vars[0])
+    return r0.scalar(_rat_inv(lc))
+
+
+def _an_factor(g, x):
+    """Q(alpha)[x] Trager 分解。返回 (monic 因子列表, lc content) 或 None。"""
+    alpha = _an_detect(g)
+    if alpha is None:
+        return None
+    from cas.integrate import AN_RELATIONS
+    from cas.poly import ALG_MODULI
+
+    m = AN_RELATIONS.get(alpha) or ALG_MODULI.get(alpha)
+    if m is None or m.degree(alpha) > 5:
+        return None
+
+    # 1) 清分母：p~ 的系数为 Q[alpha]-Poly
+    items = []
+    for k, c in g.monos.items():
+        if isinstance(c, Fr):
+            items.append((k, Poly((alpha,), {(0,): c}), None))
+        elif isinstance(c, SymRat):
+            items.append((k, c.num, c.den))
+        else:
+            return None
+    D = Poly.one((alpha,))
+    for _, _num, den in items:
+        if den is not None:
+            D = D * den
+    coeffs = {k: (num * D if den is not None else num)
+              for k, num, den in items}
+
+    # 2) 两变量空间 (x, alpha) 构造 Norm 并在 Q[x] 上分解
+    two = (x, alpha)
+    p2m = {}
+    for k, cp in coeffs.items():
+        for kk, vv in cp.monos.items():
+            p2m[(k[0],) + kk] = vv
+    norm = _norm_det(Poly(two, p2m), alpha, m)
+    if norm.is_const() or norm.degree(x) < 1:
+        return None
+    _c0, irrs = factor(norm)
+
+    # 3) 逐轨道积 F 提取真因子（squarefree 输入保证互素分离）
+    one_a = Poly.one((alpha,))
+    pk = Poly((x,), {k: SymRat(cp, one_a) for k, cp in coeffs.items()})
+    facs = []
+    for h, _mult in irrs:
+        gg = _kx_gcd(pk, h, alpha, m)
+        if gg is not None and gg.degree(x) >= 1:
+            facs.append(gg)
+    if not facs:
+        return None
+
+    # 4) 完整性守卫：提取的因子次数和必须等于 deg(g)（否则漏提，
+    #    宁可诚实放弃也不给残缺分解）
+    total = sum(f_.degree(x) for f_ in facs)
+    if total != g.degree(x):
+        return None
+    monic = [f_.scalar(_rat_inv(f_.lc(x))) for f_ in facs]
+    return monic, g.lc(x)
+
+
 def _xgcd(a, b, x):
     r0, r1 = a, b
     s0, s1 = Poly.one(a.vars), Poly.zero(a.vars)
@@ -183,9 +369,15 @@ def apart(f, g, x=None):
     ctotal = Fr(1)
     for g0, k0 in squarefree_decomp(g):
         if is_param_poly(g0):
-            # 参数域：不可约因子（1 次直接；2 次判判别式；更高阶暂不支持）。
-            # 可约二次的首项系数作为 content 折入 ctotal，校正分子。
-            facs, pc = _param_factors(g0, x)
+            # 参数域：deg<=2 走既有判别式路径（AN 符号同样适用，保持
+            # log(x±√2) 教科书形态）；deg>=3 的 AN 多项式走 Trager
+            # 范数分解；更高阶不可约诚实拒。
+            # 可约因子的首项系数作为 content 折入 ctotal，校正分子。
+            an = _an_factor(g0, x) if g0.degree(x) >= 3 else None
+            if an is not None:
+                facs, pc = an
+            else:
+                facs, pc = _param_factors(g0, x)
             if pc is not None:
                 ctotal = _rat_mul(ctotal, pc)
             for h in facs:

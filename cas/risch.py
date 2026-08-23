@@ -248,7 +248,10 @@ def _collect_radical(pterm, subs):
             return
     _ALG_RADICAL_COUNTER[0] += 1
     sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
-    mp = Poly((), {(1,): Fr(1), (0,): Fr(-(bv ** p_))})
+    # 极小多项式必须是该符号上的单变量 Poly：X^q − b^p（monic）。
+    # 零维坏键 Poly（{(1,):..,(0,):..} 于 () 空间）会被 _reduce_alg_var
+    # 误读为 X−2 —— α≡2 静默错域（M5.4a 休眠 bug，M5.4-c 审计修复）
+    mp = Poly((sym,), {(q_,): Fr(1), (0,): Fr(-(bv ** p_))})
     ALG_RELATIONS[sym] = ((bv, p_, q_), mp)
     from cas.poly import ALG_MODULI
     ALG_MODULI[sym] = mp          # 乘积出口自动模约简（M5.4b）
