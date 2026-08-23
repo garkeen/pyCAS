@@ -514,29 +514,33 @@ def _integrate_core(t, x):
 
         ok = _verify(pw_, x, t) == "VERIFIED"
         return pw_, ok, "rational power rule (algebraic form)", []
-    try:
-        P, Q = _rat_pair(t, x)
-        term, ok, provisos = integrate_rational(P, Q, x)
-        return term, ok, "Hermite reduction + RootOf log part", provisos
-    except PolyError:
-        res = _trig_tan_half(t, x)
-        if res is not None:
-            return res[0], res[1], "t = tan(x/2) substitution -> rational integration", res[2]
-    # Risch 判定终点站（M5.1/M5.2：exp/primitive 塔）——便宜层全空手后调用；
-    # 结论即终局：初等原函数 VERIFIED，或 NOT ELEMENTARY (proved) 上抛。
-    from cas.risch import (integrate_exp_tower as _risch, RischUnsupported,
-                           RischNonElementary)
-
-    try:
-        F, _de = _risch(t, x)
-    except RischNonElementary:
-        raise   # 证明性拒答（session 层专属输出，区别于 unsupported）
-    except RischUnsupported as _ru:
-        raise PolyError(f"unsupported integrand: {_ru}")
+    # 结构序列（P3）：分析-投影-计算-回写-验证 的声明式实例化。
+    # Qx → TanHalf → Tower；投影 FAIL 跳过，域内无解/超界记录原因，
+    # RischNonElementary（证明性拒答）原样上抛。
+    from cas.structs import STRUCTS, FAIL
+    from cas.risch import RischNonElementary, RischUnsupported
     from cas.diff import verify as _verify
 
-    ok = _verify(F, x, t) == "VERIFIED"
-    return F, ok, "Risch tower (exp/primitive case)", []
+    last_reason = ""
+    for s in STRUCTS:
+        v = s.project(t, x, None)
+        if v is FAIL:
+            continue
+        try:
+            term, ok, provisos = s.retract(s.compute(v))
+        except RischNonElementary:
+            raise   # 证明性拒答（session 层专属输出，区别于 unsupported）
+        except RischUnsupported as _ru:
+            last_reason = str(_ru)
+            continue
+        except PolyError as _pe:
+            last_reason = str(_pe)
+            continue
+        if ok is None:                     # 塔通道：管线统一验证
+            ok = _verify(term, x, t) == "VERIFIED"
+        return term, ok, s.method, provisos
+    raise PolyError("unsupported integrand"
+                    + (": " + last_reason if last_reason else ""))
 
 
 def _trig_linear_integrand(t, x):
