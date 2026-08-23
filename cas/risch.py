@@ -1339,33 +1339,38 @@ class RischNonElementary(Exception):
         self.reason = reason
 
 
-def _norm_num_powers(t, x):
-    """自底向上：数值底幂 b^e（e 含 x）-> Exp(e·Log(b))。
+def _norm_const_base_powers(t, x):
+    """自底向上：变指数幂 b^e（e 含 x，底任意）-> Exp(e·Log(b))。
 
-    积分塔只认 Exp/Log 头（微分侧有通用幂规则故无此步）。b 为符号
-    常量（pi 等）暂不动——其参数化待 M5.6 符号常数通道扩展。
+    通用桥接恒等式（Maxima/FriCAS/sympy 积分器对 a^b 的标准处理）：
+    变指数幂是 x 的超越函数，塔只认 Exp/Log 头。与系统自身语义自洽：
+    diff.py 幂规则 d(b^e)=b^e(D(e)Log(b)+eD(b)/b) 同用 Log(b)（单值
+    主支承诺）；_fold_power 的 E^a->Exp(a) 是本规则在欧拉数底的
+    构造级特例。常指数幂（x²、√x）不动——代数名词归 M7a。
     """
     head = getattr(t, "head", None)
     if head is None:
         return t          # Int/Fr 等数值叶（无头，无需重写）
-    args = tuple(_norm_num_powers(a, x) for a in t.args)
+    args = tuple(_norm_const_base_powers(a, x) for a in t.args)
     u = T.mk(head, args)
     uhead = getattr(u, "head", None)
     if uhead is None:
         return u          # mk 规范化可能整体折叠（如 exp(x·log2)−2^x -> 0）
     if uhead.name == "Power":
         b, e = u.args
-        if T.is_num(b) and x in T.free_vars(e):
+        if x in T.free_vars(e):
             return T.mk(S("Exp"), (T.times(e, T.fn("Log")(b)),))
     return u
 
 
-def _parametrize_const_logs(f):
-    """Log(无自由变量项) -> 独立超越参数符号（M5.6 首项：∫2^x 修复）。
+def _parametrize_const_logs(f, x):
+    """Log(不含积分变量的项) -> 独立超越参数符号（M5.6 首项）。
 
-    log 2 类常量须进系数域做线性代数，而此类常量间的数值关系不可
-    判定（Richardson）；积分全程只需"互相超越独立"假设——零等价 =
-    ℚ(c₁..cₙ) 上有理恒等（可判定，SymRat 参数机器），出口回代还原。
+    log 2 / log y 类常量须进系数域做线性代数，而此类常量间的数值
+    关系不可判定（Richardson）；积分全程只需"互相超越独立"假设——
+    零等价 = ℚ(params, c₁..cₙ) 上有理恒等（可判定，SymRat 参数机
+    器），出口回代还原。形式恒等 ⇒ 对一致特化（c=真值）成立：
+    独立性假设只可能保守拒绝，不产生误证。
     返回 (新 f, 回代表 {塔符号 -> 原 Log 项})。
     """
     found = {}
@@ -1373,7 +1378,7 @@ def _parametrize_const_logs(f):
     while stack:
         u = stack.pop()
         if isinstance(u, Expr) and getattr(u, "head", None) is not None:
-            if u.head.name == "Log" and not T.free_vars(u.args[0]):
+            if u.head.name == "Log" and x not in T.free_vars(u.args[0]):
                 found[u] = None      # 整体替换，不再深入 arg
                 continue
             stack.extend(u.args)
@@ -1401,8 +1406,8 @@ def integrate_exp_tower(f, x):
     if x not in T.free_vars(f):
         return T.times(f, x), DiffExt(x)
     f = trigs_to_exp(f)
-    # M5.6 首项：数值底幂归一 + Log(常量) 参数化（∫2^x 全族解锁）
-    f, backsub = _parametrize_const_logs(_norm_num_powers(f, x))
+    # M5.6 首项：变指数幂归一 + Log(常量) 参数化（∫a^x 全族解锁）
+    f, backsub = _parametrize_const_logs(_norm_const_base_powers(f, x), x)
     de, fa, fd = build_extension(f, x)
     j = len(de.levels) - 1
     if j == 0:

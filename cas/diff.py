@@ -50,8 +50,8 @@ def _tower_zero(a, b, x):
     from cas.risch import build_extension, RischUnsupported
 
     try:
-        from cas.risch import (trigs_to_exp, _norm_num_powers,
-                               _parametrize_const_logs)
+        from cas.risch import (trigs_to_exp, _norm_const_base_powers,
+                           _parametrize_const_logs)
         d0 = plus(a, neg(b))
         if d0 is T.ZERO:
             return True
@@ -61,8 +61,8 @@ def _tower_zero(a, b, x):
         # 指数、Log(常量) -> 独立超越参数——两侧同一常量集按同一排序
         # 编号，替换一致；恒等式在 ℚ(c₁..)(tower) 上判定，对真实
         # 超越值特化仍成立（独立性假设只会保守拒绝，不产生误证）
-        d0 = trigs_to_exp(_norm_num_powers(d0, x))
-        d0, _bs = _parametrize_const_logs(d0)
+        d0 = trigs_to_exp(_norm_const_base_powers(d0, x))
+        d0, _bs = _parametrize_const_logs(d0, x)
         _de, na, nd = build_extension(d0, x)
         return na.is_zero()
     except Exception:

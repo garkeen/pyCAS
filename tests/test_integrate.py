@@ -122,13 +122,15 @@ class TestTrigIntegrate(unittest.TestCase):
 
     def test_unsupported(self):
         from cas.errors import PolyError
+        from cas.risch import RischNonElementary
 
         # exp(x)/sin(2x) 已入 spec anti 表（含线性复合）；和式仍未支持；
         # sin(y) 自 M5.3 起走常被积函数通道（∫c dx = c·x）不再 unsupported
         with self.assertRaises(PolyError, msg="x+sin(x)"):
             self.t("x+sin(x)")
-        # x^x = exp(x*log x)：指数依赖既有塔变量 => 代数相关，诚实拒绝
-        with self.assertRaises(PolyError, msg="x^x"):
+        # x^x：M5.6 变指数幂归一后 = exp(x*log x)，塔可建造，
+        # Risch 判定给出更强结论——证明性拒答（非 unsupported）
+        with self.assertRaises(RischNonElementary, msg="x^x"):
             self.t("x^x")
 
     def test_linear_composition(self):

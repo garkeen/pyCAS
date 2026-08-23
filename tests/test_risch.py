@@ -364,11 +364,12 @@ class TestTrigViaComplexExp(unittest.TestCase):
 
 
 class TestConstLogParam(unittest.TestCase):
-    """M5.6 首项：Log(常量) 参数化（∫2^x 全族解锁）。
+    """M5.6 首项：变指数幂归一 + Log(常量) 参数化（∫a^x 全族解锁）。
 
-    语义：log 2 作独立超越参数 c 进系数域（ℚ(c) 上零等价可判定，
-    Richardson 安全——积分全程无需此类常量间关系），出口回代；
-    状态必须 VERIFIED（出口精确验证背书）。
+    语义：变指数幂 b^e（e 含 x，底任意）-> Exp(e·Log(b))——通用桥接
+    恒等式，与 diff.py 幂规则的单值 Log(b) 承诺自洽；Log(不含 x 的
+    项) 作独立超越参数进系数域（ℚ(params,c) 上零等价可判定，
+    Richardson 安全），出口回代；状态必须 VERIFIED（出口精确验证背书）。
     """
 
     def _int(self, s):
@@ -397,9 +398,31 @@ class TestConstLogParam(unittest.TestCase):
         self.assertIn("VERIFIED", out)
 
     def test_numeric_base_power_norm(self):
-        # 4^x 经数值底幂归一走同一参数通道
+        # 4^x 经变指数幂归一走同一参数通道
         out = self._int("4^x")
         self.assertIn("VERIFIED", out)
+
+    def test_frac_base(self):
+        # 有理底：log(1/3) 参数化，负系数域线性代数
+        out = self._int("(1/3)^x")
+        self.assertIn("VERIFIED", out)
+
+    def test_param_base_direct(self):
+        # 符号参数底 y^x：Log(y) 作独立超越参数（对 x 积分）
+        from cas.pprint import to_str
+        from cas.risch import integrate_exp_tower
+
+        F, _de = integrate_exp_tower(parse("y^x"), parse("x"))
+        self.assertIn("log(y)", to_str(F))
+
+    def test_x_power_x_now_proved_nonelementary(self):
+        # 通用化红利：x^x 用户形态直达 Risch 证明（此前仅 exp(x*log(x))
+        # 输入可达；变指数幂归一后 Power 形态同路）
+        from cas.session import Session
+
+        out = Session().integrate("x^x")
+        self.assertIn("NOT ELEMENTARY", out)
+        self.assertIn("proved", out)
 
     def test_exp_regression(self):
         # 回归：普通 Exp 不受参数化影响（spec 表路径）
