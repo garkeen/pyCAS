@@ -114,6 +114,7 @@ M6.5 起由测试锁定。
 | 文件 | 内容 |
 |----|------|
 | term.py | 驻留 Expr/Bound/mk 规范化/subst |
+| termpath | 树遍历与重写工具：subst/instantiate/路径寻址（term 末尾回接） |
 | gaussian.py | Ga 高斯有理域（分量泛型→ℚ(i,params)） |
 | scalarutil.py | 标量域助手单点（Ga 标量算术 + ℚ(i,params) 分解，M6.6） |
 | univar.py | K[t] 单变量域多项式稠密算术（M6.4） |
@@ -125,10 +126,34 @@ M6.5 起由测试锁定。
 | solve/matrix/ineq/sets/groebner | 方程 / 线性代数 / Sturm 不等式 / 解集 / Gröbner |
 | ops/spec/trig/diff | 项层结构API / FunctionSpec / 三角多角度基 / 微分+verify |
 | integrate/istrategy/bsub | 积分入口(SOLVERS 消费) / 步树 / 反向换元 |
-| risch | 微分塔全套（DiffExt/RDE 三态/prde 判定件/_pld_solve） |
+| risch_core | 微分塔地基：DiffExt/build_extension/derivation/trigs_to_exp/代数常数登记 |
+| risch_exp | exp 层积分：Hermite 推广+RT 残数、K[t] 视图、log 配对实化 |
+| risch_rdesup | RDE 支撑：weak normalization/split/limited_integrate/视图导子 |
+| risch_prde | 参数化判定件：_pld_solve 三态/_ldrad_base/_is_logderiv_radical |
+| risch_rde | 塔上 RDE 完备求解器（ok/proved/undecided）+ exp 频率分量 + Laurent 实化 |
+| risch | 门面+递归驱动：_risch_rec/_integrate_in_K/_risch_rec_mixed/integrate_exp_tower |
 | structs | Struct 协议 + SOLVERS 总表 |
 | series/limits/ode/summation | Taylor / 极限 / ODE / Faulhaber+Gosper |
 | evalnum/session/parser/pprint/latex/errors | 数值抽查 / REPL / 解析 / 打印 / 异常协议 |
+
+补充行（M6.7 拆分登记）：
+
+| 文件 | 内容 |
+|----|------|
+| ratint | 有理积分核：Hermite+RootOf/atan、AN 区间精确符号、根式/常数参数化收集 |
+| intcore | 不定积分入口与快速通道：u-sub/spec anti 表/tan-half/特殊函数出口/SOLVERS 瀑布 |
+| defint | 定积分：NL+奇点拆分+反常判敛+分段+中点反射/周期折叠 |
+| integrate | 兼容门面：ratint/intcore/defint 全部历史名显式重导出（零行为差） |
+| session_cmds | 内核命令 handler（_k_*）+ 惰性形式求值助手（_eval_inert 等） |
+| session_core | SessionBase：状态/账本/规则应用/定义展开/撤销重放 |
+| session_kernel | KernelOpsMixin：! 前缀算法入口 + :value 族 + refine/LaTeX |
+| session_manual | ManualOpsMixin：子项手术/等式双侧/变形工具箱/微积分战术 |
+| session_dispatch | DispatchMixin：分发/帮助表/转录 DSL（save/replay） |
+| session | 组装门面：四 Mixin 合成 Session + REPL 入口 |
+
+懒导入断环登记（M6.7，三处，均为函数级 import）：build_extension→
+risch_prde._is_logderiv_radical；_limited_integrate/_exp_freq_part→
+risch._integrate_in_K。
 
 ## 6. 里程碑（单一 M 系列；基于当前代码实证状态）
 

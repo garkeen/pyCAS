@@ -187,6 +187,7 @@ def DB_(i):
         _DBS[i] = t
     return t
 
+
 TRUE = BVal(True)
 FALSE = BVal(False)
 UND = _SPECIALS.setdefault("Undefined", Special("Undefined"))
@@ -961,199 +962,13 @@ def _lift(t, var, depth):
     return t
 
 
-def _subst_raw(t, mapping):
-    """原始结构替换（不规范化，保 held 形）：用于 Quote 内部。
+# ---------------------------------------------------------------------------
+# 树遍历与重写工具（M6.7 拆分）：subst/instantiate/path 操作移居
+# cas/termpath.py（对 term 只持模块引用，无导入环）；此处回接名字，
+# `from cas.term import subst` 等既有导入面不变。
+# ---------------------------------------------------------------------------
 
-    与 subst 同构但重建走 _intern_expr——Times/Power 不合并同底幂，
-    保持 held 项的原始结构。Quote 内部含 ?x 替换时用此。
-    """
-    if not mapping:
-        return t
-    order = []
-    stack = [t]
-    while stack:
-        u = stack.pop()
-        order.append(u)
-        if isinstance(u, Expr):
-            if u in mapping:
-                continue
-            stack.extend(u.args)
-        elif isinstance(u, Bound):
-            stack.append(u.body)
-    val = {}
-    for u in reversed(order):
-        hit = mapping.get(u)
-        if hit is not None:
-            val[u] = hit
-        elif isinstance(u, Expr):
-            val[u] = _intern_expr(u.head, tuple(val[a] for a in u.args))
-        elif isinstance(u, Bound):
-            val[u] = _mk_bound_canon(u.hint, val[u.body])
-        else:
-            val[u] = u
-    return val[t]
-
-
-def subst(t, mapping):
-    """替换（显式工作栈后序重建，深表达式不触及 Python 递归上限）。
-
-    Quote 内部走 _subst_raw（保 held 结构，不合并同底幂/同类项）。
-    """
-    if not mapping:
-        return t
-    # 显式栈后序遍历；Bound 的 body 必须始终下行（内部自由变量需替换且防捕获）
-    order = []
-    stack = [t]
-    while stack:
-        u = stack.pop()
-        order.append(u)
-        if isinstance(u, Expr):
-            if u in mapping:
-                continue  # 命中替换表的子树不再下行
-            if isinstance(u.head, Sym) and u.head.name == "Quote":
-                continue  # quote 内部不走 mk 重建（保 held 结构，单独 raw subst）
-            stack.extend(u.args)
-        elif isinstance(u, Bound):
-            stack.append(u.body)
-    val = {}
-    for u in reversed(order):
-        hit = mapping.get(u)
-        if hit is not None:
-            val[u] = hit
-        elif isinstance(u, Expr):
-            if isinstance(u.head, Sym) and u.head.name == "Quote":
-                # quote 内部保 held 结构：raw subst（_intern_expr 重建，不规范化）
-                val[u] = _intern_expr(u.head, tuple(_subst_raw(a, mapping) for a in u.args))
-            else:
-                val[u] = mk(u.head, tuple(val[a] for a in u.args))
-        elif isinstance(u, Bound):
-            val[u] = _mk_bound_canon(u.hint, val[u.body])
-        else:
-            val[u] = u
-    return val[t]
-
-
-def _instantiate_raw(t, sub):
-    """原始结构实例化（不规范化，保 held 形）：用于 Quote 内部。
-
-    与 instantiate 同构但重建走 _intern_expr——Times/Power 不合并，
-    保持 held 项的原始结构。规则 RHS 的 Quote 内含 ?x 实例化时用此。
-    """
-    if isinstance(t, PatVar):
-        return sub.get(t.name, t)
-    if isinstance(t, PatSeq):
-        raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
-    if isinstance(t, Expr):
-        out = []
-        for a in t.args:
-            if isinstance(a, PatSeq):
-                seq = sub.get(a.name)
-                if seq is None:
-                    out.append(a)
-                else:
-                    out.extend(seq)
-            else:
-                out.append(_instantiate_raw(a, sub))
-        return _intern_expr(t.head, tuple(out))
-    if isinstance(t, Bound):
-        return _mk_bound_canon(t.hint, _instantiate_raw(t.body, sub))
-    return t
-
-
-def instantiate(t, sub):
-    if isinstance(t, PatVar):
-        return sub.get(t.name, t)
-    if isinstance(t, PatSeq):
-        raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
-    if isinstance(t, Expr):
-        if isinstance(t.head, Sym) and t.head.name == "Quote":
-            # quote 内部保 held 结构：raw instantiate（_intern_expr 重建，不规范化）
-            return _intern_expr(t.head, tuple(_instantiate_raw(a, sub) for a in t.args))
-        out = []
-        for a in t.args:
-            if isinstance(a, PatSeq):
-                seq = sub.get(a.name)
-                if seq is None:
-                    out.append(a)
-                else:
-                    out.extend(seq)
-            else:
-                out.append(instantiate(a, sub))
-        return mk(t.head, tuple(out))
-    if isinstance(t, Bound):
-        return _mk_bound_canon(t.hint, instantiate(t.body, sub))
-    return t
-
-
-def free_vars(t, acc=None):
-    if acc is None:
-        acc = set()
-    if isinstance(t, Sym):
-        acc.add(t)
-    elif isinstance(t, Expr):
-        for a in t.args:
-            free_vars(a, acc)
-    elif isinstance(t, Bound):
-        free_vars(t.body, acc)
-    return acc
-
-
-def term_at(t, path):
-    for i in path:
-        if isinstance(t, Expr):
-            t = t.args[i]
-        elif isinstance(t, Bound):
-            # 穿过绑定层时打开体：DB 索引还原为绑定符号，子树脱离绑定上下文
-            # 供规则匹配/求值视为自由符号树（replace_at 放回时 mk_bound 重新抽象）
-            t = _lift(t.body, S(t.hint), 0)
-        else:
-            raise IndexError(path)
-    return t
-
-
-def _bind_into(t, var, depth=0):
-    """把打开后的体中的自由变量 var 绑回 de Bruijn 索引，不触碰已有 DB 引用。
-
-    与 _abstract 的区别：_abstract 会提升 body 里已有的 DB(i>=depth)（正常 mk_bound
-    场景 body 无 DB 引用）；replace_at 穿过已绑定层时 body 里已有外层 DB 引用，必须保持。
-    """
-    if isinstance(t, Sym):
-        return DB_(depth) if t is var else t
-    if isinstance(t, Expr):
-        return mk(t.head, tuple(_bind_into(a, var, depth) for a in t.args))
-    if isinstance(t, Bound):
-        return _mk_bound_canon(t.hint, _bind_into(t.body, var, depth + 1))
-    return t
-
-
-def replace_at(t, path, v):
-    if not path:
-        return v
-    i = path[0]
-    if isinstance(t, Expr):
-        args = list(t.args)
-        args[i] = replace_at(args[i], path[1:], v)
-        return mk(t.head, tuple(args))
-    if isinstance(t, Bound):
-        # 打开当前层 -> 递归替换 -> 只把当前层变量绑回，外层 DB 引用保持不动
-        var = S(t.hint)
-        inner = replace_at(_lift(t.body, var, 0), path[1:], v)
-        return _mk_bound_canon(t.hint, _bind_into(inner, var, 0))
-    raise IndexError(path)
-
-
-def all_paths(t, base=()):
-    yield base
-    if isinstance(t, Expr):
-        for i, a in enumerate(t.args):
-            yield from all_paths(a, base + (i,))
-    elif isinstance(t, Bound):
-        yield from all_paths(t.body, base + (0,))
-
-
-def size(t):
-    if isinstance(t, Expr):
-        return 1 + sum(size(a) for a in t.args)
-    if isinstance(t, Bound):
-        return 1 + size(t.body)
-    return 1
+from cas.termpath import (  # noqa: E402
+    _subst_raw, subst, _instantiate_raw, instantiate,
+    free_vars, term_at, _bind_into, replace_at, all_paths, size,
+)

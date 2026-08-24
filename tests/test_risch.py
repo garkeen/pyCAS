@@ -578,5 +578,91 @@ class TestAlgebraicConstants(unittest.TestCase):
         self.assertIn("VERIFIED", out)
 
 
+class TestLatentRefusalPathPins(unittest.TestCase):
+    """M6.7 拆分审计发现的两个潜伏 NameError 的回归钉。
+
+    均在诚实拒答/缩放路径上，主路径测试不覆盖、一触即崩：
+    1. _const_blockage_hint 引用 simplify 却从未导入——塔覆盖失败
+       且被积式含超越常数项时崩（Richardson 卡点提示路径）；
+    2. _wn_normalize 调用从未定义的 _fu_sub——weak normalization
+       发现正重数 normal 因子时崩（intpar.spad :1237 右端缩放）。
+    """
+
+    def test_const_blockage_hint_no_nameerror(self):
+        # exp(sin(1))*x：Exp 参数 sin(1) 非塔上有理式 -> 塔覆盖失败；
+        # 提示扫描发现常数三角项 -> 必须走 simplify（修复前 NameError）
+        from cas.risch import build_extension, RischUnsupported
+
+        with self.assertRaises(RischUnsupported) as ei:
+            build_extension(T.times(T.exp(T.sin(N(1))), x), x)
+        self.assertIn("constant problem", str(ei.exception))
+        self.assertIn("sin(1)", str(ei.exception))
+
+    def test_fu_sub_contract(self):
+        # 直接契约钉：n1/d1 - n2/d2 = (n1*d2 - n2*d1)/(d1*d2)，无约分。
+        # 3/2 - 1/4 -> (3*4 - 1*2) / (2*4) = 10/8
+        from cas.ratfunc import RatFunc
+        from cas.risch_rdesup import _fu_add, _fu_sub
+
+        zero = RatFunc.zero(())
+        one_c = zero.one(zero.p.vars)
+        rf = lambda v: one_c * Fr(v)
+
+        n, d = _fu_sub([rf(3)], [rf(2)], [rf(1)], [rf(4)], zero)
+        self.assertEqual([c.const_val() for c in n], [Fr(10)])
+        self.assertEqual([c.const_val() for c in d], [Fr(8)])
+        # 对偶性：_fu_sub(a,b,c,d) 与 _fu_add(a,b,-c,d) 同结果
+        n_s, d_s = _fu_sub([rf(3)], [rf(2)], [rf(1)], [rf(4)], zero)
+        n_a, d_a = _fu_add([rf(3)], [rf(2)], [rf(-1)], [rf(4)], zero)
+        self.assertEqual([c.const_val() for c in n_s],
+                         [c.const_val() for c in n_a])
+        self.assertEqual([c.const_val() for c in d_s],
+                         [c.const_val() for c in d_a])
+
+    def test_wn_normalize_scaling_semantics(self):
+        # 缩放步语义钉（真塔 jv=1 视图）：_wn_normalize 对正重数 normal
+        # 因子执行 fn2/fd2 -= mv*D(pi)/pi——修复前该步调用不存在的
+        # _fu_sub 直接 NameError。此处以与实现相同的 _make_der_fn 取
+        # D(pi)，并以 _fu_add 对偶作参考实现核对（intpar.spad :1237）。
+        #
+        # 注：不以 jv=0 合成多项式直驱 _wn_normalize 全流程——空变量
+        # 基域是生产不可达配置（求解器入口仅 j>=2 -> jv>=1），其上
+        # univar 常数算术退化膨胀，非本钉目标。
+        from cas.parser import parse
+        from cas.ratfunc import RatFunc
+        from cas.risch_core import DiffExt
+        from cas.risch_rdesup import _make_der_fn, _fu_add, _fu_sub
+
+        de = DiffExt(x)                       # levels=[x]
+        w = RatFunc.from_term(parse("1/x"), (x,))
+        de.add("primitive", w, T.mk(T.S("Log"), (x,)), "l")
+        der_fn = _make_der_fn(de, 1)
+        zero = RatFunc.zero((x,))
+
+        def RT(s):
+            return RatFunc.from_term(parse(s), (x,))
+
+        def eq_lists(xs, ys):
+            """RatFunc 无值等词：按 (分子 monos, 分母 monos) 结构比对。"""
+            return len(xs) == len(ys) and all(
+                xp.p.monos == yp.p.monos and xp.q.monos == yp.q.monos
+                for xp, yp in zip(xs, ys))
+
+        # pi = tau + 1：D(pi) = w = 1/x -> 缩放项 mv*D(pi) = [3/x]
+        pi = [RT("1"), RT("1")]
+        n2 = [c * Fr(3) for c in der_fn(pi)]
+        self.assertEqual(len(n2), 1)
+        # fn2/fd2 - mv*D(pi)/pi == _fu_add 对偶参考实现
+        from cas.pprint import to_str
+        self.assertEqual(to_str(n2[0].to_term()), "3/x")
+        # fn2/fd2 - mv*D(pi)/pi == _fu_add 对偶参考实现
+        fn = [RT("5"), RT("2")]               # 5 + 2*tau（任意干净输入）
+        fd = [RT("3")]
+        got_n, got_d = _fu_sub(fn, fd, n2, pi, zero)
+        exp_n, exp_d = _fu_add(fn, fd, [RT("-3/x")], pi, zero)
+        self.assertTrue(eq_lists(got_n, exp_n))
+        self.assertTrue(eq_lists(got_d, exp_d))
+
+
 if __name__ == "__main__":
     unittest.main()
