@@ -121,3 +121,21 @@
   合并(2e18c54)。E↔exp(1) 双面孔同一性实证并守卫（验证链叶键依赖
   面孔一致），识别归 N6 超越常数关系表。待办序：N3→N6→N8→N2，
   小件 B4（_bareiss_det 绑定 K[z] 元素层需适配非顺手）。
+
+- M78.5 进度账：N6-P1 统一注册表门面 kernelreg.py——代数区=
+  ALG_FIELDS 视图 API，超越关系区 const_face_key 两面孔同键
+  E≡exp(1)(492ed94)。N6-P2 双面孔全量统一：展示层规则 exp_one
+  (log.rules auto, c787899)+引擎层 z-符号合一（_parametrize_
+  const_logs 把 Exp(单位字面) 并入 _nc2；exp(1)+e→2*_nc2；
+  非单位整字面诚实保持核形态——替换值须为符号，幂形回代不对称，
+  92ec27e）。N6-P3a/B2 根式建域唯一化：kernelreg.register_
+  numeric/symbolic_radical 持有极小多项式构造+规范键去重，
+  _collect_radical 降级为项级消费者适配，QxStruct 岛改工厂+
+  别名语义，solve α①与塔层经既有消费路径自动统一(e429dcc)。
+  **教训**：bracket（实嵌入区间）必须进规范键——同一极小多项式
+  在不同嵌入下是不同域身份，混同致主支选择失效、负底分数幂泄
+  漏进数值预言机（test_nested_radical_coefficients 抓获）。
+- 待办序：N3 项级闸门接线（try_collapse 桥：项级根式叶→已注册
+  域元素→perfect_power→坍缩回代）→ exp(k∈ℤ\\{1})/exp(p,q) 面
+  孔扩展（(符号,指数)对回代 / _np 路由）→ N8 → N2 → B9 TanHalf
+  共享裁定 → 小件。
