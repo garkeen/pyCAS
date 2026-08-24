@@ -91,6 +91,11 @@ def integrate(t, x, principal=None):
     M5.6#4 阶段一：generic 答案在参数退化点（e^{ax}/a 的 a=0 类）
     无定义而原函数存在——静默输出即撒谎，此处强制声明成立条件。
     """
+    # 变量名归一：字符串入参必须折算为驻留 Sym——塔覆盖检查与
+    # free_vars 全靠指针同一，裸字符串曾致 e^x 建层后残留检查误判
+    # "not covered"（诚实性缺陷：错拒载体伪装成超界说明）
+    if isinstance(x, str):
+        x = T.S(x)
     from cas.structure import run_pre_passes
 
     t, a = run_pre_passes(t, x)

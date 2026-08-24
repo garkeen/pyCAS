@@ -664,5 +664,62 @@ class TestLatentRefusalPathPins(unittest.TestCase):
         self.assertTrue(eq_lists(got_d, exp_d))
 
 
+class TestM71ResidueField(unittest.TestCase):
+    """M7.1 z-常数中间层：代数常数残根落域（ℚ(α) 残数 → VERIFIED）。
+
+    数学背景：∫eˣdx/(e²ˣ−2) 中 τ=eˣ 层的残数为 ±1/(2√2) ∈ ℚ(√2)
+    ——修复前 honest 'und'（"algebraic residue roots beyond ..."），
+    修复后残根经 ALG_FIELDS 建域、参数化符号穿算术、出口回化根式。
+    """
+
+    def _integ(self, s):
+        from cas.integrate import integrate
+
+        return integrate(parse(s), x)
+
+    def test_alg_const_residue_unlocked(self):
+        from cas.diff import verify
+
+        f = parse("exp(x)/(exp(2*x)-2)")
+        F, ok, m, provisos = self._integ("exp(x)/(exp(2*x)-2)")
+        self.assertTrue(ok)
+        # 理论形态：(1/(2√2))·ln((eˣ−√2)/(eˣ+√2)) = (±√2/4)(ln 差)
+        s = to_str(F)
+        self.assertIn("log(exp(x) - 2^(1/2))", s)
+        self.assertIn("log(exp(x) + 2^(1/2))", s)
+        self.assertIn("2^(1/2)", s)
+        self.assertNotIn("_a", s)             # 参数化符号必须全部回化
+        self.assertEqual(verify(F, x, f), "VERIFIED")
+
+    def test_rational_residue_still_works(self):
+        # 对照：有理残数路径不受影响 ∫eˣ/(e²ˣ−1) = ½ln((eˣ−1)/(eˣ+1))
+        from cas.diff import verify
+
+        f = parse("exp(x)/(exp(2*x)-1)")
+        F, ok, _m, _pv = self._integ("exp(x)/(exp(2*x)-1)")
+        self.assertTrue(ok)
+        self.assertEqual(verify(F, x, f), "VERIFIED")
+
+    def test_nonconst_residue_proved_refusal(self):
+        # ∫dx/(eˣ+x)：唯一极点残数 1/(1-x) 非常数（p 与 D(p) 互素，
+        # 正规极点前提成立）⟹ Liouville 定理 proved 不可初等——
+        # 方向安全序钉：绝不允许未来改动把它翻成可积或 'und'
+        from cas.risch_core import RischNonElementary
+
+        with self.assertRaises(RischNonElementary):
+            self._integ("1/(exp(x)+x)")
+
+    def test_string_var_normalized(self):
+        # M7.1 附带诚实性修复：字符串变量名曾绕过驻留 Sym 归一，
+        # eˣ 建层后残留检查误判 "not covered"（错拒载体伪装成超界）
+        from cas.integrate import integrate
+        from cas.diff import verify
+
+        f = parse("exp(x)/(exp(2*x)-2)")
+        F, ok, _m, _pv = integrate(f, "x")
+        self.assertTrue(ok)
+        self.assertEqual(verify(F, x, f), "VERIFIED")
+
+
 if __name__ == "__main__":
     unittest.main()

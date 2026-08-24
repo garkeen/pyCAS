@@ -99,9 +99,27 @@ AlgElem(fld, cs)          # cs 升序系数 list，构造即 mod m 约简 + trim
 
 ### 分步执行计划（每步全绿提交）
 
-1. **M7.0-a 核心**：algfield.py + tests/test_algfield.py——ℚ(√2)/ℚ(i)(Ga 对拍)/ℚ(∛2)/函数基 K=RatFunc(x)[α], α=√(x²+1) 四切片；(x+α)(x−α)=−1 类恒等式、范数/迹 parity、求逆/幂/回化。
-2. **M7.0-b 收口迁移**：QxStruct 投影改写 AlgField 为唯一登记处（作用域对象持 {sym: AlgField}），ALG_MODULI/AN_RELATIONS/AN_INTERVALS 读端改为读它；alg_suspend 退役或降级为兼容垫片。行为零差（现有 AN 测试全绿为准绳）。
-3. 之后进 arch §M7.1（z-常数中间层）/ M7.2（RT 残根落域）。
+1. **M7.0-a 核心 ✓(0adaf88)**：algfield.py + tests/test_algfield.py——
+   ℚ(√2)/ℚ(i)(Ga 对拍)/ℚ(∛2)/函数基 K=RatFunc(x)[α] 四切片全绿。
+   实现要点：自含鸭子类型算术层 _p_*（univar 契约要求叶自带
+   is_zero()，标量叶不满足）；_p_xgcd 不变量 s0·a+t0·b=A；
+   牛顿递推界 min(k−1,n)。
+2. **M7.0-b 收口迁移 ✓(0adaf88)**：ALG_FIELDS 单一登记处上线，
+   poly.ALG_MODULI/risch_core.ALG_RELATIONS/ratint.AN_INTERVALS/
+   AN_RELATIONS 四表删除，全部读写端迁移；QxStruct 登记改构造
+   AlgField（bracket 入域对象）。迁移中修出两个升序/降序换算 bug
+   （minpoly_poly、af_irreducible_q——后者巧合性通过测试）。
+3. **M7.1 z-常数中间层 ✓**：调研发现 arch 原描述失真——∫dx/(eˣ+x)
+   的残数 1/(1−x) 非常数，本就是正确 proved 拒答（非 'und'）；
+   真实卡点 = 代数常数残根（∫eˣ/(e²ˣ−2)：±1/(2√2) ∈ ℚ(√2)）
+   落在 `_constant_roots` 的 "beyond Q(i)/Q(params)" 诚实拒答上。
+   实现：解项中数值底根式叶逐个经 _collect_radical 建 AlgField →
+   参数化符号形态穿 SymRat 系数通道（乘积出口模约简保次数有界，
+   复用 M5.4 作用域参数化语义与 M7.0-b 统一登记处，零特判）→
+   TowerStruct.compute 出口统一回化根式再 verify。附带修复
+   integrate(f, 'x') 字符串变量未归一的错拒诚实性缺陷。
+   回归钉：解锁 VERIFIED / 有理残数对照 / eˣ+x proved 拒答方向锁 /
+   字符串归一（tests/test_risch.py::TestM71ResidueField）。
 
 ### 正确性锚点（测试即规格）
 

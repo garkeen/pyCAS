@@ -201,6 +201,15 @@ class TowerStruct(Struct):
             expr = T.subst(expr, subs)
         if backsub:
             expr = T.subst(expr, backsub)
+        # M7.1 z-常数中间层出口：代数常数残根以参数化符号穿过系数
+        # 算术（ALG_FIELDS 乘积出口模约简），此处统一回化根式形态，
+        # 使后续实化/verify 都在原始根式语义下精确进行。键为内容寻址
+        # （同形幂同符号），跨计算残留映射语义恒真。
+        from cas.algfield import ALG_FIELDS
+        ak = {s: fld.origin for s, fld in ALG_FIELDS.items()
+              if fld.origin is not None}
+        if ak:
+            expr = T.subst(expr, ak)
         # 出口实化切片二：log 配对候选先规范化再整体 verify 背书，
         # 失败保留复形态（诚实纪律）
         try:

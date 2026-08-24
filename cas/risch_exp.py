@@ -831,10 +831,47 @@ def _constant_roots(Rz):
             if sr is not None:
                 out.append(sr)
                 continue
+            # M7.1 z-常数中间层：残数根落在 ℚ(α)（数值底根式常数，
+            # 如 ±1/(4√2) ∈ ℚ(√2)）——经统一登记处建 AlgField、以
+            # 参数化符号形态穿过系数算术（乘积出口模约简保次数有界），
+            # 出口由 TowerStruct.compute 统一回化根式形态再验证。
+            sr = _alg_const_coeff(sol)
+            if sr is not None:
+                out.append(sr)
+                continue
             raise RischUnsupported(
-                "algebraic residue roots beyond Q(i)/Q(params) pending")
+                "algebraic residue roots beyond radical constants pending "
+                "(RootOf/nested forms: M7.2/M7.3)")
         out.append(T.num_val(sol))
     return out
+
+
+def _alg_const_coeff(sol):
+    """代数常数根 term -> 系数域形态（SymRat over 参数化符号）。
+
+    遍历解项中的数值底有理指数幂叶，逐叶经 risch_core._collect_radical
+    登记 AlgField（ALG_FIELDS 单一来源，M7.0-b），解项替换为符号多项式
+    后走既有 SymRat 通道。非根式可吸收形态返回 None（诚实上抛）。
+    """
+    from cas.risch_core import _collect_radical
+
+    subs = {}
+    stack = [sol]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, T.Expr):
+            if u.head.name == "Power":
+                _b, _e = u.args
+                if T.is_num(_b) and isinstance(_e, T.Rat):
+                    _collect_radical(u, subs)
+                    continue
+            stack.extend(u.args)
+    if not subs:
+        return None
+    s2 = T.subst(sol, subs)
+    if _free_of_x(s2):
+        return _term_to_symrat(s2)
+    return None
 
 
 def _free_of_x(t):

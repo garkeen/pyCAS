@@ -212,12 +212,23 @@ risch._integrate_in_K。
   共用底座：ℚ(B)[α] 通用代数扩张算术——minpoly 登记/约简/求逆/
   uexgcd/迹/范数/结式（B = 常量域或 ℚ(x,params) 多项式环；
   algnum.py 与 M5.4 Trager 装置为起点）。
-  - M7.0 ℚ(B)[α] 域算术通用化（单一代数对象表示，消灭
-    "常量 α / 变元 α / 参数根式"三套表示并行）
-  - M7.1 残数域装置：z-常数中间层的 K[root] 约束计算
-    （解锁 1/(eˣ+x) 型 _pld_solve 'und'）
+  - M7.0 ℚ(B)[α] 域算术通用化 ✓(0adaf88)：cas/algfield.py
+    AlgField/AlgElem 单一表示（K 叶鸭子类型：Fr/Ga/SymRat/RatFunc），
+    mod minpoly 算术/xgcd/牛顿幂和迹/Sylvester 范数与结式；三套并行
+    注册表退役合一为 algfield.ALG_FIELDS（域对象携带极小多项式+出处键
+    +实嵌入区间），poly/apart/ratint/structs/structure 全部读端迁移，
+    alg_suspend 保留为作用域语义声明
+  - M7.1 残数域装置 ✓：z-常数中间层落地——_constant_roots 对根式
+    形态代数常数残根经 _collect_radical 建 AlgField、参数化符号穿
+    系数算术（乘积出口模约简），TowerStruct.compute 出口统一回化
+    根式形态再 verify。解锁 ∫eˣ/(e²ˣ−2) 型（残数 ±1/(2√2) ∈
+    ℚ(√2)）VERIFIED；∫dx/(eˣ+x) 经查本就是正确 proved 拒答（残数
+    1/(1−x) 非常数，非 'und'——arch 原描述失真已修正，回归钉锁定
+    方向安全序）。附带修复 integrate 字符串变量名未归一的错拒缺陷。
+    边界：RootOf/嵌套根式形态残根仍诚实拒答（→M7.2/M7.3）
   - M7.2 RT 残数根落域：√(a²−4) 类残根直接驻留代数扩张
-    （解锁 ∫dx/(eˣ+(a+i)) 诚实拒答转 VERIFIED）
+    （解锁 ∫dx/(eˣ+(a+i)) 诚实拒答转 VERIFIED；RootOf/嵌套形态
+    残根落域亦在此收口）
   - M7.3 本原元多符号：乘法闭包归一或 primelt（√2·√3→√6；
     解锁多 AN 符号 apart）
   - M7.4 变元基底纯代数积分：∫dx/√(x²+1)
