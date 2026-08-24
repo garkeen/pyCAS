@@ -31,42 +31,56 @@ def format_steps(step, indent=0):
 
 
 def explain(t, x, _depth=0):
-    """积分策略分类 -> IntStep 树。与 integrate() 同一套探测，只做展示分类。"""
-    from cas import spec as _spec
-    from cas import integrate as _zi
-    from cas.solve import _linear_split
+    """积分策略步树 —— B7：从单一执行踪迹派生。
 
-    if _depth > 2:
-        return IntStep("failed", "strategy depth exceeded (honest)")
-    # 1. spec 原函数表（裸 / 线性复合）
-    if isinstance(t, T.Expr) and len(t.args) == 1:
-        sp = _spec.get(t.head.name)
-        if sp is not None and sp.anti is not None:
-            arg = t.args[0]
-            if arg is x:
-                return IntStep("table", f"spec antiderivative: \u222b{sp.print_name} "
-                                          f"({to_str(sp.anti(x))} verified by D)")
-            a_, b_ = _linear_split(arg, x)
-            if T.is_num(a_) and T.num_val(a_) != 0 and T.is_num(b_) and x in T.free_vars(arg):
-                return IntStep("linear", f"linear composition u={to_str(arg)}: "
-                                         f"scale 1/{to_str(T.N(T.num_val(a_)))}")
-    # 2. 正向换元（t = h(g(x)) g'(x)；递归解释 h）
-    us = _zi._try_usub(t, x)
-    if us is not None:
-        _F, _ok, g, h, _H = us
-        vs = sorted(T.free_vars(h), key=lambda v: v.name)
-        if len(vs) == 1:
-            return IntStep("usub", f"u = {to_str(g)} (du divides integrand)",
-                           [explain(h, vs[0], _depth + 1)])
-        return IntStep("usub", f"u = {to_str(g)} (du divides integrand)")
-    # 3. 有理函数算法
+    不再并行重跑分类：直接执行真实 integrate()，步树由
+    intcore._LAST_TRACE（求解器命中/错过序列）构造——展示与
+    执行同源，结构性不可能各说各话。子步 = 本次顶层调用期间
+    内层递归 integrate 的命中（如 usub 的 ∫h du）。不可积/
+    证明性拒答如实出 failed 节点并携带原因。
+    """
+    from cas.intcore import integrate as _ig, _LAST_TRACE
+    from cas.risch import RischNonElementary, RischUnsupported
+    from cas.errors import BudgetExceeded
+
     try:
-        _P, _Q = _zi._rat_pair(t, x)
-        return IntStep("rational", "Hermite reduction + Rothstein-Trager log part "
-                                    "(algorithm; verify by D)")
-    except Exception:
-        pass
-    # 4. 三角 tan(x/2)
-    if _zi._trig_check(t, x):
-        return IntStep("tan-half", "t = tan(x/2) substitution -> rational integration")
-    return IntStep("failed", "no strategy found (honest refusal; try :parts)")
+        F, ok, method, provisos = _ig(t, x)
+    except (RischNonElementary, RischUnsupported) as e:
+        return IntStep("failed", f"{type(e).__name__}: {e}")
+    except BudgetExceeded:
+        return IntStep("failed", "budget exceeded (honest abort)")
+
+    def kind_of(entry):
+        m = entry.get("method", "")
+        slv = entry.get("solver", "")
+        if "linear composition" in m:
+            return "linear"
+        if m.startswith("spec antiderivative") or "multi-angle" in slv:
+            return "table"
+        if "u-substitution" in m or "u-substitution" in slv:
+            return "usub"
+        if "Hermite" in m or "power rule" in m:
+            return "rational"
+        if "tan(x/2)" in m:
+            return "tan-half"
+        if "tower" in m or "Risch" in m:
+            return "tower"
+        if "special function" in m:
+            return "special"
+        return "step"
+
+    hits = [e for e in _LAST_TRACE if e.get("ev") == "hit"]
+    if not hits:
+        return IntStep("failed", "no strategy fired (trace empty)")
+    # 根 = 最外层命中；内层递归（depth 更大）按执行序作子步
+    root_e = min(hits, key=lambda e: e["depth"])
+    tag = "VERIFIED" if root_e.get("ok") else "UNVERIFIED"
+    root = IntStep(kind_of(root_e),
+                   f"{root_e.get('method','')} [{tag}]")
+    for e in hits:
+        if e is root_e or e["depth"] <= root_e["depth"]:
+            continue
+        ctag = "VERIFIED" if e.get("ok") else "UNVERIFIED"
+        root.children.append(IntStep(kind_of(e),
+                                     f"{e.get('method','')} [{ctag}]"))
+    return root

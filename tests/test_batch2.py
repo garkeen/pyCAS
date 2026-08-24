@@ -141,7 +141,9 @@ class TestStrategyTree(_Base):
     def test_usub_child(self):
         st = self.trees("2*x*exp(x^2)")
         self.assertEqual(len(st.children), 1)
-        self.assertIn("u = x^2", st.note)
+        # B7：注记源自执行踪迹（method 串），换元对象如实呈现
+        self.assertIn("u=x^2", st.note)
+        self.assertEqual(st.children[0].kind, "table")
 
     def test_isteps_command(self):
         s = Session()

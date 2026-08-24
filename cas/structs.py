@@ -266,7 +266,17 @@ class SpecAnti(_HeadSolver):
         if F0 is None:
             return "miss", ""
         ok = _vf(F0, x, t) == "VERIFIED"
-        return "hit", F0, self.name, []
+        # B7：线性复合在执行源处自报（步树标注用，非并行分类——
+        # 探测结果就是本通道实际执行的换元）
+        note = self.name
+        if isinstance(t, T.Expr) and len(t.args) == 1:
+            arg = t.args[0]
+            if arg is not x and x in T.free_vars(arg):
+                from cas.solve import _linear_split
+                ab = _linear_split(arg, x)
+                if ab is not None:
+                    note += "; linear composition"
+        return "hit", F0, note, []
 
 
 class TrigLinear(_HeadSolver):

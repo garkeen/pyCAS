@@ -90,6 +90,10 @@ def integrate(t, x, principal=None):
     ln(e^{2ln x}-(x-1)^2) 类伪装式先收缩为 ln(2x-1) 再入管线。
     M5.6#4 阶段一：generic 答案在参数退化点（e^{ax}/a 的 a=0 类）
     无定义而原函数存在——静默输出即撒谎，此处强制声明成立条件。
+
+    B7 单一执行踪迹：_LAST_TRACE 记录本次顶层调用的求解器命中/
+    错过序列（内层递归不清空），istrategy.explain 据此派生步树
+    ——分类与执行同源，不可能再各说各话。
     """
     # 变量名归一：字符串入参必须折算为驻留 Sym——塔覆盖检查与
     # free_vars 全靠指针同一，裸字符串曾致 e^x 建层后残留检查误判
@@ -98,14 +102,24 @@ def integrate(t, x, principal=None):
         x = T.S(x)
     from cas.structure import run_pre_passes
 
-    t, a = run_pre_passes(t, x)
-    F, ok, method, provisos = _integrate_core(t, x, a,
-                                              principal=principal)
-    from cas.risch import _param_provisos
-    for p in _param_provisos(F, x):
-        if p not in provisos:
-            provisos.append(p)
-    return F, ok, method, provisos
+    if _TRACE_DEPTH[0] == 0:
+        _LAST_TRACE.clear()
+    _TRACE_DEPTH[0] += 1
+    try:
+        t, a = run_pre_passes(t, x)
+        F, ok, method, provisos = _integrate_core(t, x, a,
+                                                  principal=principal)
+        from cas.risch import _param_provisos
+        for p in _param_provisos(F, x):
+            if p not in provisos:
+                provisos.append(p)
+        return F, ok, method, provisos
+    finally:
+        _TRACE_DEPTH[0] -= 1
+
+
+_LAST_TRACE = []          # B7: [{'ev':'hit'/'miss','solver','method','ok','depth'}]
+_TRACE_DEPTH = [0]
 
 
 def _symbol_power_antideriv(t, x):
@@ -164,14 +178,30 @@ def _integrate_core(t, x, a=None, principal=None):
     正向复合 t = h(g(x))·g'(x) 走自动换元（代回不需逆函数）；
     有理函数走 Hermite+RootOf；sin x/cos x 有理式走 t=tan(x/2) 代换。
     method 供策略通道可解释输出（REPL/step log）；provisos 为参数情形的条件声明。
+
+    B7：快路径与 SOLVERS 循环统一入踪迹（_trace_hit）——步树派生
+    覆盖全部执行路径，无暗返。
     """
+    def _trace_hit(method, ok):
+        _LAST_TRACE.append({"ev": "hit", "solver": "fast:" + method,
+                            "method": method, "ok": ok,
+                            "depth": _TRACE_DEPTH[0]})
+
     F0 = _spec_antideriv(t, x)
     if F0 is not None:
         from cas.diff import verify as _verify
 
         ok = _verify(F0, x, t,
                      principal=principal) == "VERIFIED"
-        return F0, ok, "spec antiderivative table", []
+        _m0 = "spec antiderivative table"
+        if isinstance(t, T.Expr) and len(t.args) == 1:
+            _arg = t.args[0]
+            if _arg is not x and x in T.free_vars(_arg):
+                from cas.solve import _linear_split
+                if _linear_split(_arg, x) is not None:
+                    _m0 += "; linear composition"
+        _trace_hit(_m0, ok)
+        return F0, ok, _m0, []
     # 三角多项式：多角度基线性化后逐项积分（连续原函数，无 tan-half 分支切）。
     # sin^2 -> (1-cos(2x))/2 类；线性组合经 spec anti 表（含线性复合）逐项原函数。
     tl = _trig_linear_integrand(t, x)
@@ -190,6 +220,7 @@ def _integrate_core(t, x, a=None, principal=None):
 
             F0 = simplify(T.mk(S("Plus"), tuple(terms_)))
             ok = _verify(F0, x, t) == "VERIFIED"
+            _trace_hit("trig poly: multi-angle linearization + termwise table", ok)
             return F0, ok, "trig poly: multi-angle linearization + termwise table", []
     if _USUB_DEPTH[0] < 3:
         _USUB_DEPTH[0] += 1
@@ -199,6 +230,7 @@ def _integrate_core(t, x, a=None, principal=None):
             _USUB_DEPTH[0] -= 1
         if us is not None:
             F, ok, g, _h, _H = us
+            _trace_hit(f"u-substitution u={to_str(g)}", ok)
             return F, ok, f"u-substitution u={to_str(g)}", []
     pw_ = _power_antideriv(t, x)
     if pw_ is not None:
@@ -206,6 +238,7 @@ def _integrate_core(t, x, a=None, principal=None):
 
         ok = _verify(pw_, x, t,
                      principal=principal) == "VERIFIED"
+        _trace_hit("rational power rule (algebraic form)", ok)
         return pw_, ok, "rational power rule (algebraic form)", []
     spw = _symbol_power_antideriv(t, x)
     if spw is not None:
@@ -214,6 +247,7 @@ def _integrate_core(t, x, a=None, principal=None):
         F_sp, proviso = spw
         ok = _verify(F_sp, x, t,
                      principal=principal) == "VERIFIED"
+        _trace_hit("symbolic power rule (generic form)", ok)
         return F_sp, ok, "symbolic power rule (generic form)", [proviso]
     # SOLVERS 总表（N2 兑现 v3 设计）：头部快速通道 + Struct 三段式
     # 统一为声明式数据。attempt 协议：
@@ -231,6 +265,8 @@ def _integrate_core(t, x, a=None, principal=None):
         if verdict[0] == "miss":
             if verdict[1]:
                 last_reason = verdict[1]
+            _LAST_TRACE.append({"ev": "miss", "solver": s.name,
+                                "depth": _TRACE_DEPTH[0]})
             continue
         if len(verdict) == 5:
             _tag, term, method, provisos, ok = verdict
@@ -240,6 +276,9 @@ def _integrate_core(t, x, a=None, principal=None):
         else:
             _tag, term, method, provisos = verdict
             ok = True
+        _LAST_TRACE.append({"ev": "hit", "solver": s.name,
+                            "method": method, "ok": ok,
+                            "depth": _TRACE_DEPTH[0]})
         return term, ok, method, provisos
     raise RischUnsupported("unsupported integrand"
                     + (": " + last_reason if last_reason else ""))
