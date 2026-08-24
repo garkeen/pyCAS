@@ -255,7 +255,10 @@ class TowerZeroStage(Pass):
 
 class RatpowMergeStage(Pass):
     """同底有理指数幂合并后判零——仅 principal 承诺开启（分支切割
-    安全：x^{3/2}·x^{-1}=x^{1/2} 在负 x 半轴不成立）。"""
+    安全：x^{3/2}·x^{-1}=x^{1/2} 在负 x 半轴不成立）。
+
+    M6.2 收敛：判零序列（直零→equivalent 符号回退→塔零）唯一实现
+    在 diff._ratpow_zero_run，本 Stage 只持 needs 门控与显式 x。"""
     name = "ratpow_merge"
     needs = ("principal-branch",)
 
@@ -263,15 +266,8 @@ class RatpowMergeStage(Pass):
         m = _merge_ratpow(t0)
         if m is t0:
             return None
-        from cas.decide import equivalent, T3
-        from cas.diff import _tower_zero
-        if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
-            return True
-        if equivalent(m, T.ZERO) is T3.YES:
-            return True
-        if _tower_zero(m, T.ZERO, x):
-            return True
-        return None
+        from cas.diff import _ratpow_zero_run
+        return _ratpow_zero_run(m, x)
 
 
 class AtomizeTogetherStage(Pass):

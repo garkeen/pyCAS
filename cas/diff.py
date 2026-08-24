@@ -134,9 +134,28 @@ def _eq_single_var(r):
     return vs[0] if len(vs) == 1 else None
 
 
+def _ratpow_zero_run(m, x):
+    """合并后判零唯一实现（M6.2 收敛：_EQ_STAGES 与 VERIFY_STAGES
+    共用本函数，禁止再写第二份）。
+
+    序列：直接零 -> equivalent 符号回退（只认 T3.YES；采样 PROBABLE
+    不进证明通道）-> 塔内精确零。x=None 表示无积分变量语境（decide
+    扫描失败），跳过塔层。
+
+    返回 True(证零) | None(无结论)。"""
+    if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
+        return True
+    from cas.decide import equivalent, T3
+    if equivalent(m, T.ZERO) is T3.YES:
+        return True
+    if x is None:
+        return None
+    return True if _tower_zero(m, T.ZERO, x) else None
+
+
 def _eq_stage_tower(r, a, b, ctx):
-    """形式塔零判定：两侧投影进同一核分式做精确零判定（Risch 结构定理）。"""
-    from cas import term as T
+    """形式塔零判定（decide 视图）：_tower_zero 唯一核 + elfold/
+    单变元预过滤（省 wasted work，非语义差异）。"""
     from cas.decide import T3
     if not _eq_has_elfold(r):
         return None
@@ -147,21 +166,16 @@ def _eq_stage_tower(r, a, b, ctx):
 
 
 def _eq_stage_ratpow(r, a, b, ctx):
-    """分数幂合并（principal 承诺门控，P4 语义）。"""
-    from cas import term as T
-    from cas.decide import T3
+    """分数幂合并判零（decide 视图）：principal 门控 + 单变元扫描，
+    判零序列委托 _ratpow_zero_run。"""
     from cas.structure import principal_branch, _merge_ratpow
     if not principal_branch():
         return None
     m = _merge_ratpow(r)
     if m is r:
         return None
-    if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
-        return T3.YES
     xv = _eq_single_var(m)
-    if xv is None:
-        return None
-    return T3.YES if _tower_zero(m, T.ZERO, xv) else None
+    return T3.YES if _ratpow_zero_run(m, xv) else None
 
 
 from cas.decide import register_eq_stage

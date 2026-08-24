@@ -149,11 +149,14 @@ M6.5 起由测试锁定。
 ### 进行中 / 待办
 
 - **M6 架构统一（还债批，全部来自 2026-08 全码审计）**
-  - M6.1 双塔合一：`risch.integrate_exp_tower` 改为薄壳委托
-    TowerStruct（现存两份完整拷贝，已漂移一次）
-  - M6.2 判零框架收敛：tower_zero/ratpow_merge 在 _EQ_STAGES 与
-    VERIFY_STAGES 双注册——保留判等视图于 _EQ_STAGES，
-    VERIFY_STAGES 仅存 needs 门控差异并复用其 run
+  - M6.1 双塔合一 ✓(e1ec8c0)：integrate_exp_tower 已薄壳委托
+    TowerStruct（project/compute 唯一实现）
+  - M6.2 判零框架收敛 ✓：判零序列唯一实现 = diff._ratpow_zero_run
+    （直零→equivalent 符号回退→塔零；显式 x 参数，None 跳塔层）；
+    _eq_stage_ratpow（decide 视图：principal 门控+单变元扫描）与
+    RatpowMergeStage（verify 视图：needs 门控）均委托之；
+    tower 零判定唯一核 = diff._tower_zero（自带入口归一+异常安全），
+    _eq_stage_tower 为其门控视图
   - M6.3 拒答协议落地：按 §2 语义表统一抛出点（现 PolyError×50
     与 RischUnsupported×24 混用于同类场景）
   - M6.4 单变量域塔代数模块化：risch 内嵌 `_univar/_u_*` 十余函数
