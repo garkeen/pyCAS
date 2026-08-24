@@ -63,5 +63,32 @@ class TestConstFaceKeys(unittest.TestCase):
         self.assertIsNone(same_constant(parse("x"), parse("e")))
 
 
+class TestEngineFaceUnification(unittest.TestCase):
+    """N6-P2：z-参数化层叶键级同一性（risch_core 单点）。"""
+
+    def test_parametrize_unifies_dual_face(self):
+        from cas.risch_core import _parametrize_const_logs
+        from cas.pprint import to_str
+        xv = S('x')
+        f1, _ = _parametrize_const_logs(parse('exp(1)*x'), xv)
+        f2, _ = _parametrize_const_logs(parse('e*x'), xv)
+        self.assertEqual(to_str(f1), to_str(f2))
+        self.assertEqual(to_str(f1), '_nc2*x')
+
+    def test_dual_face_sum_counts(self):
+        # exp(1)+e -> 2*_nc2：同面孔合并计数
+        from cas.risch_core import _parametrize_const_logs
+        from cas.pprint import to_str
+        f, _ = _parametrize_const_logs(parse('exp(1)+e'), S('x'))
+        self.assertEqual(to_str(f), '2*_nc2')
+
+    def test_nonunit_literal_honest(self):
+        # exp(2)：幂关系暂不收，保持核形态（诚实边界）
+        from cas.risch_core import _parametrize_const_logs
+        from cas.pprint import to_str
+        f, _ = _parametrize_const_logs(parse('exp(2)*x'), S('x'))
+        self.assertIn('exp(2)', to_str(f))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

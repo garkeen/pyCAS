@@ -21,7 +21,7 @@ from fractions import Fraction as Fr
 from math import gcd
 
 from cas import term as T
-from cas.term import S, N, Expr, Sym, Const, Int, ONE, IU
+from cas.term import S, N, Expr, Sym, Const, Int, ONE, IU, is_num, num_val
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
@@ -996,6 +996,19 @@ def _parametrize_const_logs(f, x):
             if u.head.name == "Log" and x not in T.free_vars(u.args[0]):
                 found[u] = None      # 整体替换，不再深入 arg
                 continue
+            if u.head.name == "Exp" and x not in T.free_vars(u.args[0]):
+                # N6-P2 面孔统一：exp(1) ≡ e —— 与命名常数 e 映到
+                # 同一 z-符号 _nc2（叶键级同一性；回代各还原本面孔）。
+                # 整数字面 k>1 与 e 的幂关系暂不收（替换值须为符号，
+                # 幂形回代不对称）——诚实保持核形态。
+                a0 = u.args[0]
+                if is_num(a0):
+                    v0 = num_val(a0)
+                    if isinstance(v0, Fr) and v0 == 1:
+                        found[u] = None
+                        nc_subs.setdefault(u, S(named["e"]))
+                        continue
+                stack.append(u.args[0])
             stack.extend(u.args)
             # 命名常数收集（Log 子树已整体替换，其内部 π 不重复点名）
             for a in u.args:
