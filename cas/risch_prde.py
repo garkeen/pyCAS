@@ -105,7 +105,7 @@ def _ldrad_base(f_rf, de):
     if u_is_zero(Rz):
         return None
 
-    roots = _constant_roots(Rz)        # 无法判定 => 异常上抛（诚实）
+    roots = _constant_roots(Rz, xv=xv)   # 无法判定 => 异常上抛（诚实）
     residueterms = []
 
     def _neg_val(v):

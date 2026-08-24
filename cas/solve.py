@@ -373,7 +373,7 @@ def solve(f, var, budget=100000):
                 continue
             if h.name == "Power":
                 if var not in T.free_vars(u.args[0]):
-                    _collect_radical(u, rsubs)
+                    _collect_radical(u, rsubs, xv=var)
             stack.extend(getattr(u, "args", ()) or ())
         if rsubs:
             lifted = T.subst(lhs, rsubs)

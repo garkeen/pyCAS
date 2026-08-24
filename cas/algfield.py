@@ -255,17 +255,14 @@ class AlgField:
     # ---- 消费端换算 -------------------------------------------------
 
     def minpoly_poly(self, sym):
-        """极小多项式 → 该符号上的首一 Poly（ℚ 系数，poly 层消费）。"""
+        """极小多项式 → 该符号上的首一 Poly。
+
+        系数叶类型随域（Fr/Ga/SymRat）——Poly 层域泛化（N1）接受；
+        消费端 _reduce_alg_var 的系数算术同为鸭子类型。
+        """
         from cas.poly import Poly
 
-        n = len(self.m) - 1
-        monos = {}
-        for i, c in enumerate(self.m):
-            if _z(c):
-                continue
-            if not isinstance(c, Fr):
-                raise PolyError("algfield: non-Q minpoly leaf")
-            monos[(i,)] = c          # 升序表：索引即指数
+        monos = {(i,): c for i, c in enumerate(self.m) if not _z(c)}
         return Poly((sym,), monos)
 
     # ---- 域相等（表示级：同一极小多项式 ⟺ 同一域） -----------------
@@ -474,6 +471,69 @@ def register_alg_field(sym, fld):
 def unregister_alg_fields(syms):
     for s in syms:
         ALG_FIELDS.pop(s, None)
+
+
+# ---- Capelli 二项式不可约判定（M7.2） --------------------------------
+# 定理（特征零）：T^n − G 在 K 上不可约 ⟺
+#   (i)  G ∉ K^p 对每个素数 p | n；且
+#   (ii) 若 4 | n，则 G ∉ −4K⁴。
+# K = ℚ(params)：G 以互素 Poly 对 (num, den) 表示；
+# a/b ∈ Kᵖ ⟺ num、den 各自为 p 次幂（约分后）。符号/单位元一律以
+# perfect_power_part 的乘回精确验证为准，不做正性假设。
+
+def _prime_divisors(n):
+    out = []
+    d = 2
+    while d * d <= n:
+        if n % d == 0:
+            out.append(d)
+            while n % d == 0:
+                n //= d
+        d += 1
+    if n > 1:
+        out.append(n)
+    return out
+
+
+def binomial_irreducible(num, den, n):
+    """T^n − num/den 在 ℚ(params) 上不可约（Capelli 完整判定）。
+
+    num/den：ℚ 系数 Poly 对（入口强制 mgcd 约分——跨分子分母的
+    公因子会伪装/掩盖完全幂）。返回 True/False。n ≥ 2。
+    """
+    from cas.poly import perfect_power_part, div_exact, mgcd, _unify_vs
+
+    if n < 2:
+        raise PolyError("capelli: degree >= 2 required")
+    if num.is_zero():
+        raise PolyError("capelli: zero radicand (G = 0 => T^n reducible)")
+    def _reduce_pair(a_, b_):
+        g_ = mgcd(a_, b_)
+        if g_.is_const() and abs(g_.const_val()) == 1:
+            return a_, b_
+        return div_exact(a_, g_), div_exact(b_, g_)
+
+    num, den = _unify_vs(num, den)
+    num, den = _reduce_pair(num, den)
+
+    def _is_pth_power(a_, b_):
+        ha = perfect_power_part(a_, p_)
+        hb = perfect_power_part(b_, p_) if b_ is not None else None
+        return ha is not None and hb is not None
+
+    for p_ in _prime_divisors(n):
+        if _is_pth_power(num, den):
+            return False
+    if n % 4 == 0:
+        # G ∈ −4K⁴ ⟺ 约分后的 (−num)/(4·den) 分子分母各为四次幂
+        nn = num.scalar(Fr(-1))
+        dd = den.scalar(Fr(4))
+        nn, dd = _reduce_pair(nn, dd)
+        h1 = perfect_power_part(nn, 4)
+        h2 = perfect_power_part(dd, 4)
+        if h1 is not None and h2 is not None:
+            return False
+    return True
 
 
 # ---- 工厂 ------------------------------------------------------------

@@ -120,6 +120,28 @@ AlgElem(fld, cs)          # cs 升序系数 list，构造即 mod m 约简 + trim
    integrate(f, 'x') 字符串变量未归一的错拒诚实性缺陷。
    回归钉：解锁 VERIFIED / 有理残数对照 / eˣ+x proved 拒答方向锁 /
    字符串归一（tests/test_risch.py::TestM71ResidueField）。
+4. **M7.2 判定装置 ✓ / 端到端落域被基建缺口阻塞（已守卫收口）**：
+   - 已建成（完整通用算法，零启发式）：poly.sqrfree_mults 多元
+     无平方重数分解（内容/本原分裂 + Musser 型重数阶梯，仅用
+     mgcd/div_exact）；perfect_power_part 完全幂检测（重数必要
+     判据 + 乘回精确验证双闸）；algfield.binomial_irreducible
+     Capelli 二项式不可约完整判定（含 4|n 的 −4K⁴ 判据、入口
+     强制约分——T⁴+4 可约 / T⁴+16 不可约等锚点全过）；
+     _collect_radical 符号底泛化（ℚ(params) 底根式严格判定后
+     登记，退化根式 √(a²) 类诚实拒绝）。
+   - **基建缺口（阻塞项，升级为 M8.1 前置）**：符号底残根使塔上
+     系数域变为 ℚ(a)[α]——需要商环感知的函数域系数算术。实测：
+     全局乘法出口模约简与原始多项式算法（mgcd/div_exact 的伪除）
+     不可两全——开着则 gcd 中途被约简产失真结果；关着（作用域
+     挂起）则 α-次数无界爆炸（挂死级）。M7.1 数值路径能通是因为
+     ℚ(√2)-元素是标量叶；符号底才引爆矛盾。正解 = 代数生成元
+     作为真塔层入 DiffExt 或 Poly/RatFunc 叶域升格为含 AlgElem
+     （两者皆 M8.1 规模工程）。当前以即时诚实守卫收口：
+     _alg_const_coeff 检出符号底残根 → RischUnsupported 点名
+     "pending coefficient-field upgrade (M8.1)"。
+   - 配套修复：alg_suspend 改可重入计数器；ugcd/mgcd/div_exact
+     包装为原始多项式原语（强制自由变量语义——notes.md #1 的
+     算法层兑现）；solve.py Phase α① 与新路径共用同一纪律。
 
 ### 正确性锚点（测试即规格）
 

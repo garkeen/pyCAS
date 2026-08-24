@@ -613,7 +613,7 @@ def _residue_sqfr(B, p, de, j, zero):
     logs = []
     rem = list(B)
     if len(Rz) >= 1 and not u_is_zero(Rz):
-        roots = _constant_roots(Rz)
+        roots = _constant_roots(Rz, xv=de.levels[0])
         for c in roots:
             # fc = fz 代入 z=c：b + c*(-d)
             fc = []
@@ -777,7 +777,7 @@ def _term_to_symrat(t_):
         return None
 
 
-def _constant_roots(Rz):
+def _constant_roots(Rz, xv=None):
     """R(z) ∈ Q(x)[z] 的常数根：转 term 用 solve，含 x 的根丢弃。
 
     含 x 的根被丢弃正是数学语义：非常数 residue 不对应初等对数项。
@@ -835,7 +835,7 @@ def _constant_roots(Rz):
             # 如 ±1/(4√2) ∈ ℚ(√2)）——经统一登记处建 AlgField、以
             # 参数化符号形态穿过系数算术（乘积出口模约简保次数有界），
             # 出口由 TowerStruct.compute 统一回化根式形态再验证。
-            sr = _alg_const_coeff(sol)
+            sr = _alg_const_coeff(sol, xv=xv)
             if sr is not None:
                 out.append(sr)
                 continue
@@ -846,7 +846,7 @@ def _constant_roots(Rz):
     return out
 
 
-def _alg_const_coeff(sol):
+def _alg_const_coeff(sol, xv=None):
     """代数常数根 term -> 系数域形态（SymRat over 参数化符号）。
 
     遍历解项中的数值底有理指数幂叶，逐叶经 risch_core._collect_radical
@@ -865,11 +865,29 @@ def _alg_const_coeff(sol):
                 if T.is_num(_b) and isinstance(_e, T.Rat):
                     _collect_radical(u, subs)
                     continue
+                if xv is not None and isinstance(_e, T.Rat) \
+                        and xv not in T.free_vars(_b):
+                    _collect_radical(u, subs, xv=xv)
+                    continue
+                stack.extend(u.args)
+                continue
             stack.extend(u.args)
     if not subs:
         return None
     s2 = T.subst(sol, subs)
     if _free_of_x(s2):
+        # M7.2 边界守卫：符号底根式常数（√(a²−4) 类，key[0]=='sym'）
+        # 一旦进入残数循环，系数域实为 ℚ(params)[α]——当前 RatFunc
+        # 系数层无商环感知算术，gcd/结式链次数爆炸（实测挂死级）。
+        # 如实拒答，等待代数层入塔（M8.1）。数值底（√2 类）系数是
+        # 标量叶，不触发，M7.1 路径照常解锁。
+        from cas.algfield import ALG_FIELDS
+        if any(ALG_FIELDS[s_].key is not None
+               and ALG_FIELDS[s_].key[0] == "sym"
+               for s_ in subs.values() if s_ in ALG_FIELDS):
+            raise RischUnsupported(
+                "residue roots in Q(params,alpha) pending "
+                "coefficient-field upgrade (M8.1 algebraic layer)")
         return _term_to_symrat(s2)
     return None
 

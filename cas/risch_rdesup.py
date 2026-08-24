@@ -325,7 +325,7 @@ def _wn_normalize(fn, fd, de, jv, der_fn, zero):
     Rz = _sylvester_res(fz, gz)
     rl = []
     if Rz and not u_is_zero(Rz):
-        for mval in _constant_roots(Rz):
+        for mval in _constant_roots(Rz, xv=de.levels[0]):
             try:
                 mv = mval if isinstance(mval, Fr) else Fr(mval)
             except Exception:

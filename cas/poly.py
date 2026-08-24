@@ -8,21 +8,47 @@ from cas.errors import PolyError
 # 符号 -> AlgField，极小多项式/出处/区间全在域对象上）。本模块仅在
 # 乘积出口读取（_alg_reduce_out）。alg_suspend 保留：作用域化域语义
 # 声明（solve 参数路径等消费方在无关系语义下工作时挂起约简）。
+#
+# 原始多项式原语包装器（M7.2）：ugcd/mgcd/div_exact 一律在挂起作用域
+# 内运行——它们把登记变量当自由变量做伪除/精确除，中途被模约简打断
+# 会产失真 gcd 与假非整除；商环规范化只属于叶算术出口（SymRat/_mk_rat、
+# Poly 乘积出口）。这是 notes.md 裁定 #1"作用域声明 > 全局状态"的
+# 算法层兑现。
 
-ALG_REDUCE_SUSPENDED = [False]
+
+def ugcd(a, b):
+    with alg_suspend():
+        return _ugcd_impl(a, b)
+
+
+def mgcd(a, b):
+    with alg_suspend():
+        return _mgcd_impl(a, b)
+
+
+def div_exact(A, B):
+    with alg_suspend():
+        return _div_exact_impl(A, B)
+
+ALG_REDUCE_SUSPENDED = [0]
 
 
 class alg_suspend:
-    """挂起关系约简（作用域化域语义）：自由参数轨道的消费者
-    （solve 参数路径等）在投影/求解期间声明"我在无关系语义下工作"，
-    出口约简随之停用——半吊子语义的根治。"""
+    """挂起关系约简（作用域化域语义，M7.2 改可重入计数）：
+
+    两类消费方——①自由参数轨道算法（solve 参数路径等）声明"我在
+    无关系语义下工作"；②原始多项式原语（mgcd/div_exact/ugcd）
+    入口强制进入：把登记变量当自由变量的伪除/精确除若在中途被模
+    约简打断，gcd 会失真、div_exact 报非整除（实测回归）。出口
+    计数归零后恢复乘积出口约简。
+    """
 
     def __enter__(self):
-        ALG_REDUCE_SUSPENDED[0] = True
+        ALG_REDUCE_SUSPENDED[0] += 1
         return self
 
     def __exit__(self, *exc):
-        ALG_REDUCE_SUSPENDED[0] = False
+        ALG_REDUCE_SUSPENDED[0] -= 1
         return False
 
 
@@ -350,7 +376,7 @@ def _monic(p):
     return p.scalar(_rat_inv(p.lc(p.vars[0])))
 
 
-def ugcd(a, b):
+def _ugcd_impl(a, b):
     """域上单变量多项式 gcd（欧几里得，monic 规范）。
 
     ℚ 与 ℚ(params) 统一：系数域是域（SymRat 有理函数），无 content 概念，
@@ -520,7 +546,7 @@ def _rat_content(p):
 
 
 
-def mgcd(a, b):
+def _mgcd_impl(a, b):
     """多元多项式 gcd（域泛化，任意变量数、任意已支持叶）。
 
     N1 根治：唯一算法 = 原始伪除余序列（primitive PRS）——
@@ -628,7 +654,7 @@ def _prs_gcd(a, b):
     return _primitive_full(r1)[1]
 
 
-def div_exact(A, B):
+def _div_exact_impl(A, B):
     """精确除法 A/B（要求 B 整除 A，否则抛 PolyError）。多元递归实现。
 
     原理：主变量伪除得 lc(B)^k·A = B·Q，整除时余数为 0，
@@ -684,6 +710,151 @@ def _rec_const(B):
     if list(d) != [0]:
         raise PolyError("not exact division")
     return d[0]
+
+
+# ---------------------------------------------------------------------------
+# 多元无平方重数分解 + 完全幂检测（M7.2 基础设施；Capelli 判定的底层件）
+# 算法：内容/本原分裂（按主变量递归）+ Musser 型重数阶梯——每步只用
+# mgcd/div_exact，无启发式、无采样，全部精确。
+# ---------------------------------------------------------------------------
+
+
+def _coeffs_wrt(p, x):
+    """p 按变量 x 的指数分桶：{指数: Poly(rest-vars)}。"""
+    idx = p._var_idx(x)
+    rest = p.vars[:idx] + p.vars[idx + 1:]
+    buckets = {}
+    for k, v in p.monos.items():
+        e = k[idx]
+        nk = k[:idx] + k[idx + 1:]
+        cp = Poly(rest, {nk: v})
+        buckets[e] = cp if e not in buckets else buckets[e] + cp
+    return buckets
+
+
+def content_prim_wrt(p, x):
+    """p = c·q：c = x-系数的 gcd（ℚ[x̄] 上），q 对 x 本原。
+
+    返回 (c, q)。q 的每个不可约因子都含 x（否则整除全部系数落入 c），
+    这保证对 q 跑 x-导数重数阶梯时不会漏掉任何因子的重数。
+    """
+    if p.is_zero():
+        raise PolyError("sqrfree: zero polynomial")
+    idx = p._var_idx(x)
+    rest = p.vars[:idx] + p.vars[idx + 1:]
+    buckets = _coeffs_wrt(p, x)
+    g = None
+    for c in buckets.values():
+        g = c if g is None else mgcd(g, c)
+        if g.is_const():
+            break
+    # 常数 content（rest 为空或系数互素）：直接有理归一
+    if g.is_const():
+        cv = g.const_val()
+        inv = Fr(1) / cv
+        q = Poly(p.vars, {k: v * inv for k, v in p.monos.items()})
+        return Poly(rest, {(): cv}), q
+    qm = {}
+    for e, c in buckets.items():
+        cq = div_exact(c, g)
+        for k, v in cq.monos.items():
+            qm[k[:idx] + (e,) + k[idx:]] = v
+    q = Poly(p.vars, qm)
+    # g 提升回全变量空间（x 指数为 0）
+    gl = Poly(p.vars, {(k[:idx] + (0,) + k[idx:]): v
+                       for k, v in g.monos.items()})
+    return gl, q
+
+
+def sqrfree_mults(p):
+    """p 的重数分解：f = const·Π g_i^{m_i}，g_i 两两互素、无平方、非常数。
+
+    返回 (const, [(g_i, m_i), ...])。精确性：每步 mgcd/div_exact；
+    重建由调用方 perfect_power_part 乘回验证兜底。特征零。
+    """
+    out = []
+    cur_const = Fr(1)
+    cur = p
+    if cur.is_const():
+        return cur.const_val(), []
+    while not cur.is_const():
+        x = None
+        for v in cur.vars:
+            if not cur.deriv(v).is_zero():
+                x = v
+                break
+        if x is None:
+            raise PolyError("sqrfree: constant derivative (impossible in "
+                            "char 0 for nonconstant poly)")
+        c, prim = content_prim_wrt(cur, x)
+        if not c.is_const():
+            sub_c, sub_l = sqrfree_mults(c)
+            cur_const *= sub_c
+            out.extend(sub_l)
+        elif isinstance(c.const_val(), Fr):
+            cur_const *= c.const_val()
+        cur = prim
+        C = mgcd(cur, cur.deriv(x))
+        B = div_exact(cur, C)
+        k = 1
+        while not B.is_const():
+            Bn = mgcd(B, C)
+            gk = div_exact(B, Bn)
+            if not gk.is_const():
+                out.append((gk, k))
+            C = div_exact(C, Bn)
+            B = Bn
+            k += 1
+        cur = Poly.one(cur.vars)   # 内层阶梯已完全分解
+    return cur_const, out
+
+
+def _frac_ipow_root(c, k):
+    """有理数 c 的精确 k 次根（|c| 完全幂才成功）；否则 None。"""
+    from math import isqrt
+
+    if not isinstance(c, Fr) or c == 0:
+        return None
+    n, d = abs(c.numerator), abs(c.denominator)
+    rn = int(round(n ** (1.0 / k)))
+    while rn ** k > n:
+        rn -= 1
+    while (rn + 1) ** k <= n:
+        rn += 1
+    rd = int(round(d ** (1.0 / k)))
+    while rd ** k > d:
+        rd -= 1
+    while (rd + 1) ** k <= d:
+        rd += 1
+    if rn ** k != n or rd ** k != d:
+        return None
+    r = Fr(rn, rd)
+    return -r if c < 0 and k % 2 == 1 else r
+
+
+def perfect_power_part(f, k):
+    """h 使 f = h^k（Poly，ℚ 系数；乘回精确验证），否则 None。
+
+    重数判据（必要）+ 乘回验证（充分）双闸：符号/常数单位元一律以
+    验证为准，不做次序或正性假设。
+    """
+    if f.is_zero():
+        return None
+    const, parts = sqrfree_mults(f)
+    rc = _frac_ipow_root(const, k)
+    if rc is None:
+        return None
+    h = Poly.one(f.vars).scalar(rc)
+    for g, m in parts:
+        if m % k != 0:
+            return None
+        h = h * (g ** (m // k))
+    if h ** k == f:
+        return h
+    neg = h.scalar(Fr(-1))
+    if neg ** k == f:
+        return neg
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -245,40 +245,86 @@ _ALG_RADICAL_COUNTER = [0]
 _NCPOW_COUNTER = [0]
 
 
-def _collect_radical(pterm, subs):
-    """数值底正有理指数幂 b^(p/q)（b>0 整数）-> 新代数常数符号。
+def _collect_radical(pterm, subs, xv=None):
+    """正有理指数幂 b^(p/q) -> 代数常数符号 + AlgField 登记。
 
-    极小多项式 X^q − b^p（monic，不可约当 b 非完全幂——完全幂已被
-    mk 数值折叠）。同形幂共享符号；√2·√2 经 SymRat 算术自然产生
-    _a1² 叶——乘积出口模约简消费 algfield.ALG_FIELDS。
+    M7.2 泛化：b 从"正有理数"推广到 **ℚ(params) 中任意元素**
+    （符号底根式，如 √(a²−4)）——极小多项式 T^q − b 经 Capelli
+    定理完整判定不可约后建域入 ALG_FIELDS；可约（退化根式，如
+    √(a²)、∛8、T⁴+4 型）诚实抛 RischUnsupported（归一化前置缺失，
+    绝不静默错域）。嵌套根式/ℚ(i,params) 底暂不吸收（M7.3 边界，
+    返回不登记——调用方的残留检查会如实拒答）。
+
+    xv：基变量。符号底路径必须提供并校验 b 不含 xv——变元底根式属
+    函数域代数扩张（M8 塔层），绝不冒充常数登记。
     """
     b, e = pterm.args
-    if not (T.is_num(b) and isinstance(e, T.Rat)):
-        return
-    bv = T.num_val(b)
-    if bv <= 0 or e.f <= 0 or e.f == 1:
+    if not (isinstance(e, T.Rat)) or e.f <= 0 or e.f == 1 \
+            or e.f.denominator == 1:
         return
     p_, q_ = e.f.numerator, e.f.denominator
-    if q_ == 1:
-        return
-    key = (bv, p_, q_)
     from cas.algfield import ALG_FIELDS, AlgField, register_alg_field
+
+    if T.is_num(b):
+        bv = T.num_val(b)
+        if bv <= 0:
+            return
+        key = ("num", bv, p_, q_)
+        for sym, fld in ALG_FIELDS.items():
+            if fld.key == key:
+                subs[pterm] = sym
+                return
+        _ALG_RADICAL_COUNTER[0] += 1
+        sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
+        # 极小多项式系数表直接构造：T^q − b^p（升序）——无零维坏键问题
+        # （旧 Poly 零维表示曾致 α≡2 静默错域，M5.4a 休眠 bug）
+        coefs = [Fr(-(bv ** p_))] + [Fr(0)] * (q_ - 1) + [Fr(1)]
+        fld = AlgField(coefs, Fr(1), zero_c=Fr(0),
+                       origin=pterm, key=key)
+        register_alg_field(sym, fld)
+        subs[pterm] = sym
+        return
+
+    # ---- 符号底（ℚ(params) 元素，M7.2） -----------------------------
+    if xv is None or xv in T.free_vars(b):
+        return                  # 无变量语境 / 变元底：不登记（M8 属塔层）
+    from cas.poly import Poly, SymRat, mgcd, div_exact
+    from cas.algfield import binomial_irreducible
+    try:
+        gp = Poly.from_term(b, ())
+    except PolyError:
+        return                  # 嵌套根式/超越项底（M7.3 边界）：不登记
+    leaf = gp.const_val()
+    if isinstance(leaf, SymRat):
+        num, den = leaf.num, leaf.den
+    elif isinstance(leaf, Fr):
+        num, den = Poly((), {(): leaf}), Poly((), {(): Fr(1)})
+    else:
+        return                  # Ga 底等（M7.3 边界）：不登记
+    if not binomial_irreducible(num, den, q_):
+        raise RischUnsupported(
+            "radical constant has reducible binomial min polynomial "
+            "(degenerate radical pending normalization)")
+    key = ("sym", q_, str(sorted(num.monos.items())), str(sorted(den.monos.items())))
     for sym, fld in ALG_FIELDS.items():
         if fld.key == key:
             subs[pterm] = sym
             return
     _ALG_RADICAL_COUNTER[0] += 1
     sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
-    # 极小多项式系数表直接构造：T^q − b^p（升序）——无零维坏键问题
-    # （旧 Poly 零维表示曾致 α≡2 静默错域，M5.4a 休眠 bug）
-    coefs = [Fr(-(bv ** p_))] + [Fr(0)] * (q_ - 1) + [Fr(1)]
-    fld = AlgField(coefs, Fr(1), zero_c=Fr(0),
+    one_c = SymRat(Poly.one(()), Poly.one(()))
+    zero_c = SymRat(Poly.zero(()), Poly.one(()))
+    # m(T) = T^q − b^p：b 以域元素 num/den 表示，m 升序 = [−G^p, 0.., 1]
+    # （AlgField 系数是域元素——首一化天然成立，无需整化分母）
+    negG = -SymRat(num ** p_, den ** p_)
+    coefs = [negG] + [zero_c] * (q_ - 1) + [one_c]
+    fld = AlgField(coefs, one_c, zero_c=zero_c,
                    origin=pterm, key=key)
     register_alg_field(sym, fld)
     subs[pterm] = sym
 
 
-def _const_blockage_hint(f):
+def _const_blockage_hint(f, xv=None):
     """被积函数含命名常数/非常量域超越常量时的 Richardson 卡点提示。
 
     π、e、γ 类命名常数与 sin(1)、e² 类未求值超越项目前不在任何精确
@@ -576,6 +622,19 @@ def build_extension(f, x):
     """
     from cas.ratfunc import RatFunc
 
+    # M7.2 诚实守卫：符号底根式常数（√(a²−4) 类，key[0]=='sym'）已
+    # 参数化为 _ak 时，塔上系数域实为 ℚ(a)[α]——当前 RatFunc 系数层
+    # 无商环感知算术，残数/gcd 链会次数爆炸（实测挂死级）。在进入
+    # 塔机制前如实拒答，等待系数域升格（M8.1 代数层提前）。数值底
+    # （√2 类，key[0]=='num'）系数仍是标量叶，不触发。
+    from cas.algfield import ALG_FIELDS
+    sym_rad = {s for s, fld in ALG_FIELDS.items()
+               if fld.key is not None and fld.key[0] == "sym"}
+    if sym_rad and (sym_rad & T.free_vars(f)):
+        raise RischUnsupported(
+            "symbolic-radical constant coefficients pending "
+            "coefficient-field upgrade (M8.1 algebraic tower layer)")
+
     de = DiffExt(x)
     subs = {}   # 原始 Exp/Log term -> 塔符号（驻留键）
 
@@ -668,7 +727,7 @@ def build_extension(f, x):
     if rexp or rlog:
         raise RischUnsupported(
             "expression not covered by the differential extension"
-            + _const_blockage_hint(f))
+            + _const_blockage_hint(f, xv=x))
 
     try:
         fa, fd = _frac_from_term(g, de.vars)
@@ -836,7 +895,7 @@ def _parametrize_const_logs(f, x):
                 if isinstance(a, Const) and getattr(a, "name", "") in named:
                     nc_subs.setdefault(a, S(named[a.name]))
                 elif isinstance(a, Expr) and a.head.name == "Power":
-                    _collect_radical(a, nc_subs)
+                    _collect_radical(a, nc_subs, xv=x)
                     # M5.5 支援切片：命名常数的非整幂（sqrt(pi) 类）
                     # -> 独立参数。独立性假设 Richardson 安全（同 _nc），
                     # 使 erf 族答案的验证链（d(F) 与 f 的常数因子

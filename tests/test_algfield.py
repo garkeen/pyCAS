@@ -6,6 +6,8 @@ from fractions import Fraction as Fr
 from cas.parser import parse
 from cas import term as T
 from cas.term import S, N
+
+x = S("x")
 from cas.errors import PolyError
 from cas.algfield import (AlgField, AlgElem, af_q, af_func, af_norm,
                           af_res, af_irreducible_q)
@@ -188,6 +190,93 @@ class TestIrreducibility(unittest.TestCase):
                        RatFunc.zero((xv,)),
                        RatFunc.one((xv,))], (xv,))
         self.assertIsNone(af_irreducible_q(fld))
+
+
+class TestCapelli(unittest.TestCase):
+    """M7.2 Capelli 二项式不可约判定（T^n − G over ℚ(params)）。
+
+    锚点含 Sophie Germain 经典：T⁴+4 = (T²+2T+2)(T²−2T+2) 可约
+    （G=−4 ∈ −4K⁴ 判据 ii）；T⁴+16 在 ℚ 上不可约（易错对照）。
+    """
+
+    def _poly(self, vs, d):
+        from cas.poly import Poly
+        return Poly(vs, {k: Fr(v) for k, v in d.items()})
+
+    def setUp(self):
+        from cas.poly import Poly
+        self.one = Poly((), {(): Fr(1)})
+        self.a = S("a")
+
+    def test_quadratic_symbolic(self):
+        from cas.algfield import binomial_irreducible
+        G = self._poly((self.a,), {(0,): -4, (2,): 1})
+        self.assertTrue(binomial_irreducible(G, self.one, 2))
+        G2 = self._poly((self.a,), {(2,): 1})
+        self.assertFalse(binomial_irreducible(G2, self.one, 2))
+
+    def test_sophie_germain(self):
+        from cas.algfield import binomial_irreducible
+        self.assertFalse(binomial_irreducible(
+            self._poly((), {(): -4}), self.one, 4))
+        # T^4+16 在 ℚ 上确实不可约（√2 系数因子）
+        self.assertTrue(binomial_irreducible(
+            self._poly((), {(): -16}), self.one, 4))
+
+    def test_higher_degree_and_denominator(self):
+        from cas.algfield import binomial_irreducible
+        self.assertFalse(binomial_irreducible(
+            self._poly((), {(): 8}), self.one, 3))       # ∛8 = 2
+        self.assertTrue(binomial_irreducible(
+            self.one, self._poly((self.a,), {(1,): 1}), 2))  # T²−1/a
+        b = S("b")
+        pa = self._poly((self.a, b), {(2, 0): 1})
+        pb = self._poly((self.a, b), {(0, 4): 1})
+        self.assertFalse(binomial_irreducible(pa * pb, self.one, 4))
+        self.assertTrue(binomial_irreducible(pa + pb, self.one, 4))
+
+
+class TestSymbolicRadicalGuard(unittest.TestCase):
+    """M7.2 符号底根式登记 + 塔路径诚实边界。"""
+
+    def test_symbolic_registration(self):
+        import cas.term as T
+        from cas.risch_core import _collect_radical
+        from cas.algfield import ALG_FIELDS, unregister_alg_fields
+
+        rad = parse("(a^2-4)^(1/2)")
+        subs = {}
+        _collect_radical(rad, subs, xv=x)
+        self.assertEqual(len(subs), 1)
+        sym = subs[rad]
+        try:
+            fld = ALG_FIELDS[sym]
+            self.assertIsNotNone(fld.key)
+            self.assertEqual(fld.key[0], "sym")
+            mp = fld.minpoly_poly(sym)
+            self.assertEqual(mp.degree(sym), 2)
+        finally:
+            unregister_alg_fields([sym])
+
+    def test_degenerate_radical_refused(self):
+        # √(a²)：极小多项式 T²−a² 可约（a 是平方根本身）——诚实拒绝，
+        # 绝不静默登记错误域
+        from cas.risch_core import RischUnsupported, _collect_radical
+
+        rad = parse("(a^2)^(1/2)")
+        with self.assertRaises(RischUnsupported):
+            _collect_radical(rad, {}, xv=x)
+
+    def test_tower_guard_instant_refusal(self):
+        # ∫eˣ/(e²ˣ+a·eˣ+1)：残数 ∈ ℚ(a,√(a²−4))——塔路径即时诚实
+        # 拒答（修复前：系数 gcd 次数爆炸挂死）
+        from cas.integrate import integrate
+        from cas.risch_core import RischUnsupported
+
+        f = parse("exp(x)/(exp(2*x)+a*exp(x)+1)")
+        with self.assertRaises(RischUnsupported) as cm:
+            integrate(f, x)
+        self.assertIn("coefficient-field upgrade", str(cm.exception))
 
 
 def _ga(re, im):
