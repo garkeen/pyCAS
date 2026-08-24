@@ -246,7 +246,15 @@ def _det_bareiss(mat):
         for i in range(k + 1, n):
             for j in range(k + 1, n):
                 t = M[i][j] * p - M[i][k] * M[k][j]
-                M[i][j] = t if prev is None else div_exact(t, prev)
+                if prev is None:
+                    M[i][j] = t
+                elif isinstance(prev, Poly) and len(prev.monos) == 1 \
+                        and next(iter(prev.monos)) == ():
+                    # 常数除数：纯缩放（div_exact 的 _rec_view 不支持
+                    # 空 exponent 键——常数 Poly 直除在此短路）
+                    M[i][j] = t.scalar(Fr(1) / next(iter(prev.monos.values())))
+                else:
+                    M[i][j] = div_exact(t, prev)
             M[i][k] = zero
         prev = p
     return M[n - 1][n - 1].scalar(sign)
@@ -280,6 +288,11 @@ def _kx_gcd(a, b, alpha, m):
         return None
     lc = r0.lc(r0.vars[0])
     return r0.scalar(_rat_inv(lc))
+
+
+def _binom(a, b):
+    from math import comb
+    return comb(a, b)
 
 
 def _an_factor(g, x):
