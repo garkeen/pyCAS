@@ -397,6 +397,30 @@ n_l==1 时 beta=−(a·Dz+b·z).lc/(z·a.lc)）。验收：双层 log 塔正例�
    两处接线（primitive db==da−1 主修正 + db==da 二阶 beta）的
    fallback 'undecided' 全部退役。配套测试从"最小有效 m"期望改为
    "共振度"期望（非常数比率 => m=0）。540 tests。
+**M5 收官批 #3 落地（混合域 Q(i,params) 塔积分门控解除）**：
+   旧门控三处（integrate_exp_tower / QxStruct.project /
+   _rde_tower_solve）拒绝 Q(i,params) 混合系数——诚实拒答而非
+   挂死/误算（A4 定位：ugcd 伪除在 SymRat 内嵌 Ga 叶的分数塔上
+   度数爆炸）。
+   完备化路线：顶层共轭拆分（A4 的 _poly_re_im 泛化至多变量塔）——
+   fa/fd 逐系数取 (re, im) 对，fd 共轭有理化 den=fd_re^2+fd_im^2，
+   num_re/num_im 各走纯参数链（无 Ga 叶），线性合并 re+i*im。
+   RDE-internal 门控退役（顶层拆分后系数已纯参数化）。
+   配套修复三处休眠缺陷：
+   (1) _frac_sqrt 对 SymRat 判别式直接 Fr(f) 炸 TypeError -> 非 Fr
+   安全返回 None（_ga_sqrt_exact 回退，_const_roots_ga_quad 给
+   None，_constant_roots 转 solve 路径）；
+   (2) _constant_roots 的 solve 路径对 SymRat 内嵌分母报"not
+   polynomial"——用 together+numerator 在项级清分母（根不变，
+   乘非零常数倍）；常数多项式时 together 报"no variables"——
+   try/except 回退原始项由 solve 处理；
+   (3) _has_mixed_domain/_split_tower_rational/_risch_rec_mixed
+   新增——拆分判定与执行统一入口。
+   验收：(a+i)/(e^x+1) = a*(x-log(e^x+1)) + i*(x-log(e^x+1)) 正确给出
+   （verify UNVERIFIED 是 i 符号验证的既有限制，非计算错误）；
+   e^{ax}*e^{ix} = e^{(a+i)x}/(a+i) 正确给出；1/(e^x+(a+i)) 诚实拒答
+   （残数根含 sqrt(a^2-4) 代数根——精确定位卡点 vs 旧版模糊"mixed
+   domain pending"）；纯 Q(i)/纯 params/纯有理全回归通过。546 tests。
 **P1-P4 收官批（塔 RDE × ℚ(α) 系统审计 + 配套清理）**：
    **审计电池战果（19 案例全分支）**：频率分解/多项式 RDE/共振/
    primitive 升次/Laurent 分母/出口回代——全部与手算期望对齐 +

@@ -175,21 +175,15 @@ class TowerStruct(Struct):
 
     def project(self, t, x, a):
         from cas.risch import (trigs_to_exp, _norm_const_base_powers,
-                               _parametrize_const_logs, build_extension,
-                               RischUnsupported, _iter_leaf_coefs_m,
-                               _mixed_domain_leaf)
+                               _parametrize_const_logs, build_extension)
         f = trigs_to_exp(_norm_const_base_powers(t, x))
         f, backsub = _parametrize_const_logs(f, x)
         de, fa, fd = build_extension(f, x)
-        if any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fa)) or \
-                any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fd)):
-            raise RischUnsupported(
-                "tower over Q(i,params) mixed domain pending M5.4-c "
-                "(field-generic gcd)")
         return (f, de, fa, fd, backsub, x)
 
     def compute(self, v):
-        from cas.risch import _risch_rec, _realify_log_pairing
+        from cas.risch import (_risch_rec_mixed, _realify_log_pairing,
+                               RischUnsupported)
         from cas import term as T
         from cas.simplify import simplify as _s, expand as _e
         from cas.diff import verify as _vf
@@ -198,7 +192,7 @@ class TowerStruct(Struct):
         if j == 0:
             from cas.risch import RischUnsupported
             raise RischUnsupported("no extension layer in expression")
-        expr = _risch_rec(fa, fd, de, j)
+        expr = _risch_rec_mixed(fa, fd, de, j)
         subs = {T.S(de.levels[i].name): de.terms[i]
                 for i in range(1, len(de.levels))}
         if subs:

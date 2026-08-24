@@ -1529,10 +1529,11 @@ def _term_to_ga(t):
 
 
 def _frac_sqrt(f):
-    """有理数的精确平方根；非完全平方返回 None。"""
+    """有理数的精确平方根；非 Fr 或非完全平方返回 None。"""
     from math import isqrt
 
-    f = Fr(f)
+    if not isinstance(f, Fr):
+        return None          # SymRat/Ga 判别式：非有理平方根
     if f < 0:
         return None
     rn, rd = isqrt(f.numerator), isqrt(f.denominator)
@@ -1654,7 +1655,10 @@ def _constant_roots(Rz):
     数值 Fr / ℚ(i)（_term_to_ga）/ ℚ(params,α)（_term_to_symrat，
     M5.4 审计扩容——残数根可安全停留在参数轨道：形式恒等对特化
     保真）；更高阶代数根（真 RootOf 域）显式异常。"""
+    # M5 收官批 #3：系数含 SymRat 分母时 solve 报 "not polynomial"。
+    # 用 together+numerator 在项级清分母——根不变（乘非零常数倍）。
     from cas.solve import solve as _solve
+    from cas.ratfunc import RatFunc
 
     z = T.S("_rz")
     terms = []
@@ -1666,7 +1670,16 @@ def _constant_roots(Rz):
     if not terms:
         return []
     poly_t = T.mk(S("Plus"), tuple(terms)) if len(terms) > 1 else terms[0]
-    r = _solve(poly_t, z)
+    # 项级清分母：together 取公分母，numerator 取分子
+    # （SymRat 内嵌分母在项级暴露为分数；together 合并后 numerator
+    #  揽出多项式分子——根不变，乘非零常数倍。常数多项式无变量时
+    #  together 会报 "no variables"——此无害，回退原始项由 solve 处理）
+    try:
+        from cas.ops import together as _together, numerator as _numer
+        cleared = _numer(_together(poly_t))
+    except Exception:
+        cleared = poly_t
+    r = _solve(cleared, z)
     if r.status != "ok":
         # ℚ(i) 常数低次回退：精确二次/一次求根（三角残数常为 ±i 型）
         fb = _const_roots_ga_quad(Rz)
@@ -1847,6 +1860,53 @@ def _mixed_domain_leaf(c):
     return False
 
 
+def _has_mixed_domain(*polys):
+    """多 Poly 的叶是否含 ℚ(i,params) 混合。"""
+    for p in polys:
+        if any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(p)):
+            return True
+    return False
+
+
+def _split_tower_rational(fa, fd):
+    """fa/fd（塔上 Poly）共轭展开实虚拆分（A4 泛化至多变量塔）。
+
+    返回 (num_re, num_im, den) 或 None（无混合域叶时不需拆分）。
+    num_re/den 与 num_im/den 各自纯参数叶（Fr/SymRat，无 Ga）——
+    消除 _rde_tower_solve 的域泛化 gcd 需求。
+    """
+    if not _has_mixed_domain(fa, fd):
+        return None
+    from cas.integrate import _poly_re_im
+    fa_re, fa_im = _poly_re_im(fa)
+    fd_re, fd_im = _poly_re_im(fd)
+    den = fd_re * fd_re + fd_im * fd_im
+    if den.is_zero():
+        raise PolyError("zero denominator after conjugate expansion")
+    num_re = fa_re * fd_re + fa_im * fd_im
+    num_im = fa_im * fd_re - fa_re * fd_im
+    return num_re, num_im, den
+
+
+def _risch_rec_mixed(fa, fd, de, j):
+    """_risch_rec 的混合域前置拆分包装。
+
+    混合域（ℚ(i,params)）输入 => 共轭拆分 => 两条纯参数链 =>
+    线性合并 re + i·im。非混合 => 直通 _risch_rec。
+    """
+    split = _split_tower_rational(fa, fd)
+    if split is None:
+        return _risch_rec(fa, fd, de, j)
+    num_re, num_im, den = split
+    expr_re = _risch_rec(num_re, den, de, j)
+    if num_im.is_zero():
+        return expr_re
+    expr_im = _risch_rec(num_im, den, de, j)
+    from cas import term as T
+    from cas.term import S
+    return T.plus(expr_re, T.times(S("i"), expr_im))
+
+
 def integrate_exp_tower(f, x):
     """顶层 API：term -> (term, de)（初等原函数）或异常。
 
@@ -1863,18 +1923,12 @@ def integrate_exp_tower(f, x):
     # M5.6 首项：变指数幂归一 + Log(常量) 参数化（∫a^x 全族解锁）
     f, backsub = _parametrize_const_logs(_norm_const_base_powers(f, x), x)
     de, fa, fd = build_extension(f, x)
-    # M5.4c 前置门控：Q(i,params) 混合轨道的塔上 RDE 需要域泛化
-    # gcd（无它则度数爆炸）——诚实拒绝而非挂死/误算
-    _bad = any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fa)) or \
-        any(_mixed_domain_leaf(c) for c in _iter_leaf_coefs_m(fd))
-    if _bad:
-        raise RischUnsupported(
-            "tower over Q(i,params) mixed domain pending M5.4-c "
-            "(field-generic gcd)")
+    # M5 收官批 #3：混合域（Q(i,params)）门控退役——共轭拆分前置
+    # （A4 泛化至多变量塔），消除 RDE 域泛化 gcd 需求
     j = len(de.levels) - 1
     if j == 0:
         raise RischUnsupported("no extension layer in expression")
-    expr = _risch_rec(fa, fd, de, j)
+    expr = _risch_rec_mixed(fa, fd, de, j)
     subs = {T.S(de.levels[i].name): de.terms[i]
             for i in range(1, len(de.levels))}
     if subs:
@@ -3519,16 +3573,8 @@ def _rde_tower_solve(f, g, de, j):
 
     if j < 1:
         return None, 'undecided'
-    # M5.4c 前置门控：混合域（Q(i,params)）分式进入 Fr-Euclid 链会
-    # 度数爆炸——诚实拒绝，待域泛化 gcd
-    for rf in (f, g):
-        if any(_mixed_domain_leaf(c)
-               for c in _iter_leaf_coefs_m(rf.p)) or \
-           any(_mixed_domain_leaf(c)
-               for c in _iter_leaf_coefs_m(rf.q)):
-            raise RischUnsupported(
-                "RDE over Q(i,params) mixed domain pending M5.4-c "
-                "(field-generic gcd)")
+    # M5 收官批 #3：混合域门控退役——顶层 _risch_rec_mixed 已做
+    # 共轭拆分，此处的 f, g 系数已纯参数化（Fr/SymRat 无 Ga）
     if j == 1:
         return _rde_base_rde(f, g, de)
     tview = de.levels[j - 1]
