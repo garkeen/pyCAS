@@ -180,5 +180,7 @@ def _eq_stage_ratpow(r, a, b, ctx):
 
 from cas.decide import register_eq_stage
 
-register_eq_stage("tower_zero", _eq_stage_tower, prepend=True)
+# 注册序即管线序（prepend 语义：后注册者居前）。tower 零判定先于
+# ratpow 合并——与 decide 管线原硬编码顺序一致，M6.5 锁定测试钉住。
 register_eq_stage("ratpow_merge", _eq_stage_ratpow, prepend=True)
+register_eq_stage("tower_zero", _eq_stage_tower, prepend=True)

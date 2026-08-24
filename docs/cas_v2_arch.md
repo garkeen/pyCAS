@@ -150,7 +150,8 @@ M6.5 起由测试锁定。
 
 ### 进行中 / 待办
 
-- **M6 架构统一（还债批，全部来自 2026-08 全码审计）**
+- **M6 架构统一 ✓（还债批，全部来自 2026-08 全码审计；e1ec8c0→
+  本批六项全绿，555 测试）**
   - M6.1 双塔合一 ✓(e1ec8c0)：integrate_exp_tower 已薄壳委托
     TowerStruct（project/compute 唯一实现）
   - M6.2 判零框架收敛 ✓：判零序列唯一实现 = diff._ratpow_zero_run
@@ -172,8 +173,11 @@ M6.5 起由测试锁定。
     19 函数，升序系数 list、域元素系数、monic gcd；契约与 Poly
     换算边界见模块 docstring；from_poly 为正向转换，反向
     _from_univar 因塔嵌入耦合留 risch）
-  - M6.5 文档-现实锁定：domain_decls/arch 矩阵改为导入期测试断言
-    （导出面 ↔ 声明一致；杜绝 SOLVERS 式虚报复发）
+  - M6.5 文档-现实锁定 ✓：tests/test_registry_lock.py（9 测试）——
+    §5 模块表↔磁盘双向锁、DOMAIN_DECLS 完整性、四大注册表成员/
+    顺序/门控逐项断言、scalarutil/univar 公开面。落地即抓两处漂移：
+    _EQ_STAGES 注册序颠倒原硬编码顺序（已修正为 tower 零判定先于
+    ratpow 合并）、__main__ 豁免登记
   - M6.6 标量域助手归拢 ✓：cas/scalarutil.py 单点（Ga 标量簇
     rf_const_ga/ga_den/lcm2/ga_vec_to_ints/mk_zero_like + ℚ(i,params)
     分解簇 leaf_has_ga/symrat_has_ga/coef_zero/coef_re_im/poly_re_im；
