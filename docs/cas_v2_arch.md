@@ -287,9 +287,37 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   **审计修复（M5.4a 休眠 bug）**：_collect_radical 登记的"极小多项式"
   是零维坏键 Poly（键 (1,) 在 () 空间被 _reduce_alg_var 读作次数 1）
   ——α≡2、α²≡4 静默错域；修复为 Poly((sym,), {(q,):1,(0,):-b^p})。
-  剩余：塔内 AN 零判定的关系感知完备审计（RDE 全链）、多 AN 符号/
-  自由参数混合的 Trager 推广、ℚ(i,params) 混合塔 RDE 门控解除
-  （_fgcd 已备，需 spde/no_cancel 全链系统测试）。  → **M5.5 特殊函数输出层 ✓（M5 收官批扩容）**：Risch proved 拒答后
+  已完成收官：塔内 AN 零判定完备审计（M5 收官批 #1 _pld_solve
+  三态化）、ℚ(i,params) 混合塔门控解除（#3 顶层共轭拆分 + N1
+  系数域总算术后原生直通）。多 AN 符号 Trager 推广移入 N 系列。
+**N1 ✓ 系数域总算术（2026-08-24，作弊逻辑清零批）**：
+  根治三层系统性绕行：(a) SymRat∘Ga 混算在 SymRat 侧静默包裹
+  Ga 入 num/den Poly（产"内嵌 Ga 叶 SymRat"污染系数域）→
+  dunder 对 Ga 返回 NotImplemented，规范结果统一 Ga(SymRat,·)，
+  _parts 直调撞 Ga 改响亮报错；(b) mgcd 的 _fgcd 分发（系数当
+  域元素致多元公因子被单位元吞噬 + raw_norm 下回代清分母产非
+  整除垃圾，违反自身契约）整体删除——唯一算法 = 原始 PRS
+  （_primitive_full 递归 content + _prem 环伪除 + div_exact，
+  本就叶类型无关），域叶标量 content 取平凡单位元 1、非实首项
+  跳过符号规范化（单位元差语义不变）；(c) RatFunc 构造器两处
+  all_fr 跳过约分守卫删除（"content 无定义"系过期认知）+
+  _RAW_NORM 全局开关随 _fgcd 陪葬。配套：Poly._build/_frac_num
+  虚单位识别单一收口（Sym/Const 同路径）；_tower_zero 含 IU
+  预拆与混合回退特判删（总算术下原生直通）。验收：(a+i)/(eˣ+1)、
+  e^{ax}e^{ix}、(a−i)eˣ/(eˣ−i) 全 VERIFIED；Ga/SymRat 多变量
+  gcd 整除性断言全过；546 tests。
+**新里程碑 N 系列（取代旧 M5 余项排序；不允许绕行式实现）**：
+  - **N2 Stage 注册表落地**（v3 设计 P4）：verify_stages/
+    ratpow_merge needs 声明化、integrate 瀑布改 SOLVERS 数据表、
+    detect/needs/degrade 三管线共享——新增数类只动注册表一处
+  - **N3 边界 B**：z-常数中间层残数域约束（1/(eˣ+x) 型）——
+    代数扩张 K[root] 上的范数/结式装置（Bronstein 完备结构定理）
+  - **N4 边界 C**：RT 残数根参数代数扩张 ℚ(params,√(·)) 域运算
+    （minpoly 参数化 algnum；与 M7a 方向共享但参数化更难）
+  - **N5 边界 D**：本原元多符号 Trager（乘法闭包归一或 primelt，
+    与 M7a 共享基建）
+  - Richardson 常数零等价保持为唯一理论不可解边界（采样
+    PROBABLE + 拒答为正确处理，非作弊）  → **M5.5 特殊函数输出层 ✓（M5 收官批扩容）**：Risch proved 拒答后
   的结构化候选族——Si/Ci（sin(x)/x、cos(x)/x）、Ei 线性族
   （e^(ax+b)/(cx+d) -> (1/c)·e^(b-ad/c)·Ei((a/c)(cx+d))，含复合
   斜率/截距/分母斜率全参数组合，公式经多斜率数值回验定稿）、

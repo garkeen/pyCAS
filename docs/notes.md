@@ -421,6 +421,27 @@ n_l==1 时 beta=−(a·Dz+b·z).lc/(z·a.lc)）。验收：双层 log 塔正例�
    e^{ax}*e^{ix} = e^{(a+i)x}/(a+i) 正确给出；1/(e^x+(a+i)) 诚实拒答
    （残数根含 sqrt(a^2-4) 代数根——精确定位卡点 vs 旧版模糊"mixed
    domain pending"）；纯 Q(i)/纯 params/纯有理全回归通过。546 tests。
+**N1 系数域总算术（作弊清零批；用户审计驱动）**：
+   全面自查交出六类绕行清单（按名嗅探 i×8 / 跳过硬操作×5 /
+   形状检测换道×6 / try 吞异常 / 有界搜索冒充判定 / 白名单补漏）
+   后实施根治。三个关键认知纠错：
+   (1) "ugcd content 算术无定义"是过期认知——现 ugcd 早已域泛化
+   （欧几里得+monic，无 content），ratfunc 两处 all_fr 跳过纯属
+   守卫僵尸；
+   (2) 多元 gcd 把系数当域元素（RatFunc 视角）数学性错误——
+   (x−1) 在 ℚ(x) 中是单位元会被吞噬，_fgcd 的 raw_norm 回代更是
+   各系数乘上互不相同的杂因子连自身整除契约都违反；正解 = 唯一
+   原始 PRS 路径（其 _primitive_full/_prem/div_exact 本就叶无关，
+   劫持分发一删即通），域叶 content 取单位元 1 换取正确性；
+   (3) SymRat∘Ga 混算不对称是混合域一切苦难的种子——SymRat 侧
+   静默包裹产出内嵌 Ga 叶，下游全线失守逼出层层守卫；NotImplemented
+   交接后系数域封闭于 {Fr,Ga,SymRat} 且 Ga 独占 i 成分。
+   教训入档：守卫是债务的利息，不是本金；每写一个 hasattr/名字
+   比较/all_fr 检查，都该先问"哪个通用机制缺失了"。架构呼应：
+   本次三处内联混算处理正是 domain_env_design v3 §1.b 点名的
+   反模式，N2 Stage 注册表落地前以"单一函数 + 单一调用约定"
+   过渡（_risch_rec_mixed/_split_tower_rational 收拢于 risch 单点，
+   verify 侧已随 N1 删净）。
 **P1-P4 收官批（塔 RDE × ℚ(α) 系统审计 + 配套清理）**：
    **审计电池战果（19 案例全分支）**：频率分解/多项式 RDE/共振/
    primitive 升次/Laurent 分母/出口回代——全部与手算期望对齐 +

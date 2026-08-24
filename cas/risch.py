@@ -17,7 +17,7 @@ from fractions import Fraction as Fr
 from math import gcd
 
 from cas import term as T
-from cas.term import S, N, Expr, Sym, Const, Int, ONE
+from cas.term import S, N, Expr, Sym, Const, Int, ONE, IU
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
@@ -782,10 +782,12 @@ def _frac_num(t, vars_):
         for v in vars_:
             if t is v:
                 return Poly.mono(vars_, t, 1), Poly.one(vars_)
-        if t.name == "i":
-            # 虚单位常量（ℚ(i)）——与 Poly._build 同款保留名
-            from cas.gaussian import Ga
-            return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
+    if isinstance(t, (Sym, Const)) and t.name == "i":
+        # 虚单位单一收口（N1，与 Poly._build 同款保留名）：
+        # Sym("i")/Const("i") 同路径 → Ga(0,1)
+        from cas.gaussian import Ga
+        return Poly.const(vars_, Ga(0, 1)), Poly.one(vars_)
+    if isinstance(t, Sym):
         # 不在 vars 的符号 = 超越参数：升入 ℚ(params)（M5.6 首项，
         # ∫2^x 全族；与 Poly._build 同款语义）
         from cas.poly import _mk_param
@@ -1904,7 +1906,7 @@ def _risch_rec_mixed(fa, fd, de, j):
     expr_im = _risch_rec(num_im, den, de, j)
     from cas import term as T
     from cas.term import S
-    return T.plus(expr_re, T.times(S("i"), expr_im))
+    return T.plus(expr_re, T.times(IU, expr_im))
 
 
 def integrate_exp_tower(f, x):

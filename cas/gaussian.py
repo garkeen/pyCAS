@@ -5,7 +5,7 @@ RDE 链在复指数化三角积分（M5.3）中使用。
 
 约定：
 - Fr 可无痕嵌入（b=0）；Ga 与 Fr/int 混合运算自动提升。
-- to_term() 输出符号 i（T.S("i")）；最终答案的实化（atan 形式回转）
+- to_term() 输出 IU（Const("i")），i²=−1 在 mk 构造器内 mod 4 折叠；
   是 M5.3 的出口职责，本模块只负责域内精确性。
 - 零等价精确可判定（re/im 分量比较）——非 Richardson 障碍域。
 """
@@ -13,6 +13,7 @@ RDE 链在复指数化三角积分（M5.3）中使用。
 from fractions import Fraction as Fr
 
 from cas import term as T
+from cas.term import IU
 from cas.term import S, N
 
 
@@ -139,8 +140,8 @@ class Ga:
         if self.re != 0:
             parts.append(_ct(self.re))
         if self.im != 0:
-            ic = T.times(_ct(self.im), T.S("i")) if self.im != 1 \
-                else T.S("i")
+            ic = T.times(_ct(self.im), IU) if self.im != 1 \
+                else IU
             parts.append(ic)
         if not parts:
             return N(0)

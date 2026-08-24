@@ -67,6 +67,9 @@ def _tower_zero(a, b, x):
         d0 = _simp(_exp(d0))
         d0 = trigs_to_exp(_norm_const_base_powers(d0, x))
         d0, _bs = _parametrize_const_logs(d0, x)
+        # N1 根治后：系数域总算术（SymRat∘Ga 规范形 Ga(SymRat,·) +
+        # 域泛化 ugcd/mgcd），build_extension 原生接受混合系数——
+        # 旧版含 IU 预拆与混合域回退特判已删
         _de, na, nd = build_extension(d0, x)
         return na.is_zero()
     except Exception:

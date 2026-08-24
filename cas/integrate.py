@@ -10,7 +10,7 @@ from cas.algnum import RootOf, qa_div, qa_mul, qa_inv, tr_power_sums, tr_eval, c
 from cas.simplify import simplify
 from cas.pprint import to_str
 from cas import term as T
-from cas.term import S, N, Sym
+from cas.term import S, N, Sym, IU
 
 
 def _coef_term(c):
@@ -551,7 +551,7 @@ def _ga_rational_split(P, Q, x):
     if num_im.is_zero():
         return v1, ok1, pv1
     v2, ok2, pv2 = integrate_rational(num_im, den, x)
-    return T.plus(v1, T.times(S("i"), v2)), ok1 and ok2, pv1 + pv2
+    return T.plus(v1, T.times(IU, v2)), ok1 and ok2, pv1 + pv2
 
 
 def integrate_rational(P, Q, x, structured=False):

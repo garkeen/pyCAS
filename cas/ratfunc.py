@@ -32,63 +32,26 @@ def _coef_inv(c):
 class RatFunc:
     __slots__ = ("p", "q")
 
-    _RAW_NORM = [False]
-
-    @classmethod
-    def raw_norm(cls):
-        """上下文开关：构造时跳过约分（域泛化 gcd 内部专用，
-        避免 RatFunc 规范化回调 mgcd/_fgcd 的互递归）。"""
-
-        class _Ctx:
-            def __enter__(self2):
-                cls._RAW_NORM[0] = True
-                return self2
-
-            def __exit__(self2, *e):
-                cls._RAW_NORM[0] = False
-                return False
-
-        return _Ctx()
-
     def __init__(self, p, q):
         if p.vars != q.vars:
             raise PolyError("var mismatch")
         if q.is_zero():
             raise PolyError("zero denominator")
-        if RatFunc._RAW_NORM[0]:
-            self.p = p
-            self.q = q
-            return
         if p.is_zero():
             self.p = Poly.zero(p.vars)
             self.q = Poly.one(p.vars)
             return
-        all_fr = (all(isinstance(v, Fr) for v in _iter_leaf_coefs(p))
-                  and all(isinstance(v, Fr) for v in _iter_leaf_coefs(q)))
+        # N1 根治：ugcd/mgcd 已域泛化（原始 PRS 路径，叶类型无关）——
+        # 无条件约分。旧版按 all_fr 跳过（"content 算术无定义"系过期
+        # 认知：域上无 content 概念，欧几里得+首一化即完备）
         if len(p.vars) == 1:
-            # 域/混合系数（Ga、SymRat 混合叶，ℚ(i,params) 轨道）时
-            # ugcd 的 content 算术无定义——跳过 gcd 约化（分数不约，
-            # 正确性不受影响）
-            if all_fr:
-                g = ugcd(p, q)
-                p2 = p.udivmod(g)[0] if not g.is_zero() else p
-                q2 = q.udivmod(g)[0] if not g.is_zero() else q
-            else:
-                p2, q2 = p, q
+            g = ugcd(p, q)
+            p2 = p.udivmod(g)[0] if not g.is_zero() else p
+            q2 = q.udivmod(g)[0] if not g.is_zero() else q
         else:
-            # 多变量：mgcd + 精确除法；域系数（Ga 等）时 content/符号
-            # 规范无定义——跳过 gcd 约化（分数不约，正确性不受影响，
-            # 下游 Hermite/residue 各自正规约化）
-            all_fr = all(isinstance(v, Fr)
-                         for sub in _iter_leaf_coefs(p) for v in [sub]) \
-                and all(isinstance(v, Fr)
-                        for sub in _iter_leaf_coefs(q) for v in [sub])
-            if all_fr:
-                g = mgcd(p, q)
-                if not g.is_zero() and not g.is_const():
-                    p2, q2 = div_exact(p, g), div_exact(q, g)
-                else:
-                    p2, q2 = p, q
+            g = mgcd(p, q)
+            if not g.is_zero() and not g.is_const():
+                p2, q2 = div_exact(p, g), div_exact(q, g)
             else:
                 p2, q2 = p, q
         lc = q2.lc(q2.vars[0]) if q2.vars else Fr(1)

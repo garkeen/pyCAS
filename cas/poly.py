@@ -132,6 +132,12 @@ class Poly:
     def _build(cls, t, vars_):
         if T.is_num(t):
             return Poly.const(vars_, T.num_val(t))
+        if isinstance(t, (Const, Sym)) and t.name == "i":
+            # 虚单位单一收口（N1）：Sym("i")/Const("i") 同路径 →
+            # Ga(0,1)。保留名取舍与 spec.get_constant 对齐；用户若以
+            # i 为参数符号则冲突——文档级保留，sympy I 同款
+            from cas.gaussian import Ga
+            return Poly.const(vars_, Ga(0, 1))
         if isinstance(t, Sym):
             for v in vars_:
                 if t is v:
@@ -478,11 +484,16 @@ def _rat_gcd_frac(a, b):
 
 
 def _sign_normalize(p):
-    """首项系数取正（规范符号，使 gcd 唯一到符号）。"""
+    """首项系数取正（规范符号，使 gcd 唯一到符号）。
+
+    首项系数非实数（Ga 虚部≠0 / SymRat 参数式）时无全序——跳过
+    符号规范化（gcd 相差单位元语义不变，仅非唯一代表形）。"""
     if p.is_zero():
         return p
     if not p.vars:
         v = p.const_val()
+        if not isinstance(v, Fr):
+            return p            # 域叶常数：无正负序，保持原样
         return p if v > 0 else p.scalar(Fr(-1))
     d = _rec_view(p)
     lc = d[max(d)]
@@ -491,125 +502,32 @@ def _sign_normalize(p):
         sgn = dd[max(dd)].const_val()
     else:
         sgn = lc.const_val()
+    if not isinstance(sgn, Fr):
+        return p                # 非实首项系数：跳过（诚实非最简）
     return p if sgn > 0 else p.scalar(Fr(-1))
 
 
 def _rat_content(p):
-    """Fr 层 content：全体系数的有理数 gcd。"""
+    """content：全体系数的标量 gcd（域叶取平凡单位元，见 _scalar_gcd）。"""
     c = Fr(0)
     for v in p.monos.values():
-        c = _rat_gcd_frac(c, v)
+        c = _scalar_gcd(c, v)
     return c
 
 
-def _has_nonsimple_leaf(p):
-    """叶含非纯有理数（Ga/SymRat/混合）——需要域泛化 gcd。"""
-    stack = [p]
-    while stack:
-        u = stack.pop()
-        for c in getattr(u, "monos", {}).values():
-            if isinstance(c, Fr):
-                continue
-            return True
-    return False
 
-
-def _fgcd(a, b):
-    """域泛化多变量 gcd：系数环 = 前缀变量上的有理函数（RatFunc），
-    主变量欧几里得 + 每步首一化。支持 ℚ(i)/参数/混合叶。
-
-    返回 Poly（分母已用系数分母之积清除；不保证内容最简，但
-    整除性 gcd|a、gcd|b 与唯一性（相差单位元）精确成立）。
-    全程置于 RatFunc.raw_norm() 下——系数运算不做分式约分
-    （约分会回调本函数，互递归；结果单位元差异不影响整除语义）。"""
-    from cas.ratfunc import RatFunc
-
-    with RatFunc.raw_norm():
-
-        vs = a.vars
-        assert vs == b.vars
-        if not vs:
-            # 常数：域元素 gcd 取单位元（非零时）
-            return Poly.one(())
-        main = vs[-1]
-        rest = vs[:-1]
-
-        def split_to_rf(t):
-            """Poly(vs) -> {deg: RatFunc(rest)}，按主变量次数分桶。"""
-            buckets = {}
-            for k, c in t.monos.items():
-                e = k[-1]
-                kp = k[:-1]
-                cp = Poly(rest, {kp: c})
-                rf = RatFunc(cp, Poly.one(rest))
-                buckets[e] = buckets.get(e, RatFunc.zero(rest)) + rf
-            return buckets
-
-        def rf_monic(buckets):
-            """首一化：各系数除以首项系数——指数保持绝对位置不变。"""
-            ks = [e for e, c in buckets.items() if not c.is_zero()]
-            if not ks:
-                return {}
-            top = max(ks)
-            inv = RatFunc.one(rest) / buckets[top]
-            return {e: c * inv for e, c in buckets.items() if c}
-
-        r0 = split_to_rf(a)
-        r1 = split_to_rf(b)
-
-        while any(not c.is_zero() for c in r1.values()):
-            r1 = rf_monic(r1)
-            if not r1:
-                break
-            q = {}
-            r0n = {}
-            top1 = max(r1)
-            while True:
-                ks = [e for e, c in r0.items() if not c.is_zero()]
-                if not ks:
-                    break
-                top0 = max(ks)
-                if top0 < top1:
-                    break
-                t = (top0 - top1, r0[top0])
-                for e, c in r1.items():
-                    te = e + t[0]
-                    term = c * t[1]
-                    r0n[te] = r0n.get(te, RatFunc.zero(rest)) - term
-                for e, c in r0.items():
-                    r0n[e] = r0n.get(e, RatFunc.zero(rest)) + c
-                # 注：te=top0 的减式与旧首项在此相消（monic 首一化保证）
-                r0 = {e: c for e, c in r0n.items() if not c.is_zero()}
-                r0n = {}
-            r0, r1 = r1, r0
-
-        r0 = rf_monic(r0)
-        if not r0:
-            return Poly.zero(vs)
-
-        # 清分母：各系数分母之积（非 lcm，可能有公共因子——单位元意义下无碍）
-        dens = Poly.one(rest)
-        for e, c in r0.items():
-            dens = dens * c.q
-        out = {}
-        for e, c in r0.items():
-            prod = c.p * dens
-            for k, cc in prod.monos.items():
-                full = k + (e,)
-                out[full] = cc
-        res = Poly(vs, out)
-        # 单位元意义下返回（符号/常数因子不保证最简——整除性与零判定精确）
-        return res
-
-
-    if _has_nonsimple_leaf(a) or _has_nonsimple_leaf(b):
-        g = _fgcd(a, b)
-        return g
-    return mgcd(a, b)
 
 
 def mgcd(a, b):
-    """多元多项式 gcd（ℚ 上，任意变量数）。
+    """多元多项式 gcd（域泛化，任意变量数、任意已支持叶）。
+
+    N1 根治：唯一算法 = 原始伪除余序列（primitive PRS）——
+    本原分解递归 mgcd + _prem 环伪除 + div_exact 精确除，全部
+    叶类型无关。旧版按 _has_nonsimple_leaf 把 Ga/SymRat 劫持进
+    _fgcd（系数当域元素 → 多元公因子被单位元吞噬 + 回代清分母
+    产非整除垃圾）——该路径连同分发器整体删除。
+    域叶（Ga/SymRat）的标量 content 取平凡单位元 1（域中非零元
+    全是单位元，gcd 相差单位元语义不变），仅损失最简形不损正确性。
 
     返回规范形（content 归一、符号规范化），约定 mgcd(0, b) = 规范化的 b。
     单变量基保留有理 content（ugcd 归一会丢，此处补回）。
@@ -617,24 +535,20 @@ def mgcd(a, b):
     if a.vars != b.vars:
         raise PolyError("var mismatch")
     vs = a.vars
-    if len(a.vars) == 1 and (_has_nonsimple_leaf(a) or _has_nonsimple_leaf(b)):
-        return _fgcd(a, b)   # 单变量域泛化欧几里得（多变量待修：见 Step3 缺陷记录）
     if a.is_zero():
         return _primitive_full(b)[1] if not b.is_zero() else Poly(vs, {})
     if b.is_zero():
         return _primitive_full(a)[1]
     if not vs:
-        g = _rat_gcd_frac(a.const_val(), b.const_val())
+        g = _scalar_gcd(a.const_val(), b.const_val())
         return Poly(vs, {(): g}) if g else Poly(vs, {})
     if len(vs) == 1:
         ra, rb = _rat_content(a), _rat_content(b)
         pa = Poly(vs, {k: v / ra for k, v in a.monos.items()})
         pb = Poly(vs, {k: v / rb for k, v in b.monos.items()})
         g = ugcd(pa, pb)
-        gr = _rat_gcd_frac(ra, rb)
+        gr = _scalar_gcd(ra, rb)
         return g.scalar(gr) if gr != 1 else g
-    if _has_nonsimple_leaf(a) or _has_nonsimple_leaf(b):
-        return _fgcd(a, b)
     ca, pa = _primitive_full(a)
     cb, pb = _primitive_full(b)
     gc = mgcd(ca, cb)
@@ -643,6 +557,19 @@ def mgcd(a, b):
     # 不再取原始部分——content gcd 本身就是结果的组成。
     gcl = Poly(vs, {(0,) + k: v for k, v in gc.monos.items()})
     return _sign_normalize(gcl * g)
+
+
+def _scalar_gcd(x, y):
+    """标量 gcd：Fr×Fr 走有理 gcd；含 Ga/SymRat（域元素）时非零即
+    单位元，返回 Fr(1)——相差单位元的 gcd 语义精确，仅非最简。"""
+    from cas.gaussian import Ga as _G
+    if isinstance(x, Fr) and isinstance(y, Fr):
+        return _rat_gcd_frac(x, y)
+    xz = x.is_zero() if hasattr(x, "is_zero") else x == 0
+    yz = y.is_zero() if hasattr(y, "is_zero") else y == 0
+    if xz and yz:
+        return Fr(0)
+    return Fr(1)
 
 
 def _primitive_full(p):
@@ -766,6 +693,13 @@ class SymRat:
     """ℚ(params) 有理函数系数：num/den ∈ ℚ[params]（Fr 系数 Poly，约分规范）。
 
     常数（无参数）结果退化回 Fr，保持 Poly 其余代码对 Fr 的既有假设。
+
+    域泛化纪律（M5 收官批 N1）：SymRat 与 Ga 混算**不得**在 SymRat 侧
+    吸收——旧版 _parts 把 Ga 包成常量 Poly 塞进 num/den，产出"内嵌 Ga
+    叶的 SymRat"，下游 content/gcd 全线失守，逼出全线跳过守卫。现一律
+    返回 NotImplemented 交由 Ga.__r*__ 接管，规范结果 = Ga(SymRat, ·)
+    （ℚ(i,params) 单一表示），Poly 系数域从此封闭于 {Fr, Ga, SymRat}
+    且 Ga 已含全部 i-成分。
     """
 
     __slots__ = ("num", "den")
@@ -774,28 +708,49 @@ class SymRat:
         self.num = num
         self.den = den
 
+    @staticmethod
+    def _ga_operand(o):
+        from cas.gaussian import Ga
+        return isinstance(o, Ga)
+
     def __add__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_add(self, o)
 
     def __radd__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_add(o, self)
 
     def __sub__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_add(self, _rat_neg(o))
 
     def __rsub__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_add(o, _rat_neg(self))
 
     def __mul__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_mul(self, o)
 
     def __rmul__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_mul(o, self)
 
     def __truediv__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_mul(self, _rat_inv(o))
 
     def __rtruediv__(self, o):
+        if self._ga_operand(o):
+            return NotImplemented
         return _rat_mul(o, _rat_inv(self))
 
     def __neg__(self):
@@ -840,9 +795,14 @@ def _parts(x):
     if isinstance(x, (Fr, int)):
         return Poly((), {(): Fr(x)}), Poly.one(())
     if hasattr(x, "norm"):
-        # Ga（ℚ(i)）常量：升入混合参数多项式轨道（ℚ(i,params)，
-        # M5.6#1）——叶系数 Ga 的 Poly 分式，_mk_rat 混合叶跳过规范化
-        return Poly((), {(): x}), Poly.one(())
+        # Ga 到达此处 = 分发漏洞：SymRat dunder 已对 Ga 返回
+        # NotImplemented（交 Ga.__r*__ 产出 Ga(SymRat,·) 规范形），
+        # 直调 _rat_* 撞上 Ga 属内部 bug——响亮拒绝，绝不静默包裹
+        # 出"内嵌 Ga 叶 SymRat"污染系数域（N1 根治纪律）
+        from cas.errors import PolyError
+        raise PolyError(
+            "internal: Ga operand reached SymRat arithmetic "
+            "(dispatch bug, not honest refusal)")
     # 其余（命名常数 Const 等）不在任何已支持系数域——诚实拒绝
     from cas.errors import PolyError
     raise PolyError(f"coefficient outside supported domains: {x!r}")

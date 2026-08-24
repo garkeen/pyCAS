@@ -16,7 +16,7 @@ declare("msolve", C.Q, {L.RING},
         "Q VERIFIED；Q(i) 路径脆（输出未约简）；params OK")
 declare("gsolve", C.Q, {L.RING}, "基计算限 Q；解枚举限有理")
 declare("sturm", C.Q, {L.RING},
-        "Sturm 假设 Fr；params 崩溃（SymRat numerator bug 已定位）")
+        "Sturm 假设 Fr；AN/params 结构化拒答（根式叶扫描，M5.4 收官）")
 declare("ode", C.Q, {L.RING},
         "direct/separable/linear1/constcoef2；特征方程根走代数输出侧")
 declare("integrate_rational", C.PARAMS, {L.RING},
@@ -24,8 +24,9 @@ declare("integrate_rational", C.PARAMS, {L.RING},
         "参数 RootOf 分支化待条件框架阶段二（1/(x^3+a) 类）")
 declare("risch_tower", C.MIXED_QI_PARAMS, {L.EXPLOG, L.TRIG, L.ALGEBRAIC},
         "塔内 Q 全链三态；Q(i)+实化切片二；params 塔+Log 参数化+"
-        "变指数幂归一；混合域 RDE 门控待 M5.4-c 域泛化 gcd；"
-        "残数根越域诚实拒绝 pending M5.4-c")
+        "变指数幂归一；混合域经顶层共轭拆分全通（N1 系数域总算术，"
+        "旧域泛化 gcd 门控退役）；残数根含参数代数根诚实拒绝"
+        "（√(a^2-4) 类——边界 C，需参数代数扩张）")
 declare("defint", C.Q, {L.RING, L.EXPLOG, L.TRIG},
         "NL+奇点分割；超越常数界精确；参数界诚实拒（不可数值比较）"
         "；无数值积分通道")
