@@ -265,8 +265,11 @@ risch._integrate_in_K。
       核注册表，四处降级为消费者；B3 Capelli 降为快筛，门卫改
       建域+诚实拒答（依赖 N2）；B4 apart._det_poly → 统一 Bareiss；
       B5 _mk_rat 混合叶跳规范化契约洞；B6 RatFunc 缺 __eq__；
-      B7 istrategy 步树从单一执行踪迹派生；B8 simplify/refine 游离
-      pass 并入构造期折叠+规则注册表；B9 TanHalfStruct 共享登记否则拆。
+      B7 istrategy 步树从单一执行踪迹派生（已兑现：intcore _LAST_TRACE
+      埋点全路径，explain 为纯踪迹投影）；B8 simplify/refine 游离
+      pass 并入构造期折叠+规则注册表（已兑现：_SIMPLIFY_PASSES /
+      _REFINE_RULES 注册表化）；B9 TanHalfStruct 共享登记否则拆
+      （裁定：共享——全链单一定义、零独立登记，防泄漏钉在册）。
     - **N 缺失件（依赖序施工）**：
       N4 构造期收缩规则集——exp(a+b)=exp(a)exp(b)、Exp(Log u)→u、
         Exp(k·Log u)→u^k、Log(正实常数·u)=c+Log u（主分支安全，

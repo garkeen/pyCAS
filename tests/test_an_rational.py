@@ -478,5 +478,20 @@ class TestTragerCapLift(unittest.TestCase):
         self.assertEqual(a.monos, b.monos)
 
 
+class TestTanHalfRegistryHygiene(unittest.TestCase):
+    """B9 裁定：TanHalf 全链共享（_trig_check/_trig_sub 单一定义、
+    积分走共享 integrate_rational、零独立登记）——不拆。本钉防回归：
+    tan-half 通道执行后 ALG_FIELDS 必须无残留。"""
+
+    def test_no_algfield_leak(self):
+        from cas.algfield import ALG_FIELDS
+        from cas.integrate import integrate
+        before = dict(ALG_FIELDS)
+        for expr in ("1/(1+sin(x))", "sin(x)/(2+cos(x))"):
+            F, ok, _m, _pv = integrate(parse(expr), S('x'))
+            self.assertTrue(ok, expr)
+        self.assertEqual(ALG_FIELDS, before)
+
+
 if __name__ == "__main__":
     unittest.main()
