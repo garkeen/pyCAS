@@ -164,8 +164,10 @@ M6.5 起由测试锁定。
     Poly 的换算边界
   - M6.5 文档-现实锁定：domain_decls/arch 矩阵改为导入期测试断言
     （导出面 ↔ 声明一致；杜绝 SOLVERS 式虚报复发）
-  - M6.6 标量域助手归拢：_rf_const_ga/_coef_re_im/_ga_vec_to_ints
-    等 → cas/scalarutil.py 单点
+  - M6.6 标量域助手归拢 ✓：cas/scalarutil.py 单点（Ga 标量簇
+    rf_const_ga/ga_den/lcm2/ga_vec_to_ints/mk_zero_like + ℚ(i,params)
+    分解簇 leaf_has_ga/symrat_has_ga/coef_zero/coef_re_im/poly_re_im；
+    公开名去下划线，risch/integrate 顶层导入，跨模块懒导入清除）
 - **M7 代数扩张完备域（常数字幕 + 变元字幕统一基建）**
   共用底座：ℚ(B)[α] 通用代数扩张算术——minpoly 登记/约简/求逆/
   uexgcd/迹/范数/结式（B = 常量域或 ℚ(x,params) 多项式环；

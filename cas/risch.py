@@ -21,6 +21,10 @@ from cas.term import S, N, Expr, Sym, Const, Int, ONE, IU
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
+from cas.scalarutil import (rf_const_ga, ga_den, lcm2,
+                            ga_vec_to_ints, mk_zero_like,
+                            leaf_has_ga, symrat_has_ga,
+                            coef_zero, coef_re_im, poly_re_im)
 
 
 class RischUnsupported(Exception):
@@ -1570,7 +1574,7 @@ def _const_roots_ga_quad(Rz):
         return None
     vals = []
     for c in cs:
-        g = _rf_const_ga(c)
+        g = rf_const_ga(c)
         if g is None:
             return None
         vals.append(g)
@@ -1879,9 +1883,9 @@ def _split_tower_rational(fa, fd):
     """
     if not _has_mixed_domain(fa, fd):
         return None
-    from cas.integrate import _poly_re_im
-    fa_re, fa_im = _poly_re_im(fa)
-    fd_re, fd_im = _poly_re_im(fd)
+    from cas.scalarutil import poly_re_im
+    fa_re, fa_im = poly_re_im(fa)
+    fd_re, fd_im = poly_re_im(fd)
     den = fd_re * fd_re + fd_im * fd_im
     if den.is_zero():
         raise PolyError("zero denominator after conjugate expansion")
@@ -2393,32 +2397,6 @@ def _const_to_term(c):
     return c.to_term() if hasattr(c, "to_term") else N(c)
 
 
-def _rf_const_ga(rf):
-    """RatFunc 是否为 ℚ(i) 标量；是则返回 Ga，否则 None。"""
-    for pp in (rf.p, rf.q):
-        for k in pp.monos:
-            if any(e != 0 for e in k):
-                return None
-    num = rf.p.const_val()
-    den = rf.q.const_val()
-    from cas.gaussian import Ga as _G
-    num_g = num if isinstance(num, _G) else _G(num)
-    den_g = den if isinstance(den, _G) else _G(den)
-    if den_g.is_zero():
-        return None
-    return num_g / den_g
-
-
-def _ga_den(ga):
-    from fractions import Fraction as _Fr
-    return _lcm2(ga.re.denominator, ga.im.denominator)
-
-
-def _lcm2(a, b):
-    from math import gcd as _g
-    return a * b // _g(a, b)
-
-
 def _rf_of_cs(cs, allv, tau):
     from cas.ratfunc import RatFunc as _RF
     n_, d_ = _from_univar(cs, allv, tau)
@@ -2501,7 +2479,7 @@ def _ldrad_base(f_rf, de):
         g = _pugcd(diffp, b)
         if g.degree(xv) <= 0:
             continue
-        dn_ = _ga_den(c) if isinstance(c, Ga) else c.denominator
+        dn_ = ga_den(c) if isinstance(c, Ga) else c.denominator
         residueterms.append((g, c, dn_))
     if not residueterms:
         return None
@@ -2580,7 +2558,7 @@ def _limited_int_prim(al_rf, v_rf, de, jl, cap=16):
         rho = al_r / v_r
     except Exception:
         return "ok", 0
-    cv = _rf_const_ga(rho)
+    cv = rf_const_ga(rho)
     if cv is not None and cv.im == 0 \
             and cv.re.denominator == 1 and cv.re > 0:
         return "ok", int(cv.re)
@@ -2670,7 +2648,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
     def dens_lcm():
         nd = 1
         for cv, _g in logs:
-            nd = _lcm2(nd, _ga_den(cv) if isinstance(cv, Ga)
+            nd = lcm2(nd, ga_den(cv) if isinstance(cv, Ga)
                        else cv.denominator)
         return nd
 
@@ -2696,7 +2674,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         if rec is None:
             return None
         n_l, v = rec
-        N = _lcm2(n_l, dens_lcm())
+        N = lcm2(n_l, dens_lcm())
         mm = N // n_l
         uacc = v ** mm
         for cv, g in logs:
@@ -2711,9 +2689,9 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         # 常数 P 平凡参数化（heu 的结构定理限制补全）：
         # v=1 时 n·P = m·η <=> P/η ∈ ℚ，取 n=分母、m=分子、U=τ^m/n·?
         # 即 U=τ^E，E/n = P/η。
-        P_cv = _rf_const_ga(P_rf)
+        P_cv = rf_const_ga(P_rf)
         if P_cv is not None:
-            eta_cv = _rf_const_ga(eta)
+            eta_cv = rf_const_ga(eta)
             if eta_cv is not None and not eta_cv.is_zero():
                 rho = P_cv / eta_cv
                 if rho.im == 0 and rho.re.denominator != 0:
@@ -2734,7 +2712,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
                 "parametric log derivative undecided: " + str(rec[1]))
         _n2, n_l, ms_l, v = rec
         m_l = ms_l[0]
-        N = _lcm2(n_l, dens_lcm())
+        N = lcm2(n_l, dens_lcm())
         mm = N // n_l
         uacc = v ** mm
         for cv, g in logs:
@@ -2854,7 +2832,7 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
             continue
         placed = False
         for g in groups:
-            cv0 = _rf_const_ga(w0 / g[0])
+            cv0 = rf_const_ga(w0 / g[0])
             if cv0 is not None and cv0.im == 0:
                 g[1].append((idx0, cv0.re))
                 placed = True
@@ -2885,8 +2863,6 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
             raise RischUnsupported(
                 "internal: parametric log deriv descent witness failed "
                 "exact verify (bug, not honest refusal)")
-
-
 
 
     f_free = not _poly_dep(f_rf.p, tp) and not _poly_dep(f_rf.q, tp)
@@ -3031,7 +3007,7 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
     allv = tuple(de.levels[:jl + 1])
     saw_alive = False
     for vec in cands:
-        ints = _ga_vec_to_ints(vec)
+        ints = ga_vec_to_ints(vec)
         if ints is None:
             saw_alive = True          # 非整数常数向量：不可判死也不可用
             continue
@@ -3087,32 +3063,6 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
     return "no", "all projective candidates proved dead"
 
 
-def _ga_vec_to_ints(vec):
-    """Ga 常数向量 -> 本原整向量 | None（含非常数/非有理分量）。"""
-    gs = []
-    for e in vec:
-        g = _rf_const_ga(e)
-        if g is None:
-            return None
-        gs.append(g)
-    den = 1
-    for g in gs:
-        den = _lcm2(den, _ga_den(g))
-    ints = []
-    for g in gs:
-        val = g * den
-        if val.im != 0 or val.re.denominator != 1:
-            return None
-        ints.append(int(val.re))
-    from math import gcd as _g2
-    acc = 0
-    for v2 in ints:
-        acc = _g2(acc, abs(v2))
-    if acc == 0:
-        return None
-    return [v2 // acc for v2 in ints]
-
-
 def _rf_nullspace(rows, ncols, zero, one_c):
     """RatFunc 系数齐次系统零空间基（行主元消元）；空表 = 仅零解。"""
     mat = [list(r) for r in rows]
@@ -3141,17 +3091,12 @@ def _rf_nullspace(rows, ncols, zero, one_c):
                  {pc for _pr, pc in pivots}]
     basis = []
     for fc in free_cols:
-        vec = [_mk_zero_like(one_c) for _ in range(ncols)]
+        vec = [mk_zero_like(one_c) for _ in range(ncols)]
         vec[fc] = one_c
         for ri, pc in pivots:
             vec[pc] = mat[ri][fc] * Fr(-1)
         basis.append(vec)
     return basis
-
-
-def _mk_zero_like(one_c):
-    """与 one_c 同变量集的零 RatFunc（算术构造，免依赖构造器细节）。"""
-    return one_c - one_c
 
 
 def _pld_base_pair(f_rf, ws_rf, de):

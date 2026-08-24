@@ -11,6 +11,10 @@ from cas.simplify import simplify
 from cas.pprint import to_str
 from cas import term as T
 from cas.term import S, N, Sym, IU
+from cas.scalarutil import (rf_const_ga, ga_den, lcm2,
+                            ga_vec_to_ints, mk_zero_like,
+                            leaf_has_ga, symrat_has_ga,
+                            coef_zero, coef_re_im, poly_re_im)
 
 
 def _coef_term(c):
@@ -52,7 +56,7 @@ def _rat_pair(t, x):
     num, den = _frac(t, x)
     leaves = list(num.monos.values()) + list(den.monos.values())
     if any(not isinstance(c, (Fr, SymRat)) for c in leaves) \
-            or any(isinstance(c, SymRat) and _symrat_has_ga(c)
+            or any(isinstance(c, SymRat) and symrat_has_ga(c)
                    for c in leaves):
         # M5.3.1 ℚ(i) / M5.4-c ℚ(i,params) 混合：跳过 gcd（ugcd 的伪除
         # 对内嵌 Ga 的分数塔会指数爆炸——实测挂死）。不约分不影响正确性，
@@ -63,77 +67,6 @@ def _rat_pair(t, x):
         num = num.udivmod(g)[0]
         den = den.udivmod(g)[0]
     return num, den
-
-
-def _leaf_has_ga(c):
-    """叶系数是否携带 Ga 分量（递归穿 SymRat）。"""
-    if isinstance(c, SymRat):
-        return _symrat_has_ga(c)
-    if isinstance(c, Fr):
-        return False
-    return hasattr(c, "norm")           # Ga（ℚ(i) 域元素）
-
-
-def _symrat_has_ga(c):
-    """SymRat 是否内嵌 Ga 叶（ℚ(i,params) 混合轨道标志）。"""
-    for pp in (c.num, c.den):
-        for cc in pp.monos.values():
-            if _leaf_has_ga(cc):
-                return True
-    return False
-
-
-def _coef_zero(c):
-    if isinstance(c, Fr):
-        return c == 0
-    if isinstance(c, SymRat):
-        return c.is_zero()
-    return bool(c.re == 0 and c.im == 0) if hasattr(c, "norm") else c == 0
-
-
-def _coef_re_im(c):
-    """系数 -> (re, im) 纯参数 SymRat 对（ℚ(i,params) 规范化）。
-
-    SymRat 内嵌 Ga 时分母有理化：(nr+i·ni)/(dr+i·di) 乘 (dr-i·di)——
-    全程 Poly 有限运算，无分数塔增长。"""
-    if isinstance(c, Fr):
-        return c, Fr(0)
-    if isinstance(c, SymRat):
-        if not _symrat_has_ga(c):
-            return c, Fr(0)
-        nr, ni = _poly_re_im(c.num)
-        dr, di = _poly_re_im(c.den)
-        dd = dr * dr + di * di
-        if dd.is_zero():
-            raise PolyError("zero coefficient denominator")
-        ren = nr * dr + ni * di
-        imn = ni * dr - nr * di
-        return SymRat(ren, dd), SymRat(imn, dd)
-    if hasattr(c, "norm"):
-        # Ga：分量递归取复数对后组合。value = re + i·im，
-        # (re_r+i·re_i) + i·(im_r+i·im_i) = (re_r - im_i) + i·(re_i + im_r)
-        if isinstance(c.re, Fr):
-            rr, ri = c.re, Fr(0)
-        else:
-            rr, ri = _coef_re_im(c.re)
-        if isinstance(c.im, Fr):
-            ir, ii = c.im, Fr(0)
-        else:
-            ir, ii = _coef_re_im(c.im)
-        return rr - ii, ri + ir
-    raise PolyError(f"coefficient outside supported domains: {c!r}")
-
-
-def _poly_re_im(p):
-    """Poly -> (re, im)：逐系数实虚拆分，结果叶仅 Fr/纯参数 SymRat。"""
-    re_m, im_m = {}, {}
-    for k, c in p.monos.items():
-        r, i_ = _coef_re_im(c)
-        if not _coef_zero(r):
-            re_m[k] = r
-        if not _coef_zero(i_):
-            im_m[k] = i_
-    return Poly(p.vars, re_m), Poly(p.vars, im_m)
 
 
 def _is_named_const(t):
@@ -540,8 +473,8 @@ def _ga_rational_split(P, Q, x):
     P·Q̄ = (Pre·Qre+Pim·Qim) + i·(Pim·Qre-Pre·Qim)，两通道各走完整
     纯参数链（Hermite + atan/RootOf log）。答案为实形态（log(x²+1)+
     i·atan 类）。"""
-    pre, pim = _poly_re_im(P)
-    qre, qim = _poly_re_im(Q)
+    pre, pim = poly_re_im(P)
+    qre, qim = poly_re_im(Q)
     den = qre * qre + qim * qim
     if den.is_zero():
         raise PolyError("zero denominator after conjugate expansion")
@@ -563,7 +496,7 @@ def integrate_rational(P, Q, x, structured=False):
     """
     coeffs = list(P.monos.values()) + list(Q.monos.values())
     if any(not isinstance(c, (Fr, SymRat)) for c in coeffs) \
-            or any(isinstance(c, SymRat) and _symrat_has_ga(c)
+            or any(isinstance(c, SymRat) and symrat_has_ga(c)
                    for c in coeffs):
         # ℚ(i) / ℚ(i,params) 混合（M5.3.1 + A4）：共轭展开实虚拆分
         # 归约纯参数链。旧 "pending" 诚实拒绝退役。
