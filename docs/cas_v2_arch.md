@@ -127,6 +127,7 @@ M6.5 起由测试锁定。
 | ops/spec/trig/diff | 项层结构API / FunctionSpec / 三角多角度基 / 微分+verify |
 | contract | N4 构造期收缩规则集（exp∘log 往返、选择性 exp 和拆分、Log 幂/正实常数剥离、π 有理倍数 ℚ(√d) 全类表；spec.contract 挂载点） |
 | radnorm | N1 根式规范化（[m,c,r] 记录形：content/sqfree mod n、指标归约、同次合并 √a·√b→√(ab)；负底奇指标/大数诚实边界） |
+| denest | N3 域内完全幂判定（Groebner 坐标法三态：范数预筛 proved-no、有界精确枚举快路、商式编码方程组后备；规模闸诚实 unknown；rsimp.spad 同题参照） | N1 根式规范化（[m,c,r] 记录形：content/sqfree mod n、指标归约、同次合并 √a·√b→√(ab)；负底奇指标/大数诚实边界） |
 | integrate/istrategy/bsub | 积分入口(SOLVERS 消费) / 步树 / 反向换元 |
 | risch_core | 微分塔地基：DiffExt/build_extension/derivation/trigs_to_exp/代数常数登记 |
 | risch_exp | exp 层积分：Hermite 推广+RT 残数、K[t] 视图、log 配对实化 |
