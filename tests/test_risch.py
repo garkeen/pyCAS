@@ -12,6 +12,7 @@ from cas.term import S, N
 from cas.parser import parse
 from cas.pprint import to_str
 from cas.simplify import simplify
+from cas.poly import Poly
 import cas.term as T
 
 x = S("x")
@@ -719,6 +720,77 @@ class TestM71ResidueField(unittest.TestCase):
         F, ok, _m, _pv = integrate(f, "x")
         self.assertTrue(ok)
         self.assertEqual(verify(F, x, f), "VERIFIED")
+
+
+class TestM78AlgebraicLayer(unittest.TestCase):
+    """M78 合并地基：代数生成元入塔（'algebraic' 层）。
+
+    数学锚：θ=√(x²+1)，D(θ)=η·θ，η=x/(x²+1)；θ² ≡ x²+1（塔不变量
+    约简）；exp 与 algebraic 层共存。独立预言机 = diff.d 对回代根式
+    形态的数值采样（两个独立实现必须一致）。
+    """
+
+    def _build(self, s):
+        from cas.risch import build_extension
+
+        return build_extension(parse(s), x)
+
+    def test_build_and_structure(self):
+        de, fa, fd = self._build("1/sqrt(x^2+1)")
+        self.assertEqual(de.cases, ["base", "algebraic"])
+        self.assertEqual(de.minpolys[1][0], 2)
+        # f = 1/t：分子 1，分母 θ
+        t = de.levels[1]
+        self.assertTrue(fa.is_const() and fa.const_val() == 1)
+        self.assertEqual(to_str(fd.to_term()), t.name)
+
+    def test_derivation_matches_diff_oracle(self):
+        # D(√(x²+1)) = x/√(x²+1)：塔上 derivation 与 diff.d 数值对拍
+        from cas.risch_core import derivation
+
+        de, _fa, _fd = self._build("1/sqrt(x^2+1)")
+        t = de.levels[1]
+        tpoly = Poly.mono(de.vars, t, 1)
+        dn, dd = derivation(tpoly, de)
+        # 塔上值：η·θ；先把塔符号代入回代形态再数值采样
+        from cas.diff import d as diff_d
+        from cas.evalnum import eval_approx
+
+        theta_term = de.terms[1]          # 回代形态
+        num_s = T.subst(dn.to_term(), {t: theta_term})
+        den_s = T.subst(dd.to_term(), {t: theta_term})
+        lhs = T.div(num_s, den_s)
+        rhs = diff_d(theta_term, x)
+        for pt in (0.7, 1.9, 3.2):
+            env = {x: pt}
+            lv = eval_approx(lhs, env)
+            rv = eval_approx(rhs, env)
+            self.assertAlmostEqual(float(lv), float(rv), places=8)
+
+    def test_tower_invariant_reduction(self):
+        from cas.risch_core import _ta_reduce
+
+        de, _fa, _fd = self._build("1/sqrt(x^2+1)")
+        t = de.levels[1]
+        tpoly = Poly.mono(de.vars, t, 1)
+        red = _ta_reduce(tpoly * tpoly, de)
+        self.assertEqual(to_str(red.to_term()), "x^2 + 1")
+
+    def test_mixed_exp_algebraic(self):
+        de, fa, fd = self._build("exp(x)/sqrt(x^2+1)")
+        self.assertEqual(de.cases, ["base", "exp", "algebraic"])
+        t_exp, t_alg = de.levels[1], de.levels[2]
+        # f = t_exp / t_alg
+        self.assertEqual(to_str(fa.to_term()), t_exp.name)
+        self.assertEqual(to_str(fd.to_term()), t_alg.name)
+
+    def test_degenerate_radical_refused(self):
+        # √((x+1)²) 型：极小多项式 T²−(x²+2x+1) 在 ℚ(x) 可约——
+        # 诚实拒绝（Capelli 判定），绝不建错误域
+        from cas.risch_core import RischUnsupported
+
+        with self.assertRaises(RischUnsupported):
+            self._build("1/sqrt(x^2+2*x+1)")
 
 
 if __name__ == "__main__":

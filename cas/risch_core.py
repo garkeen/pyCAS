@@ -56,30 +56,35 @@ class DiffExt:
     """微分域塔 K_0 < K_1 < ... < K_n，K_0 = Q(x)。
 
     levels[i]：塔变量（levels[0] = 积分变量 x）；
-    cases[i]：'base' | 'exp' | 'primitive'；
+    cases[i]：'base' | 'exp' | 'primitive' | 'algebraic'；
     ws[i]：RatFunc（K_{i-1} 上）——exp: D(t_i) = w*t_i；
-    primitive: D(t_i) = w；
-    terms[i]：塔变量的原函数形态（backsubs 用，如 Exp(x/2)、Log(x)）。
+    primitive: D(t_i) = w；algebraic: 同 exp 形态 D(t_i) = w*t_i
+      （w = D(M)/(q·M)，M = 极小多项式首一多项式部分）；
+    terms[i]：塔变量的原函数形态（backsubs 用，如 Exp(x/2)、Log(x)）；
+    minpolys[i]：algebraic 层专用——(q, M) 其中 M ∈ K_{i-1}[t_i] 首一，
+      塔不变量 = 全部代数层变量指数 < q（_ta_reduce 维护）。
     """
 
-    __slots__ = ("levels", "cases", "ws", "terms")
+    __slots__ = ("levels", "cases", "ws", "terms", "minpolys")
 
     def __init__(self, x):
         self.levels = [x]
         self.cases = ["base"]
         self.ws = [None]
         self.terms = [x]
+        self.minpolys = [None]
 
     @property
     def vars(self):
         return tuple(self.levels)
 
-    def add(self, case, w, term, name_hint):
+    def add(self, case, w, term, name_hint, mp=None):
         t = _fresh_sym(self.levels, name_hint)
         self.levels.append(t)
         self.cases.append(case)
         self.ws.append(w)
         self.terms.append(term)
+        self.minpolys.append(mp)
         return t
 
     def dpair(self, j, all_vars):
@@ -89,10 +94,33 @@ class DiffExt:
         w = self.ws[j]
         wn = _embed(w.p, all_vars)
         wd = _embed(w.q, all_vars)
-        if self.cases[j] == "exp":
+        if self.cases[j] in ("exp", "algebraic"):
             tj = _embed(Poly.mono(all_vars, self.levels[j], 1), all_vars)
             return _rmul_polys(wn, wd, tj, Poly.one(all_vars))
         return wn, wd
+
+
+def _ta_reduce(p, de):
+    """塔不变量维护：p（Poly on de.vars）逐 algebraic 层做 θ^q → M 余式。
+
+    代数层的极小多项式给出商环结构——所有塔上算术的出口都保持
+    各代数变量次数 < q 的规范形（M78 合并地基；与 exp/primitive 层
+    的超越无关性不同，这里的关系必须显式约简）。
+    """
+    for j, case in enumerate(de.cases):
+        if case != "algebraic" or p.is_zero():
+            continue
+        tj = de.levels[j]
+        if tj not in p.vars:
+            continue
+        q_, mp_low = de.minpolys[j]
+        rest = tuple(v for v in p.vars if v is not tj)
+        mf = {}
+        for k, c in mp_low.monos.items():
+            mf[k] = _embed(c, rest)
+        from cas.poly import _reduce_alg_var
+        p = _reduce_alg_var(p, tj, Poly((tj,) + rest, mf))
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +735,56 @@ def build_extension(f, x):
                               else T.S(tl.name))
             changed = True
 
+        # 代数层（M78 合并地基）：变元底根式 Power(u, p/q)，u 含塔变量
+        for pw in _collect_alg_candidates(f, de):
+            if pw in subs:
+                continue
+            b_, e_ = pw.args
+            p_, q_ = e_.f.numerator, e_.f.denominator
+            r_ = gcd(p_, q_)
+            pp_, qq_ = p_ // r_, q_ // r_
+            try:
+                bn, bd = tower_frac(b_)
+            except PolyError:
+                continue
+            # 根式 R = B^{pp}（B = bn/bd 约化分式）
+            rn, rd = _cancel(bn ** pp_, bd ** pp_)
+            if rn.is_const() and rd.is_const():
+                continue          # 常数底：常数域路径（ALG_FIELDS）
+            from cas.algfield import binomial_irreducible
+            if not binomial_irreducible(rn, rd, qq_):
+                raise RischUnsupported(
+                    "variable-base radical with reducible binomial "
+                    "min polynomial (degenerate form)")
+            # 积分生成元 ϑ：ϑ^{qq} = rn·rd^{qq−1}（首一整关系）
+            Mp = _ta_reduce(rn * (rd ** (qq_ - 1)) if qq_ > 1 else rn, de)
+            Mp = _cancel(Mp, Poly.one(Mp.vars))[0]
+            # η = D(ϑ)/ϑ = D(Mp)/(q·Mp)
+            dmn, dmd = derivation(Mp, de)
+            from cas.ratfunc import RatFunc as _RFa
+            eta = _RFa(dmn, dmd.scalar(Fr(qq_)) * Mp)
+            t_new = _fresh_sym(de.levels, "a")
+            lower = tuple(de.levels)
+            mp_low = Poly((t_new,),
+                          {(qq_,): Poly.one(lower),
+                           (0,): Mp.scalar(Fr(-1))})
+            de.levels.append(t_new)
+            de.cases.append("algebraic")
+            de.ws.append(eta)
+            # 方向一致性：ϑ = θ·rd。前向 leaf ↦ ϑ/rd（值恒等）；
+            # 回代 sym ↦ ϑ 的值 = leaf·rd（rd 平凡时退化为叶本身）
+            leaf_term = T.mk(S("Power"), (b_, e_))
+            rd_term = rd.to_term()
+            if rd.is_const() and abs(rd.const_val()) == 1:
+                fwd_term, retract_term = t_new, leaf_term
+            else:
+                fwd_term = T.div(t_new, rd_term)
+                retract_term = T.times(leaf_term, rd_term)
+            de.terms.append(retract_term)
+            de.minpolys.append((qq_, mp_low))
+            subs[pw] = fwd_term
+            changed = True
+
         if not changed:
             break
 
@@ -734,6 +812,33 @@ def build_extension(f, x):
     except PolyError as ex:
         raise RischUnsupported("not rational over the extension: " + str(ex))
     return de, fa, fd
+
+
+def _collect_alg_candidates(f, de):
+    """扫描 f 中变元底根式叶：Power(u, p/q)，u 含塔变量、q ≥ 2。
+
+    纯参数底（√2 类常数）不在此列——常数域路径（ALG_FIELDS）负责。
+    按驻留节点身份去重。
+    """
+    out = []
+    seen = set()
+    tower = set(de.levels)
+    stack = [f]
+    while stack:
+        u = stack.pop()
+        if not isinstance(u, Expr):
+            continue
+        if u.head.name == "Power":
+            b_, e_ = u.args
+            if isinstance(e_, T.Rat) and e_.f.denominator > 1 \
+                    and e_.f > 0 \
+                    and (tower & T.free_vars(b_)):
+                if id(u) not in seen:
+                    seen.add(id(u))
+                    out.append(u)
+                continue          # 整叶处理，不再深入
+        stack.extend(u.args)
+    return out
 
 
 def _frac_from_term(t, vars_):
@@ -815,7 +920,9 @@ def derivation(p, de):
             acc_n, acc_d = _radd(
                 (acc_n, acc_d), _rmul_polys(pre, Poly.one(vars_), dn, dd)
             )
-    return _cancel(acc_n, acc_d)
+    # M78：代数层的乘积中途会产生 θ 指数 ≥ q 的项（D(θ)=η·θ 使
+    # θ^{e-1}·θ 相乘），出口统一约简回规范形
+    return _cancel(_ta_reduce(acc_n, de), _ta_reduce(acc_d, de))
 
 
 # ---------------------------------------------------------------------------

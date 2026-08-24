@@ -208,54 +208,57 @@ risch._integrate_in_K。
     rf_const_ga/ga_den/lcm2/ga_vec_to_ints/mk_zero_like + ℚ(i,params)
     分解簇 leaf_has_ga/symrat_has_ga/coef_zero/coef_re_im/poly_re_im；
     公开名去下划线，risch/integrate 顶层导入，跨模块懒导入清除）
-- **M7 代数扩张完备域（常数字幕 + 变元字幕统一基建）**
-  共用底座：ℚ(B)[α] 通用代数扩张算术——minpoly 登记/约简/求逆/
-  uexgcd/迹/范数/结式（B = 常量域或 ℚ(x,params) 多项式环；
-  algnum.py 与 M5.4 Trager 装置为起点）。
-  - M7.0 ℚ(B)[α] 域算术通用化 ✓(0adaf88)：cas/algfield.py
+- **M78 代数扩张与混合塔（原 M7+M8 合并；FriCAS
+  FunctionFieldCategory/intalg/intaf/intpar 完整对齐）**
+  合并裁定：M7.2 实测证明"常数码化"路线存在原则性阻塞——符号底
+  残根使塔上系数域变为 ℚ(a)[α]，商环感知算术不可回避；而代数层
+  入塔（原 M8.1）正是它的正解。两条线本是一件事：**代数对象以
+  一等公民身份进入微分塔**。单一线性塔目标不变：
+  ℚ(x,params) ⊂ ℚ(...,α) ⊂ ℚ(...,α,τ) ⊂ …（α 代数生成元、
+  τ=exp/log 生成元，顺序不限）。
+  - M78.0 ℚ(B)[α] 域算术通用化 ✓(0adaf88)：cas/algfield.py
     AlgField/AlgElem 单一表示（K 叶鸭子类型：Fr/Ga/SymRat/RatFunc），
     mod minpoly 算术/xgcd/牛顿幂和迹/Sylvester 范数与结式；三套并行
     注册表退役合一为 algfield.ALG_FIELDS（域对象携带极小多项式+出处键
     +实嵌入区间），poly/apart/ratint/structs/structure 全部读端迁移，
-    alg_suspend 保留为作用域语义声明
-  - M7.1 残数域装置 ✓：z-常数中间层落地——_constant_roots 对根式
-    形态代数常数残根经 _collect_radical 建 AlgField、参数化符号穿
-    系数算术（乘积出口模约简），TowerStruct.compute 出口统一回化
-    根式形态再 verify。解锁 ∫eˣ/(e²ˣ−2) 型（残数 ±1/(2√2) ∈
-    ℚ(√2)）VERIFIED；∫dx/(eˣ+x) 经查本就是正确 proved 拒答（残数
-    1/(1−x) 非常数，非 'und'——arch 原描述失真已修正，回归钉锁定
-    方向安全序）。附带修复 integrate 字符串变量名未归一的错拒缺陷。
-    边界：RootOf/嵌套根式形态残根仍诚实拒答（→M7.2/M7.3）
-  - M7.2 RT 残数根落域（判定装置 ✓ / 端到端阻塞于系数域升格）：
-    多元无平方重数分解 + 完全幂检测 + Capelli 二项式不可约完整
-    判定已落地（T⁴+4/T⁴+16 等锚点）；符号底残根使塔上系数域变为
-    ℚ(a)[α]，需商环感知函数域算术——与 M8.1 代数层入塔合流实施
-    （当前即时诚实拒答守卫，点名升级方向；实测挂死级爆炸已消除）
-  - M7.3 本原元多符号：乘法闭包归一或 primelt（√2·√3→√6；
-    解锁多 AN 符号 apart）
-  - M7.4 变元基底纯代数积分：∫dx/√(x²+1)
-    = log(x+√(x²+1)) VERIFIED；Hermite 推广 + Trager 范数/结式；
-    椭圆积分类 proved 拒答（FriCAS intaf/intalg 对标）
-- **M8 混合超越-代数塔（FriCAS Risch 完整对齐收口）**
-  代数层与超越层任意交错的单一线性塔：ℚ(x,params) ⊂ ℚ(...,α) ⊂
-  ℚ(...,α,τ) ⊂ …（α 代数生成元、τ=exp/log 生成元，顺序不限）。
-  - M8.1 DiffExt 新增 'algebraic' 层类型：生成元携带 minpoly，
-    D(t) 由 minpoly 形式微分导出的有理式给出；build_extension 接受
-    变元底根式建层（替代现拒绝路径），依赖检测 = minpoly 在既有
-    域上可约性测试（可约 ⟹ 已在域内，回代映射）
-  - M8.2 RDE/prde 全链在函数域系数上运行：spde/no_cancel/
-    bound_degree/_pld_solve 的系数域升格 ℚ(x,α[,τ])（依赖 M6.4
-    univar 模块 + M7.0 域算术）；残数经 M7.1 装置落扩张域
-  - M8.3 出口回化：代数生成元还原根式形态 + 主支 proviso；
-    diff.verify 支持穿越代数层的精确判等（minpoly 驱动归零）
-  - M8.4 **双轨验收（生成器为主 + 钉子库为锚，角色不同不互替）**
+    alg_suspend 改可重入计数并升级为原始多项式原语作用域纪律
+    （ugcd/mgcd/div_exact 强制自由变量语义——notes.md #1 算法层兑现）
+  - M78.1 z-常数中间层 ✓(d952306)：数值底代数常数残根落域——
+    _constant_roots 经 _collect_radical 建 AlgField、参数化符号穿
+    系数算术，TowerStruct.compute 出口统一回化再 verify。解锁
+    ∫eˣ/(e²ˣ−2) VERIFIED；∫dx/(eˣ+x) 查明本就是正确 proved 拒答
+    （arch 原描述失真已修正，回归钉锁定方向安全序）；附带修复
+    integrate 字符串变量名未归一错拒缺陷
+  - M78.2 代数扩张判定装置 ✓(e096593)：poly.sqrfree_mults 多元
+    无平方重数分解 + perfect_power_part 完全幂检测（乘回精确验证）
+    + algfield.binomial_irreducible Capelli 完整判定（含 −4K⁴ 判据；
+    T⁴+4 可约/T⁴+16 不可约锚点）+ _collect_radical 符号底泛化
+  - M78.3 代数层入塔 ✓：DiffExt 新增 'algebraic' case——生成元 ϑ
+    携带首一极小关系 ϑ^q = Mp（有理根式经整化 ϑ=θ·rd 保证 monic）；
+    D(ϑ) = η·ϑ 与 exp 层导数规则同构（dpair 直接复用，η=D(Mp)/(q·Mp)）；
+    塔不变量 = 全部代数层指数 < q，由 _ta_reduce 在 derivation 出口
+    维护；build_extension 接受变元底根式建层（_collect_alg_candidates
+    扫描 + Capelli 门槛，退化根式 √((x+1)²) 类诚实拒绝）；前向
+    leaf ↦ ϑ/rd 与回代 sym ↦ leaf·rd 方向一致性；混合塔
+    ℚ(x)⊂ℚ(x,τ)⊂ℚ(x,τ,α) 构建通过。验收 = derivation 与 diff.d
+    数值对拍（独立预言机）+ 塔不变量钉 + 混合建层钉
+  - M78.4 代数层上的积分算法（进行中）：Hermite 迹推广 +
+    Trager 范数残数（intalg.spad DoubleResultant 对标）+ RDE/prde
+    系数域升格 ℚ(x,α[,τ])（intpar.spad 全套在函数域系数上运行）。
+    解锁目标：∫dx/√(x²+1)=log(x+√(x²+1)) VERIFIED、
+    ∫eˣ/(e²ˣ+a·eˣ+1) VERIFIED、椭圆积分类 proved 拒答。
+    已知边界：嵌套代数层的残数链、RootOf 形态残根
+  - M78.5 多符号与本原元：乘法闭包归一或 primelt（√2·√3→√6；
+    解锁多 AN 符号 apart）；出口回化的主支 proviso 体系；
+    diff.verify 穿越代数层的精确判等（minpoly 驱动归零）
+  - M78.6 **双轨验收（生成器为主 + 钉子库为锚，角色不同不互替）**
     - **回积生成器（覆盖率与进度量化）**：文法随机生成初等 F
       （叶 {x,有理数,参数}，运算 {+-×÷,整幂,n次根(代数层),Exp,Log,
       sin/cos/tan 经复指数化}，深度有界，种子固定，语料入库）；
       f := simplify(dF/dx) → integrate(f)=G 且 verify=VERIFIED
       （G 不必等于 F）。F 初等 ⟹ f 必可积（Risch 完备性），任何
       失败 = 引擎真实缺口，归档并定位卡点层。切片通过率
-      （纯超越/纯代数/混合交错）为 M7/M8 进度指标。
+      （纯超越/纯代数/混合交错）为 M78 进度指标。
     - **钉子库（回归锚 + 对照锚，手工策展且只增不删）**：
       每钉 = 精确期望形态 + 历史缺陷类别标签。两类来源：
       ① 边界结构博物馆——共振/cancellation/Laurent 特殊分母/
@@ -279,8 +282,8 @@ risch._integrate_in_K。
   - M11.a 丢番图（线性/Pell/平方和；一般情形不可判定为定理边界）
   - M11.b 平面几何吴消去
   - M11.c 实不等式 CAD/VTS（≤3 变量小次数；YES/NO 双可信决策）
-  （变元基底代数积分已并入 M7.4；混合塔为 M8——两者合计构成
-   FriCAS 积分判定面的完整对齐）
+  （变元基底代数积分与混合塔已合并为 M78——构成 FriCAS 积分判定面
+   的完整对齐）
 
 ### 理论不可解边界（非债务，处理方式已定）
 Richardson 超越常数零等价：数值采样 PROBABLE + 拒答，永不进 YES 通道。
@@ -294,7 +297,7 @@ FullSimplify 式搜索不做。verify 同为三值诚实。
 ## 8. 数据草图（关键结构签名）
 
 ```
-Expr=(head,args) 驻留;  DiffExt{levels,cases,ws,terms}
+Expr=(head,args) 驻留;  DiffExt{levels,cases,ws,terms,minpolys}
 Poly(vars,{mono:coeff});  RatFunc(p,q) 规范形
 Pass{name,detect,apply,needs,gated};  Struct{project,compute,retract}
 Solver.attempt(t,x)->('hit',F,method,provisos[,ok])|('miss',reason)

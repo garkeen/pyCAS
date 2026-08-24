@@ -75,11 +75,15 @@ def _reduce_alg_var(p, a, m):
 
     按 a 的指数分桶（系数=其余变量上的 Poly），monic 首项消去法；
     系数环算术全走 Poly 反射通道，对混合叶（Ga 等）安全。
+    M78：m 的系数可为 Poly（商环关系 T^q − G(x,…)，G 是 rest 变量上
+    多项式）或标量叶——统一包装为 rest 空间 Poly 后做系数算术。
     """
     idx = p._var_idx(a)
     rest = tuple(vv for vv in p.vars if vv is not a)
+    zero_rest = Poly.zero(rest)
     dm = max(kk[0] for kk in m.monos)
-    md = {kk[0]: cc for kk, cc in m.monos.items()}
+    md = {kk[0]: (cc if isinstance(cc, Poly) else Poly(rest, {(0,) * len(rest): cc}))
+          for kk, cc in m.monos.items()}
     cur = {}
     for k, c in p.monos.items():
         e = k[idx]
@@ -96,12 +100,12 @@ def _reduce_alg_var(p, a, m):
         shift = top - dm
         topc = cur.pop(top)
         nxt = dict(cur)
-        for e, cc in md.items():
+        for e, ccp in md.items():
             if e == dm:
                 continue          # monic：首项系数 1 已随 top 抵消
             te = e + shift
-            prod = topc.scalar(cc)
-            nxt[te] = nxt.get(te, Poly.zero(rest)) - prod
+            prod = topc * ccp
+            nxt[te] = nxt.get(te, zero_rest) - prod
         cur = nxt
     out = {}
     for e, c in cur.items():
