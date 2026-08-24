@@ -77,12 +77,15 @@ class QxStruct(Struct):
             t2 = T.subst(t, rmap)
             P, Q = _rat_pair(t2, x)
             back = {sym: rad for rad, sym in rmap.items()}
-            # A2/A3：根式叶构造 AlgField（隔离区间 + 极小多项式，符号
-            # 全局唯一，retract 清除——泄漏仅冗余不致错）；非根式常量项
-            # 无关系语义，不建域对象
+            # A2/A3：根式叶建域统一走 kernelreg 工厂（B2/P3：唯一
+            # 建域点，规范键去重；隔离区间 + 极小多项式，retract 清除
+            # ——泄漏仅冗余不致错）；非根式常量项无关系语义，不建域
+            # 对象。工厂按规范键复用时返回既有符号——rmap 回代要求
+            # 本通道符号持有域对象，故以别名登记同一域实例。
             from fractions import Fraction as _Fr
-            from cas.algfield import (AlgField, register_alg_field,
-                                      unregister_alg_fields)
+            from cas.algfield import unregister_alg_fields
+            from cas.kernelreg import (register_numeric_radical,
+                                       alg_field, register)
             registered = []
             try:
                 for rad, sym in rmap.items():
@@ -97,14 +100,13 @@ class QxStruct(Struct):
                         continue
                     lo, hi = _radical_bracket(bv, e_.f.numerator,
                                               e_.f.denominator)
-                    qd_ = e_.f.denominator
-                    pn_ = e_.f.numerator
-                    coefs = [_Fr(-(bv ** pn_))] + [_Fr(0)] * (qd_ - 1) \
-                        + [_Fr(1)]
-                    fld = AlgField(coefs, _Fr(1), zero_c=_Fr(0),
-                                   origin=rad, key=(bv, pn_, qd_),
-                                   bracket=(lo, hi))
-                    register_alg_field(sym, fld)
+                    got = register_numeric_radical(
+                        bv, e_.f.numerator, e_.f.denominator, sym=sym,
+                        bracket=(lo, hi), origin=rad)
+                    if got is None:
+                        continue
+                    if got != sym:
+                        register(sym, alg_field(got))
                     registered.append(sym)
                 return (P, Q, x, back)
             except Exception:

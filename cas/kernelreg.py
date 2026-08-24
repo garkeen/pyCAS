@@ -23,7 +23,7 @@ from fractions import Fraction as Fr
 from cas.term import S, N, Expr, Rat, Const, is_num, num_val
 import cas.term as T
 
-from cas.algfield import ALG_FIELDS
+from cas.algfield import ALG_FIELDS, AlgField
 
 
 # ---------------------------------------------------------------------------
@@ -92,3 +92,68 @@ def same_constant(a, b):
 def iter_exp_literals():
     """当前已知的 (有理指数,) 字面枚举（诊断/测试用）。"""
     return [('exp', Fr(1))]
+
+
+# ---------------------------------------------------------------------------
+# 代数区：根式常数唯一建域点（B2 收敛，P3）
+# ---------------------------------------------------------------------------
+# 四孤岛（QxStruct/_collect_radical/塔层/solve α①）此前各自构造
+# T^q − b^p 极小多项式并各用键方案去重；本节收敛为单一原语，
+# 岛侧全部降级为消费者。
+
+_RADICAL_COUNTER = [0]
+
+
+def register_numeric_radical(bv, p_, q_, sym=None, bracket=None,
+                             origin=None):
+    """数值底 b^(p/q)：T^q − b^p 建域入册，返回符号；已注册按规范键
+    复用现有域（不新建）。bv<=0 不登记返回 None。
+
+    bracket（实嵌入区间）进规范键：同一极小多项式在不同嵌入下是
+    不同域身份——混同曾致主支选择失效（负底分数幂泄漏）。"""
+    if bv <= 0:
+        return None
+    key = ("num", bv, p_, q_,
+           None if bracket is None else (bracket[0], bracket[1]))
+    for s0, f0 in ALG_FIELDS.items():
+        if f0.key == key:
+            return s0
+    if sym is None:
+        _RADICAL_COUNTER[0] += 1
+        sym = S(f"_a{_RADICAL_COUNTER[0]}")
+    fld = AlgField([Fr(-(bv ** p_))] + [Fr(0)] * (q_ - 1) + [Fr(1)],
+                   Fr(1), zero_c=Fr(0),
+                   origin=origin, key=key, bracket=bracket)
+    register(sym, fld)
+    return sym
+
+
+def register_symbolic_radical(num, den, p_, q_, sym=None, origin=None):
+    """符号底（ℚ(params) 元素 num/den，指数 p_/q_）：Capelli 完整判定
+    不可约后以 SymRat 系数建 m(T)=T^q−(num/den)^p 入册；可约抛
+    RischUnsupported（诚实拒答——退化根式归一化前置缺失，绝不静默
+    错域）。"""
+    from cas.poly import Poly, SymRat
+    from cas.algfield import binomial_irreducible
+    from cas.risch_core import RischUnsupported
+    if not binomial_irreducible(num, den, q_):
+        raise RischUnsupported(
+            "radical constant has reducible binomial min polynomial "
+            "(degenerate radical pending normalization)")
+    key = ("sym", q_, str(sorted(num.monos.items())),
+           str(sorted(den.monos.items())))
+    for s0, f0 in ALG_FIELDS.items():
+        if f0.key == key:
+            return s0
+    if sym is None:
+        _RADICAL_COUNTER[0] += 1
+        sym = S(f"_a{_RADICAL_COUNTER[0]}")
+    one_c = SymRat(Poly.one(()), Poly.one(()))
+    zero_c = SymRat(Poly.zero(()), Poly.one(()))
+    # m(T) = T^q − b^p：b 以域元素 num/den 表示，m 升序 = [−(n/d)^p, 0.., 1]
+    negG = -SymRat(num ** p_, den ** p_)
+    coefs = [negG] + [zero_c] * (q_ - 1) + [one_c]
+    fld = AlgField(coefs, one_c, zero_c=zero_c,
+                   origin=origin, key=key)
+    register(sym, fld)
+    return sym

@@ -276,48 +276,31 @@ _NCPOW_COUNTER = [0]
 def _collect_radical(pterm, subs, xv=None):
     """正有理指数幂 b^(p/q) -> 代数常数符号 + AlgField 登记。
 
-    M7.2 泛化：b 从"正有理数"推广到 **ℚ(params) 中任意元素**
-    （符号底根式，如 √(a²−4)）——极小多项式 T^q − b 经 Capelli
-    定理完整判定不可约后建域入 ALG_FIELDS；可约（退化根式，如
-    √(a²)、∛8、T⁴+4 型）诚实抛 RischUnsupported（归一化前置缺失，
-    绝不静默错域）。嵌套根式/ℚ(i,params) 底暂不吸收（M7.3 边界，
-    返回不登记——调用方的残留检查会如实拒答）。
-
-    xv：基变量。符号底路径必须提供并校验 b 不含 xv——变元底根式属
-    函数域代数扩张（M8 塔层），绝不冒充常数登记。
+    P3/B2：建域与去重收敛至 kernelreg（register_numeric_radical /
+    register_symbolic_radical），本函数降级为项级消费者适配——
+    解析底、分流、把结果写入调用方 subs 字典。语义与原实现逐条
+    保持（含可约二项式的 RischUnsupported 诚实拒答、变元底/嵌套
+    底不登记的 M7.3 边界）。
     """
     b, e = pterm.args
     if not (isinstance(e, T.Rat)) or e.f <= 0 or e.f == 1 \
             or e.f.denominator == 1:
         return
     p_, q_ = e.f.numerator, e.f.denominator
-    from cas.algfield import ALG_FIELDS, AlgField, register_alg_field
+    from cas.kernelreg import register_numeric_radical, \
+        register_symbolic_radical
 
     if T.is_num(b):
         bv = T.num_val(b)
-        if bv <= 0:
-            return
-        key = ("num", bv, p_, q_)
-        for sym, fld in ALG_FIELDS.items():
-            if fld.key == key:
-                subs[pterm] = sym
-                return
-        _ALG_RADICAL_COUNTER[0] += 1
-        sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
-        # 极小多项式系数表直接构造：T^q − b^p（升序）——无零维坏键问题
-        # （旧 Poly 零维表示曾致 α≡2 静默错域，M5.4a 休眠 bug）
-        coefs = [Fr(-(bv ** p_))] + [Fr(0)] * (q_ - 1) + [Fr(1)]
-        fld = AlgField(coefs, Fr(1), zero_c=Fr(0),
-                       origin=pterm, key=key)
-        register_alg_field(sym, fld)
-        subs[pterm] = sym
+        sym = register_numeric_radical(bv, p_, q_, origin=pterm)
+        if sym is not None:
+            subs[pterm] = sym
         return
 
     # ---- 符号底（ℚ(params) 元素，M7.2） -----------------------------
     if xv is None or xv in T.free_vars(b):
         return                  # 无变量语境 / 变元底：不登记（M8 属塔层）
-    from cas.poly import Poly, SymRat, mgcd, div_exact
-    from cas.algfield import binomial_irreducible
+    from cas.poly import Poly, SymRat
     try:
         gp = Poly.from_term(b, ())
     except PolyError:
@@ -329,27 +312,9 @@ def _collect_radical(pterm, subs, xv=None):
         num, den = Poly((), {(): leaf}), Poly((), {(): Fr(1)})
     else:
         return                  # Ga 底等（M7.3 边界）：不登记
-    if not binomial_irreducible(num, den, q_):
-        raise RischUnsupported(
-            "radical constant has reducible binomial min polynomial "
-            "(degenerate radical pending normalization)")
-    key = ("sym", q_, str(sorted(num.monos.items())), str(sorted(den.monos.items())))
-    for sym, fld in ALG_FIELDS.items():
-        if fld.key == key:
-            subs[pterm] = sym
-            return
-    _ALG_RADICAL_COUNTER[0] += 1
-    sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
-    one_c = SymRat(Poly.one(()), Poly.one(()))
-    zero_c = SymRat(Poly.zero(()), Poly.one(()))
-    # m(T) = T^q − b^p：b 以域元素 num/den 表示，m 升序 = [−G^p, 0.., 1]
-    # （AlgField 系数是域元素——首一化天然成立，无需整化分母）
-    negG = -SymRat(num ** p_, den ** p_)
-    coefs = [negG] + [zero_c] * (q_ - 1) + [one_c]
-    fld = AlgField(coefs, one_c, zero_c=zero_c,
-                   origin=pterm, key=key)
-    register_alg_field(sym, fld)
-    subs[pterm] = sym
+    sym = register_symbolic_radical(num, den, p_, q_, origin=pterm)
+    if sym is not None:
+        subs[pterm] = sym
 
 
 def _const_blockage_hint(f, xv=None):
