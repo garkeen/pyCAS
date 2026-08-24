@@ -51,6 +51,25 @@ def _sqrt_leaves(t):
     return leaves
 
 
+def _higher_leaves(t):
+    """一般 q 次根叶（2<=q<=6、分子 1、正数值底）。"""
+    out = set()
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, Expr):
+            if u.head.name == "Power":
+                b, e = u.args
+                if is_num(b) and isinstance(e, Rat) \
+                        and e.f.numerator == 1 \
+                        and 2 <= e.f.denominator <= 6 \
+                        and num_val(b) > 0:
+                    out.add(u)
+                    continue
+            stack.extend(u.args)
+    return out
+
+
 def _split_linear(f, leaf):
     """f 是否 c0 + c1*leaf（c0,c1 均无 leaf 且无其它平方根叶）。
 
@@ -115,6 +134,14 @@ def _rationalize_once(t):
                             T.neg(T.times(T.pw(c1, N(2)), N(bv))))
                 hit = T.times(conj, T.pw(d1, N(-1)))
                 break
+            if hit is None:
+                # N8 余项：一般 q 次根（2<=q<=6）经域求逆有理化
+                gen = sorted(_higher_leaves(f), key=repr)
+                for l in gen:
+                    inv = _rationalize_higher(f, l)
+                    if inv is not None:
+                        hit = inv
+                        break
         if hit is not None:
             val[u] = hit
             changed = True
@@ -123,7 +150,70 @@ def _rationalize_once(t):
     return val[t], changed
 
 
+def _rationalize_higher(f, leaf):
+    """N8 余项：一般 q 次根叶的分母逆——映入 ℚ(x)(ℓ) 域元素求逆。
+
+    d(x,ℓ)=Σ c_i(x)·ℓ^i（c_i 无其它根式叶）在 K=ℚ(ℓ)(x) 中可逆
+    （m 不可约时）；inv 的 to_term 即有理化形（分母归 ℚ(x)）。
+    m 可约/不可逆/混叶 ⟹ None（诚实跳过）。"""
+    from cas.term import Expr as _E
+    b, e = leaf.args
+    if not is_num(b):
+        return None
+    bv = num_val(b)
+    if bv <= 0 or e.f.numerator != 1:
+        return None
+    q = e.f.denominator
+    if q < 2 or q > 6:
+        return None
+    # 系数提取：对 ℓ 位置次数 <=q-1；系数为 xv 多项式（Fr/SymRat 叶）
+    sub = T.subst(f, {leaf: S("_rl")})
+    try:
+        from cas.poly import Poly, SymRat
+        from cas.ratfunc import RatFunc as _RF
+        from cas.algfield import af_func
+        vs = (S("_rl"),) + tuple(sorted(T.free_vars(sub) - {S("_rl")},
+                                        key=str))
+        gp = Poly.from_term(sub, vs)
+        buckets = {}
+        for key, cf in gp.monos.items():
+            ea = key[0]
+            if ea >= q:
+                return None
+            rest = key[1:]
+            tgt = buckets.setdefault(ea, {})
+            tgt[rest] = tgt.get(rest, Fr(0)) + cf
+        cs_rf = []
+        for i in range(q):
+            mm = buckets.get(i, {})
+            cs_rf.append(_RF(Poly(vs[1:], mm), Poly.one(vs[1:]))
+                         if mm else _RF.zero(vs[1:]))
+        # 域：ℚ(x)(ℓ)，m=T^q−bv 首一 RatFunc 系数（升序恰 q+1 项）
+        mrf = []
+        for j in range(q):
+            cj = Fr(-(bv ** e.f.numerator)) if j == 0 else Fr(0)
+            mrf.append(_RF.from_const(vs[1:], cj))
+        mrf.append(_RF.one(vs[1:]))
+        fld = af_func(mrf, vs[1:], origin=leaf)
+        d_el = fld.elem(cs_rf)
+        inv = d_el.inv()
+        parts = []
+        for j, c in enumerate(inv.cs):
+            ct = c.to_term()
+            if j == 0:
+                parts.append(ct)
+            else:
+                parts.append(T.times(ct, T.pw(leaf, N(j))))
+        if not parts:
+            return None
+        return parts[0] if len(parts) == 1 \
+            else T.mk(S("Plus"), tuple(parts))
+    except Exception:
+        return None
+
+
 def rationalize(t, max_passes=_MAX_PASSES):
+
     """出口共轭有理化：多遍至不动点（上限守卫）。纯函数、无副作用。"""
     cur = t
     for _ in range(max_passes):

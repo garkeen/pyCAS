@@ -58,6 +58,17 @@ class TestConjugateRationalization(unittest.TestCase):
         # 边界只可能经高次根出现，同样由指数恰为 1/2 的叶子判据排除
         self.assertIn("3^(1/3)", to_str(_rat("1/(1+3^(1/3))")))
 
+    def test_higher_order_roots(self):
+        # N8 余项：一般 q 次根分母经 K=Q(x)(l) 域求逆有理化
+        from cas.evalnum import eval_approx
+        from cas.term import S as _S
+        env = {_S('x'): 0.7}
+        for c in ('1/(1+2^(1/3))', '1/(x+3^(1/3))',
+                  '1/(2+5^(1/3))'):
+            a, b = parse(c), _rat(c)
+            va, vb = eval_approx(a, env), eval_approx(b, env)
+            self.assertAlmostEqual(va, vb, places=9, msg=c)
+
     def test_idempotent(self):
         once = _rat("(x+1)/(x-sqrt(2))")
         twice = rationalize(once)
