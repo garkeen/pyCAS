@@ -136,12 +136,11 @@ def _param_factors(g, x):
 
 
 def _an_detect(g):
-    """g 的系数中的代数常数符号（经作用域/全局关系表）。
+    """g 的系数中的代数常数符号（M7.0-b 统一登记处）。
 
     返回唯一 AN 符号（列表单元素）或 None（无 AN / 多符号 / 自由
     参数混合 / 叶域不支持）。"""
-    from cas.integrate import AN_RELATIONS
-    from cas.poly import ALG_MODULI
+    from cas.algfield import ALG_FIELDS
 
     syms = set()
     for c in g.monos.values():
@@ -157,7 +156,7 @@ def _an_detect(g):
             return None
     if not syms:
         return None
-    rel = [v for v in syms if v in AN_RELATIONS or v in ALG_MODULI]
+    rel = [v for v in syms if v in ALG_FIELDS]
     if len(rel) == 1 and syms == set(rel):
         return rel[0]
     return None
@@ -255,10 +254,10 @@ def _an_factor(g, x):
     alpha = _an_detect(g)
     if alpha is None:
         return None
-    from cas.integrate import AN_RELATIONS
-    from cas.poly import ALG_MODULI
+    from cas.algfield import ALG_FIELDS
 
-    m = AN_RELATIONS.get(alpha) or ALG_MODULI.get(alpha)
+    fld = ALG_FIELDS.get(alpha)
+    m = fld.minpoly_poly(alpha) if fld is not None else None
     if m is None or m.degree(alpha) > 5:
         return None
 

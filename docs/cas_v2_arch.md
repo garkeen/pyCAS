@@ -150,6 +150,7 @@ M6.5 起由测试锁定。
 | session_manual | ManualOpsMixin：子项手术/等式双侧/变形工具箱/微积分战术 |
 | session_dispatch | DispatchMixin：分发/帮助表/转录 DSL（save/replay） |
 | session | 组装门面：四 Mixin 合成 Session + REPL 入口 |
+| algfield | ℚ(B)[α] 代数扩张域（M7.0）：AlgField/AlgElem 单一表示、mod minpoly 算术、迹/范数/结式 |
 
 懒导入断环登记（M6.7，三处，均为函数级 import）：build_extension→
 risch_prde._is_logderiv_radical；_limited_integrate/_exp_freq_part→

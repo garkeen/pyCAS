@@ -4,12 +4,10 @@ from cas import term as T
 from cas.term import Expr, Int, Rat, Sym, Const, S, N
 from cas.errors import PolyError
 
-# 代数常数模注册表（M5.4b，SAE 语义对齐 FriCAS algext.spad）：
-# 符号 -> monic 极小多项式（单变量 Poly，Fr 系数）。出现该变量的
-# Poly 乘积自动做余式约简——保证零判定精确（未约简的 α²−2 叶会
-# 让 is_zero 误判）。risch 侧在根式参数化时登记。
-ALG_MODULI = {}
-
+# 代数常数模登记已统一迁至 cas/algfield.ALG_FIELDS（M7.0-b 单一来源：
+# 符号 -> AlgField，极小多项式/出处/区间全在域对象上）。本模块仅在
+# 乘积出口读取（_alg_reduce_out）。alg_suspend 保留：作用域化域语义
+# 声明（solve 参数路径等消费方在无关系语义下工作时挂起约简）。
 
 ALG_REDUCE_SUSPENDED = [False]
 
@@ -30,11 +28,15 @@ class alg_suspend:
 
 def _alg_reduce_out(p):
     """乘积出口：对含已登记代数变量的结果逐变量做模余式。"""
-    if not ALG_MODULI or ALG_REDUCE_SUSPENDED[0]:
+    if ALG_REDUCE_SUSPENDED[0]:
         return p
-    mods = [(v, ALG_MODULI[v]) for v in p.vars if v in ALG_MODULI]
-    if not mods:
-        return p
+    from cas.algfield import ALG_FIELDS
+
+    mods = []
+    for v in p.vars:
+        fld = ALG_FIELDS.get(v)
+        if fld is not None:
+            mods.append((v, fld.minpoly_poly(v)))
     for v, m in mods:
         if p.is_zero():
             return p

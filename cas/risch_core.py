@@ -239,10 +239,8 @@ def _exp_of(tt):
     return T.mk(S("Exp"), (tt,))
 
 
-# 代数常数关系登记（M5.4 切片 a）：符号 -> monic 极小多项式
-# （Poly over ()，Fr 系数）。SAE 语义：元素 = 次数<deg(m) 的多项式，
-# reduce = udivmod 余项——关系感知算术在后续切片接入，登记先行。
-ALG_RELATIONS = {}
+# 代数常数关系登记（M5.4 切片 a → M7.0-b 迁移）：符号 -> AlgField
+# （极小多项式/出处键/区间全在域对象上，单一来源 cas.algfield）。
 _ALG_RADICAL_COUNTER = [0]
 _NCPOW_COUNTER = [0]
 
@@ -252,7 +250,7 @@ def _collect_radical(pterm, subs):
 
     极小多项式 X^q − b^p（monic，不可约当 b 非完全幂——完全幂已被
     mk 数值折叠）。同形幂共享符号；√2·√2 经 SymRat 算术自然产生
-    _a1² 叶——关系约简在 M5.4 后续切片接入 reduce_mod_m。
+    _a1² 叶——乘积出口模约简消费 algfield.ALG_FIELDS。
     """
     b, e = pterm.args
     if not (T.is_num(b) and isinstance(e, T.Rat)):
@@ -264,19 +262,19 @@ def _collect_radical(pterm, subs):
     if q_ == 1:
         return
     key = (bv, p_, q_)
-    for sym, (mkey, _m) in ALG_RELATIONS.items():
-        if mkey == key:
+    from cas.algfield import ALG_FIELDS, AlgField, register_alg_field
+    for sym, fld in ALG_FIELDS.items():
+        if fld.key == key:
             subs[pterm] = sym
             return
     _ALG_RADICAL_COUNTER[0] += 1
     sym = S(f"_a{_ALG_RADICAL_COUNTER[0]}")
-    # 极小多项式必须是该符号上的单变量 Poly：X^q − b^p（monic）。
-    # 零维坏键 Poly（{(1,):..,(0,):..} 于 () 空间）会被 _reduce_alg_var
-    # 误读为 X−2 —— α≡2 静默错域（M5.4a 休眠 bug，M5.4-c 审计修复）
-    mp = Poly((sym,), {(q_,): Fr(1), (0,): Fr(-(bv ** p_))})
-    ALG_RELATIONS[sym] = ((bv, p_, q_), mp)
-    from cas.poly import ALG_MODULI
-    ALG_MODULI[sym] = mp          # 乘积出口自动模约简（M5.4b）
+    # 极小多项式系数表直接构造：T^q − b^p（升序）——无零维坏键问题
+    # （旧 Poly 零维表示曾致 α≡2 静默错域，M5.4a 休眠 bug）
+    coefs = [Fr(-(bv ** p_))] + [Fr(0)] * (q_ - 1) + [Fr(1)]
+    fld = AlgField(coefs, Fr(1), zero_c=Fr(0),
+                   origin=pterm, key=key)
+    register_alg_field(sym, fld)
     subs[pterm] = sym
 
 

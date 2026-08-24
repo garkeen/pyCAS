@@ -213,8 +213,8 @@ def _classify_discriminant(D):
     return "unknown"
 
 
-AN_INTERVALS = {}
-AN_RELATIONS = {}            # _rc 符号 -> monic 极小多项式（A3 作用域登记）
+# AN_INTERVALS/AN_RELATIONS 已删除（M7.0-b）：统一迁至
+# cas.algfield.ALG_FIELDS（域对象携带 bracket/极小多项式）。
 _RC_COUNTER = [0]
 
 
@@ -276,14 +276,24 @@ def _poly_interval_sign(p, env):
     return None
 
 
+def _an_interval_env():
+    """M7.0-b 统一登记处 → 区间环境 {sym: (lo, hi)}。"""
+    from cas.algfield import ALG_FIELDS
+
+    return {s: f.bracket for s, f in ALG_FIELDS.items() if f.bracket}
+
+
 def _an_interval_sign(D):
     """SymRat 判别式的 AN 区间精确符号：'pos'/'neg'/None。"""
     if not isinstance(D, SymRat):
         return None
-    ns = _poly_interval_sign(D.num, AN_INTERVALS)
+    env = _an_interval_env()
+    if not env:
+        return None
+    ns = _poly_interval_sign(D.num, env)
     if ns is None:
         return None
-    ds = _poly_interval_sign(D.den, AN_INTERVALS)
+    ds = _poly_interval_sign(D.den, env)
     if ds is None:
         return None
     if ds == "pos":
@@ -412,10 +422,11 @@ def _poly_eq_relaware(A, B):
     D = A - B
     if D.is_zero():
         return True
-    from cas.poly import _reduce_alg_var, ALG_MODULI
-    regs = {**ALG_MODULI, **AN_RELATIONS}
-    if not regs:
+    from cas.algfield import ALG_FIELDS
+    from cas.poly import _reduce_alg_var
+    if not ALG_FIELDS:
         return False
+    regs = {v: fld.minpoly_poly(v) for v, fld in ALG_FIELDS.items()}
     out = {}
     for k, c in D.monos.items():
         if isinstance(c, SymRat):

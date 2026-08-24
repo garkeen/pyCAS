@@ -60,14 +60,16 @@ class QxStruct(Struct):
     method = "Hermite reduction + RootOf log part"
 
     def project(self, t, x, a):
-        from cas.integrate import (_rat_pair, _collect_rad_params,
-                                   _collect_const_params)
+        from cas.integrate import (_rat_pair, _collect_const_params,
+                                   _radical_bracket)
         try:
             P, Q = _rat_pair(t, x)
             return (P, Q, x, {})
         except Exception:
             pass
-        # M5.4-c + M5.6#1：根式/命名常数/常数函数项 -> 局部不透明参数
+        # M5.4-c + M5.6#1：根式/命名常数/常数函数项 -> 局部不透明参数。
+        # M7.0-b：登记统一走 algfield.ALG_FIELDS（域对象携带极小多项式
+        # 与实嵌入区间），不再触碰 AN_INTERVALS/AN_RELATIONS 旧表。
         try:
             rmap = _collect_const_params(t, x)
             if not rmap:
@@ -75,10 +77,12 @@ class QxStruct(Struct):
             t2 = T.subst(t, rmap)
             P, Q = _rat_pair(t2, x)
             back = {sym: rad for rad, sym in rmap.items()}
-            # A2/A3：根式叶登记隔离区间与极小多项式（符号全局唯一，
-            # retract 清除——泄漏仅冗余不致错）；非根式常量项无关系语义
-            from cas.integrate import (AN_INTERVALS, AN_RELATIONS,
-                                       _radical_bracket)
+            # A2/A3：根式叶构造 AlgField（隔离区间 + 极小多项式，符号
+            # 全局唯一，retract 清除——泄漏仅冗余不致错）；非根式常量项
+            # 无关系语义，不建域对象
+            from fractions import Fraction as _Fr
+            from cas.algfield import (AlgField, register_alg_field,
+                                      unregister_alg_fields)
             registered = []
             try:
                 for rad, sym in rmap.items():
@@ -93,19 +97,18 @@ class QxStruct(Struct):
                         continue
                     lo, hi = _radical_bracket(bv, e_.f.numerator,
                                               e_.f.denominator)
-                    AN_INTERVALS[sym] = (lo, hi)
-                    from fractions import Fraction as _Fr
-                    from cas.poly import Poly as _Poly
                     qd_ = e_.f.denominator
-                    mp = _Poly((sym,), {(qd_,): _Fr(1),
-                                        (0,): _Fr(-(bv ** e_.f.numerator))})
-                    AN_RELATIONS[sym] = mp
+                    pn_ = e_.f.numerator
+                    coefs = [_Fr(-(bv ** pn_))] + [_Fr(0)] * (qd_ - 1) \
+                        + [_Fr(1)]
+                    fld = AlgField(coefs, _Fr(1), zero_c=_Fr(0),
+                                   origin=rad, key=(bv, pn_, qd_),
+                                   bracket=(lo, hi))
+                    register_alg_field(sym, fld)
                     registered.append(sym)
                 return (P, Q, x, back)
             except Exception:
-                for sym in registered:
-                    AN_INTERVALS.pop(sym, None)
-                    AN_RELATIONS.pop(sym, None)
+                unregister_alg_fields(registered)
                 raise
         except Exception:
             return FAIL
@@ -123,10 +126,8 @@ class QxStruct(Struct):
     def retract(self, v):
         term, ok, provisos, back = v
         if back:
-            from cas.integrate import AN_INTERVALS, AN_RELATIONS
-            for sym in back:
-                AN_INTERVALS.pop(sym, None)
-                AN_RELATIONS.pop(sym, None)
+            from cas.algfield import unregister_alg_fields
+            unregister_alg_fields(back.keys())
             term = T.subst(term, back)
         provisos = [T.subst(p, back) for p in provisos]
         # 回代完整性守卫：残留 _rc 符号 = 上次事故的失效形态，

@@ -67,8 +67,9 @@ class TestAlgebraicRational(unittest.TestCase):
         self.assertTrue(_num_check(F, f, self.x))
 
     def test_an_interval_sign_unit(self):
-        from cas.integrate import (_an_interval_sign, AN_INTERVALS,
-                                   _radical_bracket)
+        from cas.integrate import _an_interval_sign, _radical_bracket
+        from cas.algfield import (AlgField, register_alg_field,
+                                  unregister_alg_fields)
         from cas.poly import SymRat, Poly
         from cas.term import S as _S
         from fractions import Fraction as Fr
@@ -77,7 +78,9 @@ class TestAlgebraicRational(unittest.TestCase):
         self.assertLess(lo * lo, Fr(2))
         self.assertGreater(hi * hi, Fr(2))
         sym = _S("_rc_probe")
-        AN_INTERVALS[sym] = (lo, hi)
+        fld = AlgField([Fr(-2), Fr(0), Fr(1)], Fr(1), zero_c=Fr(0),
+                       bracket=(lo, hi))
+        register_alg_field(sym, fld)
         try:
             # -4α < 0
             D = SymRat(Poly((sym,), {(0,): Fr(-4), (1,): Fr(1)}),
@@ -92,7 +95,7 @@ class TestAlgebraicRational(unittest.TestCase):
             D3 = SymRat(Poly((free,), {(1,): Fr(1)}), Poly.one((free,)))
             self.assertIsNone(_an_interval_sign(D3))
         finally:
-            AN_INTERVALS.pop(sym, None)
+            unregister_alg_fields([sym])
 
     def test_mixed_linear_factor(self):
         # ∫(√2·x+1)/(x²-√2·x)：根 ∈ {0, √2}，判别式 2 为域内平方
@@ -113,15 +116,13 @@ class TestAlgebraicRational(unittest.TestCase):
 
     def test_no_global_registry_pollution(self):
         # 诚实性核心：投影不登记全局关系表（上次事故教训——全局
-        # ALG_MODULI 泄漏曾致假 VERIFIED）
-        from cas.poly import ALG_MODULI
-        from cas.risch import ALG_RELATIONS
+        # 注册表泄漏曾致假 VERIFIED）。M7.0-b 后统一登记处 =
+        # cas.algfield.ALG_FIELDS，有理通道同样零副作用。
+        from cas.algfield import ALG_FIELDS
 
-        before_m = dict(ALG_MODULI)
-        before_r = dict(ALG_RELATIONS)
+        before = dict(ALG_FIELDS)
         self.integ("1/((x-2^(1/2))*(x+2^(1/2)))")
-        self.assertEqual(ALG_MODULI, before_m)
-        self.assertEqual(ALG_RELATIONS, before_r)
+        self.assertEqual(ALG_FIELDS, before)
 
     def test_collect_rad_params_shapes(self):
         from cas.integrate import _collect_rad_params
@@ -172,7 +173,8 @@ class TestAlgebraicRational(unittest.TestCase):
         # α·α 必须模约简为 2（坏键 Poly 曾致 α≡2 静默错域）
         import cas.term as T
         from fractions import Fraction as Fr
-        from cas.poly import Poly, ALG_MODULI
+        from cas.poly import Poly
+        from cas.algfield import ALG_FIELDS, unregister_alg_fields
         from cas.risch import _collect_radical
         from cas.term import S as _S, N as _N
 
@@ -181,14 +183,14 @@ class TestAlgebraicRational(unittest.TestCase):
         _collect_radical(sq2, subs)
         sym = subs[sq2]
         try:
-            mp = ALG_MODULI[sym]
+            mp = ALG_FIELDS[sym].minpoly_poly(sym)
             self.assertEqual(mp.vars, (sym,))
             pa = Poly((sym,), {(1,): Fr(1)})
             prod = pa * pa
             self.assertTrue(prod.is_const())
             self.assertEqual(prod.const_val(), 2)
         finally:
-            ALG_MODULI.pop(sym, None)
+            unregister_alg_fields([sym])
 
 
 class TestTowerANAudit(unittest.TestCase):

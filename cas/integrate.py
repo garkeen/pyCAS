@@ -25,12 +25,13 @@ from cas.scalarutil import (rf_const_ga, ga_den, lcm2,
                             coef_zero, coef_re_im, poly_re_im)
 
 # --- ratint：有理积分核 + AN 区间 + 参数化收集 ---
+# （AN_INTERVALS/AN_RELATIONS 已退役，M7.0-b：统一迁 cas.algfield.ALG_FIELDS）
 from cas.ratint import (_coef_term, _frac, _rat_pair,
                         _is_named_const, _CONST_FUNCT_HEADS,
                         _collect_const_params, _collect_rad_params,
                         _qa_to_term, _hermitte_power,
                         _classify_discriminant,
-                        AN_INTERVALS, AN_RELATIONS, _RC_COUNTER,
+                        _RC_COUNTER,
                         _radical_bracket, _iv_mul, _poly_interval_sign,
                         _an_interval_sign, _log_terms, _integrate_poly,
                         _exact_sqrt_term, _assemble, _poly_eq_relaware,

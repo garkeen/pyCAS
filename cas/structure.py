@@ -125,9 +125,9 @@ def analyze(t, x):
             elif x in T.free_vars(e_):
                 layers.add(Layer.EXPLOG)   # 变指数幂=超越（归一后入塔）
         stack.extend(u.args)
-    # 根式代数常数经 _collect_radical 已登记 ALG_MODULI——此处读出
-    from cas.risch import ALG_RELATIONS
-    if ALG_RELATIONS:
+    # 根式代数常数经参数化已登记 ALG_FIELDS——此处读出
+    from cas.algfield import ALG_FIELDS
+    if ALG_FIELDS:
         layers.add(Layer.EXPLOG)          # 参数化后以 exp/log 形态入塔
     coeff = _coeff_of(t, x)
     return Analysis(layers, coeff, consts, x=x)

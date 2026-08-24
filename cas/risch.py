@@ -37,7 +37,7 @@ from cas.risch_core import (
     RischUnsupported, RischNonElementary, DiffExt,
     _embed, _rmul_polys, _cancel, _fr_gcd, _radd,
     _collect_exts, _TRIG_HEADS, _param_provisos, _exp_of,
-    ALG_RELATIONS, _ALG_RADICAL_COUNTER, _NCPOW_COUNTER,
+    _ALG_RADICAL_COUNTER, _NCPOW_COUNTER,
     _collect_radical, _const_blockage_hint, _lin_exp_freq,
     _ef_contract, _ef_expand_trans, _neg_term, _iu,
     trigs_to_exp, _as_real_rat, _group_integer_powers, _ratio,
@@ -46,6 +46,7 @@ from cas.risch_core import (
     _frac_from_term, _frac_num, derivation, tower_to_term_pair,
     _norm_const_base_powers, _parametrize_const_logs,
 )
+from cas.algfield import ALG_FIELDS   # M7.0-b 统一登记处（兼容导出面）
 
 # --- exp 层 ---
 from cas.risch_exp import (
