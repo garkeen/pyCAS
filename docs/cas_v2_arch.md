@@ -129,6 +129,7 @@ M6.5 起由测试锁定。
 | radnorm | N1 根式规范化（[m,c,r] 记录形：content/sqfree mod n、指标归约、同次合并 √a·√b→√(ab)；负底奇指标/大数诚实边界） |
 | denest | N3 域内完全幂判定（Groebner 坐标法三态：范数预筛 proved-no、有界精确枚举快路、商式编码方程组后备；规模闸诚实 unknown；rsimp.spad 同题参照） | N1 根式规范化（[m,c,r] 记录形：content/sqfree mod n、指标归约、同次合并 √a·√b→√(ab)；负底奇指标/大数诚实边界） |
 | kernelreg | N6-P1 核关系统一注册表门面（代数区=ALG_FIELDS 统一视图 API；超越常数关系区 const_face_key 两面孔同键 E≡exp(1)；P2 z-符号合一/P3 四孤岛迁移的接缝） |
+| ratexit | N8 出口共轭有理化（root_reduce 项级局部重写：平方根类叶、分母一次闭式；逐叶多遍不动点；无注册表依赖零泄漏面） |
 | integrate/istrategy/bsub | 积分入口(SOLVERS 消费) / 步树 / 反向换元 |
 | risch_core | 微分塔地基：DiffExt/build_extension/derivation/trigs_to_exp/代数常数登记 |
 | risch_exp | exp 层积分：Hermite 推广+RT 残数、K[t] 视图、log 配对实化 |

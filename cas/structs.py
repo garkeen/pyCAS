@@ -131,6 +131,10 @@ class QxStruct(Struct):
             from cas.algfield import unregister_alg_fields
             unregister_alg_fields(back.keys())
             term = T.subst(term, back)
+            # N8 出口持续归约：根式分母共轭有理化（root_reduce 逻辑，
+            # 项级局部重写——恒等变换，不影响 verify 语义）
+            from cas.ratexit import rationalize
+            term = rationalize(term)
         provisos = [T.subst(p, back) for p in provisos]
         # 回代完整性守卫：残留 _rc 符号 = 上次事故的失效形态，
         # 绝不带病出 VERIFIED（诚实降级）
