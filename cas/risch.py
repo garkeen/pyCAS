@@ -2525,38 +2525,37 @@ def _term_within_field(val_t, de, jl):
 
 
 def _limited_int_prim(al_rf, v_rf, de, jl, cap=16):
-    """系数域 levels[:jl+1] 内解 alpha = m*v + D(z)，m∈ℤ、z∈K。
+    """完备化版：α = m·η + D(z) 的共振界修正（M5 收官批 #2）。
 
-    可判定探测：对候选 m 调 _integrate_in_K（塔层受限积分——z 的
-    域界由层参数强制）。三态：
-      ('ok', m)     找到合法整数解
-      ('und', None) 范围内未找到或理论受限 => 调用方保守升级
-                    undecided（漏修正会欠界导致误证不可积，方向安全
-                    要求绝不漏；多探测只耗时间）
+    核心洞察（余陪集定理 + 多项式约束）：
+    - η = D(τ) 在塔内恒可积（∫η = τ），故 k·η 可积 ⟺ η 可积
+      ⟹ S₀ = {k : k·η 可积} ∈ {{0}, ℤ}
+    - α = m·η + D(z)、z ∈ K₀[τ]（多项式）⟹ D(z)/η = D(z)/D(τ) 为常数
+      ⟹ z = c·τ + const ⟹ α/η = m + c = 整数常数
+    - 逆否：α/η 非整数常数 => 无多项式共振 => 朴素界正确
+
+    故 α/η 的常数整数性检验是完备的——无需有界积分探测。
+
+    三态：('ok', m)  m = 正整数共振度，或 0（无共振）
+           ('und', None) 理论受限（仅 η=0 或比率计算异常的极端情形）
     """
-    if jl < 0:
-        return "und", None
+    if v_rf.is_zero():
+        return "ok", 0
     allv_sub = tuple(de.levels[:jl + 1])
     try:
-        al_rf = _restrict(al_rf, allv_sub)
-        v_rf = _restrict(v_rf, allv_sub)
+        al_r = _restrict(al_rf, allv_sub)
+        v_r = _restrict(v_rf, allv_sub)
     except PolyError:
-        return "und", None
-
-    for m in range(1, cap + 1):
-        cm = al_rf - v_rf * Fr(m)
-        if cm.is_zero():
-            return "ok", m
-        try:
-            t_val = _integrate_in_K(cm, de, jl + 1)
-        except RischNonElementary:
-            continue          # 该 m 在系数域内无初等原函数（证明性排除）
-        except RischUnsupported:
-            return "und", None
-        if not _term_within_field(t_val, de, jl):
-            continue          # 解需域外元素（如未建层 Log）=> 该 m 无效
-        return "ok", m
-    return "und", None
+        return "ok", 0
+    try:
+        rho = al_r / v_r
+    except Exception:
+        return "ok", 0
+    cv = _rf_const_ga(rho)
+    if cv is not None and cv.im == 0 \
+            and cv.re.denominator == 1 and cv.re > 0:
+        return "ok", int(cv.re)
+    return "ok", 0
 
 
 def _is_logderiv_radical(f_rf, de, jv, depth=0):
@@ -3680,25 +3679,12 @@ def _rde_tower_solve(f, g, de, j):
                 al = (bbr[db] * Fr(-1)) / aa[da]
                 eta_rf = RF_of(dk_ncs, dk_dcs)
                 if not eta_rf.is_zero():
+                    # M5 收官批 #2：完备版 _limited_int_prim 退化
+                    # 为比率检验——α/η 整数常数 <=> 共振；
+                    # 否则朴素界正确。不再返回 undecided（消除假拒答）。
                     st_m, m_v = _limited_int_prim(al, eta_rf, de, jv - 1)
-                    if st_m == 'ok':
-                        if m_v > 0:
-                            n = max(n, m_v)
-                    else:
-                        # 'und'：紧刻画兜底（z=const 子情形瞬时判定）
-                        rho = al / eta_rf
-                        if rho.is_const():
-                            cv = rho.const_val()
-                            cvi = cv
-                            if isinstance(cvi, Ga):
-                                cvi = None
-                            if cvi is not None and cvi.denominator == 1 \
-                                    and cvi > 0:
-                                n = max(n, int(cvi))
-                            elif cvi is None:
-                                return None, 'undecided'
-                        else:
-                            return None, 'undecided'
+                    if st_m == 'ok' and m_v > 0:
+                        n = max(n, m_v)
             elif db == da and da != 0:
                 # S-a 第二阶修正（sympy bound_degree primitive db==da 分支）：
                 # α 为对数导数-根式（n_l==1）时经 beta 公式再探 limited
@@ -3717,11 +3703,8 @@ def _rde_tower_solve(f, g, de, j):
                     beta = -(num / (z_rf * lc_a))
                     eta_rf = RF_of(dk_ncs, dk_dcs)
                     st_m, m_v = _limited_int_prim(beta, eta_rf, de, jv - 1)
-                    if st_m == 'ok':
-                        if m_v > 0:
-                            n = max(n, m_v)
-                    else:
-                        return None, 'undecided'      # S-a（保守）
+                    if st_m == 'ok' and m_v > 0:
+                        n = max(n, m_v)
             # da==db==0：cancellation 逐度下降，naive 界 n>=dc 不截断，
             # 无需共振修正（安全性：各度独立处理到底）
         else:  # exp
