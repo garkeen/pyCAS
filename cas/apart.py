@@ -216,7 +216,40 @@ def _norm_det(p2, alpha, m):
         col = _reduce_alg_var(p2 * pw, alpha, m)
         mat.append([coef_in(col, k) for k in range(n)])
         pw = pw * alpha_p2
-    return _det_poly(mat)
+    return _det_bareiss(mat)
+
+
+def _det_bareiss(mat):
+    """Poly 条目行列式（Bareiss 免分数消元）。
+
+    取代余子式展开（O(n!)——旧 deg(m)<=5 限界的真实根源，B4 统一
+    项）：Bareiss 主步 a_ij <- (a_ij*p_k - a_ik*a_kj)/p_{k-1} 除法
+    精确（整域性质），O(n^3) 次乘除；行交换记号差。条目为同变元
+    Poly（coef_in 输出），零元保留 vars。"""
+    from cas.poly import div_exact
+
+    n = len(mat)
+    zero = mat[0][0].scalar(Fr(0))
+    M = [row[:] for row in mat]
+    sign = Fr(1)
+    prev = None
+    for k in range(n - 1):
+        if M[k][k].is_zero():
+            for r in range(k + 1, n):
+                if not M[r][k].is_zero():
+                    M[k], M[r] = M[r], M[k]
+                    sign = -sign
+                    break
+            else:
+                return zero
+        p = M[k][k]
+        for i in range(k + 1, n):
+            for j in range(k + 1, n):
+                t = M[i][j] * p - M[i][k] * M[k][j]
+                M[i][j] = t if prev is None else div_exact(t, prev)
+            M[i][k] = zero
+        prev = p
+    return M[n - 1][n - 1].scalar(sign)
 
 
 def _kx_gcd(a, b, alpha, m):
@@ -258,7 +291,9 @@ def _an_factor(g, x):
 
     fld = ALG_FIELDS.get(alpha)
     m = fld.minpoly_poly(alpha) if fld is not None else None
-    if m is None or m.degree(alpha) > 5:
+    if m is None or m.degree(alpha) > 16:
+        # 上限根源曾是余子式展开 O(n!)；Bareiss 后瓶颈后移到
+        # factor(norm)（deg = deg_x*deg_m），16 为诚实规模闸
         return None
 
     # 1) 清分母：p~ 的系数为 Q[alpha]-Poly

@@ -1,7 +1,10 @@
 import unittest
+from fractions import Fraction as Fr
 
 from cas.parser import parse
 from cas.pprint import to_str
+from cas.term import S
+from cas.apart import _an_factor
 
 
 def _num_check(F, f, x, points=(0.31, 0.73, 1.17, 2.5), tol=1e-9):
@@ -355,6 +358,124 @@ class TestSpecialFunctionOutput(unittest.TestCase):
                            eval_approx(parse(s), {self.x: p})) < 1e-9
                        for p in (0.41, 0.93, 1.77))
             self.assertTrue(good, s)
+
+
+class TestTragerCapLift(unittest.TestCase):
+    """N2/B4：Bareiss 行列式取代余子式展开后的去限验收。
+
+    deg(m)>5 的域分解在旧 O(n!) 余子式下不可达（诚实 None）；
+    Bareiss O(n^3) 后成为可达形态。断言面：高次域（Eisenstein
+    不可约）上 Trager 分解给出正确次数谱；乘回精确恒等；Bareiss
+    与余子式展开小规模一致（换底座不改语义）。
+    """
+
+    def _field(self, av, c, deg):
+        """T^deg - c 域登记（Eisenstein@c 保证不可约）。"""
+        from cas.algfield import AlgField, register_alg_field
+        register_alg_field(av, AlgField([Fr(-c)] + [Fr(0)] * (deg - 1)
+                                        + [Fr(1)], Fr(1)))
+
+    def _sr(self, av, num_monos):
+        """ℚ[α] 元素 -> SymRat（分母 1）。"""
+        from cas.poly import Poly, SymRat
+        return SymRat(Poly((av,), num_monos), Poly((av,), {(0,): Fr(1)}))
+
+    def _neg(self, v):
+        return self._sr_a(v.num.vars[0],
+                          {k: -c for k, c in v.num.monos.items()})
+
+    def _sr_a(self, av, num_monos):
+        return self._sr(av, num_monos)
+
+    def _eval_at(self, poly, xv, av, xval, aval):
+        """双变量数值求值：系数（Fr/SymRat/Poly(α) 统一处理）经
+        α 实嵌入取值后 Horner 合成。乘回恒等的表示无关对拍。"""
+        tot = 0.0
+        for k, c in poly.monos.items():
+            cv = c
+            if hasattr(cv, "num"):
+                nv = sum(cf * aval ** e[0]
+                         for e, cf in cv.num.monos.items())
+                dv = sum(cf * aval ** e[0]
+                         for e, cf in cv.den.monos.items())
+                cv = nv / dv
+            elif isinstance(cv, Fr):
+                cv = float(cv)
+            elif hasattr(cv, "monos"):
+                cv = sum(float(cf) * aval ** e[0]
+                         for e, cf in cv.monos.items())
+            else:
+                cv = float(cv)
+            tot += cv * xval ** k[0]
+        return tot
+
+    def _same_poly(self, g, prod, av, aval):
+        import math
+        from cas.algfield import unregister_alg_fields
+        try:
+            for xv_ in (0.7, 1.3, 2.11):
+                a = self._eval_at(g, None, None, xv_, aval)
+                b = self._eval_at(prod, None, None, xv_, aval)
+                self.assertAlmostEqual(a, b, places=8, msg=f"x={xv_}")
+        finally:
+            unregister_alg_fields([av])
+
+    def test_degree6_field(self):
+        from cas.poly import Poly
+        av = S('_tst_a6')
+        self._field(av, 2, 6)
+        xv = S('x')
+        al2 = self._sr(av, {(2,): Fr(1)})
+        one = self._sr(av, {(0,): Fr(1)})
+        neg = self._sr(av, {(0,): Fr(-1)})
+        # g = (x^2-alpha)(x^2+alpha)(x-1) = x^5 - x^4 - alpha^2*x + alpha^2
+        g = Poly((xv,), {(5,): one, (4,): neg,
+                         (1,): self._neg(al2), (0,): al2})
+        res = _an_factor(g, xv)
+        self.assertIsNotNone(res)
+        facs, _pc = res
+        # 完整性：次数和守恒 + 乘回精确恒等（粒度=轨道积语义，
+        # 共轭二次对可合取为四次粗因子——Trager 契约如此）
+        self.assertEqual(sum(f.degree(xv) for f in facs), 5)
+        prod = Poly.one((xv,))
+        for f in facs:
+            prod = prod * f
+        self._same_poly(g, prod, av, 2.0 ** (1.0 / 6.0))
+
+    def test_degree7_field(self):
+        from cas.poly import Poly
+        av = S('_tst_a7')
+        self._field(av, 3, 7)
+        xv = S('x')
+        a6 = self._sr(av, {(6,): Fr(1)})
+        one = self._sr(av, {(0,): Fr(1)})
+        nz = self._sr(av, {(0,): Fr(-1)})
+        # g = (x^2-alpha^3)(x^2+alpha^3) = x^4 - alpha^6
+        g = Poly((xv,), {(4,): one, (0,): self._neg(a6)})
+        res = _an_factor(g, xv)
+        self.assertIsNotNone(res)
+        facs, _pc = res
+        self.assertEqual(sum(f.degree(xv) for f in facs), 4)
+        prod = Poly.one((xv,))
+        for f in facs:
+            prod = prod * f
+        self._same_poly(g, prod, av, 3.0 ** (1.0 / 7.0))
+        # 非平凡性：确有分解发生（至少两因子）
+        self.assertGreaterEqual(len(facs), 2)
+
+    def test_bareiss_matches_cofactor_small(self):
+        from cas.apart import _det_poly, _det_bareiss
+        from cas.poly import Poly
+
+        def P(c, e=0):
+            return Poly((S('x'),), {(e,): Fr(c)})
+
+        mat = [[P(1, 1), P(2), P(0)],
+               [P(3), P(-1, 2), P(1)],
+               [P(0), P(4), P(2, 1)]]
+        a = _det_poly(mat)
+        b = _det_bareiss(mat)
+        self.assertEqual(a.monos, b.monos)
 
 
 if __name__ == "__main__":
