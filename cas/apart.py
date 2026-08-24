@@ -118,7 +118,9 @@ def _param_factors(g, x):
         if facs is None:
             return [g], None
         return facs, lc
-    raise PolyError(f"parameter-domain factorization: degree {n} unsupported")
+    from cas.risch import RischUnsupported
+    raise RischUnsupported(
+        f"parameter-domain factorization: degree {n} unsupported")
 
 
 # ---------------------------------------------------------------------------

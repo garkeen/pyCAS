@@ -10,7 +10,7 @@ from fractions import Fraction as Fr
 
 from cas import term as T
 from cas.poly import Poly
-from cas.errors import PolyError
+from cas.errors import BudgetExceeded, PolyError
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def groebner(fs, order="grevlex"):
     pairs = [(i, j) for i in range(len(G)) for j in range(i + 1, len(G))]
     while pairs:
         if len(pairs) > _MAX_PAIRS or len(G) > _MAX_BASIS:
-            raise PolyError("groebner: computation budget exceeded")
+            raise BudgetExceeded("groebner: computation budget exceeded")
         i, j = pairs.pop(0)
         li, lj = _lm(G[i], key), _lm(G[j], key)
         # 第一判则：首单项式互素 -> S-poly 必归零
@@ -136,7 +136,7 @@ def reduced_basis(G, order="grevlex"):
         changed = False
         rounds += 1
         if rounds > 50:
-            raise PolyError("groebner: autoreduce budget exceeded")
+            raise BudgetExceeded("groebner: autoreduce budget exceeded")
         newH = []
         for h in H:
             rest = [u for u in H if u is not h]
@@ -203,7 +203,7 @@ def solve_system(fs, vars_, order="lex"):
     try:
         G = groebner(polys, order)
         G = reduced_basis(G, order)
-    except PolyError as ex:
+    except (PolyError, BudgetExceeded) as ex:
         return SolveSysResult([], "unsupported", str(ex))
     if any(g.is_const() for g in G):
         return SolveSysResult([], "contradiction", "1 in ideal: no common zero")

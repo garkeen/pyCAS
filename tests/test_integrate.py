@@ -121,15 +121,15 @@ class TestTrigIntegrate(unittest.TestCase):
         self.assertEqual(to_str(res), "-1/2/tan(1/2*x) + 1/2*tan(1/2*x)")
 
     def test_unsupported(self):
-        from cas.errors import PolyError
-        from cas.risch import RischNonElementary
+        from cas.risch import RischNonElementary, RischUnsupported
 
         # x+sin(x)：M5.3.1 起塔内 k=0 分量经实虚拆分可积（升级，
         # 原为 unsupported 期望）
         res, ok = self.t("x+sin(x)")
         self.assertTrue(ok)
         # sin(x)/log(x)：log 层与三角复指数混合超出塔覆盖，诚实拒答
-        with self.assertRaises(PolyError, msg="sin(x)/log(x)"):
+        # （M6.3：策略层拒绝载体 = RischUnsupported，非 PolyError）
+        with self.assertRaises(RischUnsupported, msg="sin(x)/log(x)"):
             self.t("sin(x)/log(x)")
         # x^x：M5.6 变指数幂归一后 = exp(x*log x)，塔可建造，
         # Risch 判定给出更强结论——证明性拒答（非 unsupported）

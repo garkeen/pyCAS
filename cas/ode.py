@@ -157,7 +157,7 @@ def _solve_linear1(A, B, Cc, y, x, f, dy, dy2):
     try:
         P, _ok1, m1, _prov1 = zz_int(p, x)
         G, _ok2, m2, _prov2 = zz_int(simplify(T.times(q, T.exp(P))), x)
-    except PolyError:
+    except (PolyError, RischUnsupported):
         return None
     # IF = exp(P)：解写为 (G + C1)·exp(−P)，避免 C1/exp(P) 形态
     sol = simplify(T.times(T.plus(G, C1), T.exp(T.neg(P))))
@@ -186,7 +186,7 @@ def _solve_separable(A, B, y, x, f, dy, dy2):
     try:
         K, _o1, _m1, _p1 = zz_int(ky, y)
         F, _o2, _m2, _p2 = zz_int(fx, x)
-    except PolyError:
+    except (PolyError, RischUnsupported):
         return None
     rhs = T.plus(F, C1)
     # 显式化：K 的常见形态
@@ -276,7 +276,7 @@ def dsolve(f, y, x):
 
         try:
             F, ok, _m, _prov = zz_int(simplify(T.div(T.neg(B), A)), x)
-        except PolyError:
+        except (PolyError, RischUnsupported):
             return OdeResult(None, "unsupported", "-", "direct: integrand not integrable")
         sol = T.plus(F, C1)
         st = _verify_sol(sol, f, y, x, dy, dy2, 1)

@@ -434,6 +434,7 @@ def _eval_inert(t, budget):
     from cas.diff import d as dd
     from cas.integrate import integrate as zz_int
     from cas.errors import PolyError
+    from cas.risch import RischUnsupported
 
     changed = False
     order = []
@@ -462,7 +463,7 @@ def _eval_inert(t, budget):
             x, body = T.open_bound(args[0])
             try:
                 r = zz_int(body, x)[0]
-            except PolyError:
+            except (PolyError, RischUnsupported):
                 r = None   # 不可积：保持名词
         elif name == "Sum" and len(args) == 1 and isinstance(args[0], T.Bound):
             from cas import summation
@@ -1871,6 +1872,7 @@ class Session:
         from cas.integrate import integrate as zz_int
         from cas.decide import equivalent
         from cas.errors import PolyError
+        from cas.risch import RischUnsupported
 
         u = self._parse_in(u_s)
         found = None
@@ -1891,7 +1893,7 @@ class Session:
                 continue
             try:
                 v, _ok, _m, _prov = zz_int(q, x)
-            except PolyError:
+            except (PolyError, RischUnsupported):
                 continue
             du = d(u, x)
             cand = T.times(v, du)
@@ -2818,6 +2820,7 @@ class Session:
             return "empty session"
         from cas.integrate import integrate as zz_int
         from cas.errors import PolyError
+        from cas.risch import RischUnsupported
 
         sub = T.term_at(self.current, path)
         if isinstance(sub, T.Expr) and sub.head.name == "Integrate" \
@@ -2825,7 +2828,7 @@ class Session:
             x, body = T.open_bound(sub.args[0])
             try:
                 res, ok, method, provisos = zz_int(body, x)
-            except PolyError:
+            except (PolyError, RischUnsupported):
                 return f"unsupported integrand at path {path}"
             note = f"evaluate Integrate at path {tuple(path)}"
         else:
@@ -2834,7 +2837,7 @@ class Session:
                 return "no variable in subterm"
             try:
                 res, ok, method, provisos = zz_int(sub, x)
-            except PolyError:
+            except (PolyError, RischUnsupported):
                 return f"unsupported integrand at path {path}"
             note = f"algorithm=integrate[{method}] at path {tuple(path)}"
         before = self.current

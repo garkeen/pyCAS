@@ -314,7 +314,7 @@ def _log_terms(f, p, x):
             # （atan 公式对 D≠0 任何符号成立：复对数主值组合，符号验证背书）
             # D ≡ 0 为重根（平方自由分解已排除），防御性拒答。
             if D.is_zero():
-                raise PolyError("parameter discriminant is identically zero")
+                raise RischUnsupported("parameter discriminant is identically zero")
             sign = _classify_discriminant(D)
             return [("atan", fm, pm, pc, D, sign)]
         if D > 0:
@@ -770,7 +770,7 @@ def _integrate_core(t, x, a=None, principal=None):
             _tag, term, method, provisos = verdict
             ok = True
         return term, ok, method, provisos
-    raise PolyError("unsupported integrand"
+    raise RischUnsupported("unsupported integrand"
                     + (": " + last_reason if last_reason else ""))
 
 
@@ -1193,7 +1193,7 @@ def defint(t, x, lo, hi, _no_sym=False):
     except RischNonElementary:
         # Risch 证明不可初等：定积分无初等原函数，诚实拒答（带证明标记）
         return None, "unsupported", "no elementary antiderivative (proved)"
-    except PolyError:
+    except (PolyError, RischUnsupported):
         return None, "unsupported", "no antiderivative method"
     if F is None:
         # 无初等原函数（如 exp(-x^2)）：诚实拒答，绝不解包崩溃（永不静默错）
@@ -1358,7 +1358,7 @@ def _defint_improper(t, x, lo, hi):
     except RischNonElementary:
         # Risch 证明不可初等：定积分无初等原函数，诚实拒答（带证明标记）
         return None, "unsupported", "no elementary antiderivative (proved)"
-    except PolyError:
+    except (PolyError, RischUnsupported):
         return None, "unsupported", "no antiderivative method"
     if F is None:
         # 无初等原函数（如 exp(-x^2)）：诚实拒答，绝不解包崩溃（永不静默错）

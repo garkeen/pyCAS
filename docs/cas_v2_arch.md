@@ -159,8 +159,15 @@ M6.5 起由测试锁定。
     RatpowMergeStage（verify 视图：needs 门控）均委托之；
     tower 零判定唯一核 = diff._tower_zero（自带入口归一+异常安全），
     _eq_stage_tower 为其门控视图
-  - M6.3 拒答协议落地：按 §2 语义表统一抛出点（现 PolyError×50
-    与 RischUnsupported×24 混用于同类场景）
+  - M6.3 拒答协议落地 ✓（raise 点 76 处全审计）：
+    重分类 5 处——integrate 瀑布兜底+判别式防御、apart 参数分解
+    次数界、tan-half 未匹配 → RischUnsupported；groebner 预算 ×2
+    → BudgetExceeded。处理器加宽 10 处（session ×4/ode ×3/defint ×2/
+    solve_system）。审计后保留三类并记录理由：共轭拆分零分母对
+    （真·除零输入契约）、u_inv_mod 的 RischUnsupported（须走 RDE
+    拒绝路由）、_frac_num 的 PolyError（build_extension 边界已统一
+    翻译为 RischUnsupported）。测试期望同步：sin(x)/log(x) 拒绝
+    载体改为 RischUnsupported
   - M6.4 单变量域塔代数模块化 ✓：cas/univar.py（K[t] 稠密算术
     19 函数，升序系数 list、域元素系数、monic gcd；契约与 Poly
     换算边界见模块 docstring；from_poly 为正向转换，反向

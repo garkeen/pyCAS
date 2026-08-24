@@ -151,11 +151,11 @@ class TanHalfStruct(Struct):
 
     def compute(self, v):
         from cas.integrate import _trig_tan_half
-        from cas.errors import PolyError
+        from cas.risch import RischUnsupported
         tt, xx = v
         res = _trig_tan_half(tt, xx)
         if res is None:
-            raise PolyError("tan-half unmatched")
+            raise RischUnsupported("tan-half unmatched")
         if len(res) == 4:
             term, ok, _m, prov = res
         else:
