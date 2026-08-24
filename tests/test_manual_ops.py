@@ -16,12 +16,14 @@ from cas.session import Session
 
 class TestTree(unittest.TestCase):
     def test_tree_shows_paths(self):
+        # N4 迁移：原夹具 ln(e^x) 已被构造期收缩，改用 log(y^2)
+        # （偶次幂、底正不可证 ⟹ 不收缩）承载同一树遍历语义
         s = Session()
-        s.handle("x + ln(e^x) = e^x")
+        s.handle("x + log(y^2) = y^2")
         out = s.handle(":tree")
         self.assertIn("()", out)
-        self.assertIn("0.1", out)          # lhs 的第二个加项 log(exp(x))
-        self.assertIn("log(exp(x))", out)
+        self.assertIn("0.1", out)          # lhs 的第二个加项 log(y^2)
+        self.assertIn("log(y^2)", out)
 
     def test_tree_readonly_not_recorded(self):
         s = Session()
@@ -33,11 +35,12 @@ class TestTree(unittest.TestCase):
 
 class TestSetRsub(unittest.TestCase):
     def test_set_probable_tag(self):
-        # ln(e^x) -> x：采样支持（PROBABLE），mk 归并 x+x -> 2*x
+        # N4 迁移：原夹具 ln(e^x)~x 已收缩；改用采样可证、符号不可判
+        # 的对（log(y^2) ~ 2*log(abs(y))，非零样本恒等）承载 PROBABLE 标注
         s = Session()
-        s.handle("x + ln(e^x) = e^x")
-        out = s.handle(":set 0.1 x")
-        self.assertIn("2*x == exp(x)", out)
+        s.handle("x + log(y^2) = 5")
+        out = s.handle(":set 0.1 2*log(abs(y))")
+        self.assertIn("x + 2*log(abs(y)) == 5", out)
         self.assertIn("[PROBABLE]", out)
 
     def test_set_verified_tag(self):
@@ -65,10 +68,13 @@ class TestSetRsub(unittest.TestCase):
         self.assertIn("no subterm", out)
 
     def test_rsub_replaces_all(self):
+        # N4 迁移：ln(e^x) 已收缩；改用 sin^2 ~ 1-cos^2（采样可证）
+        # 承载 rsub 全式替换 + 归并语义
         s = Session()
-        s.handle("ln(e^x) + ln(e^x)")
-        out = s.handle(":rsub ln(e^x)=x")
-        self.assertIn("2*x", out)
+        s.handle("2*sin(y)^2")
+        out = s.handle(":rsub sin(y)^2=1-cos(y)^2")
+        self.assertIn("2", out)
+        self.assertIn("cos(y)^2", out)
 
     def test_rsub_not_found(self):
         s = Session()
@@ -110,10 +116,12 @@ class TestEquationOps(unittest.TestCase):
         self.assertIn("x^2 - 4 == 0", out)
 
     def test_apply_both_log_proviso(self):
+        # N4 迁移：e^x=5 两侧取 log 后 lhs 即收缩为 x（无 proviso 可言）；
+        # 改用 y^2=5：log(y^2) 不收缩（偶次幂底正不可证），proviso 机制原样
         s = Session()
-        s.handle("e^x = 5")
+        s.handle("y^2 = 5")
         out = s.handle(":apply_both log")
-        self.assertIn("log(exp(x)) == log(5)", out)
+        self.assertIn("log(y^2) == log(5)", out)
         self.assertIn("proviso", out)
 
     def test_apply_both_sin_non_injective_note(self):
@@ -203,12 +211,14 @@ class TestDomainAudit(unittest.TestCase):
         self.assertTrue(any("x >= 0" in str(c) for c in cons))
 
     def test_set_no_spurious_proviso_when_removing_constraint(self):
-        # ln(e^x) -> x：约束被移除而非引入 -> 不应有 proviso
+        # N4 迁移：原 ln(e^x)->x 场景已收缩；改用 exp(z)*exp(-z) -> 1
+        # （符号 YES 判等、无域约束引入）——替换成功且无 proviso
         s = Session()
-        s.handle("y + ln(e^x)")
-        out = s.handle(":set 1 x")
-        self.assertIn("[PROBABLE]", out)
+        s.handle("y + exp(z)*exp(-z)")
+        out = s.handle(":set 1 1")
+        self.assertIn("y + 1", out)
         self.assertNotIn("proviso", out)
+        self.assertNotIn("refused", out)
 
     def test_separate_preserves_denominator_domain(self):
         s = Session()
@@ -384,10 +394,12 @@ class TestGuardObligations(unittest.TestCase):
         self.assertIn("(none)", s.handle(":obls"))
 
     def test_apply_both_creates_obligation(self):
+        # N4 迁移：e^x=5 取 log 即收缩；改用 y^2=5——log 的 dom 声明
+        # （arg>0 不可判）照常产生义务
         s = Session()
-        s.handle("e^x = 5")
+        s.handle("y^2 = 5")
         s.handle(":apply_both log")
-        self.assertIn("exp(x) > 0", s.handle(":obls"))
+        self.assertIn("y^2 > 0", s.handle(":obls"))
 
 
 class TestReshaping(unittest.TestCase):

@@ -66,11 +66,17 @@ class TestTowerBuild(unittest.TestCase):
         self.assertEqual(to_str(fa.to_term()), "l*t")
 
     def test_reject_algebraic_dependency(self):
-        from cas.risch import RischUnsupported
+        # N4 迁移：exp(r·log u) 类代数相关形态已在构造期坍缩为代数叶
+        # （e^{log(x)/2} = sqrt(x)），旧守卫场景整体消失（同批：
+        # refine log-exp 规则 / auto 重写步均上收为构造期收缩）。
+        # 改钉新行为：坍缩精确 + 建塔走代数层成功。
+        from cas.parser import parse
+        from cas.pprint import to_str
 
-        # exp(log(x)/2) = sqrt(log x)：代数相关（精确判定后仍拒绝）
-        with self.assertRaises(RischUnsupported):
-            _build("exp(log(x)/2)")
+        self.assertEqual(to_str(parse("exp(log(x)/2)")),
+                         to_str(parse("sqrt(x)")))
+        de, fa, fd = _build("sqrt(x)")
+        self.assertEqual(de.cases, ["base", "algebraic"])
 
     def test_accept_nested_transcendental(self):
         # M5.2c-iii：exp(x*exp(x)) 底含塔变量但超越（精确判定非对数

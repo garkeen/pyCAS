@@ -345,6 +345,9 @@ def _special_output(t, x):
                         and c_v is not None and c_v != 0:
                     k = T.div(a_, c_)
                     phase = T.plus(b_, T.neg(T.times(k, d_)))
+                    # 相位因子保持 Exp 核形式：塔内坍缩（线性 arg 拆分）
+                    # 同样生成 Exp 字面核；若此处改用命名原子 E，两面孔
+                    # 在塔叶键中不可消去 ⟹ verify 失败（ei 族回归钉实证）
                     # d(C·Ei(k(cx+d))) = C·c·e^(k(cx+d))/(cx+d)
                     # => 需 C·c·e^(kd)=e^b => C = e^(b-kd)/c
                     F = T.times(coef, T.div(N(1), c_), T.exp(phase),

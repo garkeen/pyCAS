@@ -17,7 +17,7 @@ from fractions import Fraction as Fr
 import math
 
 from cas import term as T
-from cas.term import S, N, PI, ZERO, ONE, MONE, PV
+from cas.term import S, N, PI, E, ZERO, ONE, MONE, PV
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class FunctionSpec:
     bound: tuple = None           # (lo, hi) Fraction 界：decide 有界公理
     dom: object = None            # callable(term) -> [约束]：dom_condition
     special: dict = field(default_factory=dict)   # {arg 项: 值}：构造即折叠
+    contract: object = None       # callable(arg) -> 收缩项 | None（N4 构造期收缩）
     numeric: object = None        # callable(*float) -> float：数值求值层（仅验证/抽查通道）
     anti: object = None           # callable(arg) -> 原函数（裸函数简单积分表，定积分友好）
     inv: str = None               # 逆函数头名（主支）：f(x)=c -> x=inv(c)，带主支注释
@@ -97,7 +98,7 @@ register(FunctionSpec(
     "Log", 1, print_name="log",
     deriv=lambda a: T.pw(a, MONE),
     dom=lambda t: [T.mk(S("Gt"), (t.args[0], ZERO))],
-    special={ONE: ZERO},
+    special={ONE: ZERO, E: ONE},
     numeric=math.log,
     inv="Exp",
     injective=True,
@@ -291,3 +292,8 @@ def registry_view(user_defs=None):
     for n in (user_defs or {}):
         out[n] = {"kind": "user", "spec": user_defs[n]}
     return out
+
+
+# N4 构造期收缩规则集挂载（contract.py 定义，此处唯一接线点）
+from cas.contract import install as _install_contracts
+_install_contracts()

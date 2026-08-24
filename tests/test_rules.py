@@ -102,13 +102,18 @@ class TestM2Rules(unittest.TestCase):
         from cas.session import Session
 
         s = Session()
-        # 构造器已在解析时合并同类项（3*exp(log(x))），auto 负责规则重写并入账
+        # N4 迁移：log∘exp 收缩已上收构造期（contract.py），解析即 3*x，
+        # auto 无重写步可记——本用例改验规则引擎记账通道仍然工作
+        # （奇偶性规则：spec origin 自动通道）
         s.feed("exp(log(x)) + 2*exp(log(x))")
         s.auto()
         self.assertEqual(to_str(s.current), "3*x")
-        self.assertGreaterEqual(len(s.log), 1)
-        rule_ids = [st.rule_id for st in s.log]
-        self.assertIn("exp_log", rule_ids)
+
+        s2 = Session()
+        s2.feed("y + sin(-x) + cos(-x)")
+        s2.auto()
+        rule_ids = [st.rule_id for st in s2.log]
+        self.assertGreaterEqual(len(rule_ids), 1)
 
     def test_auto_rewrites_parity(self):
         from cas.session import Session

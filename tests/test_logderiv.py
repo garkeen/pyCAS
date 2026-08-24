@@ -108,11 +108,15 @@ class TestGuardExact(unittest.TestCase):
         return build_extension(parse(s), x)
 
     def test_sqrt_log_rejected(self):
-        # e^{log(x)/2} = √(log x)：代数相关（D(base)=1/(2x) 是对数导数）
-        from cas.risch import RischUnsupported
+        # N4 迁移：e^{log(x)/2} 已在构造期坍缩为 sqrt(x)（代数叶），
+        # 旧"代数相关拒绝"场景消失；改钉坍缩正确 + 代数层建塔成功
+        from cas.parser import parse
+        from cas.pprint import to_str
 
-        with self.assertRaises(RischUnsupported):
-            self._build("exp(log(x)/2)")
+        self.assertEqual(to_str(parse("exp(log(x)/2)")),
+                         to_str(parse("sqrt(x)")))
+        de, fa, fd = self._build("sqrt(x)")
+        self.assertEqual(de.cases[-1], "algebraic")
 
     def test_transcendent_nested_accepted(self):
         # e^{x·e^x}：底含塔变量但超越 => 建三层塔

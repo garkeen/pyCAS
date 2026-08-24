@@ -117,11 +117,13 @@ class TestRefine(unittest.TestCase):
         self.assertIs(r, parse("abs(y)"))
 
     def test_log_exp_unconditional(self):
-        # log∘exp 互逆不依赖账本（exp 在实数上单射）
+        # N4 迁移：log∘exp 互逆已上收为构造期收缩（contract.py，
+        # Log 的 dom 声明即 arg>0 主支语义）——解析即得 y；
+        # refine 通道对已收缩输入自然 no-op
+        self.assertEqual(to_str(parse("log(exp(y))")), "y")
         ctx = Context()
         r, changed = refine(parse("log(exp(y))"), ctx)
-        self.assertTrue(changed)
-        self.assertIs(r, T.S("y"))
+        self.assertFalse(changed)
 
     def test_piecewise_branch_pick(self):
         ctx = Context()

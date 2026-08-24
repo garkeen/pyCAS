@@ -806,14 +806,20 @@ def mk(head, args):
             return a
         return _intern_expr(head, args)
     args = tuple(args)
-    # FunctionSpec 特殊点折叠（构造即规范化；洞参数不折叠，模式语义保持）
+    # FunctionSpec 特殊点折叠 + N4 构造期收缩（构造即规范化；
+    # 洞参数不折叠，模式语义保持）
     sp = _spec_lookup(name)
-    if sp is not None and sp.special:
+    if sp is not None:
         a0 = args[0]
         if not isinstance(a0, (PatVar, PatSeq)):
-            r = sp.special.get(a0)
-            if r is not None:
-                return r
+            if sp.special:
+                r = sp.special.get(a0)
+                if r is not None:
+                    return r
+            if sp.contract is not None:
+                r = sp.contract(a0)
+                if r is not None:
+                    return r
     norm = NORM.get(name)
     if norm is not None:
         r = norm(args)
