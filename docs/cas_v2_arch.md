@@ -242,16 +242,64 @@ risch._integrate_in_K。
     leaf ↦ ϑ/rd 与回代 sym ↦ leaf·rd 方向一致性；混合塔
     ℚ(x)⊂ℚ(x,τ)⊂ℚ(x,τ,α) 构建通过。验收 = derivation 与 diff.d
     数值对拍（独立预言机）+ 塔不变量钉 + 混合建层钉
-  - M78.4 代数层上的积分算法（进行中）：Hermite 迹推广 +
+  - M78.4 架构裁定与规范形算术（进行中，一等交付物）。
+    **双阶梯原则**（FriCAS expr.spad/algext.spad、Maxima rat3e.lisp/
+    ratmac.lisp 证据）：数域=显式数据结构（SAE 模式：Rep=次数<deg(M)
+    多项式，乘法出口 reduce；AlgField 即其等价物）；函数域=平表示+
+    分类谓词+分发表（intef.spad lfintegrate 模式），无塔型数据结构；
+    算法内部允许临时工作域对象（intaf.spad RadicalFunctionField 模式：
+    建→算→映回→弃）。现存实现三分类：
+    - **A 分发路（保留）**：SpecAnti 表、_try_usup（对标 tryChangeVar）、
+      QxStruct 有理层全套、TowerStruct 初等塔层、trig.py 与
+      trigs_to_exp 双规范形、defint NL+奇点拆分（_numeric_cross 标注
+      为启发式证据不冒充证明）、evalnum/decide、Gosper、各系数域
+      各自的 gcd（ugcd/mgcd/u_gcd/_monic_gcd）。
+    - **B 拆除（重复登记与契约破洞，非窄域快路）**：B1 自创根式剥离
+      三函数（已删）；B2 四处独立根式登记（QxStruct _rcN /
+      _collect_radical _aN / 塔层 / solve Phase α① 游走）收敛到唯一
+      核注册表，四处降级为消费者；B3 Capelli 降为快筛，门卫改
+      建域+诚实拒答（依赖 N2）；B4 apart._det_poly → 统一 Bareiss；
+      B5 _mk_rat 混合叶跳规范化契约洞；B6 RatFunc 缺 __eq__；
+      B7 istrategy 步树从单一执行踪迹派生；B8 simplify/refine 游离
+      pass 并入构造期折叠+规则注册表；B9 TanHalfStruct 共享登记否则拆。
+    - **N 缺失件（依赖序施工）**：
+      N4 构造期收缩规则集——exp(a+b)=exp(a)exp(b)、Exp(Log u)→u、
+        Exp(k·Log u)→u^k、Log(正实常数·u)=c+Log u（主分支安全，
+        需常数符号表 e,π>0）、sin/cos 的 π 有理倍数精确值表（结果
+        落 𝔄）（elemntry.spad iiilog/ilog 逻辑）；只收无条件恒等式，
+        一般 Log(a b) 不拆（分支破裂）。
+      N1 froot 链——有理底 n 次根构造期归一 [m,c,r] 记录使
+        f^(1/n)=c·r^(1/m)：content 抽整、sqfree 重数 mod n、同次
+        合并 √a·√b→√(ab)（正有理底无条件；一般复底不合并）
+        （manip.spad zroot(:83)/nthr/iroot(:90)/froot(:182) 逻辑）。
+      N8 表达式层除法出口共轭有理化（expr.spad root_reduce 闭式
+        d₁=c₀²dn−aₙc₁²；多核逐层 univariate 提升）。
+      N3 落域判定 denesting——新代数核注册前先判"在已注册域内是否
+        完全幂"，成功就地坍缩不建新核（√(3+2√2)→1+√2），失败诚实
+        建嵌套塔（rsimp.spad Borodin-Zippel 候选多项式 p₂..p₁₁ +
+        复合指数素数组合）。与 N2 同币两面：N3 构造期便宜版，
+        N2 事后完备版。
+      N6 核关系注册表统一——ALG_FIELDS 推广：任意核 ↦ minPoly
+        （fspace kernel 协议），四孤岛销户后全部分发器查同一份。
+      N5 统一投影服务——expr ↦ (系数域标签, 核集标签) 喂分发器
+        （SMP(R,Kernel) 投影惯例），随消费者迁移渐进成型。
+      N2 𝔄 上多项式因子分解（范数法/InnerAlgFactor 逻辑）→ 解锁
+        𝔄(x) 部分分式、an_factor 去限、B3 门替换。
+      **入域闸门链**（新代数对象统一流水线，例子只是回归钉）：
+      ①折叠(N4)→②落域判定(N3)→③重数归一(N1)→④注册/复用(N6)
+      →⑤出口持续归约(AlgField+N8)。
+  - M78.5 注册表统一与投影迁移（N6/N5/B2/B3/B9 收尾）
+  - M78.6 代数域因子分解 N2 与 B4 清理
+  - M78.7 代数层上的积分算法：Hermite 迹推广 +
     Trager 范数残数（intalg.spad DoubleResultant 对标）+ RDE/prde
     系数域升格 ℚ(x,α[,τ])（intpar.spad 全套在函数域系数上运行）。
     解锁目标：∫dx/√(x²+1)=log(x+√(x²+1)) VERIFIED、
     ∫eˣ/(e²ˣ+a·eˣ+1) VERIFIED、椭圆积分类 proved 拒答。
-    已知边界：嵌套代数层的残数链、RootOf 形态残根
-  - M78.5 多符号与本原元：乘法闭包归一或 primelt（√2·√3→√6；
-    解锁多 AN 符号 apart）；出口回化的主支 proviso 体系；
-    diff.verify 穿越代数层的精确判等（minpoly 驱动归零）
-  - M78.6 **双轨验收（生成器为主 + 钉子库为锚，角色不同不互替）**
+    已知边界：RootOf 形态残根。前置 normalize（efstruc.spad
+    rischNormalize 逻辑，核最小化重写）随 N5/N6 就位后接入。
+  - M78.8 primelt 多符号归一（ℚ(√2,√3)→ℚ(√2+√3)）；出口回化主支
+    proviso 体系；diff.verify 穿越代数层的精确判等（minpoly 驱动归零）
+  - M78.9 **双轨验收（生成器为主 + 钉子库为锚，角色不同不互替）**
     - **回积生成器（覆盖率与进度量化）**：文法随机生成初等 F
       （叶 {x,有理数,参数}，运算 {+-×÷,整幂,n次根(代数层),Exp,Log,
       sin/cos/tan 经复指数化}，深度有界，种子固定，语料入库）；
