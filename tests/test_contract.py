@@ -132,6 +132,13 @@ class TestExpLogContraction(unittest.TestCase):
         # 该识别属 N6 超越常数关系表管辖；当前诚实输出为：
         lhs = parse("(exp(log(e))-e*1/3*((1+sqrt(2))^2-2*sqrt(2)))*exp(x^2)")
         self.assertEqual(to_str(lhs), _norm("exp(x^2)*(exp(1) - e)"))
+        # 规则通道（log.rules exp_one，用户可见化简层）完成两面孔
+        # 识别：内部验证链保持 exp(字面) 塔核形态不受扰
+        from cas.session import Session as _Sess
+        _s = _Sess()
+        _s.handle("(exp(log(e))-e*1/3*((1+sqrt(2))^2-2*sqrt(2)))*exp(x^2)")
+        _s.auto()
+        self.assertEqual(to_str(_s.current), "0")
         # 代数-对数部分（同式内）已完全坍缩：
         self.assertEqual(
             to_str(parse("log(e)-e*1/3*((1+sqrt(2))^2-2*sqrt(2))")),

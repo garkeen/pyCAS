@@ -3,3 +3,4 @@ rule log_prod = log(?x*?y) -> log(?x)+log(?y) guard ?x>0 && ?y>0 as expand
 rule log_sum = log(?x)+log(?y) -> log(?x*?y) guard ?x>0 && ?y>0 as combine
 rule log_pow = log(?x^?n) -> ?n*log(?x) guard ?x>0 as expand
 rule exp_log = exp(log(?x)) -> ?x auto
+rule exp_one = exp(1) -> e auto
