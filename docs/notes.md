@@ -63,7 +63,7 @@
 - **守卫是债务的利息不是本金**：每写 hasattr/名字比较/all_fr，
   先问缺哪个通用机制。
 
-## 4. 外部参考锚点（修剪保护对象——随叙事删除前必须移入本节）
+## 3. 外部参考锚点（修剪保护对象——随叙事删除前必须移入本节）
 
 - **FriCAS intpar.spad**（ParametricRischDE）：weak normalization :920 /
   getDenom :910 / 变换 :1406-1410 / 右端缩放 :1237；
@@ -79,7 +79,7 @@
 - **SAINT/Rubi 参考实据**：本地 pyCAS/SAINT（Slagle 论文复刻，
   slagle.py 规则编号对应论文）；expreduce resources/rubi/ 全章节 .m 快照
 
-## 3. 批次索引（一行一批）
+## 4. 批次索引（一行一批）
 
 - M0–M3：地基/有理积分/初等域交互/分析层 ODE 换元（见 git log）
 - M4：Faulhaber+Gosper
