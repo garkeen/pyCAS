@@ -563,11 +563,17 @@ def _norm_times(args):
     """Times 环规范化：合并同底整数幂（x^a*x^b -> x^(a+b)，a,b 整数）、归一系数。
 
     generic 语义：x*x^-1 -> 1（与主流 CAS 一致）；定义域条件由 dom_condition 按需提取。
-    非整数指数幂视为原子基底，不做指数算术（分支切割安全）。
+    非整数指数幂视为原子基底，不做指数算术（分支切割安全）；
+    数值有理底根式例外——N1 同次合并（radnorm.merge_same_index，
+    正有理底/负底奇指标无条件，√a·√b→√(ab)）。
     返回规范项；含 Special 或无可归约时返回 None。
     """
     if any(isinstance(a, Special) for a in args):
         return None
+    from cas.radnorm import merge_same_index
+    nargs = merge_same_index(args)
+    if nargs is not args:
+        return mk(S("Times"), nargs)
     if (
         any(isinstance(a, Expr) and a.head.name == "Plus" for a in args)
         and all(_pure_numeric(a) for a in args)
@@ -664,6 +670,15 @@ def _norm_power(args):
         and isinstance(b.args[1], Int)
     ):
         return mk(S("Power"), (b.args[0], N(b.args[1].v * e.v)))
+    # N1 根式归一：有理数值底 × 非整指数 -> c·r^(1/m) 规范形
+    if isinstance(e, Rat) and e.f.denominator > 1 and is_num(b):
+        from cas.radnorm import split_radical
+
+        bv = num_val(b)
+        if isinstance(bv, Fr):
+            r = split_radical(bv, e.f.numerator, e.f.denominator)
+            if r is not None:
+                return r
     return None
 
 
