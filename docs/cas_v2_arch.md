@@ -175,23 +175,43 @@ M6.5 起由测试锁定。
     （解锁 ∫dx/(eˣ+(a+i)) 诚实拒答转 VERIFIED）
   - M7.3 本原元多符号：乘法闭包归一或 primelt（√2·√3→√6；
     解锁多 AN 符号 apart）
-  - M7.4 变元基底代数积分 Trager 全链：∫dx/√(x²+1)
+  - M7.4 变元基底纯代数积分：∫dx/√(x²+1)
     = log(x+√(x²+1)) VERIFIED；Hermite 推广 + Trager 范数/结式；
     椭圆积分类 proved 拒答（FriCAS intaf/intalg 对标）
-- **M8 可解释积分引擎（SAINT/Rubi 路线）**
+- **M8 混合超越-代数塔（FriCAS Risch 完整对齐收口）**
+  代数层与超越层任意交错的单一线性塔：ℚ(x,params) ⊂ ℚ(...,α) ⊂
+  ℚ(...,α,τ) ⊂ …（α 代数生成元、τ=exp/log 生成元，顺序不限）。
+  - M8.1 DiffExt 新增 'algebraic' 层类型：生成元携带 minpoly，
+    D(t) 由 minpoly 形式微分导出的有理式给出；build_extension 接受
+    变元底根式建层（替代现拒绝路径），依赖检测 = minpoly 在既有
+    域上可约性测试（可约 ⟹ 已在域内，回代映射）
+  - M8.2 RDE/prde 全链在函数域系数上运行：spde/no_cancel/
+    bound_degree/_pld_solve 的系数域升格 ℚ(x,α[,τ])（依赖 M6.4
+    univar 模块 + M7.0 域算术）；残数经 M7.1 装置落扩张域
+  - M8.3 出口回化：代数生成元还原根式形态 + 主支 proviso；
+    diff.verify 支持穿越代数层的精确判等（minpoly 驱动归零）
+  - M8.4 对齐验收电池（每例标注 FriCAS 行为对照）：
+      ∫√(eˣ+1)dx = 2√(eˣ+1)+log((√(eˣ+1)−1)/(√(eˣ+1)+1)) VERIFIED
+      ∫eˣ/√(eˣ+1)dx = 2√(eˣ+1) VERIFIED
+      ∫dx/√(x²+1)（纯代数回归）VERIFIED
+      ∫exp(x²)dx（混合语境下保持）proved 拒答
+      椭圆类 ∫dx/√(x³+1) proved 拒答
+    全绿后方可宣称：超越+代数混合范围内与 FriCAS lfintegrate
+    判定能力对齐（tan 核走复指数等价路线的差异照旧记录）
+- **M9 可解释积分引擎（SAINT/Rubi 路线）**
   - 步树战术单元（:isteps 自动搜出可重放手动路径）/ Slagle 核心
     循环 / Rubi 精选翻译（每条 D-check 入库）/ 混合工作流
-    （:replay 接管）。Risch 保持黑盒判定权威，M8 供可解释性与广度。
-- **M9 分析层完备化**
+    （:replay 接管）。Risch 保持黑盒判定权威，M9 供可解释性与广度。
+- **M10 分析层完备化**
   - Gruntz 极限完备化 / 幂级数算术+收敛半径 / 常系数递推求和 /
     ODE 非齐次+系统+高阶 / 参数 RootOf case-split（CAD 接口，
     低维片段）/ 常数依赖引擎强化
-- **M10 远期分支（启动前重估价值密度）**
-  - M10.a 丢番图（线性/Pell/平方和；一般情形不可判定为定理边界）
-  - M10.b 平面几何吴消去
-  - M10.c 实不等式 CAD/VTS（≤3 变量小次数；YES/NO 双可信决策）
-  （变元基底代数积分已升格为 M7.4——与常数字幕共享同一扩张基建，
-   分立会重复建设）
+- **M11 远期分支（启动前重估价值密度）**
+  - M11.a 丢番图（线性/Pell/平方和；一般情形不可判定为定理边界）
+  - M11.b 平面几何吴消去
+  - M11.c 实不等式 CAD/VTS（≤3 变量小次数；YES/NO 双可信决策）
+  （变元基底代数积分已并入 M7.4；混合塔为 M8——两者合计构成
+   FriCAS 积分判定面的完整对齐）
 
 ### 理论不可解边界（非债务，处理方式已定）
 Richardson 超越常数零等价：数值采样 PROBABLE + 拒答，永不进 YES 通道。
