@@ -157,3 +157,72 @@ def register_symbolic_radical(num, den, p_, q_, sym=None, origin=None):
                    origin=origin, key=key)
     register(sym, fld)
     return sym
+
+
+def try_collapse(b, ef):
+    """N3 项级闸门：常数语境 b^(p/q) 是否已落已知根式域的完全幂。
+
+    单叶情形（b 为 ℚ[leaf] 多项式、leaf=正数值底有理指数幂）：
+    建临时 ℚ-单扩张（不注册——闸门先于注册，失败零痕迹），交
+    denest.perfect_power 三态判定；'yes' 时以 y^p 替换原幂。
+    其余形态（多叶/嵌套超越/非 Fr 叶）诚实返回 None——照常建核，
+    不阻塞主流程。"""
+    from fractions import Fraction as _Fr
+    if ef.denominator < 2:
+        return None
+    q_ = ef.denominator
+    p_ = ef.numerator
+    leaves = []
+    stack = [b]
+    while stack:
+        u = stack.pop()
+        if isinstance(u, Expr) and u.head.name == "Power":
+            a0, a1 = u.args
+            if is_num(a0) and isinstance(a1, Rat) \
+                    and a1.f.denominator > 1 and num_val(a0) > 0:
+                if any(u == l for l in leaves):
+                    continue
+                leaves.append(u)
+                continue
+            stack.extend(u.args)
+            continue
+        if isinstance(u, Expr):
+            stack.extend(u.args)
+    if len(leaves) != 1:
+        return None
+    leaf = leaves[0]
+    lb, le = leaf.args
+    lf = le.f
+    m = [_Fr(-(num_val(lb) ** lf.numerator))] + [_Fr(0)] * (lf.denominator - 1) + [_Fr(1)]
+    from cas.algfield import AlgField, AlgElem
+    fld = AlgField(m, _Fr(1), zero_c=_Fr(0), origin=leaf)
+    try:
+        from cas.poly import Poly
+        sub = T.subst(b, {leaf: S("_tc_a")})
+        gp = Poly.from_term(sub, (S("_tc_a"),))
+    except Exception:
+        return None
+    d = lf.denominator
+    cs = [_Fr(0)] * d
+    ok = False
+    for mono, c in gp.monos.items():
+        if len(mono) == 1 and isinstance(c, _Fr) and mono[0] < d:
+            cs[mono[0]] += c
+            ok = True
+    if not ok:
+        return None
+    from cas.denest import perfect_power
+    verdict, y = perfect_power(fld.elem(cs), q_)
+    if verdict != 'yes' or y is None:
+        return None
+    # 主支校正：perfect_power 只保证 y^q=x；数值对拍 cmath 主值，
+    # 反向根翻号（±y 是仅有的实根候选）。
+    import cmath
+    lv = float(num_val(lb)) ** (float(lf.numerator) / lf.denominator)
+    cand = complex(sum(float(c) * lv ** i for i, c in enumerate(y.cs)))
+    target = complex(sum(float(c) * lv ** i
+                         for i, c in enumerate(cs))) ** (1.0 / q_)
+    if abs(cand - target) > 1e-8 * max(1.0, abs(target)):
+        y = fld.elem([-c for c in y.cs])
+    yterm = y.to_term()
+    return T.mk(S("Power"), (yterm, N(p_)))

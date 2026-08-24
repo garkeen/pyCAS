@@ -11,6 +11,8 @@ from fractions import Fraction as Fr
 
 from cas.algfield import AlgField, AlgElem
 from cas.denest import perfect_power
+from cas.parser import parse
+from cas.pprint import to_str
 
 
 def _qf(v):
@@ -108,6 +110,20 @@ class TestHonestBounds(unittest.TestCase):
         self.assertEqual(v, 'unknown')
         v, _ = perfect_power(f2.gen(), 99)
         self.assertEqual(v, 'unknown')
+
+
+class TestTermGate(unittest.TestCase):
+    """N3 项级闸门接线（kernelreg.try_collapse，构造期生效）。"""
+
+    def test_nested_collapse_principal(self):
+        self.assertEqual(to_str(parse('sqrt(3+2*sqrt(2))')),
+                         '2^(1/2) + 1')
+
+    def test_honest_no_and_multi_leaf(self):
+        # Q(sqrt3) 内非完全幂：不坍缩
+        self.assertIn('3^(1/2)', to_str(parse('sqrt(3+2*sqrt(3))')))
+        # sqrt2+sqrt3 不属于 Q(sqrt6)：诚实不坍缩（多叶扩张属后续）
+        self.assertIn('6^(1/2)', to_str(parse('sqrt(5+2*sqrt(6))')))
 
 
 if __name__ == "__main__":

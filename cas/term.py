@@ -679,6 +679,14 @@ def _norm_power(args):
             r = split_radical(bv, e.f.numerator, e.f.denominator)
             if r is not None:
                 return r
+    # N3 落域判定（闸门链②在④前）：常数语境根式若已是已注册域的
+    # 完全幂则就地坍缩，不建嵌套核（√(3+2√2)→1+√2）。
+    if isinstance(e, Rat) and e.f.denominator > 1:
+        from cas.kernelreg import try_collapse
+
+        r = try_collapse(b, e.f)
+        if r is not None:
+            return r
     return None
 
 
