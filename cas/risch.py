@@ -1912,45 +1912,18 @@ def _risch_rec_mixed(fa, fd, de, j):
 def integrate_exp_tower(f, x):
     """顶层 API：term -> (term, de)（初等原函数）或异常。
 
-    M5.2b 递归塔：任意 primitive/exp 层序列，K 上积分递归下降。
-    内部全程塔符号空间，出口统一回写。入口先做三角/双曲复指数化
-    （M5.3 trigs_to_exp——无三角头时零开销直通）。
+    M6.1 双塔合一：薄壳委托 structs.TowerStruct——project/compute
+    是唯一实现，本函数不再持有流水线拷贝（防漂移复发）。
+    常量被积函数快捷通道留在壳内（塔机制不适用，且保持用户原始
+    形态出口）。
     """
-    # 常被积函数快捷通道：∫c dx = c·x（c 为任意不含 x 的常量表达式，
-    # 含 sin(y)/π²/ℚ(i) 元素等——塔机制本就不适用，直接精确给出；
-    # 置于复指数化之前以保持用户原始形态）
     if x not in T.free_vars(f):
         return T.times(f, x), DiffExt(x)
-    f = trigs_to_exp(f)
-    # M5.6 首项：变指数幂归一 + Log(常量) 参数化（∫a^x 全族解锁）
-    f, backsub = _parametrize_const_logs(_norm_const_base_powers(f, x), x)
-    de, fa, fd = build_extension(f, x)
-    # M5 收官批 #3：混合域（Q(i,params)）门控退役——共轭拆分前置
-    # （A4 泛化至多变量塔），消除 RDE 域泛化 gcd 需求
-    j = len(de.levels) - 1
-    if j == 0:
-        raise RischUnsupported("no extension layer in expression")
-    expr = _risch_rec_mixed(fa, fd, de, j)
-    subs = {T.S(de.levels[i].name): de.terms[i]
-            for i in range(1, len(de.levels))}
-    if subs:
-        expr = T.subst(expr, subs)
-    if backsub:
-        expr = T.subst(expr, backsub)
-    # M5.3.2 出口实化切片二：log 配对（候选重写先规范化再整体
-    # verify 背书，失败保留复形态——诚实纪律）
-    try:
-        from cas.simplify import simplify as _simp, expand as _exp
-        e2 = _realify_log_pairing(expr, x)
-        if e2 is not None:
-            # expand 先分配（mk 不做 Times-over-Plus），环规范折叠线性项
-            e2 = _simp(_exp(e2))
-            from cas.diff import verify as _vf
-            if _vf(e2, x, f) == "VERIFIED":
-                expr = e2
-    except Exception:
-        pass
-    return expr, de
+    from cas.structs import TowerStruct
+    ts = TowerStruct()
+    st = ts.project(f, x, None)
+    expr = ts.compute(st)[0]
+    return expr, st[1]
 
 
 def _integrate_in_K(g, de, j):
