@@ -21,6 +21,11 @@ from cas.term import S, N, Expr, Sym, Const, Int, ONE, IU
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.gaussian import Ga
+from cas.univar import (from_poly, u_add, u_sub, u_mul0, u_mul,
+                        u_neg, u_pow, u_deg, u_trim, u_divmod, u_gcd,
+                        u_xgcd, u_inv_mod, u_inv_mod_t, u_is_zero,
+                        u_deriv_x, u_formal_deriv, u_diophantine,
+                        u_gauss_solve_k)
 from cas.scalarutil import (rf_const_ga, ga_den, lcm2,
                             ga_vec_to_ints, mk_zero_like,
                             leaf_has_ga, symrat_has_ga,
@@ -886,21 +891,6 @@ def tower_to_term_pair(a, d, de, backsub=True):
 #   θ 正规）——primitive 全部因子走 normal 路线。
 # ---------------------------------------------------------------------------
 
-def _univar(p, ti):
-    """Poly(all_vars) -> K[t_i] 系数 list（升序，K 元素 = RatFunc）。"""
-    from cas.ratfunc import RatFunc
-
-    sub = tuple(v for v in p.vars if v is not ti)
-    j = p.vars.index(ti)
-    out = [RatFunc.zero(sub)]
-    for k, c in p.monos.items():
-        e = k[j]
-        while len(out) <= e:
-            out.append(RatFunc.zero(sub))
-        nk = tuple(x for i, x in enumerate(k) if i != j)
-        out[e] = out[e] + RatFunc.from_poly(Poly(sub, {nk: c}))
-    return out
-
 
 def _from_univar(coeffs, all_vars, ti):
     """系数 list（RatFunc）-> 塔上 (num, den) Poly 对。"""
@@ -921,103 +911,6 @@ def _from_univar(coeffs, all_vars, ti):
         num = num * qe + den * pe
         den = den * qe
     return _cancel(num, den)
-
-
-def _u_add(a, b, zero):
-    n = max(len(a), len(b))
-    out = []
-    for i in range(n):
-        ca = a[i] if i < len(a) else zero
-        cb = b[i] if i < len(b) else zero
-        out.append(ca + cb)
-    return _u_trim(out)
-
-
-def _u_trim(cs):
-    while cs and cs[-1].is_zero():
-        cs.pop()
-    return cs
-
-
-def _u_neg(a, neg):
-    return [neg(c) for c in a]
-
-
-def _u_mul(a, b, zero):
-    if not a or not b:
-        return []
-    out = [zero for _ in range(len(a) + len(b) - 1)]
-    for i, ca in enumerate(a):
-        if ca.is_zero():
-            continue
-        for j, cb in enumerate(b):
-            if cb.is_zero():
-                continue
-            out[i + j] = out[i + j] + ca * cb
-    return _u_trim(out)
-
-
-def _u_divmod(a, b, zero):
-    """K[t] 除法（b 非零，K = RatFunc 域）。返回 (q, r) 系数 list。"""
-    r = [c for c in a]
-    db = len(b) - 1
-    lb = b[db]
-    if len(r) - 1 < db:
-        return [], _u_trim(r)
-    q = [zero for _ in range(len(r) - db)]
-    while len(r) - 1 >= db and not _u_is_zero(r):
-        shift = len(r) - 1 - db
-        lc = r[-1]
-        c = lc / lb
-        q[shift] = c
-        for i in range(db + 1):
-            r[shift + i] = r[shift + i] - c * b[i]
-        _u_trim(r)
-    return _u_trim(q), _u_trim(r)
-
-
-def _u_is_zero(cs):
-    return not cs or all(c.is_zero() for c in cs)
-
-
-def _u_gcd(a, b, zero):
-    """K[t] gcd（欧几里得 + monic）。K 是域——首系数总可逆。"""
-    A, B = _u_trim([c for c in a]), _u_trim([c for c in b])
-    while not _u_is_zero(B):
-        _, r = _u_divmod(A, B, zero)
-        A, B = B, r
-    if _u_is_zero(A):
-        return []
-    s = zero.one(zero.p.vars) / A[-1]
-    return [c * s for c in A]
-
-
-def _u_inv_mod(a, m, zero):
-    """a 的逆 mod m（gcd(a,m)=1）。扩展欧几里得：s*a + t*m = g -> s/g。
-
-    初始化 s0=0（对应 r0=m）、s1=1（对应 r1=a）；结束时 s0*a ≡ g (mod m)。
-    """
-    r0, r1 = [c for c in m], _u_trim([c for c in a])
-    s0, s1 = [zero], [zero.one(zero.p.vars)]
-    while not _u_is_zero(r1):
-        q, r = _u_divmod(r0, r1, zero)
-        qs = _u_mul(q, s1, zero)
-        s_new = _u_add(s0, _u_neg(qs, lambda c: c * Fr(-1)), zero)
-        s0, s1 = s1, s_new
-        r0, r1 = r1, r
-    # r0 = gcd；互素时为 K 中单位（非零元素），s0*a ≡ gcd (mod m)
-    if _u_is_zero(r0):
-        raise RischUnsupported("zero gcd in inverse")
-    s = r0[0].one(r0[0].p.vars) / r0[0]
-    out = [c * s for c in s0]
-    _, rem = _u_divmod(out, m, zero)
-    return rem
-
-
-def _u_deriv_x(coeffs):
-    """K 层求导：逐系数 d/dx。"""
-    xv = coeffs[0].p.vars[0] if coeffs and coeffs[0].p.vars else T.S("x")
-    return [c.deriv(xv) for c in coeffs]
 
 
 def _derive_ut(coeffs, de, j):
@@ -1043,7 +936,7 @@ def _derive_ut(coeffs, de, j):
             if i + 1 < n and not coeffs[i + 1].is_zero():
                 term = term + coeffs[i + 1] * w * Fr(i + 1)
         out.append(term)
-    return _u_trim(out)
+    return u_trim(out)
 
 
 def _exp_w(de, j):
@@ -1180,9 +1073,9 @@ def risch_exp_integrate(fa, fd, de, j):
     zero = RatFunc.zero((de.levels[0],))
     tj = de.levels[j]
 
-    A = _univar(fa, tj)
-    D = _univar(fd, tj)
-    if _u_is_zero(A):
+    A = from_poly(fa, tj)
+    D = from_poly(fd, tj)
+    if u_is_zero(A):
         return (None, None, None, None), {}, "ok"
 
     # 多项式部分：商 Q 的频率 + 真分式 R
@@ -1190,12 +1083,12 @@ def risch_exp_integrate(fa, fd, de, j):
     dp = len(A) - 1
     pos_freqs = {}
     if dp >= dq:
-        Q, R = _u_divmod(A, D, zero)
+        Q, R = u_divmod(A, D, zero)
         for k, c in enumerate(Q):
             if not c.is_zero():
                 pos_freqs[k] = c
         A = R
-        if _u_is_zero(A):
+        if u_is_zero(A):
             return (None, None, None, None), pos_freqs, "ok"
 
     res, neg_freqs, st = _integrate_proper(A, D, de, j, zero)
@@ -1221,7 +1114,7 @@ def _integrate_proper(A, D, de, j, zero):
     while len(q0) > 0 and q0[0].is_zero():
         q0 = q0[1:]
         m += 1
-    q0 = _u_trim(q0)
+    q0 = u_trim(q0)
     if m > 0:
         k_m = min(m, len(A))
         low, high = A[:k_m], A[k_m:]
@@ -1230,7 +1123,7 @@ def _integrate_proper(A, D, de, j, zero):
         for k, c in enumerate(low):
             if not c.is_zero():
                 neg_freqs[k - m] = c
-        if _u_is_zero(high):
+        if u_is_zero(high):
             return (None, None, None, None), neg_freqs, "ok"
         res, st = _integrate_normal(high, q0, de, j, zero)
         rat_part, logs, nonel, leftover = res
@@ -1267,8 +1160,8 @@ def _integrate_normal(A, D, de, j, zero):
     nonel = None
     leftover = None
     for p, e in factors:
-        cof = _u_divmod(D, _u_pow(p, e, zero), zero)[0]
-        B = _u_divmod(_u_mul(A, _u_inv_mod_t(cof, D, zero), zero), _u_pow(p, e, zero), zero)[1]
+        cof = u_divmod(D, u_pow(p, e, zero), zero)[0]
+        B = u_divmod(u_mul(A, u_inv_mod_t(cof, D, zero), zero), u_pow(p, e, zero), zero)[1]
         if e > 1:
             rat, (B1, _) = _hermite_pe(B, p, e, de, j, zero)
             rat_part.extend(rat)
@@ -1276,51 +1169,35 @@ def _integrate_normal(A, D, de, j, zero):
             B1 = B
         lg, rem = _residue_sqfr(B1, p, de, j, zero)
         logs.extend(lg)
-        if not _u_is_zero(rem):
-            q, r = _u_divmod(rem, p, zero)
-            if _u_is_zero(r):
+        if not u_is_zero(rem):
+            q, r = u_divmod(rem, p, zero)
+            if u_is_zero(r):
                 # 剩余恰为多项式：exp 下全部进频率（k=0 分量由低层递归
                 # 积分处理）；primitive 下回本层多项式循环（leftover）
                 if de.cases[j] == "exp":
                     return (rat_part, logs, None, ("special", q)), "ok"
-                leftover = q if leftover is None else _u_add(leftover, q, zero)
+                leftover = q if leftover is None else u_add(leftover, q, zero)
             else:
                 nonel = (rem, p)
     return (rat_part, logs, nonel, leftover), "ok"
 
 
-def _u_pow(cs, n, zero):
-    out = [zero.one(zero.p.vars)]
-    base = list(cs)
-    while n > 0:
-        if n & 1:
-            out = _u_mul(out, base, zero)
-        base = _u_mul(base, base, zero)
-        n >>= 1
-    return out
-
-
-def _u_inv_mod_t(a, m, zero):
-    """K[t] 上 a^{-1} mod m。"""
-    return _u_inv_mod(a, m, zero)
-
-
 def _squarefree_decomp_t(D, zero):
     """K[t] 无平方分解 [(p, e)]（形式导数 gcd 递归）。"""
     def rec(cur):
-        if len(cur) <= 1 or _u_is_zero(cur):
+        if len(cur) <= 1 or u_is_zero(cur):
             return []
-        dc = _u_formal_deriv(cur)
-        g = _u_gcd(cur, dc, zero)
+        dc = u_formal_deriv(cur)
+        g = u_gcd(cur, dc, zero)
         if len(g) <= 1:
             return [(cur, 1)]
-        core, r = _u_divmod(cur, g, zero)
-        if not _u_is_zero(r):
+        core, r = u_divmod(cur, g, zero)
+        if not u_is_zero(r):
             raise RischUnsupported("squarefree division failed")
         rest = rec(g)
         single = core
         for pp, _mm in rest:
-            single = _u_divmod(single, pp, zero)[0]
+            single = u_divmod(single, pp, zero)[0]
         out = [(pp, mm + 1) for pp, mm in rest]
         if len(single) > 1:
             out.append((single, 1))
@@ -1329,11 +1206,6 @@ def _squarefree_decomp_t(D, zero):
     out = rec(list(D))
     # 规范序：按次数升序稳定组装
     return sorted(out, key=lambda pe: len(pe[0]))
-
-
-def _u_formal_deriv(cs):
-    """形式偏导 ∂/∂t（系数不动）。"""
-    return _u_trim([c * Fr(k) for k, c in enumerate(cs)][1:])
 
 
 def _hermite_pe(a, p, e, de, j, zero):
@@ -1346,7 +1218,7 @@ def _hermite_pe(a, p, e, de, j, zero):
     cur_a, cur_e = list(a), e
     while cur_e >= 2:
         u, v = _hermite_factor(cur_a, p, cur_e, de, j, zero)
-        if not _u_is_zero(u):
+        if not u_is_zero(u):
             rat.append((u, p, cur_e - 1))
         cur_a = v
         cur_e -= 1
@@ -1359,18 +1231,18 @@ def _hermite_factor(a, p, e, de, j, zero):
     u ≡ -(e-1)^{-1}·(a mod p)·inv(D(p) mod p) (mod p)（K 域上，无 wd 因子）。
     """
     Pm = _derive_ut(p, de, j)             # D(p)：K[t] 元素
-    r = _u_divmod(a, p, zero)[1]
-    pm1 = _u_inv_mod(Pm, p, zero)
+    r = u_divmod(a, p, zero)[1]
+    pm1 = u_inv_mod(Pm, p, zero)
     coef = Fr(-1) / (e - 1)
-    u = [c * coef for c in _u_mul(r, pm1, zero)]
-    _, u = _u_divmod(u, p, zero)
+    u = [c * coef for c in u_mul(r, pm1, zero)]
+    _, u = u_divmod(u, p, zero)
     # N = a + (e-1)*u*D(p) 整除 p
-    N_ = _u_add(list(a), _u_mul([c * Fr(e - 1) for c in u], Pm, zero), zero)
-    M, rem = _u_divmod(N_, p, zero)
-    if not _u_is_zero(rem):
+    N_ = u_add(list(a), u_mul([c * Fr(e - 1) for c in u], Pm, zero), zero)
+    M, rem = u_divmod(N_, p, zero)
+    if not u_is_zero(rem):
         raise RischUnsupported("hermite divisibility failed")
     Du = _derive_ut(u, de, j)
-    v = _u_add(M, _u_neg(Du, lambda c: c * Fr(-1)), zero)
+    v = u_add(M, u_neg(Du, lambda c: c * Fr(-1)), zero)
     return u, v
 
 
@@ -1414,24 +1286,6 @@ def _sylvester_res(fz, gz):
 # Bareiss 行列式（元素 = K[z] 多项式 = list[K 元素]，与 K[t] 同构——_u_* 通用）
 # ---------------------------------------------------------------------------
 
-def _u_sub(a, b):
-    """K 多项式减法（zero 自参数推断）。"""
-    from cas.ratfunc import RatFunc
-
-    src = a if a else b
-    z = RatFunc.zero(src[0].p.vars) if src else RatFunc.zero((T.S("x"),))
-    return _u_add(a, _u_neg(b, lambda c: c * Fr(-1)), z)
-
-
-def _u_mul0(a, b):
-    """K 多项式乘法（zero 自参数推断）。"""
-    from cas.ratfunc import RatFunc
-
-    if not a or not b:
-        return []
-    z = RatFunc.zero(a[0].p.vars)
-    return _u_mul(a, b, z)
-
 
 def _bareiss_det(M, size, zero):
     """Bareiss 分式免除行列式（元素为 K[z] 多项式，_u_* 层直接适用）。"""
@@ -1439,9 +1293,9 @@ def _bareiss_det(M, size, zero):
     prev = None         # 上一步主元；第一步除数为 1（不除）
     sign = 1
     for k in range(size - 1):
-        if _u_is_zero(A[k][k]):
+        if u_is_zero(A[k][k]):
             for i in range(k + 1, size):
-                if not _u_is_zero(A[i][k]):
+                if not u_is_zero(A[i][k]):
                     A[k], A[i] = A[i], A[k]
                     sign = -sign
                     break
@@ -1450,22 +1304,22 @@ def _bareiss_det(M, size, zero):
         pk = A[k][k]
         for i in range(k + 1, size):
             for jj in range(k + 1, size):
-                num = _u_sub(_u_mul0(A[i][jj], pk), _u_mul0(A[i][k], A[k][jj]))
+                num = u_sub(u_mul0(A[i][jj], pk), u_mul0(A[i][k], A[k][jj]))
                 if prev is not None:
-                    q, r = _u_divmod(num, prev, zero)
-                    if not _u_is_zero(r):
+                    q, r = u_divmod(num, prev, zero)
+                    if not u_is_zero(r):
                         raise RischUnsupported("bareiss exact division failed")
                     A[i][jj] = q
                 else:
                     A[i][jj] = num
         prev = pk
-    det = _u_trim(A[size - 1][size - 1])
+    det = u_trim(A[size - 1][size - 1])
     det = _uz_trim_det(det)
-    return det if sign == 1 else _u_neg(det, lambda c: c * Fr(-1))
+    return det if sign == 1 else u_neg(det, lambda c: c * Fr(-1))
 
 
 def _uz_trim_det(p):
-    return _u_trim(p)
+    return u_trim(p)
 
 
 def _residue_sqfr(B, p, de, j, zero):
@@ -1487,7 +1341,7 @@ def _residue_sqfr(B, p, de, j, zero):
     Rz = _sylvester_res(fz, gz)
     logs = []
     rem = list(B)
-    if len(Rz) >= 1 and not _u_is_zero(Rz):
+    if len(Rz) >= 1 and not u_is_zero(Rz):
         roots = _constant_roots(Rz)
         for c in roots:
             # fc = fz 代入 z=c：b + c*(-d)
@@ -1497,21 +1351,21 @@ def _residue_sqfr(B, p, de, j, zero):
                 if len(zp) > 1:
                     val = val + zp[1] * c
                 fc.append(val)
-            fc = _u_trim(fc)
-            g = _u_gcd(fc, p, zero)
+            fc = u_trim(fc)
+            g = u_gcd(fc, p, zero)
             if len(g) <= 1:
                 continue
             logs.append((c, g))
             Dg = _derive_ut(g, de, j)
-            cof = _u_divmod(p, g, zero)[0]
+            cof = u_divmod(p, g, zero)[0]
             ct = zero.one(zero.p.vars) * c
-            corr = _u_mul([ct], _u_mul(Dg, cof, zero), zero)
-            rem = _u_add(rem, _u_neg(corr, lambda cc: cc * Fr(-1)), zero)
-    return logs, _u_trim(rem)
+            corr = u_mul([ct], u_mul(Dg, cof, zero), zero)
+            rem = u_add(rem, u_neg(corr, lambda cc: cc * Fr(-1)), zero)
+    return logs, u_trim(rem)
 
 
 def _uz_trim_list(cs):
-    return _u_trim(cs)
+    return u_trim(cs)
 
 
 def _iter_subterms(t):
@@ -2089,7 +1943,7 @@ def _primitive_poly_part(Q, de, j):
     zero = RatFunc.zero(sub)
     out = []
     p = list(Q)
-    while not _u_is_zero(p):
+    while not u_is_zero(p):
         m = len(p) - 1
         a = p[m]
         b_rf, c, rest = _limited_integrate(a, de, j)
@@ -2101,7 +1955,7 @@ def _primitive_poly_part(Q, de, j):
         if c is not None:
             q0[m + 1] = zero.one(zero.p.vars) * (Fr(c) / Fr(m + 1))
         q0[m] = b_rf
-        p = _u_sub(p, _derive_ut(q0, de, j))
+        p = u_sub(p, _derive_ut(q0, de, j))
         if not q0[m + 1].is_zero():
             out.append((q0[m + 1], m + 1))
         if not q0[m].is_zero():
@@ -2117,44 +1971,6 @@ def _primitive_poly_part(Q, de, j):
 # 多项式化后 K 域线性系统待定系数；有解经精确验证输出，无解返回 None
 # （unsupported，绝不误判不可积——完整 cancellation 分析留后续）。
 # ---------------------------------------------------------------------------
-
-def _u_gauss_solve_k(M, b):
-    """K 域（RatFunc）线性方程组高斯消元。返回解 list | None（无解）。"""
-    n = len(M)
-    cols = len(M[0]) if n else 0
-    if n == 0 or cols == 0:
-        return [] if not any(not x.is_zero() for x in b) else None
-    one = b[0].one(b[0].p.vars)
-    A = [list(M[r]) + [b[r]] for r in range(n)]
-    piv_cols = []
-    r = 0
-    for cidx in range(cols):
-        piv = None
-        for i in range(r, n):
-            if not A[i][cidx].is_zero():
-                piv = i
-                break
-        if piv is None:
-            continue
-        A[r], A[piv] = A[piv], A[r]
-        pv = A[r][cidx]
-        inv = one / pv
-        A[r] = [x * inv for x in A[r]]
-        for i in range(n):
-            if i != r and not A[i][cidx].is_zero():
-                fac = A[i][cidx]
-                A[i] = [vi - fac * vr for vi, vr in zip(A[i], A[r])]
-        piv_cols.append(cidx)
-        r += 1
-        if r == n:
-            break
-    for i in range(n):
-        if all(x.is_zero() for x in A[i][:cols]) and not A[i][cols].is_zero():
-            return None
-    sol = [one.zero(one.p.vars) for _ in range(cols)]
-    for i, cidx in enumerate(piv_cols):
-        sol[cidx] = A[i][cols]
-    return sol
 
 
 def _restrict(rf, vars_):
@@ -2203,50 +2019,15 @@ def _fu_add(n1, d1, n2, d2, zero):
     one_c = zero.one(zero.p.vars)
     d1 = d1 if d1 else [one_c]
     d2 = d2 if d2 else [one_c]
-    return (_u_add(_u_mul(n1, d2, zero), _u_mul(n2, d1, zero), zero),
-            _u_mul(d1, d2, zero))
+    return (u_add(u_mul(n1, d2, zero), u_mul(n2, d1, zero), zero),
+            u_mul(d1, d2, zero))
 
 
 def _fu_mul(n1, d1, n2, d2, zero):
     one_c = zero.one(zero.p.vars)
     d1 = d1 if d1 else [one_c]
     d2 = d2 if d2 else [one_c]
-    return (_u_mul(n1, n2, zero), _u_mul(d1, d2, zero))
-
-
-def _u_deg(cs):
-    return len(_u_trim(list(cs))) - 1
-
-
-def _u_xgcd(a, b, zero):
-    """扩展欧几里得：返回 (s, t, g) 使 s·a + t·b = g。"""
-    one_c = zero.one(zero.p.vars)
-    r0, r1 = _u_trim([c for c in b]), _u_trim([c for c in a])
-    s0, s1 = [], [one_c]
-    t0, t1 = [one_c], []
-    while not _u_is_zero(r1):
-        q, r = _u_divmod(r0, r1, zero)
-        s_new = _u_sub(s0, _u_mul(q, s1, zero))
-        t_new = _u_sub(t0, _u_mul(q, t1, zero))
-        r0, r1 = r1, r
-        s0, s1 = s1, s_new
-        t0, t1 = t1, t_new
-    if _u_is_zero(r0):
-        return s0, t0, []
-    inv = one_c / r0[0]
-    return [c * inv for c in s0], [c * inv for c in t0], \
-        [c * inv for c in r0]
-
-
-def _u_diophantine(b, a, c, zero):
-    """解 r·b + z·a = c（sympy gcdex_diophantine(b, a, c) 语义）。"""
-    s, t, g = _u_xgcd(b, a, zero)
-    if _u_is_zero(g):
-        return None
-    qq, rr = _u_divmod(c, g, zero)
-    if not _u_is_zero(rr):
-        return None
-    return _u_mul(s, qq, zero), _u_mul(t, qq, zero)
+    return (u_mul(n1, n2, zero), u_mul(d1, d2, zero))
 
 
 def _split_ns(p, der_fn, zero):
@@ -2255,30 +2036,30 @@ def _split_ns(p, der_fn, zero):
     normal 的平方因子与 D(p) 互素；special 为 D-不变型因子。
     返回 (normal_list, special_list)。
     """
-    p = _u_trim(list(p))
-    if _u_is_zero(p) or len(p) <= 1:
+    p = u_trim(list(p))
+    if u_is_zero(p) or len(p) <= 1:
         return list(p), []
     dp = der_fn(p)
-    dfp = _u_formal_deriv(p)
-    if _u_is_zero(_u_sub(dp, dfp)):
+    dfp = u_formal_deriv(p)
+    if u_is_zero(u_sub(dp, dfp)):
         return list(p), []
-    g = _u_gcd(p, dp, zero)
+    g = u_gcd(p, dp, zero)
     if len(g) <= 1:
         return list(p), []
-    gd = _u_gcd(p, dfp, zero)
+    gd = u_gcd(p, dfp, zero)
     if len(gd) <= 1:
         pbar = list(g)
     else:
-        pbar, r = _u_divmod(g, gd, zero)
-        if not _u_is_zero(r):
+        pbar, r = u_divmod(g, gd, zero)
+        if not u_is_zero(r):
             return list(p), []
     if len(pbar) <= 1:
         return list(p), []
-    rest, rr = _u_divmod(p, pbar, zero)
-    if not _u_is_zero(rr):
+    rest, rr = u_divmod(p, pbar, zero)
+    if not u_is_zero(rr):
         return list(p), []
     rn, rs = _split_ns(rest, der_fn, zero)
-    return rn, _u_mul(pbar, rs, zero)
+    return rn, u_mul(pbar, rs, zero)
 
 
 def _normal_part(p, der_fn, zero):
@@ -2295,7 +2076,7 @@ def _make_der_fn(de, jv):
             out = []
             for i in range(1, len(cs)):
                 out.append(cs[i] * Fr(i))
-            return _u_trim(out)
+            return u_trim(out)
         return der_fn
     return lambda cs: _derive_ut(cs, de, jv)
 
@@ -2312,23 +2093,23 @@ def _wn_normalize(fn, fd, de, jv, der_fn, zero):
     d = _normal_part(fd, der_fn, zero)
     if len(d) <= 1:
         return list(fn), list(fd), pn, pd
-    g0 = _u_gcd(d, der_fn(d), zero)
-    d0 = _u_divmod(d, g0, zero)[0]
-    dd = _u_gcd(d0, g0, zero)
-    d1 = _u_divmod(d0, dd, zero)[0]
+    g0 = u_gcd(d, der_fn(d), zero)
+    d0 = u_divmod(d, g0, zero)[0]
+    dd = u_gcd(d0, g0, zero)
+    d1 = u_divmod(d0, dd, zero)[0]
     if len(d1) <= 1:
         return list(fn), list(fd), pn, pd
-    q2, r2 = _u_divmod(fd, d1, zero)
-    if not _u_is_zero(r2):
+    q2, r2 = u_divmod(fd, d1, zero)
+    if not u_is_zero(r2):
         return None
     d2 = q2
-    s_, _t_, g_ = _u_xgcd(d2, d1, zero)
-    if _u_is_zero(g_):
+    s_, _t_, g_ = u_xgcd(d2, d1, zero)
+    if u_is_zero(g_):
         return None
-    qqf, rf = _u_divmod(fn, g_, zero)
-    if not _u_is_zero(rf):
+    qqf, rf = u_divmod(fn, g_, zero)
+    if not u_is_zero(rf):
         return None
-    a_ = _u_mul(s_, qqf, zero)
+    a_ = u_mul(s_, qqf, zero)
     d1d = der_fn(d1)
     nb = max(len(a_), len(d1d))
     a_pad = list(a_) + [zero for _ in range(nb - len(a_))]
@@ -2337,7 +2118,7 @@ def _wn_normalize(fn, fd, de, jv, der_fn, zero):
     gz = [[ci] for ci in d1]
     Rz = _sylvester_res(fz, gz)
     rl = []
-    if Rz and not _u_is_zero(Rz):
+    if Rz and not u_is_zero(Rz):
         for mval in _constant_roots(Rz):
             try:
                 mv = mval if isinstance(mval, Fr) else Fr(mval)
@@ -2345,8 +2126,8 @@ def _wn_normalize(fn, fd, de, jv, der_fn, zero):
                 return None
             if mv.denominator != 1 or mv <= 0:
                 continue
-            fm = _u_sub(a_pad, [c * mv for c in d_pad])
-            pi_m = _u_gcd(fm, d1, zero)
+            fm = u_sub(a_pad, [c * mv for c in d_pad])
+            pi_m = u_gcd(fm, d1, zero)
             if len(pi_m) <= 1:
                 continue
             rl.append((pi_m, int(mv)))
@@ -2364,7 +2145,7 @@ def _dk_pair(de, jv):
     """D(levels[jv]) 的 τ-系数表示 (n_list, d_list)。"""
     tview = de.levels[jv]
     dk_n, dk_d = de.dpair(jv, tuple(de.levels[:jv + 1]))
-    return _univar(dk_n, tview), _univar(dk_d, tview)
+    return from_poly(dk_n, tview), from_poly(dk_d, tview)
 
 
 # ---------------------------------------------------------------------------
@@ -2463,7 +2244,7 @@ def _ldrad_base(f_rf, de):
     fz = [[aa, _neg_poly(dd)] for aa, dd in zip(lap, ldbp)]
     gz = [[cc] for cc in lbp]
     Rz = _sylvester_res(fz, gz)
-    if _u_is_zero(Rz):
+    if u_is_zero(Rz):
         return None
 
     roots = _constant_roots(Rz)        # 无法判定 => 异常上抛（诚实）
@@ -2588,14 +2369,14 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
     if tau not in f_rf.p.vars and tau not in f_rf.q.vars:
         return _is_logderiv_radical(f_rf, de, jv - 1, depth + 1)
 
-    fn_cs = _univar(f_rf.p, tau)
-    fd_cs = _univar(f_rf.q, tau)
+    fn_cs = from_poly(f_rf.p, tau)
+    fd_cs = from_poly(f_rf.q, tau)
 
     # ---- -1) τ-gcd 约分（未约分形态会污染残数结果式）----
-    g0 = _u_gcd(fn_cs, fd_cs, zero)
+    g0 = u_gcd(fn_cs, fd_cs, zero)
     if len(g0) > 1:
-        fn_cs = _u_divmod(fn_cs, g0, zero)[0]
-        fd_cs = _u_divmod(fd_cs, g0, zero)[0]
+        fn_cs = u_divmod(fn_cs, g0, zero)[0]
+        fd_cs = u_divmod(fd_cs, g0, zero)[0]
 
     # ---- 0) 分母须无平方（对数导数只有单极点）----
     sqf = _squarefree_decomp_t(fd_cs, zero)
@@ -2603,14 +2384,14 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         return None
 
     # ---- 1) 多项式部分 + 逐因子残数（复用 _integrate_normal 模式）----
-    Q_cs, _R_all = _u_divmod(fn_cs, fd_cs, zero)
+    Q_cs, _R_all = u_divmod(fn_cs, fd_cs, zero)
     logs = []                        # [(c(Ga|Fr), g_cs)]
     ok = True
     rem_polys = []                   # 各因子的可除余商（τ-poly）
     for p1, _e1 in sqf:
-        cof = _u_divmod(fd_cs, p1, zero)[0]
-        Bm = _u_divmod(
-            _u_mul(fn_cs, _u_inv_mod(cof, fd_cs, zero), zero), p1, zero)[1]
+        cof = u_divmod(fd_cs, p1, zero)[0]
+        Bm = u_divmod(
+            u_mul(fn_cs, u_inv_mod(cof, fd_cs, zero), zero), p1, zero)[1]
         lg, rem = _residue_sqfr(Bm, p1, de, jv, zero)
         for c, g in lg:
             cv = c if isinstance(c, (Fr, Ga)) else None
@@ -2620,17 +2401,17 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
                 except Exception:
                     return None      # 非常数残数 => 非对数导数
             logs.append((cv, g))
-        if _u_is_zero(rem):
+        if u_is_zero(rem):
             continue
-        qq, rr = _u_divmod(rem, p1, zero)
-        if not _u_is_zero(rr):
+        qq, rr = u_divmod(rem, p1, zero)
+        if not u_is_zero(rr):
             return None              # normal 极点未被解释 => 非对数导数
         rem_polys.append(qq)
 
     # ---- 2) p_final = 多项式部分 − Σ c·D(g)/g，须为 τ-常数（∈K_{jv}）----
     P_n, P_d = list(Q_cs), [one_c]
     for qq in rem_polys:
-        P_n = _u_add(P_n, qq, zero)
+        P_n = u_add(P_n, qq, zero)
     P_rf = _rf_of_cs(P_n, allv, tau) / _rf_of_cs(P_d, allv, tau)
     for cv, g in logs:
         g_rf = _rf_of_cs(list(g), allv, tau)
@@ -2638,10 +2419,10 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         term = dg_rf / g_rf * cv
         P_rf = P_rf - term
     # τ-free 门（deg < max(1, deg(Dτ)) 的等价形式）
-    Pp_cs = _univar(P_rf.p, tau)
-    Pq_cs = _univar(P_rf.q, tau)
-    if _u_deg(_u_formal_deriv(Pp_cs)) >= 0 or \
-            _u_deg(_u_formal_deriv(Pq_cs)) >= 0:
+    Pp_cs = from_poly(P_rf.p, tau)
+    Pq_cs = from_poly(P_rf.q, tau)
+    if u_deg(u_formal_deriv(Pp_cs)) >= 0 or \
+            u_deg(u_formal_deriv(Pq_cs)) >= 0:
         return None
 
     # ---- 3) case 分派 ----
@@ -2654,7 +2435,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
 
     if jv == 0:
         # base：P 必须为零（无更低层承载）
-        if not _u_is_zero(_univar(P_rf.p, tau)) and not P_rf.p.is_zero():
+        if not u_is_zero(from_poly(P_rf.p, tau)) and not P_rf.p.is_zero():
             if not P_rf.p.is_zero() or not P_rf.q.is_one():
                 if not P_rf.p.is_zero():
                     return None
@@ -2665,7 +2446,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         uacc = RatFunc(Poly.one(allv), Poly.one(allv))
         for cv, g in logs:
             ee = int(n * cv)
-            gp = _u_pow(list(g), ee, zero)
+            gp = u_pow(list(g), ee, zero)
             gu, gd = _from_univar(gp, allv, tau)
             uacc = uacc * RatFunc(gu, gd)
         U = uacc
@@ -2679,7 +2460,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         uacc = v ** mm
         for cv, g in logs:
             ee = int(N * cv)
-            gp = _u_pow(list(g), ee, zero)
+            gp = u_pow(list(g), ee, zero)
             gu, gd = _from_univar(gp, allv, tau)
             uacc = uacc * RatFunc(gu, gd)
         N_final, U = N, uacc
@@ -2717,7 +2498,7 @@ def _is_logderiv_radical(f_rf, de, jv, depth=0):
         uacc = v ** mm
         for cv, g in logs:
             ee = int(N * cv)
-            gp = _u_pow(list(g), ee, zero)
+            gp = u_pow(list(g), ee, zero)
             gu, gd = _from_univar(gp, allv, tau)
             uacc = uacc * RatFunc(gu, gd)
         E = mm * m_l
@@ -2912,20 +2693,20 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
 
     # ---- 2. 通用路径：系数行零空间 ----
     k = len(ws_m)
-    f_n = _univar(f_rf.p, tp)
-    f_d = _univar(f_rf.q, tp)
-    ws_nd = [(_univar(w.p, tp), _univar(w.q, tp)) for w in ws_m]
+    f_n = from_poly(f_rf.p, tp)
+    f_d = from_poly(f_rf.q, tp)
+    ws_nd = [(from_poly(w.p, tp), from_poly(w.q, tp)) for w in ws_m]
 
     def _coef(cs, i):
         return cs[i] if i < len(cs) else zero
 
     dk_cs, _dkd = _dk_pair(de, jl)
-    B = max(0, _u_deg(dk_cs) - 1)
+    B = max(0, u_deg(dk_cs) - 1)
 
-    pparts = [_u_divmod(f_n, f_d, zero)[0]]
+    pparts = [u_divmod(f_n, f_d, zero)[0]]
     for n_, d_ in ws_nd:
-        pparts.append(_u_divmod(n_, d_, zero)[0])
-    C = max(_u_deg(q) for q in pparts)
+        pparts.append(u_divmod(n_, d_, zero)[0])
+    C = max(u_deg(q) for q in pparts)
 
     rows = []
     if C > B:
@@ -2938,27 +2719,27 @@ def _pld_solve(f_rf, ws_rf, de, jl, depth=0):
     dens = [f_d] + [d_ for _, d_ in ws_nd]
     l_cs = None
     for d_ in dens:
-        dm = _u_divmod(d_, [_u_trim(list(d_))[-1]], zero)[0]
+        dm = u_divmod(d_, [u_trim(list(d_))[-1]], zero)[0]
         if l_cs is None:
             l_cs = dm
         else:
-            g2 = _u_gcd(l_cs, dm, zero)
-            l_cs = _u_mul(l_cs, _u_divmod(dm, g2, zero)[0], zero)
+            g2 = u_gcd(l_cs, dm, zero)
+            l_cs = u_mul(l_cs, u_divmod(dm, g2, zero)[0], zero)
     ln_, ls_ = _split_ns(l_cs, der_fn, zero)
     z_const_case = False
-    if _u_is_zero(ln_):
+    if u_is_zero(ln_):
         z_const_case = True
     else:
-        gg = _u_gcd(ln_, der_fn(ln_), zero)
-        z_cs = _u_mul(ls_, gg, zero)
-        if _u_deg(z_cs) < 1:
+        gg = u_gcd(ln_, der_fn(ln_), zero)
+        z_cs = u_mul(ls_, gg, zero)
+        if u_deg(z_cs) < 1:
             z_const_case = True
         else:
-            lfs = [_u_mul(f_n, _u_divmod(l_cs, f_d, zero)[0], zero)]
+            lfs = [u_mul(f_n, u_divmod(l_cs, f_d, zero)[0], zero)]
             for n_, d_ in ws_nd:
-                lfs.append(_u_mul(n_, _u_divmod(l_cs, d_, zero)[0], zero))
-            rems = [_u_divmod(h_, z_cs, zero)[1] for h_ in lfs]
-            zdeg = len(_u_trim(list(z_cs))) - 1
+                lfs.append(u_mul(n_, u_divmod(l_cs, d_, zero)[0], zero))
+            rems = [u_divmod(h_, z_cs, zero)[1] for h_ in lfs]
+            zdeg = len(u_trim(list(z_cs))) - 1
             for i in range(max(len(r) for r in rems)):
                 rows.append([_coef(rems[0], i)] +
                             [_coef(rems[j + 1], i) * Fr(-1)
@@ -3246,8 +3027,8 @@ def _realify_laurent(y_rf, tau, sgn, u_eff, xv):
     one_p = Poly.one(y_rf.p.vars)
 
     # ---- 1) 归一化：y = tau^K * P(tau)/c，K=p0-q0、c 为分母首非零 ----
-    P_cs = _univar(y_rf.p, tau)
-    Q_cs = _univar(y_rf.q, tau)
+    P_cs = from_poly(y_rf.p, tau)
+    Q_cs = from_poly(y_rf.q, tau)
 
     def mono_power(cs):
         """cs 必须为单项式 c*tau^v -> (v, c)；否则 None。"""
@@ -3266,8 +3047,8 @@ def _realify_laurent(y_rf, tau, sgn, u_eff, xv):
         p0 = 0
     # 分子允许一般多项式：记录最低次
     p_lo = 0
-    P_trim = _u_trim(list(P_cs))
-    if _u_is_zero(P_trim):
+    P_trim = u_trim(list(P_cs))
+    if u_is_zero(P_trim):
         return None
     while P_cs[p_lo].is_zero():
         p_lo += 1
@@ -3384,32 +3165,32 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
 
     返回 ('ok', u_list) | ('proved', None) | ('undecided', reason)。
     """
-    dB = _u_deg(bbr)
+    dB = u_deg(bbr)
     thr = max(0, dk_deg - 1)
 
     def corr(cc, pmono):
-        return _u_sub(cc, _u_add(der_fn(pmono), _u_mul(bbr, pmono, zero),
+        return u_sub(cc, u_add(der_fn(pmono), u_mul(bbr, pmono, zero),
                                  zero))
 
     # no_cancel_b_large
-    if not _u_is_zero(bbr) and (base_flag or dB > thr):
+    if not u_is_zero(bbr) and (base_flag or dB > thr):
         u_acc, cc, mm = [], list(cn), n
-        while not _u_is_zero(cc):
-            stp = _u_deg(cc) - dB
+        while not u_is_zero(cc):
+            stp = u_deg(cc) - dB
             if stp < 0 or stp > mm:
                 return 'proved', None
             pmono = [zero for _ in range(stp)] + [cc[-1] / bbr[dB]]
-            u_acc = _u_add(u_acc, pmono, zero)
+            u_acc = u_add(u_acc, pmono, zero)
             mm = stp - 1
             cc = corr(cc, pmono)
         return 'ok', u_acc
 
     # no_cancel_b_small（含降到低层的 (h,b0,c0) 归约）
-    if (_u_is_zero(bbr) or dB < dk_deg - 1) and (base_flag or dk_deg >= 2):
+    if (u_is_zero(bbr) or dB < dk_deg - 1) and (base_flag or dk_deg >= 2):
         u_acc, cc, mm = [], list(cn), n
         low_eq = None
-        while not _u_is_zero(cc):
-            dcc = _u_deg(cc)
+        while not u_is_zero(cc):
+            dcc = u_deg(cc)
             stp = 0 if mm == 0 else dcc - dk_deg + 1
             if stp < 0 or stp > mm:
                 return 'proved', None
@@ -3423,14 +3204,14 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
                     low_eq = (bbr[0], cc[0])
                     break
                 pmono = [cc[-1] / bbr[0]]
-            u_acc = _u_add(u_acc, pmono, zero)
+            u_acc = u_add(u_acc, pmono, zero)
             mm = stp - 1
             cc = corr(cc, pmono)
         if low_eq is not None:
             yl, stl = _solve_low(low_eq[0], low_eq[1], de, jv)
             if stl != 'ok':
                 return stl, None
-            return 'ok', _u_add(u_acc, [yl], zero)
+            return 'ok', u_add(u_acc, [yl], zero)
         return 'ok', u_acc
 
     # no_cancel_equal（共振贪心，自包含）
@@ -3441,8 +3222,8 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
                 and lc_ratio.const_val() > 0:
             big_m = int(lc_ratio.const_val())
         u_acc, cc, mm = [], list(cn), n
-        while not _u_is_zero(cc):
-            dcc = _u_deg(cc)
+        while not u_is_zero(cc):
+            dcc = u_deg(cc)
             stp = max(big_m, dcc - dk_deg + 1)
             if stp < 0 or stp > mm:
                 return 'proved', None
@@ -3455,7 +3236,7 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
                 if dcc != dk_deg - 1:
                     return 'proved', None
                 pmono = [cc[-1] / bbr[dB]]
-            u_acc = _u_add(u_acc, pmono, zero)
+            u_acc = u_add(u_acc, pmono, zero)
             mm = stp - 1
             cc = corr(cc, pmono)
         return 'ok', u_acc
@@ -3463,16 +3244,16 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
     # cancellation 形态
     # B=0（S-b 已修复）：方程 D(u)=cn 即纯塔积分——对角/三角下降对
     # lam=0 同样完备（每度独立解低层 D(s)=c_jd，不可解即 proved）
-    if not _u_is_zero(bbr) and dB != 0:
+    if not u_is_zero(bbr) and dB != 0:
         return 'undecided', 'unexpected B degree in cancellation shape'
-    if _u_is_zero(bbr):
+    if u_is_zero(bbr):
         lam = zero
     else:
         lam = bbr[0]
     w_eta = de.ws[jv] if case_v == 'exp' and jv >= 1 else None
     u_acc, cc, mm = [], list(cn), n
-    while not _u_is_zero(cc):
-        jd = _u_deg(cc)
+    while not u_is_zero(cc):
+        jd = u_deg(cc)
         if jd > mm:
             return 'proved', None
         lam_j = lam + w_eta * Fr(jd) if w_eta is not None else lam
@@ -3480,7 +3261,7 @@ def _poly_rde_final(bbr, cn, n, case_v, base_flag, dk_deg, dk_ncs,
         if stl != 'ok':
             return stl, None
         stm = [zero for _ in range(jd)] + [s_rf]
-        u_acc = _u_add(u_acc, stm, zero)
+        u_acc = u_add(u_acc, stm, zero)
         mm = jd - 1
         cc = corr(cc, stm)
     return 'ok', u_acc
@@ -3514,14 +3295,14 @@ def _rde_tower_solve(f, g, de, j):
     der_fn = _make_der_fn(de, jv)
 
     dk_ncs, dk_dcs = _dk_pair(de, jv)
-    if _u_deg(_u_formal_deriv(dk_dcs)) >= 0:
+    if u_deg(u_formal_deriv(dk_dcs)) >= 0:
         return None, 'undecided'
-    dk_deg = _u_deg(dk_ncs)
+    dk_deg = u_deg(dk_ncs)
 
-    fn = _univar(f.p, tview)
-    fd = _univar(f.q, tview)
-    gn = _univar(g.p, tview)
-    gd = _univar(g.q, tview)
+    fn = from_poly(f.p, tview)
+    fd = from_poly(f.q, tview)
+    gn = from_poly(g.p, tview)
+    gd = from_poly(g.q, tview)
 
     # ---- Step 1: weak normalization（intpar:920；右端缩放 :1237）----
     wn = _wn_normalize(fn, fd, de, jv, der_fn, zero)
@@ -3533,20 +3314,20 @@ def _rde_tower_solve(f, g, de, j):
     # ---- Step 2: normal denominator -> 多项式方程（intpar:910, 1406-1410）----
     dn_ = _normal_part(fd2, der_fn, zero)
     en_ = _normal_part(gd2, der_fn, zero)
-    gg = _u_gcd(dn_, en_, zero)
-    hq, hr = _u_divmod(_u_gcd(en_, der_fn(en_), zero),
-                       _u_gcd(gg, der_fn(gg), zero), zero)
-    if not _u_is_zero(hr):
+    gg = u_gcd(dn_, en_, zero)
+    hq, hr = u_divmod(u_gcd(en_, der_fn(en_), zero),
+                       u_gcd(gg, der_fn(gg), zero), zero)
+    if not u_is_zero(hr):
         return None, 'undecided'
     h = hq
-    aa = _u_mul(dn_, h, zero)
+    aa = u_mul(dn_, h, zero)
     dh = der_fn(h)
-    bbr_n = _u_sub(_u_mul(aa, fn2, zero), _u_mul(dn_, dh, zero))
-    bq, br = _u_divmod(bbr_n, fd2, zero)
-    if not _u_is_zero(br):
+    bbr_n = u_sub(u_mul(aa, fn2, zero), u_mul(dn_, dh, zero))
+    bq, br = u_divmod(bbr_n, fd2, zero)
+    if not u_is_zero(br):
         return None, 'undecided'
     bbr = bq
-    aa1 = _u_mul(aa, h, zero)
+    aa1 = u_mul(aa, h, zero)
     cn, cd = _fu_mul(aa1, [one_c], gn2, gd2, zero)
 
     # ---- Step 3: C 的分母结构分流 ----
@@ -3554,20 +3335,20 @@ def _rde_tower_solve(f, g, de, j):
     # （FriCAS do_SPDE_exp0 的 GP 形态：special 因子 = τ 幂，展开后
     # 系数 τ-free，各指数独立）。混合/normal 型分母仍走原路线。
     laurent = None
-    if case_v == 'exp' and _u_deg(_u_formal_deriv(cd)) >= 0:
+    if case_v == 'exp' and u_deg(u_formal_deriv(cd)) >= 0:
         v_tau = 0
         cd_w = list(cd)
         while len(cd_w) > 0 and cd_w[0].is_zero():
             cd_w = cd_w[1:]
             v_tau += 1
-        rest = _u_trim(cd_w)
+        rest = u_trim(cd_w)
         rest_const = len(rest) <= 1
-        if rest_const and _u_deg(aa) == 0 and _u_deg(bbr) == 0 \
-                and not _u_is_zero(cn):
+        if rest_const and u_deg(aa) == 0 and u_deg(bbr) == 0 \
+                and not u_is_zero(cn):
             laurent = (v_tau, rest[0])
         else:
             return None, 'undecided'
-    elif _u_deg(_u_formal_deriv(cd)) >= 0:
+    elif u_deg(u_formal_deriv(cd)) >= 0:
         return None, 'undecided'
 
     u_list = []
@@ -3621,11 +3402,11 @@ def _rde_tower_solve(f, g, de, j):
                 "internal: Laurent RDE candidate failed exact verify")
         # 实化在 _exp_freq_part 组装层做（t^k 频率因子须一并参与）
         return y_final, 'ok'
-    if not _u_is_zero(cn):
+    if not u_is_zero(cn):
         inv_cd = one_c / cd[0]
         cn = [c * inv_cd for c in cn]
 
-        da, db, dc = _u_deg(aa), _u_deg(bbr), _u_deg(cn)
+        da, db, dc = u_deg(aa), u_deg(bbr), u_deg(cn)
         base_flag = (case_v == 'base')
 
         # ---- Step 4: 次数界（sympy bound_degree 移植 + 切片边界）----
@@ -3700,41 +3481,41 @@ def _rde_tower_solve(f, g, de, j):
             guard += 1
             if guard > 64:
                 return None, 'undecided'
-            if _u_is_zero(cn):
+            if u_is_zero(cn):
                 break
             if n < 0:
                 proved = True
                 break
-            gfac = _u_gcd(aa, bbr, zero)
-            qa_, ra_ = _u_divmod(aa, gfac, zero)
-            qb_, rb_ = _u_divmod(bbr, gfac, zero)
-            qc_, rc_ = _u_divmod(cn, gfac, zero)
-            if not _u_is_zero(rc_) or not _u_is_zero(ra_) \
-                    or not _u_is_zero(rb_):
+            gfac = u_gcd(aa, bbr, zero)
+            qa_, ra_ = u_divmod(aa, gfac, zero)
+            qb_, rb_ = u_divmod(bbr, gfac, zero)
+            qc_, rc_ = u_divmod(cn, gfac, zero)
+            if not u_is_zero(rc_) or not u_is_zero(ra_) \
+                    or not u_is_zero(rb_):
                 proved = True                         # gcd ∤ => 无解
                 break
             aa, bbr, cn = qa_, qb_, qc_
-            if _u_deg(aa) == 0:
+            if u_deg(aa) == 0:
                 inv_a = one_c / aa[0]
                 bbr = [c * inv_a for c in bbr]
                 cn = [c * inv_a for c in cn]
                 break
-            rz = _u_diophantine(bbr, aa, cn, zero)
+            rz = u_diophantine(bbr, aa, cn, zero)
             if rz is None:
                 proved = True
                 break
             r_, z_ = rz
-            bbr = _u_add(bbr, der_fn(aa), zero)
-            cn = _u_sub(z_, der_fn(r_))
-            n -= _u_deg(aa)
-            beta_l = _u_add(beta_l, _u_mul(alpha_l, r_, zero), zero)
-            alpha_l = _u_mul(alpha_l, aa, zero)
+            bbr = u_add(bbr, der_fn(aa), zero)
+            cn = u_sub(z_, der_fn(r_))
+            n -= u_deg(aa)
+            beta_l = u_add(beta_l, u_mul(alpha_l, r_, zero), zero)
+            alpha_l = u_mul(alpha_l, aa, zero)
 
         if proved:
             return None, 'proved'
 
         # ---- Step 6: 终解分派 ----
-        if _u_is_zero(cn):
+        if u_is_zero(cn):
             u_list = list(beta_l)
         else:
             st_f, res_u = _poly_rde_final(bbr, cn, n, case_v, base_flag,
@@ -3742,12 +3523,12 @@ def _rde_tower_solve(f, g, de, j):
                                           zero)
             if st_f != 'ok':
                 return None, st_f
-            u_list = _u_add(_u_mul(alpha_l, res_u, zero), beta_l, zero)
+            u_list = u_add(u_mul(alpha_l, res_u, zero), beta_l, zero)
 
     # ---- Step 7: 组合 y = u/(h·p) + 出口精确验证 ----
     oneL = [one_c]
-    ynum_cs = _u_mul(u_list, list(pd) or oneL, zero)
-    yden_cs = _u_mul(h, list(pn) or oneL, zero)
+    ynum_cs = u_mul(u_list, list(pd) or oneL, zero)
+    yden_cs = u_mul(h, list(pn) or oneL, zero)
     y = RF_of(ynum_cs, yden_cs)
     dy = _tower_deriv_frac(y.p, y.q, de)
     if not (dy + f * y - g).p.is_zero():
@@ -3898,15 +3679,15 @@ def _risch_rec(fa, fd, de, j):
     tj = de.levels[j]
     case = de.cases[j]
 
-    A = _univar(fa, tj)
-    D = _univar(fd, tj)
-    if _u_is_zero(A):
+    A = from_poly(fa, tj)
+    D = from_poly(fd, tj)
+    if u_is_zero(A):
         return T.ZERO
 
     dq = len(D) - 1
     dp = len(A) - 1
     if dp >= dq:
-        Q, R = _u_divmod(A, D, zero)
+        Q, R = u_divmod(A, D, zero)
     else:
         Q, R = [], A
 
@@ -3917,12 +3698,12 @@ def _risch_rec(fa, fd, de, j):
             tk = T.pw(T.S(tj.name), N(k)) if k != 1 else T.S(tj.name)
             expr = T.plus(expr, T.times(bt, tk))
         res, negf, st = (None, None, None, None), {}, "ok"
-        if not _u_is_zero(R):
+        if not u_is_zero(R):
             res, negf, st = _integrate_proper(R, D, de, j, zero)
     else:
         freqs = {k: c for k, c in enumerate(Q) if not c.is_zero()}
         res, negf, st = (None, None, None, None), {}, "ok"
-        if not _u_is_zero(R):
+        if not u_is_zero(R):
             res, negf, st = _integrate_proper(R, D, de, j, zero)
         for k, v in negf.items():
             freqs[k] = freqs[k] + v if k in freqs else v
@@ -3932,7 +3713,7 @@ def _risch_rec(fa, fd, de, j):
     expr = T.plus(expr, assemble_exp_result(rat_part, logs, nonel, de, j))
 
     if leftover is not None and any(not c.is_zero() for c in leftover):
-        lf = _u_trim(list(leftover))
+        lf = u_trim(list(leftover))
         if case == "primitive":
             # θ-多项式剩余：回本层多项式积分（deg 严格降，终止）
             fn, fdd = _from_univar(lf, de.vars, tj)

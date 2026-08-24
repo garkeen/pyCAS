@@ -115,6 +115,8 @@ M6.5 起由测试锁定。
 |----|------|
 | term.py | 驻留 Expr/Bound/mk 规范化/subst |
 | gaussian.py | Ga 高斯有理域（分量泛型→ℚ(i,params)） |
+| scalarutil.py | 标量域助手单点（Ga 标量算术 + ℚ(i,params) 分解，M6.6） |
+| univar.py | K[t] 单变量域多项式稠密算术（M6.4） |
 | match/rules/loader | 匹配器 / 规则引擎 / DSL 热重载 |
 | context/decide/domain/domain_decls | 账本 / 3VL 判等管线 / 域谓词 / 声明登记 |
 | simplify/refine/structure | 化简 / 账本化简 / analyze+Stage+判零族 |
@@ -159,9 +161,10 @@ M6.5 起由测试锁定。
     _eq_stage_tower 为其门控视图
   - M6.3 拒答协议落地：按 §2 语义表统一抛出点（现 PolyError×50
     与 RischUnsupported×24 混用于同类场景）
-  - M6.4 单变量域塔代数模块化：risch 内嵌 `_univar/_u_*` 十余函数
-    提取为 `cas/univar.py`（契约：系数为域元素的 K[t]），写明与
-    Poly 的换算边界
+  - M6.4 单变量域塔代数模块化 ✓：cas/univar.py（K[t] 稠密算术
+    19 函数，升序系数 list、域元素系数、monic gcd；契约与 Poly
+    换算边界见模块 docstring；from_poly 为正向转换，反向
+    _from_univar 因塔嵌入耦合留 risch）
   - M6.5 文档-现实锁定：domain_decls/arch 矩阵改为导入期测试断言
     （导出面 ↔ 声明一致；杜绝 SOLVERS 式虚报复发）
   - M6.6 标量域助手归拢 ✓：cas/scalarutil.py 单点（Ga 标量簇
