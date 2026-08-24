@@ -140,13 +140,56 @@ def analyze(t, x):
 # ---------------------------------------------------------------------------
 
 class Pass:
+    """Stage 协议基类（v3 设计 N2 落地）。
+
+    name     唯一标识（管线数据表引用）
+    detect(a) 适用性：基于 Analysis 声明式判定（非 if 散落）
+    apply(t,a) 全树显式重建 pass（带各自预算；绝不进构造器）
+    needs(ctx) 假设需求声明：如 ['principal-branch']；不可满足时
+               本阶段跳过并记 degrade 原因（诚实降级——UNVERIFIED
+               从模糊变具体）
+    """
+
     name = "?"
+    needs = ()                   # 缺省无假设需求
 
     def detect(self, a):
         return True
 
     def apply(self, t, a):
         return t
+
+    def gated(self, ctx):
+        """needs 对策略位/账本检查；返回 (可运行?, 降级原因)。"""
+        from cas.structure import BRANCH_POLICY
+        for req in self.needs:
+            if req == "principal-branch":
+                if not BRANCH_POLICY.get("principal", False):
+                    return False, "needs principal-branch commitment"
+            else:
+                return False, f"unknown assumption {req}"
+        return True, ""
+
+
+def run_stage_pipeline(stages, t, x, on_degrade=None):
+    """通用 Stage 序列执行器：单次分析 → 逐 Stage 检测+门控+应用。
+
+    变更即重分析（层集合可能迁移）。on_degrade(name, reason) 供
+    管线记录诚实降级（verify 汇聚为 UNVERIFIED 附因）。"""
+    a = analyze(t, x)
+    for st in stages:
+        if not st.detect(a):
+            continue
+        ok, why = st.gated(None)
+        if not ok:
+            if on_degrade:
+                on_degrade(st.name, why)
+            continue
+        t2 = st.apply(t, a)
+        if t2 is not None and t2 is not t:
+            t = t2
+            a = analyze(t, x)      # 变更即重分析
+    return t, a
 
 
 class NumPowerNorm(Pass):
@@ -192,15 +235,85 @@ def run_pre_passes(t, x):
     """入口预规范化：单次分析 → 逐 pass 检测+应用（变更即重分析）。
 
     返回 (t, a)：最终树 + 最终分析结果（供 SOLVERS 分派消费）。"""
-    a = analyze(t, x)
-    for p in PRE_PASSES:
-        if not p.detect(a):
+    return run_stage_pipeline(PRE_PASSES, t, x)
+
+
+# ---------------------------------------------------------------------------
+# 判零 Stage 族（N2）：verify 管线的声明式序列。契约：
+#   zero(t0, x) -> True(证零) | False(证伪) | None(无结论)
+# needs 门控统一走 Stage.gated（principal 承诺位）。
+# ---------------------------------------------------------------------------
+
+class TowerZeroStage(Pass):
+    """exp/log 塔内零等价（Risch 结构定理，精确）。"""
+    name = "tower_zero"
+
+    def zero(self, t0, x):
+        from cas.diff import _tower_zero
+        return True if _tower_zero(t0, T.ZERO, x) else None
+
+
+class RatpowMergeStage(Pass):
+    """同底有理指数幂合并后判零——仅 principal 承诺开启（分支切割
+    安全：x^{3/2}·x^{-1}=x^{1/2} 在负 x 半轴不成立）。"""
+    name = "ratpow_merge"
+    needs = ("principal-branch",)
+
+    def zero(self, t0, x):
+        m = _merge_ratpow(t0)
+        if m is t0:
+            return None
+        from cas.decide import equivalent, T3
+        from cas.diff import _tower_zero
+        if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
+            return True
+        if equivalent(m, T.ZERO) is T3.YES:
+            return True
+        if _tower_zero(m, T.ZERO, x):
+            return True
+        return None
+
+
+class AtomizeTogetherStage(Pass):
+    """符号幂原子化 + together 跨项通分判零（M5.6 x^(a+1)/((a+1)c)
+    族；simplify 不做跨项通分，只有 together 能折叠系数分式）。"""
+    name = "atomize_together"
+    needs = ("principal-branch",)
+
+    def zero(self, t0, x):
+        from cas.decide import equivalent, T3
+        m2 = _atomize_sym_powers(t0)
+        if m2 is t0:
+            return None
+        from cas.ops import together as _tg
+        from cas.errors import PolyError
+        try:
+            m2 = _tg(m2)
+        except PolyError:
+            pass
+        if m2 is T.ZERO or (T.is_num(m2) and T.num_val(m2) == 0):
+            return True
+        if equivalent(m2, T.ZERO) is T3.YES:
+            return True
+        return None
+
+
+VERIFY_STAGES = [TowerZeroStage(), RatpowMergeStage(),
+                 AtomizeTogetherStage()]
+
+
+def run_verify_stages(d0, x):
+    """verify 零判定序列执行器。返回 (verified?, degrades)。"""
+    degrades = []
+    for st in VERIFY_STAGES:
+        ok, why = st.gated(None)
+        if not ok:
+            degrades.append((st.name, why))
             continue
-        t2 = p.apply(t, a)
-        if t2 is not None and t2 is not t:
-            t = t2
-            a = analyze(t, x)      # 变更即重分析（层集合可能迁移）
-    return t, a
+        z = st.zero(d0, x)
+        if z is True:
+            return True, degrades
+    return False, degrades
 
 
 # 分支承诺策略位（Reduce 式诚实开关）：仅影响验证管线的合并阶段，

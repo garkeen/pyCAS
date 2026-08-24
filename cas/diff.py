@@ -77,52 +77,33 @@ def _tower_zero(a, b, x):
 
 
 def verify(F, x, f, budget=100000, principal=None):
-    from cas.decide import equivalent, T3
+    """N2：验证管线 = equivalent 短路 + VERIFY_STAGES 声明式序列。
 
-    r = equivalent(d(F, x), f, budget=budget)
+    旧版内联的 ratpow_merge/atomize 块迁入 structure.VERIFY_STAGES
+    （needs 门控统一走 Stage.gated 的 principal 承诺位）。principal
+    显式入参 = 调用方临时覆盖策略位（管线期间生效，退出还原）。"""
+    from cas.decide import equivalent, T3
+    from cas.structure import (VERIFY_STAGES, BRANCH_POLICY,
+                               run_verify_stages)
+
+    dF = d(F, x)
+    r = equivalent(dF, f, budget=budget)
     if r is T3.YES:
         return "VERIFIED"
     if r is T3.NO:
         return "FAILED"
-    # 塔上精确通道：exp/log 塔内零等价可判定（Risch 结构定理）
-    tz = _tower_zero(d(F, x), f, x)
-    if tz:
+    d0 = T.plus(dF, T.neg(f))
+    if principal is None:
+        ok, _dg = run_verify_stages(d0, x)
+    else:
+        saved = BRANCH_POLICY.get("principal", False)
+        BRANCH_POLICY["principal"] = bool(principal)
+        try:
+            ok, _dg = run_verify_stages(d0, x)
+        finally:
+            BRANCH_POLICY["principal"] = saved
+    if ok:
         return "VERIFIED"
-    # 分数幂合并阶段（P4）：仅 principal 承诺开启时启用——对差值树
-    # 做同底有理指数幂合并后判零
-    from cas.structure import principal_branch, _merge_ratpow
-    use_pb = principal_branch() if principal is None else principal
-    if use_pb:
-        d0 = T.plus(d(F, x), T.neg(f))
-        m = _merge_ratpow(d0)
-        if m is not d0:
-            if m is T.ZERO or (T.is_num(m) and T.num_val(m) == 0):
-                return "VERIFIED"
-            r2 = equivalent(m, T.ZERO, budget=budget)
-            if r2 is T3.YES:
-                return "VERIFIED"
-            if _tower_zero(m, T.ZERO, x):
-                return "VERIFIED"
-        else:
-            m = d0
-        # M5.6：符号幂原子化——x^(a+1)/((a+1)·c) 与 x^a 类差值需要
-        # 指数整数移位拆分 + 原子化后才能在环层精确判零。
-        # 判零用 together（有理函数规范形）：simplify 不做跨项通分，
-        # c(a+1)/(c(a+1)) 型系数分式只有 together 能折叠
-        from cas.structure import _atomize_sym_powers
-        m2 = _atomize_sym_powers(m)
-        if m2 is not m:
-            from cas.ops import together as _tg
-            from cas.errors import PolyError
-            try:
-                m2 = _tg(m2)
-            except PolyError:
-                pass
-            if m2 is T.ZERO or (T.is_num(m2) and T.num_val(m2) == 0):
-                return "VERIFIED"
-            r3 = equivalent(m2, T.ZERO, budget=budget)
-            if r3 is T3.YES:
-                return "VERIFIED"
     if r is T3.PROBABLE:
         return "PROBABLE"   # 数值采样支持，非符号证明
     return "UNVERIFIED"

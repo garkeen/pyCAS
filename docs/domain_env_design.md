@@ -84,9 +84,19 @@ c. 阶段的假设需求不可声明（主支承诺藏在天知道哪里）。
      快速通道；每包测试锁定后删旧入口胶水
    - 同段处理混合域门控迁移（现 _rde_tower_solve 的诚实拒绝改为
      TowerStruct.project 的 FAIL 理由）
-4. P4 分数幂合并规则落地（needs=['principal-branch'∨'x>0']）：
-   ∫√x 族按账本状态自动升级 VERIFIED/proviso；integrate 瀑布数据化
-   （M6 地基）；arch 域矩阵改述为 Stage/Struct 清单
+4. P4 ✅（N2，2026-08-24）Stage 注册表全量落地：
+   - Stage 协议定稿 structure.Pass（name/detect/apply + needs/gated
+     假设门控 + degrade 诚实降级）；run_stage_pipeline 通用执行器
+   - verify 管线内联块迁出 → VERIFY_STAGES = [tower_zero,
+     ratpow_merge(principal 门控), atomize_together(principal)]，
+     diff.verify 重写为 equivalent 短路 + run_verify_stages；
+     principal 显式入参 = 管线期临时置位（退出还原）
+   - integrate 瀑布头部五条快速通道 + STRUCTS 三实例统一为
+     SOLVERS 声明总表（structs.py）——attempt 协议 hit/miss 双态 +
+     RischNonElementary 条目内走特殊函数出口后原样上抛；文档先前
+     虚报的 "SOLVERS ✅" 名实相符于本次落地
+   - 分数幂 needs=['principal-branch'] 即 ∫√x 族 VERIFIED/proviso
+     升级机制本体（BRANCH_POLICY 单点读取，账本驱动留 L4 接线）
 
 ## 5. 与 FriCAS 的关系（诚实定位）
 

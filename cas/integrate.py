@@ -811,43 +811,32 @@ def _integrate_core(t, x, a=None, principal=None):
         ok = _verify(F_sp, x, t,
                      principal=principal) == "VERIFIED"
         return F_sp, ok, "symbolic power rule (generic form)", [proviso]
-    # 结构序列（P3）：分析-投影-计算-回写-验证 的声明式实例化。
-    # Qx → TanHalf → Tower；投影 FAIL 跳过，域内无解/超界记录原因，
-    # RischNonElementary（证明性拒答）原样上抛。
-    from cas.structs import STRUCTS, FAIL
-    from cas.risch import RischNonElementary, RischUnsupported
+    # SOLVERS 总表（N2 兑现 v3 设计）：头部快速通道 + Struct 三段式
+    # 统一为声明式数据。attempt 协议：
+    #   ('hit', F, method, provisos[, ok])   ok 缺省=已自验 True；
+    #                                        ok=None => 管线统一验证
+    #   ('miss', reason)                     不适用，原因入聚合
+    # RischNonElementary（证明性拒答）在条目内部走完特殊函数出口后
+    # 原样上抛——绝不吞。
+    from cas.structs import SOLVERS
     from cas.diff import verify as _verify
 
     last_reason = ""
-    for s in STRUCTS:
-        try:
-            v = s.project(t, x, a)
-        except RischUnsupported as _ru:
-            last_reason = str(_ru)
+    for s in SOLVERS:
+        verdict = s.attempt(t, x)
+        if verdict[0] == "miss":
+            if verdict[1]:
+                last_reason = verdict[1]
             continue
-        except PolyError as _pe:
-            last_reason = str(_pe)
-            continue
-        if v is FAIL:
-            continue
-        try:
-            term, ok, provisos = s.retract(s.compute(v))
-        except RischNonElementary:
-            # M5.5：证明不可积后尝试特殊函数出口
-            sp = _special_output(t, x)
-            if sp is not None:
-                return sp
-            raise   # 无匹配 → 保持 proved 拒答
-        except RischUnsupported as _ru:
-            last_reason = str(_ru)
-            continue
-        except PolyError as _pe:
-            last_reason = str(_pe)
-            continue
-        if ok is None:                     # 塔通道：管线统一验证
-            ok = _verify(term, x, t,
-                         principal=principal) == "VERIFIED"
-        return term, ok, s.method, provisos
+        if len(verdict) == 5:
+            _tag, term, method, provisos, ok = verdict
+            if ok is None:                 # 塔通道：管线统一验证
+                ok = _verify(term, x, t,
+                             principal=principal) == "VERIFIED"
+        else:
+            _tag, term, method, provisos = verdict
+            ok = True
+        return term, ok, method, provisos
     raise PolyError("unsupported integrand"
                     + (": " + last_reason if last_reason else ""))
 

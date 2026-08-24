@@ -15,6 +15,7 @@ Struct 协议：project / compute / retract 三段——
 from fractions import Fraction as Fr
 
 from cas import term as T
+from cas.errors import PolyError
 
 
 class _Fail:
@@ -216,3 +217,154 @@ class TowerStruct(Struct):
 
 
 STRUCTS = [QxStruct(), TanHalfStruct(), TowerStruct()]
+
+
+# ---------------------------------------------------------------------------
+# SOLVERS 总表（N2 兑现 v3 设计承诺：integrate 瀑布 = 声明式数据）。
+# 条目契约 attempt(t, x) ->
+#   (F, method_str, provisos)  命中并已 verify 背书
+#   None                       不适用，交下一个
+#   RischNonElementary         证明性拒答——原样上抛（不吞）
+# 头部五条为快速通道（延迟导入防循环），尾部 StructEntry 包装
+# project/compute/retract 三段式。新增求解通道只动本表。
+# ---------------------------------------------------------------------------
+
+class _HeadSolver:
+    """SOLVERS 条目协议：attempt(t, x) ->
+      ('hit', F, method, provisos)   命中（verify 背书态如实随附）
+      ('miss', reason)               不适用，交下一个（reason 可空）
+    RischNonElementary 在条目内部走完特殊函数出口后原样上抛。"""
+    name = "?"
+
+    def attempt(self, t, x):
+        raise NotImplementedError
+
+
+class SpecAnti(_HeadSolver):
+    name = "spec antiderivative table"
+
+    def attempt(self, t, x):
+        from cas.integrate import _spec_antideriv
+        from cas.diff import verify as _vf
+        F0 = _spec_antideriv(t, x)
+        if F0 is None:
+            return "miss", ""
+        ok = _vf(F0, x, t) == "VERIFIED"
+        return "hit", F0, self.name, []
+
+
+class TrigLinear(_HeadSolver):
+    name = "trig poly: multi-angle linearization + termwise table"
+
+    def attempt(self, t, x):
+        from cas.integrate import (_trig_linear_integrand,
+                                   _spec_antideriv)
+        from cas.diff import verify as _vf
+        from cas.simplify import simplify as _s
+        tl = _trig_linear_integrand(t, x)
+        if tl is None:
+            return "miss", ""
+        terms_ = []
+        for c, g in tl:
+            if g is T.ONE:
+                G = x
+            else:
+                G = _spec_antideriv(g, x)
+                if G is None:
+                    return "miss", ""
+            terms_.append(T.times(c, G))
+        F0 = _s(T.mk(T.S("Plus"), tuple(terms_)))
+        ok = _vf(F0, x, t) == "VERIFIED"
+        if not ok:
+            return "miss", ""
+        return "hit", F0, self.name, []
+
+
+class Usub(_HeadSolver):
+    name = "u-substitution"
+    _DEPTH = [0]
+
+    def attempt(self, t, x):
+        from cas.integrate import _try_usub
+        from cas.pprint import to_str as _ts
+        if self._DEPTH[0] >= 3:
+            return "miss", ""
+        self._DEPTH[0] += 1
+        try:
+            us = _try_usub(t, x)
+        finally:
+            self._DEPTH[0] -= 1
+        if us is None:
+            return "miss", ""
+        F, ok, g, _h, _H = us
+        return "hit", F, f"u-substitution u={_ts(g)}", []
+
+
+class PowerRule(_HeadSolver):
+    name = "rational power rule (algebraic form)"
+
+    def attempt(self, t, x):
+        from cas.integrate import _power_antideriv
+        from cas.diff import verify as _vf
+        pw = _power_antideriv(t, x)
+        if pw is None:
+            return "miss", ""
+        ok = _vf(pw, x, t) == "VERIFIED"
+        return "hit", pw, self.name, []
+
+
+class SymbolPowerRule(_HeadSolver):
+    name = "symbolic power rule (generic form)"
+
+    def attempt(self, t, x):
+        from cas.integrate import _symbol_power_antideriv
+        from cas.diff import verify as _vf
+        spw = _symbol_power_antideriv(t, x)
+        if spw is None:
+            return "miss", ""
+        F_sp, proviso = spw
+        ok = _vf(F_sp, x, t) == "VERIFIED"
+        return "hit", F_sp, self.name, [proviso]
+
+
+class StructEntry(_HeadSolver):
+    """STRUCTS 三段式包装。project FAIL/域拒 => miss（带原因）；
+    compute 链 RischNonElementary => 特殊函数出口尝试后仍上抛
+    （证明性拒答不吞）。"""
+
+    def __init__(self, st):
+        self.st = st
+
+    @property
+    def name(self):
+        return self.st.method
+
+    def attempt(self, t, x):
+        from cas.risch import RischNonElementary, RischUnsupported
+        try:
+            v = self.st.project(t, x, None)
+        except RischUnsupported as _ru:
+            return "miss", str(_ru)
+        except PolyError as _pe:
+            return "miss", str(_pe)
+        if v is FAIL or v is None:
+            return "miss", ""
+        try:
+            term, ok, provisos = self.st.retract(self.st.compute(v))
+        except RischNonElementary:
+            from cas.integrate import _special_output
+            sp = _special_output(t, x)
+            if sp is not None:
+                return "hit", sp[0], sp[2], sp[3]
+            raise                     # 无匹配出口 => 保持 proved 拒答
+        except RischUnsupported as _ru:
+            return "miss", str(_ru)
+        except PolyError as _pe:
+            return "miss", str(_pe)
+        return ("hit", term, self.st.method, provisos, ok)
+
+
+SOLVERS = [SpecAnti(), TrigLinear(), Usub(), PowerRule(),
+           SymbolPowerRule(),
+           StructEntry(QxStruct()), StructEntry(TanHalfStruct()),
+           StructEntry(TowerStruct())]

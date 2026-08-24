@@ -307,9 +307,11 @@ d(2^x) = log(2)·2^x **可算**——符号微分是纯结构变换，超越常�
   e^{ax}e^{ix}、(a−i)eˣ/(eˣ−i) 全 VERIFIED；Ga/SymRat 多变量
   gcd 整除性断言全过；546 tests。
 **新里程碑 N 系列（取代旧 M5 余项排序；不允许绕行式实现）**：
-  - **N2 Stage 注册表落地**（v3 设计 P4）：verify_stages/
-    ratpow_merge needs 声明化、integrate 瀑布改 SOLVERS 数据表、
-    detect/needs/degrade 三管线共享——新增数类只动注册表一处
+  - **N2 ✓ Stage 注册表落地**（2026-08-24）：Stage 协议 =
+    name/detect/apply/needs/gated；VERIFY_STAGES 判零族 + SOLVERS
+    求解总表双声明表就位（integrate 头部硬编码 if 链退役）；
+    principal 承诺位经 Stage.gated 单点门控——新增数类/通道只动
+    注册表一处（v3 设计 §1 反模式"三管线各写一遍"正式关闭）
   - **N3 边界 B**：z-常数中间层残数域约束（1/(eˣ+x) 型）——
     代数扩张 K[root] 上的范数/结式装置（Bronstein 完备结构定理）
   - **N4 边界 C**：RT 残数根参数代数扩张 ℚ(params,√(·)) 域运算
