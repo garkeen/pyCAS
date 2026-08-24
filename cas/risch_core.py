@@ -954,6 +954,7 @@ def _parametrize_const_logs(f, x):
     named = {"pi": "_nc1", "e": "_nc2", "gamma": "_nc3"}
     found = {}
     nc_subs = {}
+    pow_subs = {}                        # 复合替换（值非符号，不进回代）
     stack = [f]
     while stack:
         u = stack.pop()
@@ -962,17 +963,25 @@ def _parametrize_const_logs(f, x):
                 found[u] = None      # 整体替换，不再深入 arg
                 continue
             if u.head.name == "Exp" and x not in T.free_vars(u.args[0]):
-                # N6-P2 面孔统一：exp(1) ≡ e —— 与命名常数 e 映到
-                # 同一 z-符号 _nc2（叶键级同一性；回代各还原本面孔）。
-                # 整数字面 k>1 与 e 的幂关系暂不收（替换值须为符号，
-                # 幂形回代不对称）——诚实保持核形态。
+                # N6-P2/P2c 面孔统一：exp(k·字面) 与命名常数 e 的精确
+                # 幂关系收进参数化层——exp(1)≡_nc2（定义级）；非零整
+                # 字面 k（|k|≤64）→ _nc2^k 复合替换（不进回代，出口随
+                # _nc2→E 还原为规范面孔 e^k）。非整字面诚实保持核形态
+                # （分数幂需关系感知参数，N9/M78.8 辖区）。
                 a0 = u.args[0]
                 if is_num(a0):
                     v0 = num_val(a0)
-                    if isinstance(v0, Fr) and v0 == 1:
-                        found[u] = None
-                        nc_subs.setdefault(u, S(named["e"]))
-                        continue
+                    if isinstance(v0, Fr):
+                        if v0 == 1:
+                            found[u] = None
+                            nc_subs.setdefault(u, S(named["e"]))
+                            continue
+                        if v0.denominator == 1 and v0 != 0 \
+                                and abs(v0) <= 64:
+                            found[u] = None
+                            nc_subs.setdefault(T.E, S(named["e"]))
+                            pow_subs[u] = T.pw(S(named["e"]), N(v0.numerator))
+                            continue
                 stack.append(u.args[0])
             stack.extend(u.args)
             # 命名常数收集（Log 子树已整体替换，其内部 π 不重复点名）
@@ -1004,6 +1013,7 @@ def _parametrize_const_logs(f, x):
     for c_term, sym in nc_subs.items():
         subs[c_term] = sym
         backsub[sym] = c_term
+    subs.update(pow_subs)
     if not subs:
         return f, {}
     return T.subst(f, subs), backsub

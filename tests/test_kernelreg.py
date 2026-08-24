@@ -82,12 +82,30 @@ class TestEngineFaceUnification(unittest.TestCase):
         f, _ = _parametrize_const_logs(parse('exp(1)+e'), S('x'))
         self.assertEqual(to_str(f), '2*_nc2')
 
-    def test_nonunit_literal_honest(self):
-        # exp(2)：幂关系暂不收，保持核形态（诚实边界）
+    def test_integer_literal_power_relation(self):
+        # N6-P2c：exp(k)（非零整字面）与 e 的精确幂关系收进参数化层
+        # ——复合替换 _nc2^k，不进回代；出口随 _nc2->E 统一还原 e^k
         from cas.risch_core import _parametrize_const_logs
         from cas.pprint import to_str
-        f, _ = _parametrize_const_logs(parse('exp(2)*x'), S('x'))
-        self.assertIn('exp(2)', to_str(f))
+        f, bs = _parametrize_const_logs(parse('exp(2)*x'), S('x'))
+        self.assertEqual(to_str(f), 'x*_nc2^2')
+        self.assertEqual(to_str(bs[S('_nc2')]), 'e')
+
+    def test_dual_face_sum_with_powers(self):
+        # exp(2)+e -> _nc2+_nc2^2：两面孔+幂关系合并算术
+        from cas.risch_core import _parametrize_const_logs
+        from cas.pprint import to_str
+        f, _bs = _parametrize_const_logs(parse('exp(2)+e'), S('x'))
+        self.assertEqual(to_str(f), '_nc2 + _nc2^2')
+
+    def test_nonunit_literal_honest(self):
+        # 非整字面 / 超上限整字面：诚实保持核形态（分数幂需关系
+        # 感知参数，N9/M78.8 辖区；|k|<=64 规模守卫）
+        from cas.risch_core import _parametrize_const_logs
+        from cas.pprint import to_str
+        for src in ('exp(1/2)*x', 'exp(100)*x'):
+            f, _ = _parametrize_const_logs(parse(src), S('x'))
+            self.assertIn('exp(', to_str(f), src)
 
 
 if __name__ == "__main__":
