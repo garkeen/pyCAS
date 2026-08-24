@@ -97,6 +97,25 @@ class RatFunc:
                     return RatFunc.from_term(b, vars_) ** e.v
         raise PolyError(f"not rational function: {t!r}")
 
+    def __eq__(self, o):
+        if not isinstance(o, RatFunc):
+            return NotImplemented
+        if self.p.vars != o.p.vars:
+            from cas.poly import _extend
+            vs = self.p.vars + tuple(v for v in o.p.vars
+                                     if v not in self.p.vars)
+            a, b = _extend(self.p, vs), _extend(self.q, vs)
+            c, d = _extend(o.p, vs), _extend(o.q, vs)
+        else:
+            a, b, c, d = self.p, self.q, o.p, o.q
+        if a == c and b == d:
+            return True
+        # 规范形不同时交叉相乘精确判零（域系数，构造器已约分）
+        return RatFunc(a * d - c * b, b * d).is_zero()
+
+    def __hash__(self):
+        return hash((self.p, self.q))
+
     def __add__(self, o):
         return RatFunc(self.p * o.q + o.p * self.q, self.q * o.q)
 

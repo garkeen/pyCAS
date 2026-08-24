@@ -129,6 +129,11 @@ class Poly:
             return NotImplemented
         return self.vars == o.vars and self.monos == o.monos
 
+    def __hash__(self):
+        # 键唯一 ⟹ 排序只比键不比值；值域元素经 SymRat.__hash__ 可哈希
+        return hash((self.vars,
+                     tuple(sorted(self.monos.items(), key=lambda kv: kv[0]))))
+
     @staticmethod
     def zero(vars_):
         return Poly(vars_, {})
@@ -944,6 +949,9 @@ class SymRat:
                     and self.num.const_val() / self.den.const_val() == o)
         return NotImplemented
 
+    def __hash__(self):
+        return hash((self.num, self.den))
+
     def is_zero(self):
         return self.num.is_zero()
 
@@ -1023,28 +1031,47 @@ def _all_fr_leaves(p):
     return True
 
 
-def _mk_rat(num, den):
-    """规范：约分 + 分母符号规范；常数退化回 Fr。
+def _coef_inv_field(c):
+    """叶系数域精确逆：{Fr, Ga, SymRat} 全为域。未知叶型返回 None。"""
+    if isinstance(c, Fr):
+        return Fr(1) / c
+    if isinstance(c, SymRat):
+        return _rat_inv(c)
+    if hasattr(c, "norm"):          # Ga（ℚ(i)）
+        from cas.gaussian import Ga
+        return Ga.one() / c
+    return None
 
-    ℚ(i,params) 混合叶（Ga×SymRat 轨道，M5.6#1 扩展）：content-gcd
-    与符号规范无 ℚ-content 概念——跳过规范化（值恒等不受影响，
-    is_zero/inv 仍精确；仅同值异形不保证 ==）。纯 ℚ 叶走既有规范。
+
+def _mk_rat(num, den):
+    """规范：gcd 消去 + 分母首一化（唯一代表形）。
+
+    域泛化（M78.4 B5/B6 封洞）：叶域 {Fr,Ga,SymRat} 全为域——mgcd
+    消去与分母首项系数求逆对所有轨道无条件可用；同值异形自此保证 ==
+    （旧版混合叶跳过规范化系过期认知："content 无定义"不适用于域叶，
+    欧几里得+首一化即完备，RatFunc 构造器同规）。常数退化回 Fr。
     """
     num, den = _unify_vs(num, den)
     if num.is_zero():
         return Fr(0)
     if num.is_const() and den.is_const():
         return num.const_val() / den.const_val()
-    if not (_all_fr_leaves(num) and _all_fr_leaves(den)):
-        return SymRat(num, den)
     g = mgcd(num, den)
-    if not g.is_zero() and not (g.is_const() and abs(g.const_val()) == 1):
+    if not g.is_zero():
         num = div_exact(num, g)
         den = div_exact(den, g)
-    s = _sign_normalize(den)
-    if s is not den:
-        num = num.scalar(Fr(-1))
-        den = s
+    lc = den.lc(den.vars[0]) if den.vars else den.const_val()
+    ic = _coef_inv_field(lc)
+    if ic is not None:
+        if not (isinstance(ic, Fr) and ic == 1):
+            num = num.scalar(ic)
+            den = den.scalar(ic)
+    else:
+        # 未知叶型：退回符号规范（诚实非最简）
+        s = _sign_normalize(den)
+        if s is not den:
+            num = num.scalar(Fr(-1))
+            den = s
     return SymRat(num, den)
 
 
