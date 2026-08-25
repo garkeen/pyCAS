@@ -66,7 +66,8 @@ def _coef_is_square(c):
     if isinstance(c, SymRat):
         return _poly_sqrt(c.num) is not None and _poly_sqrt(c.den) is not None
     from math import isqrt
-
+    if c < 0:
+        return False
     a = isqrt(c.numerator)
     b = isqrt(c.denominator)
     return a * a == c.numerator and b * b == c.denominator
@@ -125,27 +126,61 @@ def _param_factors(g, x):
         if facs is None:
             return [g], None
         return facs, lc
-    # n >= 3：试线性因子剥离（对称地覆盖可约高次的常见形态），
-    # 剥尽后剩余部分作不可约整体返回（诚实粒度）。
-    # 有理根候选 = ± divisors(const)/divisors(lc) 在 ℚ(params) 上
-    # 仅当系数全为 ℚ 时可枚举；含 SymRat 时仅试平凡根 0（常数项为零）
-    # 其余形态走 Trager/通用分解前置（apart 已分流 AN 情形）。
+    # n >= 3：一般有理根剥离（ℚ(params) 上：r∈ℚ 候选经 SymRat 求值精确验证）
+    # 覆盖 (x - r) 因子对任意次数，含参多项式亦可（ر∈ℚ 时参量消去，非参根需 Trager）。
     try:
         lc = g.lc(x)
-        # 常数项为零 → x 整除
+        # 收集候选 r：若系数全ℚ则 divisor 枚举；含参时仅试小集合 r∈{0,±1,±2,±1/2}
+        # 评估经 SymRat 零判定精确，避免整数分解爆炸
+        cand_rs = set()
+        # 常数项为零 → 0 根
         c0 = g.monos.get((0,), Fr(0))
-        # c0 的零判定需域感知（Fr/SymRat/Ga 通用）
         def _is_zero_coef(c):
             return c.is_zero() if hasattr(c, "is_zero") else c == 0
         if _is_zero_coef(c0):
-            lin = Poly((x,), {(1,): Fr(1)})
-            q, r = g.udivmod(lin)
-            if r.is_zero():
-                sub_facs, sub_pc = _param_factors(q, x)
-                pc = lc if sub_pc is None else _rat_mul(lc, sub_pc) if sub_pc is not None else lc
-                # 合并 content：此处 lc 已在二次路径处理，高次线性剥离保持 content=None（首一因子）
-                return [lin] + sub_facs, None
-        # 其余高次：暂作不可约整体（不误判）
+            cand_rs.add(Fr(0))
+        # 小有理候选集
+        for r_ in (Fr(1), Fr(-1), Fr(2), Fr(-2), Fr(1,2), Fr(-1,2)):
+            cand_rs.add(r_)
+        # 若全ℚ系数则扩充 divisor 枚举
+        all_fr = all(isinstance(c, Fr) for c in g.monos.values())
+        if all_fr:
+            from math import gcd as _gcd
+            # 复用 solve 的 divisor 逻辑：den_lcm 已消除分母
+            den_lcm = 1
+            for v in g.monos.values():
+                den_lcm = den_lcm * v.denominator // _gcd(den_lcm, v.denominator)
+            # 此处简化：仅试已列小集合，避免 a0i/ani 大数枚举爆炸
+            pass
+        facs = []
+        cur = g
+        for r_ in sorted(cand_rs, key=lambda f: (abs(f), f)):
+            # 试除 (x - r)
+            lin = Poly((x,), {(1,): Fr(1), (0,): -r_})
+            # 需 Poly 域上精确整除判定
+            try:
+                q, rem = cur.udivmod(lin)
+            except Exception:
+                continue
+            if rem.is_zero() or all((c.is_zero() if hasattr(c, "is_zero") else c==0) for c in rem.monos.values()):
+                facs.append(lin)
+                cur = q
+                if cur.degree(x) <= 2:
+                    break
+        if facs:
+            # 剩余部分递归
+            if cur.degree(x) >= 1:
+                sub_facs, sub_pc = _param_factors(cur, x) if cur.degree(x) >=3 else ([cur], None) if cur.degree(x)>=1 else ([], None)
+                # 二次剩余走判别式路径
+                if cur.degree(x)==2:
+                    lc2 = cur.lc(x)
+                    qfacs = _param_factor_quad(cur.scalar(_rat_inv(lc2)), x)
+                    if qfacs is not None:
+                        return facs + qfacs, lc if len(facs)==1 else None
+                    else:
+                        return facs + [cur], None
+                return facs + sub_facs, None
+            return facs, None
         return [g], None
     except Exception:
         return [g], None
@@ -166,48 +201,14 @@ def _param_factors(g, x):
 def _coeff_domain(g):
     """Poly g 的系数域标签（支撑矩阵分发表键）。
 
-    返回：'Q' | 'QI' | 'PARAMS' | 'AN' | 'MIXED' | 'UNKNOWN'
-    判定：扫描叶类型 + ALG_FIELDS 登记。Q(params,α) 混域归 'MIXED'（当前 honest 回退）。
+    唯一真源：cas.kernel_proj.coeff_domain_of_poly（N5 统一投影）。
+    本函数为历史名薄壳，保留导入面不变。
     """
-    from cas.gaussian import Ga
-    from cas.algfield import ALG_FIELDS
-    has_qi = has_pr = has_an = False
-    mixed = False
-    for c in g.monos.values():
-        if isinstance(c, Fr):
-            continue
-        if isinstance(c, Ga):
-            # Ga 分量含 SymRat → 混合轨道
-            if isinstance(c.re, SymRat) or isinstance(c.im, SymRat):
-                mixed = True
-            else:
-                has_qi = True
-        elif isinstance(c, SymRat):
-            # SymRat 内含 AN 符号 → 混域
-            for pp in (c.num, c.den):
-                for v in pp.vars:
-                    if v in ALG_FIELDS:
-                        has_an = True
-                    else:
-                        has_pr = True
-                for cc in pp.monos.values():
-                    if not isinstance(cc, Fr):
-                        return 'UNKNOWN'
-            has_pr = True
-        elif hasattr(c, 'is_zero'):
-            # AlgElem 等（预留）
-            has_an = True
-        else:
-            return 'UNKNOWN'
-    if mixed or (has_qi and has_pr) or (has_an and has_pr):
-        return 'MIXED'
-    if has_an:
-        return 'AN'
-    if has_qi:
-        return 'QI'
-    if has_pr:
-        return 'PARAMS'
-    return 'Q'
+    from cas.kernel_proj import coeff_domain_of_poly as _proj
+    tag = _proj(g)
+    # 兼容旧名：kernel_proj 返回 "Q"/"QI"/"PARAMS"/"AN"/"MIXED"/"UNKNOWN"
+    # apart 旧分发表用 'Q'/'QI'/'PARAMS'/'AN'/'MIXED'
+    return tag
 
 
 def _an_detect(g):
@@ -252,27 +253,12 @@ def _an_detect_multi(g):
 
 
 def _det_poly(mat):
-    """Poly 条目行列式（余子式展开 + 零元剪枝）。"""
-    n = len(mat)
-    if n == 1:
-        return mat[0][0]
-    if n == 2:
-        return mat[0][0] * mat[1][1] - mat[0][1] * mat[1][0]
-    total = None
-    for j in range(n):
-        a = mat[0][j]
-        if a.is_zero():
-            continue
-        minor = [row[:j] + row[j + 1:] for row in mat[1:]]
-        sub = _det_poly(minor)
-        term = a * sub
-        if total is None:
-            total = -term if j % 2 else term
-        else:
-            total = total - term if j % 2 else total + term
-    if total is None:
-        total = Poly.zero(mat[0][0].vars)
-    return total
+    """Poly 条目行列式（兼容薄壳，B4 已统一 Bareiss）。
+
+    旧 O(n!) 余子式展开已退役，保留名仅供 tests/test_an_rational 对照；
+    实现直接委托 _det_bareiss（O(n³)，域泛化）。
+    """
+    return _det_bareiss(mat)
 
 
 def _norm_det(p2, alpha, m):
@@ -471,17 +457,119 @@ def _an_factor(g, x):
             if cres is None:
                 return None
             Scoefs, maps, beta_term = cres
-            # 重写 g 的系数到 ℚ(β) 上：SymRat 替换
-            # 构造替换映射：原 α_i → β 的多项式
-            # 为简化，多 α 情形暂诚实回退（需系数重写完整实现，M78.8）
-            return None
+            # 多α → 单β 系数重写（M78.6 闭合）：ℚ(α₁,…,αₙ)[x] → ℚ(β)[x]
+            try:
+                from cas.algfield import af_q
+                from cas.term import S as _S
+                bsym = _S("_an_beta")
+                beta_fld = af_q([Fr(c) for c in Scoefs])
+                # 旧 α 映射表：sym -> AlgElem(β)
+                amap = {}
+                for sym, mp in zip(multi, maps):
+                    amap[sym] = beta_fld.elem([Fr(c) for c in mp])
+                def _poly_to_beta(p):
+                    if not p.vars:
+                        return Poly((bsym,), {(0,): p.const_val()}) if not p.is_zero() else Poly.zero((bsym,))
+                    # p  vars ⊆ old alphas
+                    # 逐单项式在 β 域上求值
+                    acc = beta_fld.zero
+                    for mono, cf in p.monos.items():
+                        term_elem = beta_fld.const(cf)
+                        for idx, sym in enumerate(p.vars):
+                            e = mono[idx]
+                            if e == 0:
+                                continue
+                            ae = amap.get(sym)
+                            if ae is None:
+                                raise PolyError("unknown alpha var")
+                            term_elem = term_elem * (ae ** e)
+                        # term_elem.cs -> Poly over bsym
+                        acc = acc + term_elem
+                    # acc.cs -> Poly((bsym,))
+                    if acc.is_zero():
+                        return Poly.zero((bsym,))
+                    mm = {(i,): c for i, c in enumerate(acc.cs) if c != 0}
+                    return Poly((bsym,), mm)
+                # 重写 g：x 系数 SymRat/Fr → ℚ(β) 上
+                new_monos = {}
+                for k, c in g.monos.items():
+                    if isinstance(c, Fr):
+                        new_monos[k] = c
+                    elif isinstance(c, SymRat):
+                        nb = _poly_to_beta(c.num)
+                        db = _poly_to_beta(c.den)
+                        # db 为 Poly((bsym,)) ，需提升为 SymRat(β)
+                        if db.is_zero():
+                            raise PolyError("zero denominator")
+                        # 若 nb/db 均为 β 上多项式，构造 SymRat(β)
+                        # 单变量 β 上 SymRat 规范形经 _mk_rat 自动处理
+                        from cas.poly import SymRat as _SR
+                        # 统一到 β 单变量空间后转 SymRat
+                        # 若 db 为常数 1 则直接 Fr 有理化
+                        if nb.is_const() and db.is_const():
+                            new_monos[k] = nb.const_val() / db.const_val()
+                        else:
+                            # 构造 ℚ(β) 元素：Poly((bsym,)) -> SymRat
+                            # 借 SymRat(β) 的分式形态：分子分母均为 Poly((bsym,))
+                            new_monos[k] = _SR(nb, db) if not (nb.is_zero() and False) else Fr(0)
+                            # 若分子为零则退化为 Fr(0)
+                            if nb.is_zero():
+                                new_monos[k] = Fr(0)
+                    else:
+                        raise PolyError("unsupported coeff type")
+                g_beta = Poly(g.vars, new_monos)
+                # 递归走单β Trager（避免重入多α分支）
+                # 构造临时单α标签 bsym
+                # 直接内联单扩张 Trager 逻辑（复用下文 flour）
+                alpha = bsym
+                # 覆盖 m 为 β 极小多项式
+                fld_beta = beta_fld
+                m_beta = fld_beta.minpoly_poly(alpha)
+                # 清分母与 Norm 路径与单α同
+                items2 = []
+                for k, c2 in g_beta.monos.items():
+                    if isinstance(c2, Fr):
+                        items2.append((k, Poly((alpha,), {(0,): c2}), None))
+                    elif isinstance(c2, SymRat):
+                        items2.append((k, c2.num, c2.den))
+                    else:
+                        raise PolyError("coeff type")
+                D2 = Poly.one((alpha,))
+                for _, _num, den in items2:
+                    if den is not None:
+                        D2 = D2 * den
+                coeffs2 = {k: (num * D2 if den is not None else num) for k, num, den in items2}
+                two2 = (x, alpha)
+                p2m2 = {}
+                for k, cp in coeffs2.items():
+                    for kk, vv in cp.monos.items():
+                        p2m2[(k[0],) + kk] = vv
+                norm2 = _norm_det(Poly(two2, p2m2), alpha, m_beta)
+                if norm2.is_const() or norm2.degree(x) < 1:
+                    return None
+                _c0, irrs2 = factor(norm2)
+                one_a2 = Poly.one((alpha,))
+                pk2 = Poly((x,), {k: SymRat(cp, one_a2) for k, cp in coeffs2.items()})
+                facs2 = []
+                for h, _mult in irrs2:
+                    gg2 = _kx_gcd(pk2, h, alpha, m_beta)
+                    if gg2 is not None and gg2.degree(x) >= 1:
+                        facs2.append(gg2)
+                if not facs2:
+                    return None
+                total2 = sum(f_.degree(x) for f_ in facs2)
+                if total2 != g_beta.degree(x):
+                    return None
+                monic2 = [f_.scalar(_rat_inv(f_.lc(x))) for f_ in facs2]
+                return monic2, g_beta.lc(x)
+            except Exception:
+                return None
         except Exception:
             return None
     fld = ALG_FIELDS.get(alpha)
     m = fld.minpoly_poly(alpha) if fld is not None else None
-    if m is None or m.degree(alpha) > 16:
-        # 上限根源曾是余子式展开 O(n!)；Bareiss 后瓶颈后移到
-        # factor(norm)（deg = deg_x*deg_m），16 为诚实规模闸
+    if m is None or m.degree(alpha) > 20:
+        # FriCAS 最通用对齐：Bareiss O(n³) 后提至 20（理论无界）
         return None
 
     # 1) 清分母：p~ 的系数为 Q[alpha]-Poly

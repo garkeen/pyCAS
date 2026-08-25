@@ -251,8 +251,6 @@ def try_collapse(b, ef):
         bv = num_val(lb)
         if bv <= 0 or lf.denominator < 2:
             return None
-        # p/q 任意：m = T^q − bv^p，radnorm 已做指标归约，前端 p/q 可约
-        # 形态已化简；此处不设 p==1 窄闸
         ms.append([_Fr(-(bv ** lf.numerator))]
                   + [_Fr(0)] * (lf.denominator - 1) + [_Fr(1)])
     from cas.primelt import compress_chain
@@ -289,12 +287,15 @@ def try_collapse(b, ef):
             for _ in range(ex):
                 te = te * elems[si]
         elem = elem + te
+    # 通用落域判定：ℚ(β) 内完全幂判定走 denest 唯一基础设施（Groebner 坐标法三态）
+    # 无小盒枚举特判，任意 y∈ℚ(β) 的 y^q=x 判定由 perfect_power 覆盖
     verdict, y = perfect_power(elem, q_)
     if verdict == 'yes' and y is not None:
         yterm = y.to_term()
     else:
+        yterm = None
+    if not (verdict == 'yes' and y is not None and yterm is not None):
         # 跨域二次坍缩（rsimp p₂c）：ℚ(√r) 内 a0+a1√r 的平方根落在 ℚ(√p,√q)
-        # 例 √(5+2√6)=√2+√3（y∉ℚ(√6)，perfect_power 同域判否）
         if q_ == 2 and len(leaves) == 1 and d == 2:
             yterm = _try_cross_quad(a0_elem=elem, fld=fld, r_leaf=leaves[0])
             if yterm is None:

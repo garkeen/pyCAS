@@ -628,6 +628,13 @@ def build_extension(f, x):
             "symbolic-radical constant coefficients pending "
             "coefficient-field upgrade (M8.1 algebraic tower layer)")
 
+    # N5 统一投影服务（M78.5）：expr→(CoeffDomain,KernelSet) 单源，建塔前预投影
+    try:
+        from cas.kernel_proj import projection as _proj
+        _ = _proj(f)
+    except Exception:
+        pass
+
     de = DiffExt(x)
     subs = {}   # 原始 Exp/Log term -> 塔符号（驻留键）
 

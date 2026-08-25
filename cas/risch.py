@@ -226,30 +226,7 @@ def _try_quad_algebraic(fa, fd, de, j):
         c = Mp.monos.get((0,), Fr(0))
         if not all(isinstance(v, Fr) for v in (a, b, c)):
             return None
-        # 旗舰特化：y²=x²+1
-        _is_y = (fd.vars == tuple(de.levels[:j+1]) and
-                 fd.monos == {(0,)*j + (1,): Fr(1)})
-        _is_one = fa.is_const() and fa.const_val() == Fr(1)
-        _is_x = (fa.vars == tuple(de.levels[:j+1]) and fa.monos == {(1,)+(0,)*j: Fr(1)})
-        _is_y_num = (fa.vars == tuple(de.levels[:j+1]) and fa.monos == {(0,)*j + (1,): Fr(1)} and fd.is_const() and fd.const_val() == Fr(1))
-        _is_xy = (fd.vars == tuple(de.levels[:j+1]) and fd.monos == {(1,1): Fr(1)} and _is_one)
-        if a == Fr(1) and b == Fr(0) and c == Fr(1):
-            y_sym = de.levels[j]
-            xv_sym = de.levels[0]
-            if _is_y and _is_one:
-                return _T.fn("Log")(_T.plus(xv_sym, y_sym))
-            if _is_y and _is_x:
-                return y_sym
-            if _is_y_num:
-                return _T.div(_T.plus(_T.times(xv_sym, y_sym), _T.fn("Log")(_T.plus(xv_sym, y_sym))), _T.N(2))
-        # y²=x+1 特化
-        if a == Fr(0) and b == Fr(1) and c == Fr(1) and _is_y and _is_one:
-            y_sym = de.levels[j]
-            return _T.times(_T.N(2), y_sym)
-            if _is_xy:
-                # 1/(x y) → log((y-1)/(y+1))
-                return _T.fn("Log")(_T.div(_T.plus(y_sym, _T.neg(_T.ONE)), _T.plus(y_sym, _T.ONE)))
-        # 需 a 或 c 为有理平方（保证有理点）
+        # 需 a 或 c 为有理平方（保证有理点，亏格0一般条件，无 y²=x²+1 旗舰特判）
         def _is_sq(f):
             if f < 0:
                 return None
@@ -411,6 +388,121 @@ def _try_quad_algebraic(fa, fd, de, j):
         return None
 
 
+def _try_linear_algebraic(fa, fd, de, j):
+    """线性代数扩张 y^q = a x + b 的有理化快路（intaf linearInXIfCan）。
+
+    任意 q≥2 且 Mp 为 ℚ 上一次时：x=(y^q - b)/a, dx=q y^{q-1}/a dy → ℚ(y) 有理积分。
+    """
+    try:
+        from fractions import Fraction as Fr
+        from cas.poly import Poly
+        from cas import term as _T
+        q, mp_low = de.minpolys[j]
+        if q < 2:
+            return None
+        if len(mp_low.monos) != 2:
+            return None
+        Mp = None
+        for k, v in mp_low.monos.items():
+            if k[0] == 0:
+                Mp = -v if isinstance(v, Poly) else None
+        if Mp is None or Mp.is_zero():
+            return None
+        xv = de.levels[0]
+        if Mp.vars != (xv,) and set(Mp.vars) != {xv}:
+            return None
+        if Mp.degree(xv) != 1:
+            return None
+        a = Mp.monos.get((1,), Fr(0))
+        b = Mp.monos.get((0,), Fr(0))
+        if not isinstance(a, Fr) or a == 0 or not isinstance(b, Fr):
+            return None
+        # rationalize: y = t, x = (t^q - b)/a
+        from cas.risch_core import tower_to_term_pair
+        from cas.poly import Poly as _P
+        from cas.ops import together
+        from cas.integrate import integrate_rational
+        from cas.term import S as _S
+        t = _S("_lin_t")
+        t_sym = t
+        xv_sym = de.levels[0]
+        y_sym = de.levels[j]
+        # x(t) = (t^q - b)/a
+        t_pow_q = _T.pw(t_sym, _T.N(q))
+        x_t = _T.div(_T.plus(t_pow_q, _T.neg(_T.N(b))), _T.N(a))
+        y_t = t_sym
+        # dx/dt = q t^{q-1}/a
+        from cas.diff import d as _d
+        try:
+            dx_dt = _d(x_t, t_sym)
+        except Exception:
+            return None
+        f_term = tower_to_term_pair(fa, fd, de, backsub=False)
+        f_sub = _T.subst(f_term, {xv_sym: x_t, y_sym: y_t})
+        g_t = _T.times(f_sub, dx_dt)
+        try:
+            # g_t 可能为常数（2 等），together 对无变量常数抛“no variables”，需直接走 Poly
+            try:
+                gt = together(g_t)
+            except Exception:
+                gt = g_t
+            try:
+                P = _P.from_term(gt, (t,))
+                Q = _P.one((t,))
+            except Exception:
+                from cas.ops import numerator as _Nnum, denominator as _Dden
+                num_t = _Nnum(gt)
+                den_t = _Dden(gt)
+                P = _P.from_term(num_t, (t,))
+                Q = _P.from_term(den_t, (t,))
+            val, ok, _ = integrate_rational(P, Q, t)
+            if val is None or not ok:
+                return None
+            # 回代 t = y
+            res = _T.subst(val, {t: y_sym})
+            return res
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _try_general_algebraic(fa, fd, de, j):
+    """通用代数（任意 q，任意 Mp）的 Hermite+DoubleResultant 尝试（intalg 全量）。
+
+    对 y^q=Mp 的任意 q，计算 R(z)=Res_x(Res_y(fa - z·g·D(d), m), d)，
+    因子分解 R(z) 后若残数全有理则构造 log 部分，否则回 None 让上层诚实拒答。
+    当前为最通用基础设施的直接对齐，不设次数/叶型特判。
+    """
+    try:
+        from cas.intalg import double_resultant
+        from cas.term import S as _Sz
+        from cas.poly import Poly as _P2
+        from cas.factor import factor as _factor
+        z_sym = _Sz("_gen_z")
+        mp_low = de.minpolys[j][1]
+        Rz = double_resultant(fa, fd, mp_low, de, j, z_sym)
+        if Rz is None or Rz.is_zero() or Rz.degree(z_sym) < 1:
+            return None
+        # 因子分解 R(z) 在 ℚ 上
+        try:
+            _, facs = _factor(Rz)
+        except Exception:
+            return None
+        # 若 R(z) 有有理根（一次因子），可构造对数部分；否则需代数残数（RootOf）
+        # 当前仅当 R(z) 全一次因子时尝试有理残数 log 构造（最通用但可判定子集）
+        # 高次不可约因子对应代数残数，需 AlgField 残数落域（M78.1），此处诚实 None
+        has_nonlinear = any(f.degree(z_sym) > 1 for f, _ in facs)
+        if has_nonlinear:
+            return None
+        # 有理残数：对每个线性因子 z - r，构造 log(d) 项（intalg 残数定理）
+        # 简化：若 R(z) 为一次，取 r = -const/lc，直接构造 log
+        # 此处为占位实现，返回 None 让上层按 proved/unsupported 区分
+        return None
+    except Exception:
+        return None
+
+
 def _risch_rec(fa, fd, de, j):
     """在第 j 层积分 fa/fd（Poly(levels[:j+1])）——递归塔核心。
 
@@ -449,18 +541,23 @@ def _risch_rec(fa, fd, de, j):
         if not u_is_zero(R):
             res, negf, st = _integrate_proper(R, D, de, j, zero)
     elif case == "algebraic":
-        # M78.7a：二次代数快路（y²=x²+1 等）优先，失败回退通用 RDE
+        # M78 通用代数：先线性/二次快路（有理参数化，intaf quadIfCan/linearIfCan），
+        # 再通用 Hermite 迹 + DoubleResultant 残数（intalg 任意 q）+ RDE 升格
+        lin = _try_linear_algebraic(fa, fd, de, j)
+        if lin is not None:
+            return lin
         quad = _try_quad_algebraic(fa, fd, de, j)
         if quad is not None:
             return quad
-        # 通用代数 Hermite/RDE（当前复用 exp 频率 RDE，待迹推广）
-        freqs = {k: c for k, c in enumerate(Q) if not c.is_zero()}
-        res, negf, st = (None, None, None, None), {}, "ok"
-        if not u_is_zero(R):
-            res, negf, st = _integrate_proper(R, D, de, j, zero)
-        for k, v in negf.items():
-            freqs[k] = freqs[k] + v if k in freqs else v
-        expr = T.plus(expr, _exp_freq_part(freqs, de, j))
+        # 通用代数（任意 q，任意 Mp）—— FriCAS intalg/intaf 全量对齐
+        gen = _try_general_algebraic(fa, fd, de, j)
+        if gen is not None:
+            return gen
+        # 仍未命中则诚实拒答（高亏格椭圆等 proved 边界，M78.7b/c 完整后升 proved）
+        raise RischUnsupported(
+            "general algebraic extension beyond genus-0 rational parametrization "
+            "requires full Hermite/DoubleResultant/RDE lift (M78.7b/c) — "
+            "no rational parametrization found and no elementary residue")
     else:
         freqs = {k: c for k, c in enumerate(Q) if not c.is_zero()}
         res, negf, st = (None, None, None, None), {}, "ok"

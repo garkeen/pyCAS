@@ -201,6 +201,81 @@ def compress_chain(ms, terms, cap=8):
     term_cur = terms[0]
     maps = [list(map(Fr, [0, 1]))]
     for idx in range(1, len(ms)):
+        # 快速去重：整数底幂（如 4=2^2）直接判定 ∛4=(∛2)^2 ∈ ℚ(∛2)，避免 perfect_power 大域搜索
+        _found = False
+        try:
+            # 检查新叶底是否为已有叶底的整数幂（Fr 整数底）
+            bv_new = None
+            # ms[idx][0] = -b^p，q_new = deg
+            # 需从 terms[idx] 解析底
+            leaf_new = terms[idx]
+            if hasattr(leaf_new, 'args'):
+                bv_new = __import__('cas.term', fromlist=['num_val']).num_val(leaf_new.args[0])
+                q_new_ = len(ms[idx])-1
+                p_new = leaf_new.args[1].f.numerator if hasattr(leaf_new.args[1], 'f') else 1
+                for jdx, term_old in enumerate(terms[:idx]):
+                    if hasattr(term_old, 'args'):
+                        bv_old = __import__('cas.term', fromlist=['num_val']).num_val(term_old.args[0])
+                        q_old = len(ms[jdx])-1
+                        p_old = term_old.args[1].f.numerator if hasattr(term_old.args[1], 'f') else 1
+                        if isinstance(bv_new, Fr) and isinstance(bv_old, Fr) and bv_new>0 and bv_old>0:
+                            for kk in (2,3,4):
+                                if bv_old ** kk == bv_new:
+                                    # bv_new^{p/q} = (bv_old^kk)^{p/q} = bv_old^{kk p/q}
+                                    # 若 kk p/q = p_old/q_old * t 且 t 整数，则 leaf_new = leaf_old^t
+                                    # 简化：4^{1/3}=2^{2/3}=(2^{1/3})^2  t=2
+                                    exp_ratio = Fr(kk * p_new * q_old, q_new * p_old) if 'q_new_' in locals() else Fr(kk * p_new, q_new)
+                                    # 更直接：检查 leaf_new == leaf_old^t
+                                    # 用数值验证
+                                    try:
+                                        cand_pow = __import__('cas.term', fromlist=['num_val'])
+                                    except: pass
+                                    # 直接构造候选：leaf_old^t
+                                    # 需在域中验证，延迟到 perfect_power 前的直接幂检验已足够
+                                    pass
+        except Exception:
+            pass
+        # 试已有叶幂的直接验证（∛4 = (∛2)^2）
+        if not _found:
+            try:
+                from cas.algfield import af_q as _afq
+                q_new = len(ms[idx]) - 1
+                b_pow = -Fr(ms[idx][0])
+                cur_fld_tmp = _afq([Fr(x) for x in cur], origin=term_cur)
+                for el in maps:
+                    for kk in (2,3):
+                        for cr in (Fr(1), Fr(1,2), Fr(2)):
+                            try:
+                                e_tmp = cur_fld_tmp.zero
+                                for cc in reversed(el):
+                                    e_tmp = e_tmp * cur_fld_tmp.gen() + cur_fld_tmp.const(cc)
+                                cand = (e_tmp ** kk) * cr
+                                if cand.is_zero():
+                                    continue
+                                if cand ** q_new == cur_fld_tmp.const(b_pow):
+                                    y_map = list(cand.cs) + [Fr(0)] * (len(cur) - 1 - len(cand.cs))
+                                    maps.append(y_map)
+                                    _found = True
+                                    break
+                            except Exception:
+                                continue
+                        if _found:
+                            break
+                    if _found:
+                        break
+                if not _found:
+                    if len(cur) - 1 <= 2:
+                        const_elem = cur_fld_tmp.const(b_pow)
+                        from cas.denest import perfect_power as _pp
+                        verdict_pp, y_pp = _pp(const_elem, q_new)
+                        if verdict_pp == 'yes' and y_pp is not None:
+                            y_map = list(y_pp.cs) + [Fr(0)] * (len(cur) - 1 - len(y_pp.cs))
+                            maps.append(y_map)
+                            _found = True
+            except Exception:
+                _found = False
+        if _found:
+            continue
         res = primitive_pair(cur, ms[idx], cap)
         if res is None:
             return None

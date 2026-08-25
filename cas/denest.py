@@ -32,8 +32,8 @@ import cas.term as T
 from cas.poly import Poly, PolyError
 from cas.algfield import AlgElem, _z
 
-_DEG_CAP = 8          # 域次数上限（Groebner 规模守卫，理论无界）
-_K_CAP = 11           # 指数上限（rsimp 对标素数 k≤11）
+_DEG_CAP = 20         # P1 无界化：理论无界，Bareiss O(n³) 后提至20
+_K_CAP = 20           # P1 无界化：13→20，超时守卫后诚实unknown
 
 
 def perfect_power(elem, k):
@@ -84,9 +84,8 @@ def perfect_power(elem, k):
         qd = _try_quadratic_denest(fld, elem, m_coefs, x_cs)
         if qd is not None:
             return 'yes', qd
-    # Groebner 后备规模闸（爆炸守卫）：快路未命中且系统过大 ⟹ 诚实
-    # unknown（理论无界，闸仅防指数爆炸）
-    if ws_n > 6 or d * (ws_n + 1) > 18 or k > 11:
+    # P1 回接去闸：理论无界，去人工 ws/d 闸，仅留超时与 DEG/K 20 诚实界（超时后unknown）
+    if k > 20 or d > 20:
         return 'unknown', None
 
     def mono(sym, e):
@@ -137,7 +136,8 @@ def perfect_power(elem, k):
     if status == 'contradiction':
         return 'no', None               # 1 ∈ 理想：proved 非幂
     if status not in ('ok', 'partial', 'identity'):
-        return 'unknown', None          # positive-dim / unsupported / 其他    seen = set()
+        return 'unknown', None          # positive-dim / unsupported / 其他
+    seen = set()
     for sol in sols:
         # 契约：list[tuple(term)]，按 vars 顺序（groebner.SolveSysResult）
         if len(sol) != len(vs_rest):
@@ -261,14 +261,25 @@ def _is_kth_power_rat(f, k):
 
 
 def _bounded_search(fld, elem, x_cs, d, k, box=None):
-    """小系数有理坐标的精确枚举（逐候选举 AlgElem 乘回验证）。
+    """小系数有理坐标的精确枚举（分级）。
 
-    界自适应输入量级；漏检安全落入通用路。返回根 AlgElem 或 None。
+    d≤4: box≤6 全枚举；5≤d≤8: 缩盒 box≤2；d>8 直接跳过。超时安全。
     """
     import itertools
 
+    if d > 8:
+        return None
     mag = max(abs(c.numerator) + c.denominator for c in x_cs)
-    b = box if box is not None else min(16, int(round(mag ** (1.0 / k))) + 3)
+    if d <= 4:
+        b = box if box is not None else min(6, int(round(mag ** (1.0 / k))) + 2)
+        limit = 500000
+    elif d <= 8:
+        b = box if box is not None else min(2, int(round(mag ** (1.0 / k))) + 1)
+        limit = 200000
+    else:
+        return None
+    if (2*b+1) ** d > limit:
+        return None
     dens = (Fr(1), Fr(2), Fr(3))
     zero = Fr(0)
     seen = set()
@@ -295,10 +306,19 @@ def _expand_pow(base_t, k):
 
 
 def _solve(fs, vars_):
-    """solve_system 包装 -> (status, sols)。"""
+    """solve_system 包装（带5秒线程超时守卫，超时诚实unknown）。"""
+    import concurrent.futures, time
     from cas.groebner import solve_system
-    r = solve_system([T.mk(S("Eq"), (f, N(0))) for f in fs],
-                     list(vars_))
+    def _run():
+        return solve_system([T.mk(S("Eq"), (f, N(0))) for f in fs], list(vars_))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_run)
+            r = fut.result(timeout=5)
+    except concurrent.futures.TimeoutError:
+        return 'unknown', []
+    except Exception:
+        return 'unsupported', []
     sols = getattr(r, "solutions", None)
     if sols is None:
         try:
