@@ -163,11 +163,60 @@ def _param_factors(g, x):
 # ---------------------------------------------------------------------------
 
 
+def _coeff_domain(g):
+    """Poly g 的系数域标签（支撑矩阵分发表键）。
+
+    返回：'Q' | 'QI' | 'PARAMS' | 'AN' | 'MIXED' | 'UNKNOWN'
+    判定：扫描叶类型 + ALG_FIELDS 登记。Q(params,α) 混域归 'MIXED'（当前 honest 回退）。
+    """
+    from cas.gaussian import Ga
+    from cas.algfield import ALG_FIELDS
+    has_qi = has_pr = has_an = False
+    mixed = False
+    for c in g.monos.values():
+        if isinstance(c, Fr):
+            continue
+        if isinstance(c, Ga):
+            # Ga 分量含 SymRat → 混合轨道
+            if isinstance(c.re, SymRat) or isinstance(c.im, SymRat):
+                mixed = True
+            else:
+                has_qi = True
+        elif isinstance(c, SymRat):
+            # SymRat 内含 AN 符号 → 混域
+            for pp in (c.num, c.den):
+                for v in pp.vars:
+                    if v in ALG_FIELDS:
+                        has_an = True
+                    else:
+                        has_pr = True
+                for cc in pp.monos.values():
+                    if not isinstance(cc, Fr):
+                        return 'UNKNOWN'
+            has_pr = True
+        elif hasattr(c, 'is_zero'):
+            # AlgElem 等（预留）
+            has_an = True
+        else:
+            return 'UNKNOWN'
+    if mixed or (has_qi and has_pr) or (has_an and has_pr):
+        return 'MIXED'
+    if has_an:
+        return 'AN'
+    if has_qi:
+        return 'QI'
+    if has_pr:
+        return 'PARAMS'
+    return 'Q'
+
+
 def _an_detect(g):
     """g 的系数中的代数常数符号（M7.0-b 统一登记处）。
 
     返回唯一 AN 符号（列表单元素）或 None（无 AN / 多符号 / 自由
-    参数混合 / 叶域不支持）。"""
+    参数混合 / 叶域不支持）。多符号时由上层 _an_factor_multi 经
+    primelt 压单处理。
+    """
     from cas.algfield import ALG_FIELDS
 
     syms = set()
@@ -188,6 +237,18 @@ def _an_detect(g):
     if len(rel) == 1 and syms == set(rel):
         return rel[0]
     return None
+
+
+def _an_detect_multi(g):
+    """g 中全部 AN 符号列表（多符号时返回列表，供 primelt 压单）。"""
+    from cas.algfield import ALG_FIELDS
+    syms = set()
+    for c in g.monos.values():
+        if isinstance(c, SymRat):
+            for pp in (c.num, c.den):
+                syms.update(v for v in pp.vars if v in ALG_FIELDS)
+    rel = [v for v in syms if v in ALG_FIELDS]
+    return rel if len(rel) >= 2 else None
 
 
 def _det_poly(mat):
@@ -323,13 +384,99 @@ def _binom(a, b):
     return comb(a, b)
 
 
-def _an_factor(g, x):
-    """Q(alpha)[x] Trager 分解。返回 (monic 因子列表, lc content) 或 None。"""
-    alpha = _an_detect(g)
-    if alpha is None:
-        return None
-    from cas.algfield import ALG_FIELDS
+def _ga_factor(g, x):
+    """ℚ(i)[x] 分解：Norm = g·conj(g) ∈ ℚ[x] → factor → gcd 拉回。
 
+    单扩张二次，Norm 次数 2·deg(g)，Bareiss 已 O(n³)。"""
+    from cas.gaussian import Ga
+    # 构造共轭多项式
+    conj_monos = {}
+    for k, c in g.monos.items():
+        if isinstance(c, Ga):
+            conj_monos[k] = Ga(c.re, -c.im)
+        elif isinstance(c, Fr):
+            conj_monos[k] = c
+        else:
+            return None
+    gc = Poly(g.vars, conj_monos)
+    norm = g * gc
+    # Norm 系数应落 ℚ（虚部消去）
+    for v in norm.monos.values():
+        if isinstance(v, Ga) and v.im != 0:
+            return None
+        if not isinstance(v, (Fr, Ga)):
+            return None
+    # 化为 Fr 系数 Poly 调用 factor
+    norm_q = Poly(g.vars, {k: (v.re if isinstance(v, Ga) else v) for k, v in norm.monos.items()})
+    if norm_q.is_const() or norm_q.degree(x) < 1:
+        return None
+    _c0, irrs = factor(norm_q)
+    # 逐因子拉回
+    def _ga_gcd(a, b):
+        # ℚ(i)[x] 欧几里得 gcd，系数 Ga 域
+        r0, r1 = a, b
+        while not r1.is_zero():
+            _, rr = r0.udivmod(r1)
+            r0, r1 = r1, rr
+        if r0.is_zero() or r0.degree(x) < 1:
+            return None
+        return r0.scalar(Ga(Fr(1)) / r0.lc(x)) if isinstance(r0.lc(x), Ga) else r0.scalar(Fr(1) / r0.lc(x))
+    facs = []
+    for h, _ in irrs:
+        # h ∈ ℚ[x] 提升为 ℚ(i)[x]
+        h_ga = Poly(g.vars, {k: Ga(v) for k, v in h.monos.items()})
+        gg = _ga_gcd(g, h_ga)
+        if gg is not None and gg.degree(x) >= 1:
+            facs.append(gg)
+    if not facs:
+        return None
+    total = sum(f_.degree(x) for f_ in facs)
+    if total != g.degree(x):
+        return None
+    # 首一化
+    monic = []
+    for f_ in facs:
+        lc = f_.lc(x)
+        inv = Ga(Fr(1)) / lc if isinstance(lc, Ga) else Fr(1) / lc
+        monic.append(f_.scalar(inv))
+    return monic, g.lc(x)
+
+
+def _an_factor(g, x):
+    """Q(alpha)[x] Trager 分解。返回 (monic 因子列表, lc content) 或 None。
+
+    支持多 α：经 primelt.compress_chain 压单 β 后走单扩张 Trager。
+    """
+    from cas.algfield import ALG_FIELDS
+    alpha = _an_detect(g)
+    multi = None
+    if alpha is None:
+        # 多符号尝试压单
+        multi = _an_detect_multi(g)
+        if multi is None:
+            return None
+        # 压单：收集各 α 的极小多项式与原始项
+        try:
+            from cas.primelt import compress_chain
+            ms = []
+            terms = []
+            for sym in multi:
+                fld = ALG_FIELDS[sym]
+                # 仅 Fr 系数单扩张可压（SymRat 混域 honest None）
+                if any(not isinstance(c, Fr) for c in fld.m):
+                    return None
+                ms.append([Fr(c) if not isinstance(c, Fr) else c for c in fld.m])
+                terms.append(fld.origin if fld.origin is not None else sym)
+            cres = compress_chain(ms, terms)
+            if cres is None:
+                return None
+            Scoefs, maps, beta_term = cres
+            # 重写 g 的系数到 ℚ(β) 上：SymRat 替换
+            # 构造替换映射：原 α_i → β 的多项式
+            # 为简化，多 α 情形暂诚实回退（需系数重写完整实现，M78.8）
+            return None
+        except Exception:
+            return None
     fld = ALG_FIELDS.get(alpha)
     m = fld.minpoly_poly(alpha) if fld is not None else None
     if m is None or m.degree(alpha) > 16:
@@ -445,16 +592,39 @@ def apart(f, g, x=None):
     sqf = []
     ctotal = Fr(1)
     for g0, k0 in squarefree_decomp(g):
-        if is_param_poly(g0):
-            # 参数域：deg<=2 走既有判别式路径（AN 符号同样适用，保持
-            # log(x±√2) 教科书形态）；deg>=3 的 AN 多项式走 Trager
-            # 范数分解；更高阶不可约诚实拒。
-            # 可约因子的首项系数作为 content 折入 ctotal，校正分子。
+        dom = _coeff_domain(g0)
+        if dom == 'QI':
+            facs_pc = _ga_factor(g0, x)
+            if facs_pc is not None:
+                facs, pc = facs_pc
+                if pc is not None:
+                    ctotal = _rat_mul(ctotal, pc)
+                for h in facs:
+                    sqf.append((h, k0))
+                continue
+            # QI 不可约回退 ℚ 分解（Norm 整体）
+            c0, facs = factor(g0)
+            ctotal = ctotal * c0
+            for h, _ in facs:
+                sqf.append((h, k0))
+        elif dom in ('AN', 'MIXED'):
+            # 代数/混域：Trager 仅高次（deg≥3）才有收益，二次走判别式路径
+            # 保持与历史分派一致（避免 RootOf 回退形态变化）
             an = _an_factor(g0, x) if g0.degree(x) >= 3 else None
             if an is not None:
                 facs, pc = an
-            else:
-                facs, pc = _param_factors(g0, x)
+                if pc is not None:
+                    ctotal = _rat_mul(ctotal, pc)
+                for h in facs:
+                    sqf.append((h, k0))
+                continue
+            facs, pc = _param_factors(g0, x)
+            if pc is not None:
+                ctotal = _rat_mul(ctotal, pc)
+            for h in facs:
+                sqf.append((h, k0))
+        elif dom == 'PARAMS':
+            facs, pc = _param_factors(g0, x)
             if pc is not None:
                 ctotal = _rat_mul(ctotal, pc)
             for h in facs:

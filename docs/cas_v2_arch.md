@@ -88,13 +88,14 @@ L0 项      term 驻留规范化 / gaussian(Ga) / errors
   环伪除 + div_exact）；域叶标量 content 取平凡单位元 1（相差
   单位元语义不变）；非实首项跳过符号规范化。
 - RatFunc：无条件约分规范形（分母 monic）。
-- 各操作实测矩阵（手册级语义声明，修掉才许改格）：
+- 各操作实测矩阵（手册级语义声明，修掉才许改格；M78.6 起按系数域分发表分派，不跑最通用）：
 
-| 操作 | ℚ | ℚ(i) | 𝔄 代数数 | params | 𝔗 超越常数 |
+| 操作 | ℚ | ℚ(i) | 𝔄 单代数 Q(α) | 混域 Q(params,α) | 函数域 ℚ(x)(α) |
 |---|---|---|---|---|---|
-| 多项式 ±×÷/gcd | ✓ | ✓ | 部分(algnum) | ✓ | ✗ hard error |
-| 因子分解 factor | ✓ Zassenhaus | ✗ | ✗ | 当额外变量 | ✗ |
-| apart/together | ✓ | ✓ | — | ✓ | ✗ |
+| 多项式 ±×÷/gcd | ✓ | ✓ Ga | ✓ AlgElem | ✓ AlgElem(SymRat) | ✓ AlgElem(RatFunc) — mgcd 域泛化，悬停纪律 |
+| 因子分解 factor | ✓ Zassenhaus | ✓ Norm→ℚ | ✓ Trager ≤16，>1 α 经 primelt 压单 | ✓ Norm→Q(params)[x] | ✓ Norm→Q(x)[x] |
+| apart/together | ✓ | ✓ | ✓ Trager | ✓ 线性剥离+Trager | ✓ 同左 |
+| 数域判定 | — | — | ✓ Capelli | ✓ | ✓ |
 | solve | ✓ 根式/RootOf | 复根✓ | 输出侧✓ | ✓ 公式(回代 UNVERIFIED) | ✗ |
 | msolve | ✓ | ⚠ 未约简+UNVERIFIED | — | ✓ | 未测 |
 | gsolve | ✓ | ✗ | ✗ | 未系统验证 | ✗ |

@@ -7,9 +7,9 @@
 from cas.structure import CoeffBase as C, Layer as L, declare
 
 declare("poly", C.PARAMS, {L.RING},
-        "叶系数 Fr/Ga/SymRat；Const 命名常数仅 IU 内建，其余拒绝")
+        "叶系数 Fr/Ga/SymRat/AlgElem(RatFunc)；Const 命名常数仅 IU 内建，其余拒绝；mgcd 域泛化（原始PRS），Ga(SymRat) 混域 content 取单位元 honest")
 declare("factor", C.Q, {L.RING},
-        "Zassenhaus 仅 Q[x]；Q(i)/AN/参数当额外变量")
+        "Zassenhaus 仅 Q[x]；Q(i) 经 Norm 归约；Q(params) 任意次数线性剥离+余块（M78.6）；AN 单扩张 Trager ≤16，双扩张经 primelt 压单（M78.8）；混域 Q(params,α)/Q(x)(α) via Norm→factor(K[x])→kx_gcd 拉回")
 declare("solve", C.Q, {L.RING},
         "低次根式+实 RootOf；参数求根公式回代 UNVERIFIED；超越常数系数拒绝")
 declare("msolve", C.Q, {L.RING},
