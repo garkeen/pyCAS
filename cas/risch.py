@@ -292,13 +292,7 @@ def _try_quad_algebraic(fa, fd, de, j):
             g_t = _T.times(f_sub, dx_dt)
             # g_t 仅含 t（及常数），转 RatFunc 并有理积分
             from cas.integrate import integrate_rational
-            # 转 Poly in t
-            try:
-                num_p = Poly.from_term(_T.subst(g_t, {}), (t,))
-            except Exception:
-                # g_t 含非多项式（log 等）则本快路不适用
-                return None
-            # 用 RatFunc 路径：需分子分母 Poly
+            # g_t 为 t 的有理函数，需通分后有理积分
             from cas.ops import together
             # 简化：直接用 integrate 理论中的有理积分入口处理 g_t
             # g_t 已是 t 的有理式（含 t 的负幂），用 Poly 转 RatFunc
