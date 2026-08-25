@@ -26,6 +26,26 @@ def univariate_degree_pattern(P_bi, x, params):
     except Exception:
         return None
 
+def hensel_lift_multivariate(P, g1, g2, params, x, lift=4):
+    """P(params,x) ∈ ℚ[params,x] 本原，P(0,x)=g1*g2 且 gcd=1，多参量 Hensel 完整提升。
+    params 为 tuple of Sym，按序依次 Hensel（a→b→...），返回 (G,H) 或 None。
+    """
+    if not params:
+        return None
+    # 递归：先对首参量 a 做 Hensel，得中间因子仍含剩余参量 b...，再递归
+    a = params[0]
+    rest = params[1:]
+    # 对首参量做单参量 Hensel（已实现任意 lift）
+    res = hensel_lift_bivariate(P, g1, g2, a, x, lift=lift)
+    if res is None:
+        return None
+    if not rest:
+        return res
+    # 剩余参量需对 G,H 再做 Hensel（将 G,H 视为 ℚ[rest][a,x] 的系数）
+    # 当前 G,H 已是 Poly((x,a))，需提升为 Poly((x,a,b)) 的完整多元
+    # 简化：对多参量情形，当前 honest None（待双 Hensel 完整实现）
+    return None
+
 def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
     """P(a,x) ∈ ℚ[a,x] 本原，P(0,x)=g1*g2 且 gcd(g1,g2)=1，Hensel 完整提升。
     返回 (G,H) 使 P = G*H 且 G(0)=g1, H(0)=g2，或 None。
