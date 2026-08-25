@@ -26,6 +26,16 @@ def univariate_degree_pattern(P_bi, x, params):
     except Exception:
         return None
 
+def hensel_lift_bivariate(P, g1, g2, a, x, lift=3):
+    """P(a,x) ∈ ℚ[a,x] 本原，P(0,x)=g1*g2 且 gcd(g1,g2)=1，Hensel 提升至 a^lift。
+    返回 (G,H) 使 P = G*H mod a^{lift} 且 G(0)=g1, H(0)=g2，或 None。
+    仅处理单参量 a 的二元情形，lift≤4。
+    """
+    # 简化：对 lift=3，直接待定系数法求 G = g1 + a*G1 + a^2*G2, H = g2 + a*H1 + ...
+    # 用 Poly 在 (x,a) 上比较系数，解线性方程组（Fr 系数）
+    # 当前骨架返回 None（unknown 粒度），完整实现需扩展欧几里得解 dG*H + dH*G = err
+    return None
+
 def primitive_param(g, x):
     """g ∈ ℚ(params)[x]，x 单变量。
     返回 (content, prim) 其中 content ∈ ℚ[params]（Poly），prim ∈ ℚ[params][x] 本原且首一或本原。
