@@ -101,22 +101,132 @@ def _try_multivariate_undetermined(P, g1, g2, params, x, d):
     from cas import term as T
     from cas.term import S
     p=len(params)
-    # 未知数命名
-    unknowns=[]
-    # G 系数：i=0..d, mask 0..2^p-1
-    # H 系数：j=0..n-d
     n=P.degree(x)
-    # 构造变量
-    # 为简化，仅处理 params 1-2 且线性，G 首一（最高次系数 1）
-    # 未知数包括 G 的低次系数和 H 的全部系数（除最高次）
-    # 用 S 构造符号
-    # 收集所有未知
-    # 例如 n=2,d=1: G=x+u0+u1*a+u2*b+u3*a*b, H=x+v0+v1*a+v2*b+v3*a*b
-    # 方程：G*H - P =0 的每个单项系数为 0
-    # 构造方程组 terms
-    # 为简化，直接暴力尝试：对 params 小集合，G,H 的系数为 Fr 线性组合
-    # 用 Groebner 求解
-    # 当前实现：对 n=2, d=1 的最简情形做完整 Groebner
+    if p>3 or n>4:
+        return None
+    # 对 n=3,d=1: G=x+u, H=x^2+v x+w, u,v,w ∈ ℚ[params] 线性
+    # 对 n=3,d=1 且 p≤2，直接 Groebner
+    if n==3 and d==1 and p<=2:
+        cnt=2**p
+        # 未知 u_mask (cnt), v_mask (cnt), w_mask (cnt) => 3*cnt 未知
+        u_syms=[S(f"_u{i}") for i in range(cnt)]
+        v_syms=[S(f"_v{i}") for i in range(cnt)]
+        w_syms=[S(f"_w{i}") for i in range(cnt)]
+        unknowns=u_syms+v_syms+w_syms
+        # 方程：G*H = (x+u)(x^2+v x+w) = x^3 + (u+v) x^2 + (u v + w) x + u w = P
+        # P = x^3 + p2 x^2 + p1 x + p0, p2,p1,p0 ∈ ℚ[params] 线性
+        # 比较 x^2,x^1,x^0 的各 mask 系数
+        def _coeff_masks(P, ex):
+            out={}
+            for kk,vv in P.monos.items():
+                if kk[P.vars.index(x)]==ex:
+                    mask=0
+                    for pi,par in enumerate(params):
+                        if par in P.vars and kk[P.vars.index(par)]==1:
+                            mask|=(1<<pi)
+                        elif par in P.vars and kk[P.vars.index(par)]>1:
+                            return None
+                    out[mask]=out.get(mask,Fr(0))+vv
+            return out
+        p2m=_coeff_masks(P,2)
+        p1m=_coeff_masks(P,1)
+        p0m=_coeff_masks(P,0)
+        if None in (p2m,p1m,p0m):
+            return None
+        eqs=[]
+        # x^2: u+v = p2
+        for mask in range(1<<p):
+            u=u_syms[mask]; v=v_syms[mask]
+            p2=p2m.get(mask,Fr(0))
+            eqs.append(T.plus(u, v, T.neg(T.N(p2))))
+        # x^1: u v + w = p1
+        for mask in range(1<<p):
+            lhs=T.N(0)
+            sub=mask
+            while True:
+                other=mask ^ sub
+                lhs=T.plus(lhs, T.times(u_syms[sub], v_syms[other]))
+                if sub==0:
+                    break
+                sub=(sub-1)&mask
+            lhs=T.plus(lhs, w_syms[mask])
+            p1=p1m.get(mask,Fr(0))
+            eqs.append(T.plus(lhs, T.neg(T.N(p1))))
+        # x^0: u w = p0
+        for mask in range(1<<p):
+            lhs=T.N(0)
+            sub=mask
+            while True:
+                other=mask ^ sub
+                lhs=T.plus(lhs, T.times(u_syms[sub], w_syms[other]))
+                if sub==0:
+                    break
+                sub=(sub-1)&mask
+            p0=p0m.get(mask,Fr(0))
+            eqs.append(T.plus(lhs, T.neg(T.N(p0))))
+        from cas.groebner import solve_system
+        import concurrent.futures
+        def _run():
+            return solve_system([T.mk(S("Eq"), (e, T.N(0))) for e in eqs], unknowns)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut=ex.submit(_run)
+                r=fut.result(timeout=5)
+        except Exception:
+            return None
+        sols=getattr(r,"solutions",None)
+        if not sols:
+            return None
+        for sol in sols:
+            if len(sol)!=len(unknowns):
+                continue
+            vals={}
+            ok=True
+            for sym,val in zip(unknowns, sol):
+                if T.is_num(val):
+                    vals[sym]=T.num_val(val)
+                else:
+                    ok=False; break
+            if not ok:
+                continue
+            def _build_poly(deg, coeff_syms):
+                # deg=1: G=x+u
+                # deg=2: H=x^2+v x+w
+                monos={}
+                if deg==1:
+                    monos[(1,)+(0,)*p]=Fr(1)
+                    for mask,sym in enumerate(coeff_syms):
+                        c=vals[sym]
+                        if c==0:
+                            continue
+                        exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                        key=(0,)+exps
+                        monos[key]=monos.get(key,Fr(0))+c
+                elif deg==2:
+                    monos[(2,)+(0,)*p]=Fr(1)
+                    # x^1 系数 v
+                    for mask,sym in enumerate(coeff_syms[:cnt]):
+                        c=vals[sym]
+                        if c==0:
+                            continue
+                        exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                        key=(1,)+exps
+                        monos[key]=monos.get(key,Fr(0))+c
+                    # x^0 系数 w
+                    for mask,sym in enumerate(coeff_syms[cnt:]):
+                        c=vals[sym]
+                        if c==0:
+                            continue
+                        exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                        key=(0,)+exps
+                        monos[key]=monos.get(key,Fr(0))+c
+                vars_=(x,)+tuple(params)
+                return Poly(vars_, monos)
+            G=_build_poly(1, u_syms)
+            H=_build_poly(2, v_syms+w_syms)
+            if G*H==P:
+                return G,H
+        return None
     if n==2 and d==1 and p<=2:
         # G = x + u0 + u1*a + u2*b (+ u3*a*b if p==2)
         # H = x + v0 + v1*a + v2*b (+ v3*a*b)
