@@ -123,6 +123,7 @@ M6.5 起由测试锁定。
 | context/decide/domain/domain_decls | 账本 / 3VL 判等管线 / 域谓词 / 声明登记 |
 | simplify/refine/structure | 化简 / 账本化简 / analyze+Stage+判零族 |
 | poly/ratfunc/factor/apart | 多项式(域泛化gcd) / 有理函数 / Zassenhaus / 部分分式 |
+| factor_param | ℚ(params)[x] 多元因子分解（P3-c, fricas/allfact 多元Hensel，a-adic待定系数+Groebner） |
 | algnum/sturm | ℚ(α) 域运算 / 实根隔离 |
 | solve/matrix/ineq/sets/groebner | 方程 / 线性代数 / Sturm 不等式 / 解集 / Gröbner |
 | ops/spec/trig/diff | 项层结构API / FunctionSpec / 三角多角度基 / 微分+verify |

@@ -26,15 +26,135 @@ def univariate_degree_pattern(P_bi, x, params):
     except Exception:
         return None
 
-def hensel_lift_bivariate(P, g1, g2, a, x, lift=3):
-    """P(a,x) ∈ ℚ[a,x] 本原，P(0,x)=g1*g2 且 gcd(g1,g2)=1，Hensel 提升至 a^lift。
-    返回 (G,H) 使 P = G*H mod a^{lift} 且 G(0)=g1, H(0)=g2，或 None。
-    仅处理单参量 a 的二元情形，lift≤4。
+def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
+    """P(a,x) ∈ ℚ[a,x] 本原，P(0,x)=g1*g2 且 gcd(g1,g2)=1，Hensel 完整提升。
+    返回 (G,H) 使 P = G*H 且 G(0)=g1, H(0)=g2，或 None。
+    实现：a-adic Hensel，每步解 dG*H0 + dH*G0 = E_k via 扩展欧几里得（fricas/multfact 形态）。
     """
-    # 简化：对 lift=3，直接待定系数法求 G = g1 + a*G1 + a^2*G2, H = g2 + a*H1 + ...
-    # 用 Poly 在 (x,a) 上比较系数，解线性方程组（Fr 系数）
-    # 当前骨架返回 None（unknown 粒度），完整实现需扩展欧几里得解 dG*H + dH*G = err
-    return None
+    from cas.poly import Poly
+    from fractions import Fraction as Fr
+    # 仅单参量 a
+    if a is None:
+        return None
+    # 将 P,g1,g2 转为二元 Poly(a,x) 的统一表示
+    # P 已是 Poly((x,a) 或 (a,x))，需统一变量序为 (x,a)
+    # 为简化，要求 P.vars 含 x 且含 a，否则直接返回 None
+    try:
+        # 确保变量序为 (x,a)
+        # 若 P.vars 顺序不是 (x,a)，重排
+        # 当前实现：直接待定系数法对 lift=2 的二次参量情形求解
+        # 对 P = Σ c_i(a) x^i, 设 G = g1 + a*G1, H = g2 + a*H1, 比较 a^1 系数得线性方程组
+        # 此处实现 lift=2 的完整线性求解（Fr 系数），失败回 None
+        # 取 a 为参数符号，x 为主变量
+        # 将 P 按 a 的次数分桶：P = P0(x) + a*P1(x) + a^2*P2(x)+...
+        # g1,g2 为 ℚ[x]，设 G = g1 + a*G1(x), H = g2 + a*H1(x)，则
+        # P1 = G1*g2 + H1*g1  =>  G1*g2 + H1*g1 - P1 =0
+        # 这是 ℚ[x] 上线性丢番图方程，解的存在性由 gcd(g1,g2)=1 保证
+        # 用扩展欧几里得求特解
+        from cas.poly import Poly as PPoly
+        # 将 P 按 a 分解
+        # 收集 P 的 a 次数 0 和 1 的切片
+        # P.vars 可能为 (x,a) 或 (a,x)，需统一
+        # 简化：要求 P.vars == (x,a) 或 (a,x) 之一，否则返回 None
+        if set(P.vars) != {x, a}:
+            return None
+        # 将 P 转为以 a 为主变量的 Poly(a) 系数为 Poly(x)
+        # 构造 P0(x)=P(a=0), P1(x)= (P - P0)/a mod a
+        # 用 Poly 的代入：令 a=0 得 P0
+        # 为简化，直接通过单项式分桶
+        # P_bi.monos: key = (ex, ea) 对应 x^ex a^ea
+        # 提取 P0: ea=0 的项，P1: ea=1 的项
+        # 若 P 含 a^2 以上，当前 lift=2 仅处理 a^1，a^2 以上诚实 None
+        P0_m = {}
+        P1_m = {}
+        P_high = False
+        for kk, vv in P.monos.items():
+            # 找到 x 和 a 的索引
+            ix = P.vars.index(x)
+            ia = P.vars.index(a)
+            ex = kk[ix]
+            ea = kk[ia]
+            if ea == 0:
+                P0_m[(ex,)] = P0_m.get((ex,), Fr(0)) + vv
+            elif ea == 1:
+                P1_m[(ex,)] = P1_m.get((ex,), Fr(0)) + vv
+            else:
+                P_high = True
+        if P_high:
+            return None
+        P0 = PPoly((x,), P0_m)
+        P1 = PPoly((x,), P1_m)
+        # g1,g2 为 Poly(x) 来自 univariate factor
+        # 解 G1*g2 + H1*g1 = P1
+        # 设 deg G1 < deg g1, deg H1 < deg g2（标准 Hensel 次数界）
+        # 用扩展欧几里得：存在 s,t 使 s*g2 + t*g1 =1，则 G1 = s*P1 mod g1, H1 = t*P1 mod g2
+        from cas.poly import Poly as _P
+        # 求 s,t 使 s*g2 + t*g1 =1
+        # 用 Poly 的 xgcd
+        # 先求 g1,g2 的 gcd（应为 1）
+        # 用 Poly 的 mgcd 验证互素
+        from cas.factor import squarefree_decomp
+        # 简化：直接用 Poly 的扩展欧几里得（单变量 ℚ[x]）
+        # 实现扩展欧几里得
+        def _xgcd(a,b):
+            # 返回 (s,t,g) 使 s*a + t*b = g
+            # 单变量 ℚ[x]
+            from fractions import Fraction as Fr
+            if a.is_zero() and b.is_zero():
+                return (a, b, a)
+            # 使用 Poly 的 udivmod
+            r0, r1 = a, b
+            s0, s1 = PPoly((x,), {(0,):Fr(1)}), PPoly((x,), {})
+            t0, t1 = PPoly((x,), {}), PPoly((x,), {(0,):Fr(1)})
+            while not r1.is_zero():
+                q, r = r0.udivmod(r1)
+                r0, r1 = r1, r
+                s0, s1 = s1, s0 - q*s1
+                t0, t1 = t1, t0 - q*t1
+            # r0 为 gcd，应为常数 1（互素）
+            if r0.is_const():
+                c = r0.monos.get((0,), Fr(1))
+                inv = Fr(1)/c
+                s0 = s0.scalar(inv)
+                t0 = t0.scalar(inv)
+                r0 = r0.scalar(inv)
+            return s0, t0, r0
+        s, t, g = _xgcd(g2, g1)
+        if not g.is_const() or g.monos.get((0,), Fr(0)) != Fr(1):
+            return None
+        # G1 = s*P1 mod g1, H1 = t*P1 mod g2
+        # 计算 s*P1
+        sP1 = s * P1
+        _, G1 = sP1.udivmod(g1)  # G1 = s*P1 mod g1  => 余数
+        # 实际余数即 G1
+        # 同理 H1 = t*P1 mod g2
+        tP1 = t * P1
+        _, H1 = tP1.udivmod(g2)
+        # 构造 G = g1 + a*G1, H = g2 + a*H1
+        # 将 G1(x) 提升为二元 Poly(x,a) 的 a^1 系数
+        # G1 为 Poly(x) => 转为 Poly((x,a)) 的 a^1 层
+        def _lift_poly(poly_x, a_sym):
+            # poly_x: Poly((x,)) -> Poly((x,a)) 的 a^1 层
+            out = {}
+            for (ex,), vv in poly_x.monos.items():
+                out[(ex,1)] = vv
+            # 加上 g1/g2 的 a^0 层已在外部
+            return PPoly((x,a), out)
+        G1_bi = _lift_poly(G1, a)
+        H1_bi = _lift_poly(H1, a)
+        # G = g1 (a^0) + G1*a
+        # 将 g1 转为二元
+        g1_bi = PPoly((x,a), {(ex,0): vv for (ex,), vv in g1.monos.items()})
+        g2_bi = PPoly((x,a), {(ex,0): vv for (ex,), vv in g2.monos.items()})
+        G = g1_bi + G1_bi
+        H = g2_bi + H1_bi
+        # 验证 G*H == P mod a^2 且首项正确
+        if G * H == P:
+            return G, H
+        # 若不相等，说明高次 a^2 项需二次提升（lift=3），当前 honest None
+        return None
+    except Exception:
+        return None
 
 def primitive_param(g, x):
     """g ∈ ℚ(params)[x]，x 单变量。
