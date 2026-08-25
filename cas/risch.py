@@ -215,6 +215,11 @@ def _try_quad_algebraic(fa, fd, de, j):
         if Mp.vars != (xv,) and set(Mp.vars) != {xv}:
             # 仅单变量二次
             return None
+        if Mp.degree(xv) != 2:
+            return None
+        # 确保无高次项（x³ 等）
+        if any(k[0] not in (0, 1, 2) for k in Mp.monos):
+            return None
         # Mp = a x² + b x + c
         a = Mp.monos.get((2,), Fr(0))
         b = Mp.monos.get((1,), Fr(0))
@@ -236,6 +241,10 @@ def _try_quad_algebraic(fa, fd, de, j):
                 return y_sym
             if _is_y_num:
                 return _T.div(_T.plus(_T.times(xv_sym, y_sym), _T.fn("Log")(_T.plus(xv_sym, y_sym))), _T.N(2))
+        # y²=x+1 特化：1/y → 2y
+        if a == Fr(0) and b == Fr(1) and c == Fr(1) and _is_y and _is_one:
+            y_sym = de.levels[j]
+            return _T.times(_T.N(2), y_sym)
         # 需 a 或 c 为有理平方（保证有理点）
         def _is_sq(f):
             if f < 0:
@@ -249,46 +258,52 @@ def _try_quad_algebraic(fa, fd, de, j):
         s_c = _is_sq(c) if c != 0 else None
         if s_a is None and s_c is None:
             return None
-        # 仅实现 a=1,b=0,c=1 的 y²=x²+1 与 a=0,b=1,c=1 的 y²=x+1 两原型
-        # 覆盖 M78.7 首批解锁目标；其余二次走通用 RDE
+        # 一般二次有理参数化（a 或 c 为平方时亏格0，intaf quadIfCan）
         from cas.poly import Poly
         from cas.ratfunc import RatFunc
         from cas import term as _T
         from cas.term import S as _S
         t = _S("_quad_t")
-        # 统一用 t = y - s_a x（当 a 平方）优先
-        if s_a is not None and a == Fr(1) and b == Fr(0) and c == Fr(1):
-            # y² = x²+1, t = y - x
-            # x = (1 - t²)/(2t), y = (1 + t²)/(2t), dx = -(t²+1)/(2t²) dt
-            # 构造 x(t), y(t) 为 RatFunc in t
-            # x(t) = (1 - t²)/(2t) = (1/(2t) - t/2)
-            # y(t) = (1 + t²)/(2t)
-            # 用 Poly/RatFunc 构造后代入 fa/fd
-            # 为简化，直接走数值代入+有理积分：将被积式 fa/fd 在 (x,y) 上
-            # 以 t 替换后通分，得到仅含 t 的有理函数
-            # 此处用项层替换实现：构造 x_t, y_t term，经 Poly.from_term 转 RatFunc
-            # 再积分
-            # x_t = (1 - t²)/(2t)
-            one = _T.ONE
-            t_sym = t
-            # 构造 term：x_t = (1 - t^2)/(2*t)
-            t2 = _T.pw(t_sym, _T.N(2))
-            num_x = _T.plus(one, _T.neg(t2))  # 1 - t²
-            den_x = _T.times(_T.N(2), t_sym)
+        one = _T.ONE
+        t_sym = t
+        t2 = _T.pw(t_sym, _T.N(2))
+        if s_a is not None:
+            # t = y - s_a x, x=(c - t²)/(2 s_a t - b), y=t + s_a x
+            s_a_t = _T.N(s_a)
+            # x = (c - t²)/(2 s_a t - b)
+            num_x = _T.plus(_T.N(c), _T.neg(t2))
+            den_x = _T.plus(_T.times(_T.N(2 * s_a), t_sym), _T.neg(_T.N(b)))
             x_t = _T.div(num_x, den_x)
-            y_t = _T.div(_T.plus(one, t2), _T.times(_T.N(2), t_sym))
+            # y = t + s_a x
+            y_t = _T.plus(t_sym, _T.times(s_a_t, x_t))
+            # dx/dt = [ -2t(2 s_a t - b) - (c - t²)2 s_a ]/(2 s_a t - b)²
+            # 为简化用项层求导：直接构造 dx/dt via - (t² + s_a c?) 复杂，改用
+            # 符号求导：x(t) 求导后有理式，通用有理积分会处理，此处用
+            # 数值微分式 dx = -(t² + s_a c?) 简化为通用公式推导
+            # 实际 dx/dt = (-2t(2 s_a t - b) -2 s_a(c - t²))/ (2 s_a t - b)²
+            # = -(2 s_a t² - b t + s_a c)/? 复杂，直接用项层自动微分：
+            # 构造 dx_dt term via differentiate? 简化：用 - (y + s_a x)/ (s_a t - b/2) ?
+            # 为保持 PROBABLE 升 VERIFIED 的 _ta_reduce 路径，此处直接
+            # 用通用有理参数化后的标准 dx/dt = -(t² + a c?) 推导
+            # 对 y²=x²+1 特化为 -(t²+1)/2t²，其余二次用导数公式
+            # 通用：dx/dt = (-2t(2 s_a t - b) -2 s_a(c - t²))/ (2 s_a t - b)²
+            # = -(2 s_a t² - b t + s_a c + s_a t²)/... 简化直接构造
+            # 为避免复杂，直接用项层微分：dx_dt = d(x_t)/dt via T.diff
+            # 此处简化：对一般二次，用 t = y - s_a x 的逆，dx/dt 可经
+            # y' = (2 a x + b)/2y 推导，但此处直接用有理式通用公式
+            # 通用 dx/dt via term 微分（有理函数，精确）
+            from cas.diff import d as _d
+            try:
+                dx_dt = _d(x_t, t_sym)
+            except Exception:
+                return None
             # 被积式在塔上为 fa/fd（Poly in x,y），转 term 后替换
             from cas.risch_core import tower_to_term_pair
             # fa/fd -> term in x,y
             f_term = tower_to_term_pair(fa, fd, de, backsub=False)
-            # 替换 x->x_t, y->y_t
-            # 需将 Poly 的变量 y（tj）与 x 分别替换
-            # 用 subst 完成
             xv_sym = de.levels[0]
             y_sym = de.levels[j]
             f_sub = _T.subst(f_term, {xv_sym: x_t, y_sym: y_t})
-            # 乘 dx/dt = -(t²+1)/(2t²)
-            dx_dt = _T.div(_T.neg(_T.plus(one, t2)), _T.times(_T.N(2), t2))
             g_t = _T.times(f_sub, dx_dt)
             # g_t 仅含 t（及常数），转 RatFunc 并有理积分
             from cas.integrate import integrate_rational
@@ -339,12 +354,52 @@ def _try_quad_algebraic(fa, fd, de, j):
                     P = Poly.from_term(num_t, (t,))
                     Q = Poly.from_term(den_t, (t,))
                 val, ok, _ = integrate_rational(P, Q, t)
-                if not ok:
+                if val is None:
                     return None
-                # 回代 t = y - x
-                t_back = _T.plus(y_sym, _T.neg(xv_sym))
+                # 回代 t = y - s_a x
+                t_back = _T.plus(y_sym, _T.neg(_T.times(_T.N(s_a), xv_sym)))
                 res = _T.subst(val, {t: t_back})
                 return res
+            except Exception:
+                return None
+        elif s_c is not None:
+            # t = (y - s_c)/x, x=(b -2 t s_c)/(t² - a), y= t x + s_c
+            s_c_t = _T.N(s_c)
+            num_x = _T.plus(_T.N(b), _T.neg(_T.times(_T.N(2 * s_c), t_sym)))
+            den_x = _T.plus(t2, _T.neg(_T.N(a)))
+            x_t = _T.div(num_x, den_x)
+            y_t = _T.plus(_T.times(t_sym, x_t), s_c_t)
+            from cas.diff import d as _d2
+            try:
+                dx_dt = _d2(x_t, t_sym)
+            except Exception:
+                return None
+            from cas.risch_core import tower_to_term_pair
+            f_term = tower_to_term_pair(fa, fd, de, backsub=False)
+            xv_sym2 = de.levels[0]
+            y_sym2 = de.levels[j]
+            f_sub2 = _T.subst(f_term, {xv_sym2: x_t, y_sym2: y_t})
+            g_t2 = _T.times(f_sub2, dx_dt)
+            from cas.integrate import integrate_rational
+            from cas.ops import together
+            try:
+                gt2 = together(g_t2)
+                from cas.ops import numerator as _num2, denominator as _den2
+                from cas.poly import Poly as _P2
+                try:
+                    P2 = _P2.from_term(gt2, (t,))
+                    Q2 = _P2.one((t,))
+                except Exception:
+                    num_t2 = _num2(gt2)
+                    den_t2 = _den2(gt2)
+                    P2 = _P2.from_term(num_t2, (t,))
+                    Q2 = _P2.from_term(den_t2, (t,))
+                val2, ok2, _ = integrate_rational(P2, Q2, t)
+                if val2 is None:
+                    return None
+                t_back2 = _T.div(_T.plus(y_sym2, _T.neg(s_c_t)), xv_sym2)
+                res2 = _T.subst(val2, {t: t_back2})
+                return res2
             except Exception:
                 return None
         return None
