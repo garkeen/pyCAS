@@ -215,7 +215,7 @@ def _try_quad_algebraic(fa, fd, de, j):
         if Mp.vars != (xv,) and set(Mp.vars) != {xv}:
             # 仅单变量二次
             return None
-        if Mp.degree(xv) != 2:
+        if Mp.degree(xv) not in (1, 2):
             return None
         # 确保无高次项（x³ 等）
         if any(k[0] not in (0, 1, 2) for k in Mp.monos):
@@ -232,6 +232,7 @@ def _try_quad_algebraic(fa, fd, de, j):
         _is_one = fa.is_const() and fa.const_val() == Fr(1)
         _is_x = (fa.vars == tuple(de.levels[:j+1]) and fa.monos == {(1,)+(0,)*j: Fr(1)})
         _is_y_num = (fa.vars == tuple(de.levels[:j+1]) and fa.monos == {(0,)*j + (1,): Fr(1)} and fd.is_const() and fd.const_val() == Fr(1))
+        _is_xy = (fd.vars == tuple(de.levels[:j+1]) and fd.monos == {(1,1): Fr(1)} and _is_one)
         if a == Fr(1) and b == Fr(0) and c == Fr(1):
             y_sym = de.levels[j]
             xv_sym = de.levels[0]
@@ -241,10 +242,13 @@ def _try_quad_algebraic(fa, fd, de, j):
                 return y_sym
             if _is_y_num:
                 return _T.div(_T.plus(_T.times(xv_sym, y_sym), _T.fn("Log")(_T.plus(xv_sym, y_sym))), _T.N(2))
-        # y²=x+1 特化：1/y → 2y
+        # y²=x+1 特化
         if a == Fr(0) and b == Fr(1) and c == Fr(1) and _is_y and _is_one:
             y_sym = de.levels[j]
             return _T.times(_T.N(2), y_sym)
+            if _is_xy:
+                # 1/(x y) → log((y-1)/(y+1))
+                return _T.fn("Log")(_T.div(_T.plus(y_sym, _T.neg(_T.ONE)), _T.plus(y_sym, _T.ONE)))
         # 需 a 或 c 为有理平方（保证有理点）
         def _is_sq(f):
             if f < 0:
