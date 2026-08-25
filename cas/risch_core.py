@@ -774,6 +774,9 @@ def build_extension(f, x):
 
     try:
         fa, fd = _frac_from_term(g, de.vars)
+        # 代数层规范形：约简指数 < q（M78.3 _ta_reduce）
+        fa = _ta_reduce(fa, de)
+        fd = _ta_reduce(fd, de)
     except PolyError as ex:
         raise RischUnsupported("not rational over the extension: " + str(ex))
     return de, fa, fd

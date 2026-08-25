@@ -146,9 +146,9 @@ class TestAlgebraicRational(unittest.TestCase):
         # M78.7a：y²=x²+1 经 quadIfCan 已解锁；仍诚实拒答的例子改为 y²=x³+1（椭圆）
         with self.assertRaises(Exception):
             self.integ("1/sqrt(x^3+1)")
-        # 解锁验证：1/√(x²+1) 现通（PROBABLE 亦为诚实有理参数化结果，M78.7b 后升级 VERIFIED）
+        # 解锁验证：1/√(x²+1) 现通且 VERIFIED（_ta_reduce 修复后塔内精确归零）
         F, ok, _, _ = self.integ("1/sqrt(x^2+1)")
-        self.assertIsNotNone(F)
+        self.assertTrue(ok)
         self.assertIn("log", to_str(F))
 
     def test_trager_cubic_factorization(self):
