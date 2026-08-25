@@ -64,45 +64,30 @@ def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
         # 为简化，直接通过单项式分桶
         # P_bi.monos: key = (ex, ea) 对应 x^ex a^ea
         # 提取 P0: ea=0 的项，P1: ea=1 的项
-        # 若 P 含 a^2 以上，当前 lift=2 仅处理 a^1，a^2 以上诚实 None
-        P0_m = {}
-        P1_m = {}
-        P_high = False
-        for kk, vv in P.monos.items():
-            # 找到 x 和 a 的索引
-            ix = P.vars.index(x)
-            ia = P.vars.index(a)
-            ex = kk[ix]
-            ea = kk[ia]
-            if ea == 0:
-                P0_m[(ex,)] = P0_m.get((ex,), Fr(0)) + vv
-            elif ea == 1:
-                P1_m[(ex,)] = P1_m.get((ex,), Fr(0)) + vv
-            else:
-                P_high = True
-        if P_high:
-            return None
-        P0 = PPoly((x,), P0_m)
-        P1 = PPoly((x,), P1_m)
-        # g1,g2 为 Poly(x) 来自 univariate factor
-        # 解 G1*g2 + H1*g1 = P1
-        # 设 deg G1 < deg g1, deg H1 < deg g2（标准 Hensel 次数界）
-        # 用扩展欧几里得：存在 s,t 使 s*g2 + t*g1 =1，则 G1 = s*P1 mod g1, H1 = t*P1 mod g2
-        from cas.poly import Poly as _P
+        # 将 P 按 a 的次数分桶：P_k(x) 为 a^k 系数
+        max_a = max(kk[P.vars.index(a)] for kk in P.monos) if P.monos else 0
+        Pks = []
+        for k in range(max_a+1):
+            m = {}
+            for kk, vv in P.monos.items():
+                if kk[P.vars.index(a)] == k:
+                    # x 指数
+                    ex = kk[P.vars.index(x)]
+                    m[(ex,)] = m.get((ex,), Fr(0)) + vv
+            Pks.append(PPoly((x,), m))
+        # 迭代 Hensel：对 k=1..max_a 求 G_k, H_k
+        # 初始化 G0=g1, H0=g2
+        # 已验证 P0 = g1*g2 (因 P(0)=g1*g2)
+        # 对每 k，解 G_k*g2 + H_k*g1 = E_k
+        # 其中 E_k = P_k - Σ_{i=1}^{k-1} G_i*H_{k-i}
+        # 用扩展欧几里得求特解后模 g1/g2 归约次数
+        Gs = [None]*(max_a+1)
+        Hs = [None]*(max_a+1)
+        # G0, H0 来自 g1,g2
+        Gs[0] = g1
+        Hs[0] = g2
         # 求 s,t 使 s*g2 + t*g1 =1
-        # 用 Poly 的 xgcd
-        # 先求 g1,g2 的 gcd（应为 1）
-        # 用 Poly 的 mgcd 验证互素
-        from cas.factor import squarefree_decomp
-        # 简化：直接用 Poly 的扩展欧几里得（单变量 ℚ[x]）
-        # 实现扩展欧几里得
         def _xgcd(a,b):
-            # 返回 (s,t,g) 使 s*a + t*b = g
-            # 单变量 ℚ[x]
-            from fractions import Fraction as Fr
-            if a.is_zero() and b.is_zero():
-                return (a, b, a)
-            # 使用 Poly 的 udivmod
             r0, r1 = a, b
             s0, s1 = PPoly((x,), {(0,):Fr(1)}), PPoly((x,), {})
             t0, t1 = PPoly((x,), {}), PPoly((x,), {(0,):Fr(1)})
@@ -111,7 +96,6 @@ def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
                 r0, r1 = r1, r
                 s0, s1 = s1, s0 - q*s1
                 t0, t1 = t1, t0 - q*t1
-            # r0 为 gcd，应为常数 1（互素）
             if r0.is_const():
                 c = r0.monos.get((0,), Fr(1))
                 inv = Fr(1)/c
@@ -122,37 +106,40 @@ def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
         s, t, g = _xgcd(g2, g1)
         if not g.is_const() or g.monos.get((0,), Fr(0)) != Fr(1):
             return None
-        # G1 = s*P1 mod g1, H1 = t*P1 mod g2
-        # 计算 s*P1
-        sP1 = s * P1
-        _, G1 = sP1.udivmod(g1)  # G1 = s*P1 mod g1  => 余数
-        # 实际余数即 G1
-        # 同理 H1 = t*P1 mod g2
-        tP1 = t * P1
-        _, H1 = tP1.udivmod(g2)
-        # 构造 G = g1 + a*G1, H = g2 + a*H1
-        # 将 G1(x) 提升为二元 Poly(x,a) 的 a^1 系数
-        # G1 为 Poly(x) => 转为 Poly((x,a)) 的 a^1 层
-        def _lift_poly(poly_x, a_sym):
-            # poly_x: Poly((x,)) -> Poly((x,a)) 的 a^1 层
+        # 迭代求 Gk, Hk
+        for k in range(1, max_a+1):
+            Pk = Pks[k] if k < len(Pks) else PPoly((x,), {})
+            # 计算 E_k
+            Ek = Pk
+            for i in range(1, k):
+                if Gs[i] is not None and Hs[k-i] is not None:
+                    Ek = Ek - Gs[i]*Hs[k-i]
+            # 解 Gk*g2 + Hk*g1 = Ek, 取 Gk = s*Ek mod g1, Hk = t*Ek mod g2
+            sEk = s * Ek
+            _, Gk = sEk.udivmod(g1)
+            # 余数即 Gk
+            tEk = t * Ek
+            _, Hk = tEk.udivmod(g2)
+            Gs[k] = Gk
+            Hs[k] = Hk
+        # 构造 G,H 从 Gs/Hs（已迭代至 max_a）
+        def _to_bi_general(poly_list):
             out = {}
-            for (ex,), vv in poly_x.monos.items():
-                out[(ex,1)] = vv
-            # 加上 g1/g2 的 a^0 层已在外部
+            for k, poly in enumerate(poly_list):
+                if poly is None or poly.is_zero():
+                    continue
+                for (ex,), vv in poly.monos.items():
+                    # 合并同指数（a^k 层可能多项式相加已在 Gs[k] 内）
+                    out[(ex, k)] = out.get((ex, k), Fr(0)) + vv
             return PPoly((x,a), out)
-        G1_bi = _lift_poly(G1, a)
-        H1_bi = _lift_poly(H1, a)
-        # G = g1 (a^0) + G1*a
-        # 将 g1 转为二元
-        g1_bi = PPoly((x,a), {(ex,0): vv for (ex,), vv in g1.monos.items()})
-        g2_bi = PPoly((x,a), {(ex,0): vv for (ex,), vv in g2.monos.items()})
-        G = g1_bi + G1_bi
-        H = g2_bi + H1_bi
-        # 验证 G*H == P mod a^2 且首项正确
-        if G * H == P:
-            return G, H
-        # 若不相等，说明高次 a^2 项需二次提升（lift=3），当前 honest None
-        return None
+        try:
+            G = _to_bi_general(Gs)
+            H = _to_bi_general(Hs)
+            if G * H == P:
+                return G, H
+            return None
+        except Exception:
+            return None
     except Exception:
         return None
 
