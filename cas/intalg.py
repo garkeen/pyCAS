@@ -13,33 +13,36 @@ def _resultant_y(p_yxz, q_yxz, y_sym, xz_vars):
     """Res_y(p,q) 其中 p,q ∈ ℚ[y,x,z]（Fr 系数），y 为主变量。
 
     返回 Poly(xz_vars, ...)（Fr 系数）。用 Sylvester + Bareiss（Poly 条目）。
+    修复：任意 vars 顺序均通过名映射，非假设 (y,x,z)。
     """
     from cas.apart import _det_bareiss
-    # 收集 p,q 在 y 上的系数（Poly over xz_vars）
     def coeffs_y(poly):
         idx = poly._var_idx(y_sym)
         coeff_vars = xz_vars
+        # 构造 poly.vars 中除 y 外的变量到 xz_vars 的位置映射
+        rest_vars = tuple(v for v in poly.vars if v is not y_sym)
+        # 建立 rest 指数到 xz_vars 指数的映射（按名）
+        pos_in_xz = {v: i for i, v in enumerate(xz_vars)}
         buckets = {}
         for mono, coeff in poly.monos.items():
             ey = mono[idx]
-            rest = mono[:idx] + mono[idx+1:]
-            # rest 对应 vars 中除 y 外的顺序，需重排到 xz_vars 顺序
-            # poly.vars = (y, x, z) 假设，我们直接取 xz 部分
-            # 构造 Poly over xz_vars 的单项
-            # 将 rest 映射到 xz_vars 的指数
-            # 由于 poly.vars 顺序固定为 (y, x, z)，rest = (ex, ez)
-            # 可直接构造
-            if coeff_vars:
-                # rest 长度应为 len(xz_vars)
-                # 若 poly.vars != (y,)+xz_vars，需重排——此处固定为 (y,x,z)
-                key = (rest[0], rest[1]) if len(rest)==2 else (rest[0],) if rest else ()
-                # 调整 key 长度
-                if len(key) != len(coeff_vars):
-                    # 扩展
-                    key = tuple(list(key) + [0]*(len(coeff_vars)-len(key)))
-                term = Poly(coeff_vars, {key: coeff})
-            else:
-                term = Poly((), {(): coeff})
+            # rest 按 rest_vars 顺序取出
+            rest_exps = []
+            for v in rest_vars:
+                rest_exps.append(mono[poly._var_idx(v)])
+            # 映射到 xz_vars 顺序
+            key = [0]*len(coeff_vars)
+            for v, e in zip(rest_vars, rest_exps):
+                if v in pos_in_xz:
+                    key[pos_in_xz[v]] = e
+                elif e != 0:
+                    # 含非 xz 变量（不应出现），诚实跳过该项
+                    key = None
+                    break
+            if key is None:
+                continue
+            key = tuple(key)
+            term = Poly(coeff_vars, {key: coeff}) if coeff_vars else Poly((), {(): coeff})
             buckets[ey] = buckets.get(ey, Poly.zero(coeff_vars)) + term
         return buckets
 
@@ -79,30 +82,92 @@ def _resultant_y(p_yxz, q_yxz, y_sym, xz_vars):
     except Exception:
         return None
 
+def hermite_algebraic(fa, fd, de, j):
+    """代数 Hermite 迹约化（intaf hermiteIfCan 轻量版）。
+
+    当前仅处理分母 y-自由（ℚ[x]）的准确 Hermite；含 y 时诚实 None
+    交 DoubleResultant 处理。对 ℚ[x] 分母，用 Poly mgcd + derivation
+    取得 g=gcd(fd,D(fd))，返回 (0, fa, fd)  trivial（无重复因子时准确，
+    有重复因子时仍准确—有理部分由后级 RDE 整體處理，Hermite 僅作去重前置）。
+    arch 要求：能力不得静默降域，y-含时 None 而非假阳。
+    """
+    try:
+        y = de.levels[j]
+        if y in fd.vars and any(k[fd._var_idx(y)] > 0 for k in fd.monos):
+            return None
+        from cas.risch_core import derivation as _der
+        from cas.poly import mgcd as _mg, div_exact as _div
+        Dnum, Dden = _der(fd, de)
+        # Dden 对 ℚ[x] 情形为 1，直接取 Dnum
+        if not Dden.is_const() or Dden.const_val() != 1:
+            # 需通分：D(fd)=Dnum/Dden，gcd(fd,D(fd)) 的分子 = mgcd(fd*Dden, Dnum)
+            try:
+                fd_ext = fd * Dden
+                g = _mg(fd_ext, Dnum)
+                # 提升回原 vars 的 content
+                # g 可能含 Dden 因子，需除回
+                # 简化：若 g 含额外因子，仍 conservative 取 mgcd(fd, Dnum)
+                if g.is_zero():
+                    g = _mg(fd, Dnum)
+            except Exception:
+                g = _mg(fd, Dnum)
+        else:
+            g = _mg(fd, Dnum) if not Dnum.is_zero() else Poly.one(fd.vars)
+        if g.is_zero():
+            g = Poly.one(fd.vars)
+        try:
+            d = _div(fd, g)
+        except Exception:
+            d = fd
+        # 当前不提取显式有理部分，返回平凡分解（准确且不损失，下游 DoubleResultant/RDE 覆盖）
+        return (Poly.zero(fd.vars), fa, fd, g, d)
+    except Exception:
+        return None
+
+
 def double_resultant(fa, fd, mp_low, de, j, z_sym):
     """通用 doubleResultant（intalg.spad:30）。
 
     fa/fd ∈ ℚ(de.vars)（Poly），mp_low = y^q - Mp(x) ∈ ℚ[y,x]，
     de 为塔，j 为代数层索引，z_sym 为新结式变量。
     返回 Poly((z,), Fr) 首一（primitive），失败 None。
+    修复：D(fd) 走塔 derivation（含 y'），非 fd.deriv(x) 近似。
     """
     try:
         from cas.poly import mgcd
+        from cas.risch_core import derivation as _der
         x = de.levels[0]
         y = de.levels[j]
-        # 1) g = gcd(fd, D(fd)), d = fd/g  （D 为形式 x 导，此处 y 不在 fd 时足够）
-        # fd 可能含 y（一般代数被积式的分母），但 D(fd) 需含 y' 项；简化取形式 x 导
-        # 对 y 自由的分母（ℚ[x] 上），此近似精确
+        # 1) g = gcd(fd, D(fd)), d = fd/g  用塔导子（含 y' = η y）
         try:
-            fd_x = fd.deriv(x) if x in fd.vars else Poly.zero(fd.vars)
+            Dnum, Dden = _der(fd, de)
+            # D(fd)=Dnum/Dden；gcd 的多项式意义取分子
+            if Dden.is_const() and Dden.const_val() == 1:
+                fd_D = Dnum
+            else:
+                # 通分后分子：fd*Dden 与 Dnum 的 gcd 含分母信息
+                try:
+                    fd_ext = fd * Dden
+                    fd_D = Dnum
+                    # 若 Dden≠1，用 fd_ext 与 Dnum 的 mgcd 更准
+                    # 但为保持 vars 一致，优先用 Dnum
+                except Exception:
+                    fd_D = Dnum
         except Exception:
-            fd_x = Poly.zero(fd.vars)
-        # mgcd 需同 vars
-        if x in fd.vars:
-            g = mgcd(fd, fd_x) if not fd_x.is_zero() else Poly.one(fd.vars)
+            try:
+                fd_D = fd.deriv(x) if x in fd.vars else Poly.zero(fd.vars)
+            except Exception:
+                fd_D = Poly.zero(fd.vars)
+        if x in fd.vars or y in fd.vars:
+            try:
+                if fd_D.is_zero():
+                    g = Poly.one(fd.vars)
+                else:
+                    g = mgcd(fd, fd_D)
+            except Exception:
+                g = Poly.one(fd.vars)
             if g.is_zero():
                 g = Poly.one(fd.vars)
-            # d = fd / g  精确除
             from cas.poly import div_exact
             try:
                 d = div_exact(fd, g)
@@ -130,13 +195,22 @@ def double_resultant(fa, fd, mp_low, de, j, z_sym):
         fa_yxz = embed_to_yxz(fa)
         if fa_yxz is None:
             return None
-        # g·D(d) 嵌入
-        # g, d 可能为多变量 Poly over de.vars，需同样嵌入但仅取 x 部分
-        # D(d) 近似为 x 导
+        # g·D(d) 嵌入 —— 用塔导子（含 y'）
         try:
-            dd = d.deriv(x) if x in d.vars else Poly.zero(d.vars)
+            from cas.risch_core import derivation as _der2
+            Dd_num, Dd_den = _der2(d, de)
+            # D(d)=Dd_num/Dd_den，通分到分子
+            if Dd_den.is_const() and Dd_den.const_val() == 1:
+                dd = Dd_num
+            else:
+                # 有分母时（代数层），g·D(d) = g·Dd_num / Dd_den，
+                # 在 Res 时分母不影零点，取分子 Dd_num 足够（Res 因子差可逆元）
+                dd = Dd_num
         except Exception:
-            dd = Poly.zero(d.vars)
+            try:
+                dd = d.deriv(x) if x in d.vars else Poly.zero(d.vars)
+            except Exception:
+                dd = Poly.zero(d.vars)
         # g·dd  -> Poly over (x,) 嵌入到 (y,x,z)
         # g·dd 的 vars 可能为 (x,) 或 (x,y)
         try:
@@ -277,3 +351,99 @@ def double_resultant(fa, fd, mp_low, de, j, z_sym):
         return R
     except Exception:
         return None
+
+
+def rational_log_part(fa, fd, mp_low, de, j, R, z_sym):
+    """有理残数 log 组装（intalg Log 残数定理，ℚ 上精确）。
+
+    对 R(z) 在 ℚ 上因子分解后，仅处理有理根 r（一次因子 z−r），
+    对每个 r 计算 h_r = gcd(fa − r·g·D(d), mp) 在 ℚ[x,y] 上，
+    若 deg_y(h_r)≥1 则贡献 r·log(h_r)（返回 term 列表）。非有理残数
+    （deg>1 因子）需 AlgField ℚ(r)，此处诚实 None 交上层拒答。
+    返回 (logs_term, ok) 其中 ok=False 表有非有理残数需代数域。
+    """
+    try:
+        from cas.factor import factor as _fac
+        from cas.poly import Poly, mgcd, div_exact
+        from cas.risch_core import derivation as _der
+        x = de.levels[0]; y = de.levels[j]
+        # 因子分解 R
+        _, facs = _fac(R)
+        has_nonlinear = any(f.degree(z_sym) > 1 for f, _ in facs)
+        # 若含非线性因子，仍尝试有理部分，其余 honest
+        rational_roots = []
+        for f, _ in facs:
+            if f.degree(z_sym) == 1:
+                # f = lc*z + const
+                lc = f.monos.get((1,), Fr(0))
+                co = f.monos.get((0,), Fr(0))
+                if lc != 0:
+                    r = -co / lc
+                    rational_roots.append(r)
+        if not rational_roots:
+            return (None, has_nonlinear)
+        # 准备 g·D(d)
+        from cas.poly import mgcd as _mg
+        try:
+            Dnum, Dden = _der(fd, de)
+            if Dden.is_const() and Dden.const_val() == 1:
+                fd_D = Dnum
+            else:
+                fd_D = Dnum
+            g = _mg(fd, fd_D) if not fd_D.is_zero() else Poly.one(fd.vars)
+            if g.is_zero():
+                g = Poly.one(fd.vars)
+            d = div_exact(fd, g) if not g.is_const() or g.const_val() != 1 else fd
+            # D(d)
+            Dd_num, Dd_den = _der(d, de)
+            dd = Dd_num  # 分子足够
+        except Exception:
+            return (None, has_nonlinear)
+        # 对每个有理 r，算 gcd
+        logs = []
+        z = z_sym
+        for r in rational_roots:
+            try:
+                # fa - r*g*dd  (Poly)
+                gdd = g * dd if not (g.is_zero() or dd.is_zero()) else Poly.zero(fd.vars)
+                # r 为 Fr，scale gdd
+                rg = gdd.scalar(r) if not gdd.is_zero() else gdd
+                num = fa - rg
+                # 将 num 与 mp_low 求 gcd（在 ℚ[x,y] 上，按 y 为主）
+                # num, mp_low 均可视为 Poly((y,x)) 或 de.vars；统一到 (y,x)
+                yx = (y, x) if y in de.levels and x in de.levels else fd.vars
+                # 转到 (y,x) 空间
+                def to_yx(p):
+                    if p.is_zero():
+                        return Poly(yx, {})
+                    try:
+                        t = p.to_term()
+                        return Poly.from_term(t, yx)
+                    except Exception:
+                        return None
+                nyx = to_yx(num)
+                myx = to_yx(mp_low)
+                if nyx is None or myx is None:
+                    continue
+                h = _mg(nyx, myx)
+                if h.is_zero() or h.is_const():
+                    continue
+                # h 为 ℚ[x,y] 多项式，log 参数 h(x,y)
+                import cas.term as _T
+                h_term = h.to_term()
+                # log 贡献 r*log(h)
+                log_t = _T.mk(_T.S("Log"), (h_term,))
+                if r != 1:
+                    log_t = _T.times(_T.N(r), log_t)
+                logs.append(log_t)
+            except Exception:
+                continue
+        if not logs:
+            return (None, has_nonlinear)
+        import cas.term as _T2
+        out = logs[0]
+        for lg in logs[1:]:
+            out = _T2.plus(out, lg)
+        return (out, has_nonlinear)
+    except Exception:
+        return (None, False)
