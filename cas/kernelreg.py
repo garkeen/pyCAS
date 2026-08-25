@@ -159,14 +159,69 @@ def register_symbolic_radical(num, den, p_, q_, sym=None, origin=None):
     return sym
 
 
+def _try_cross_quad(a0_elem, fld, r_leaf):
+    """ℚ(√r) 中 a0+a1√r 的平方根跨域公式：√(a0+a1√r)=√p+√q（p=(a0+c)/2）。
+
+    c=√(a0²−a1²r) 须为 ℚ 中平方，p,q≥0。返回 y term（√p+√q）或 None。
+    """
+    from math import isqrt
+    if len(fld.m) != 3 or fld.m[2] != 1 or fld.m[1] != 0:
+        return None
+    r = -fld.m[0]
+    if not isinstance(r, Fr) or r <= 0:
+        return None
+    cs = list(a0_elem.cs) + [Fr(0)] * (2 - len(a0_elem.cs))
+    a0, a1 = cs[0], cs[1]
+    D = a0 * a0 - a1 * a1 * r
+    if D < 0:
+        return None
+    # D 须为有理平方
+    n, d = D.numerator, D.denominator
+    rn, rd = isqrt(n), isqrt(d)
+    if rn * rn != n or rd * rd != d:
+        return None
+    c = Fr(rn, rd)
+    p = (a0 + c) / Fr(2)
+    q = (a0 - c) / Fr(2)
+    if p < 0 or q < 0:
+        return None
+    # 验证 pq = a1²r/4（数值闭合）
+    if p * q != a1 * a1 * r / Fr(4):
+        return None
+    # 构造 √p + √q（p,q 为有理数，直接 Power）
+    # p 或 q 可能为完全平方有理数，mk 会进一步 via radnorm 归一
+    import cas.term as _T
+    from cas.term import S as _S, N as _N
+    parts = []
+    for val in (p, q):
+        if val == 0:
+            continue
+        # 有理平方化简：4 →2, 9/4→3/2 等由 radnorm 承担，此处直构造 Power
+        if val == 1:
+            # √1 =1，已在 p/q 构造中消去零项，此分支不触发
+            parts.append(_N(1))
+        else:
+            # 用 mk 保证 Power(1,1/2) 归一
+            parts.append(_T.mk(_S("Power"), (_N(val), _N(Fr(1, 2)))))
+    if not parts:
+        return None
+    y = parts[0] if len(parts) == 1 else _T.mk(_S("Plus"), tuple(parts))
+    # 符号：a1<0 时 √p−√q（主支正根，a0+a1√r>0 已保证）
+    if a1 < 0 and len(parts) == 2:
+        # y = √p − √q 的主支仍正（因 a0>0 且 |a1|√r < a0 当 D>0）
+        y = _T.mk(_S("Plus"), (parts[0], _T.neg(parts[1])))
+    # 主支数值校正：与 perfect_power 同款 cmath 对拍
+    return y
+
+
 def try_collapse(b, ef):
     """N3 项级闸门（通用形态，叶数无关）：
 
     收集常数语境 b 的全部数值根式叶 -> primelt 链式本原元压缩进
     单一 ℚ(β)（不可约门+生成元精确回验）-> b 映入域元素 ->
-    denest.perfect_power 三态判定 -> 命中则经 β 项级 origin 回代
-    并做主支数值校正。任一步不可判定/超界 ⟹ None（照常建核，
-    不阻塞主流程；失败零痕迹——闸门先于注册）。"""
+    denest.perfect_power 三态判定（同域）或跨域二次公式（rsimp p₂c）
+    -> 命中则经 β 项级 origin 回代并做主支数值校正。任一步不可判定/
+    超界 ⟹ None（照常建核，不阻塞主流程；失败零痕迹）."""
     from fractions import Fraction as _Fr
     if ef.denominator < 2:
         return None
@@ -235,9 +290,17 @@ def try_collapse(b, ef):
                 te = te * elems[si]
         elem = elem + te
     verdict, y = perfect_power(elem, q_)
-    if verdict != 'yes' or y is None:
-        return None
-    yterm = y.to_term()
+    if verdict == 'yes' and y is not None:
+        yterm = y.to_term()
+    else:
+        # 跨域二次坍缩（rsimp p₂c）：ℚ(√r) 内 a0+a1√r 的平方根落在 ℚ(√p,√q)
+        # 例 √(5+2√6)=√2+√3（y∉ℚ(√6)，perfect_power 同域判否）
+        if q_ == 2 and len(leaves) == 1 and d == 2:
+            yterm = _try_cross_quad(a0_elem=elem, fld=fld, r_leaf=leaves[0])
+            if yterm is None:
+                return None
+        else:
+            return None
     # 主支校正：perfect_power 只保证 y^q=x；数值对拍 cmath 主值，
     # 反向根翻号（±y 是仅有的实根候选）
     import cmath

@@ -122,8 +122,13 @@ class TestTermGate(unittest.TestCase):
     def test_honest_no_and_multi_leaf(self):
         # Q(sqrt3) 内非完全幂：不坍缩
         self.assertIn('3^(1/2)', to_str(parse('sqrt(3+2*sqrt(3))')))
-        # sqrt2+sqrt3 不属于 Q(sqrt6)：诚实不坍缩（多叶扩张属后续）
-        self.assertIn('6^(1/2)', to_str(parse('sqrt(5+2*sqrt(6))')))
+
+    def test_cross_quad_collapse(self):
+        # 跨域二次坍缩（rsimp p₂c）：√(5+2√6)=√2+√3（y∉ℚ(√6)）
+        self.assertEqual(to_str(parse('sqrt(5+2*sqrt(6))')),
+                         '2^(1/2) + 3^(1/2)')
+        self.assertEqual(to_str(parse('sqrt(7+4*sqrt(3))')),
+                         '3^(1/2) + 2')
 
 
 if __name__ == "__main__":
