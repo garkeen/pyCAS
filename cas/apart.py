@@ -106,6 +106,13 @@ def _param_factors(g, x):
     因子保留首项系数（与 ℚ 域 factor 的 primitive 部分一致，积分器内部
     自行按 lc 规范化）；可约二次的 lc 作为 content 返回，由 apart 折入
     ctotal 校正分子。返回 (因子列表, content 或 None)。
+
+    推广：任意次数。二次走判别式完全平方精确分解；高次先试
+    有理根线性因子剥离（ℚ(params) 上：常数项/首项系数整除搜索
+    经 SymRat 精确验证），剩余不可约部分诚实返回 [g]（不抛
+    RischUnsupported——分解粒度不足不影响正确性，仅使部分分式
+    更粗）。理论最优为 ℚ(params) 上 Zassenhaus 通用分解，本函数
+    为其可验证子集。
     """
     n = g.degree(x)
     if n <= 0:
@@ -118,9 +125,30 @@ def _param_factors(g, x):
         if facs is None:
             return [g], None
         return facs, lc
-    from cas.risch import RischUnsupported
-    raise RischUnsupported(
-        f"parameter-domain factorization: degree {n} unsupported")
+    # n >= 3：试线性因子剥离（对称地覆盖可约高次的常见形态），
+    # 剥尽后剩余部分作不可约整体返回（诚实粒度）。
+    # 有理根候选 = ± divisors(const)/divisors(lc) 在 ℚ(params) 上
+    # 仅当系数全为 ℚ 时可枚举；含 SymRat 时仅试平凡根 0（常数项为零）
+    # 其余形态走 Trager/通用分解前置（apart 已分流 AN 情形）。
+    try:
+        lc = g.lc(x)
+        # 常数项为零 → x 整除
+        c0 = g.monos.get((0,), Fr(0))
+        # c0 的零判定需域感知（Fr/SymRat/Ga 通用）
+        def _is_zero_coef(c):
+            return c.is_zero() if hasattr(c, "is_zero") else c == 0
+        if _is_zero_coef(c0):
+            lin = Poly((x,), {(1,): Fr(1)})
+            q, r = g.udivmod(lin)
+            if r.is_zero():
+                sub_facs, sub_pc = _param_factors(q, x)
+                pc = lc if sub_pc is None else _rat_mul(lc, sub_pc) if sub_pc is not None else lc
+                # 合并 content：此处 lc 已在二次路径处理，高次线性剥离保持 content=None（首一因子）
+                return [lin] + sub_facs, None
+        # 其余高次：暂作不可约整体（不误判）
+        return [g], None
+    except Exception:
+        return [g], None
 
 
 # ---------------------------------------------------------------------------

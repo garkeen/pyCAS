@@ -194,8 +194,10 @@ def try_collapse(b, ef):
         lb, le = l.args
         lf = le.f
         bv = num_val(lb)
-        if bv <= 0 or lf.numerator != 1 or lf.denominator < 2:
+        if bv <= 0 or lf.denominator < 2:
             return None
+        # p/q 任意：m = T^q − bv^p，radnorm 已做指标归约，前端 p/q 可约
+        # 形态已化简；此处不设 p==1 窄闸
         ms.append([_Fr(-(bv ** lf.numerator))]
                   + [_Fr(0)] * (lf.denominator - 1) + [_Fr(1)])
     from cas.primelt import compress_chain

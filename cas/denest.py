@@ -32,8 +32,8 @@ import cas.term as T
 from cas.poly import Poly, PolyError
 from cas.algfield import AlgElem, _z
 
-_DEG_CAP = 5          # 域次数上限（Groebner 规模守卫）
-_K_CAP = 7            # 指数上限
+_DEG_CAP = 8          # 域次数上限（Groebner 规模守卫，理论无界）
+_K_CAP = 11           # 指数上限（rsimp 对标素数 k≤11）
 
 
 def perfect_power(elem, k):
@@ -78,9 +78,15 @@ def perfect_power(elem, k):
     ws_n = max(k * (d - 1) - d + 1, 0)
     ws = [S(f"_den_w{j}") for j in range(ws_n)]
 
+    # p2c 类表快路：二次域 k=2 的闭式 denesting（rsimp p₂c，√(a+b√r)）
+    # 理论最优中此为 Groebner 特例，但闭式 O(1) 且覆盖旗舰例 √5+2√6
+    if d == 2 and k == 2:
+        qd = _try_quadratic_denest(fld, elem, m_coefs, x_cs)
+        if qd is not None:
+            return 'yes', qd
     # Groebner 后备规模闸（爆炸守卫）：快路未命中且系统过大 ⟹ 诚实
-    # unknown（d=2 全 k、d=3 k≤2 在闸内；更大组合待分域专用算法）
-    if ws_n > 3 or d * (ws_n + 1) > 9 or k > 5:
+    # unknown（理论无界，闸仅防指数爆炸）
+    if ws_n > 6 or d * (ws_n + 1) > 18 or k > 11:
         return 'unknown', None
 
     def mono(sym, e):
@@ -162,6 +168,55 @@ def perfect_power(elem, k):
         if _elem_eq((cand ** k).cs, elem.cs):
             return 'yes', cand
     return 'unknown', None
+
+
+def _try_quadratic_denest(fld, elem, m_coefs, x_cs):
+    """二次域 k=2 的 p₂c 闭式：x = a0 + a1·θ, θ² = r, m = [−r,0,1].
+
+    求 y = u0+u1θ 使 y²=x。展开：u0²+u1²r = a0, 2u0u1 = a1。
+    消元得 4u0⁴ −4a0u0² + a1²r =0，判别式 D = 16(a0²−a1²r)=16·N(x)。
+    N(x) 须为有理平方，再解 u0² = (a0±√D/4)/2。逐候选精确验证。
+    覆盖 √(a+b√r) 类（r 无平方因子即旗舰 √5+2√6）。"""
+    if len(m_coefs) != 3 or m_coefs[1] != 0 or m_coefs[2] != 1:
+        return None
+    r = -m_coefs[0]
+    if r <= 0:
+        return None
+    a0 = x_cs[0] if len(x_cs) > 0 else Fr(0)
+    a1 = x_cs[1] if len(x_cs) > 1 else Fr(0)
+    if a1 == 0:
+        return None
+    # N(x) = a0² − a1² r
+    nrm = a0 * a0 - a1 * a1 * r
+    # D/16 = N(x) 须为平方
+    s = _sqrt_frac(nrm)
+    if s is None:
+        return None
+    # u0² = (a0 ± s)/2
+    for sgn in (1, -1):
+        u0_sq = (a0 + sgn * s) / Fr(2)
+        u0 = _sqrt_frac(u0_sq)
+        if u0 is None:
+            continue
+        if u0 == 0:
+            continue
+        u1 = a1 / (Fr(2) * u0)
+        for su0, su1 in ((u0, u1), (-u0, -u1)):
+            cand = fld.elem([su0, su1])
+            if _elem_eq((cand ** 2).cs, elem.cs):
+                return cand
+    return None
+
+
+def _sqrt_frac(f):
+    if not isinstance(f, Fr) or f < 0:
+        return None
+    from math import isqrt
+    n, d = f.numerator, f.denominator
+    rn, rd = isqrt(n), isqrt(d)
+    if rn * rn != n or rd * rd != d:
+        return None
+    return Fr(rn, rd)
 
 
 def _expand(t):

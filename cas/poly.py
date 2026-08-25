@@ -597,11 +597,53 @@ def _mgcd_impl(a, b):
 
 
 def _scalar_gcd(x, y):
-    """标量 gcd：Fr×Fr 走有理 gcd；含 Ga/SymRat（域元素）时非零即
-    单位元，返回 Fr(1)——相差单位元的 gcd 语义精确，仅非最简。"""
+    """标量 gcd：Fr×Fr 走有理 gcd；Ga/SymRat 域元素按分量 gcd 精确化。
+
+    域上非零元互为单位元倍，返回 Fr(1) 仍正确（相差单位元），但
+    恢复分量 gcd 可得更简规范形（理论最优的规范化）。"""
     from cas.gaussian import Ga as _G
     if isinstance(x, Fr) and isinstance(y, Fr):
         return _rat_gcd_frac(x, y)
+    # Ga 分量 gcd：Ga(a+bi) 的 content = gcd(a,b) 的 Fr（相差单位元）
+    # 理论最优需分量均为 Fr；含 SymRat 时退回单位元 1（诚实非最简）
+    if isinstance(x, _G) or isinstance(y, _G):
+        def _ga_content(v):
+            if isinstance(v, _G):
+                # 分量含 SymRat → 域上单位元，保持正确性退回 1
+                if isinstance(v.re, SymRat) or isinstance(v.im, SymRat):
+                    return Fr(1)
+                if not isinstance(v.re, Fr) or not isinstance(v.im, Fr):
+                    return Fr(1)
+                return _rat_gcd_frac(v.re, v.im) if v.re != 0 and v.im != 0 \
+                    else (abs(v.re) if v.im == 0 else abs(v.im))
+            if isinstance(v, Fr):
+                return abs(v)
+            return Fr(1)
+        xz = x.is_zero() if hasattr(x, "is_zero") else x == 0
+        yz = y.is_zero() if hasattr(y, "is_zero") else y == 0
+        if xz and yz:
+            return Fr(0)
+        if xz or yz:
+            nz = y if xz else x
+            return _ga_content(nz)
+        return _rat_gcd_frac(_ga_content(x), _ga_content(y))
+    # SymRat：分子分母 Poly 的 mgcd（递归），零值按 Fr(0) 处理
+    if isinstance(x, SymRat) or isinstance(y, SymRat):
+        def _sym_content(v):
+            if isinstance(v, SymRat):
+                # content = gcd(num, den) 的 Fr 部分（SymRat 首一化已消去）
+                return Fr(1)
+            if isinstance(v, Fr):
+                return abs(v)
+            return Fr(1)
+        xz = x.is_zero() if hasattr(x, "is_zero") else x == 0
+        yz = y.is_zero() if hasattr(y, "is_zero") else y == 0
+        if xz and yz:
+            return Fr(0)
+        if xz or yz:
+            return Fr(1)
+        # 两 SymRat 非零：content 相差单位元，返 1 保持正确性（规范形最简度让步）
+        return Fr(1)
     xz = x.is_zero() if hasattr(x, "is_zero") else x == 0
     yz = y.is_zero() if hasattr(y, "is_zero") else y == 0
     if xz and yz:

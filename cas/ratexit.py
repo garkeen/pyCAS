@@ -18,10 +18,8 @@
 零作用域泄漏面（QxStruct 教训）。
 
 诚实边界：
-  - 高次根（分母指数 >=3 次单位根类）不动：共轭无二项闭式，
-    需结式机械（N2 后置）。
-  - 分母对某根次数 >=2 不动（同上）。
-  - 多叶线性分母（sqrt(2)+sqrt(3)）单遍跳过；多遍亦不动点。
+  - 分母对某根次数 >=q 不动（需结式机械，已由 af_func 域求逆覆盖任意 q）。
+  - 多叶线性分母（sqrt(2)+sqrt(3)）单遍跳过；多遍亦不动点（M78.8）。
 """
 
 from fractions import Fraction as Fr
@@ -52,7 +50,7 @@ def _sqrt_leaves(t):
 
 
 def _higher_leaves(t):
-    """一般 q 次根叶（2<=q<=6、分子 1、正数值底）。"""
+    """一般 q 次根叶（q>=2、分子 1、正数值底，理论无上界）。"""
     out = set()
     stack = [t]
     while stack:
@@ -62,7 +60,7 @@ def _higher_leaves(t):
                 b, e = u.args
                 if is_num(b) and isinstance(e, Rat) \
                         and e.f.numerator == 1 \
-                        and 2 <= e.f.denominator <= 6 \
+                        and e.f.denominator >= 2 \
                         and num_val(b) > 0:
                     out.add(u)
                     continue
@@ -135,7 +133,7 @@ def _rationalize_once(t):
                 hit = T.times(conj, T.pw(d1, N(-1)))
                 break
             if hit is None:
-                # N8 余项：一般 q 次根（2<=q<=6）经域求逆有理化
+                # N8 余项：一般 q 次根（q>=2）经域求逆有理化
                 gen = sorted(_higher_leaves(f), key=repr)
                 for l in gen:
                     inv = _rationalize_higher(f, l)
@@ -164,7 +162,7 @@ def _rationalize_higher(f, leaf):
     if bv <= 0 or e.f.numerator != 1:
         return None
     q = e.f.denominator
-    if q < 2 or q > 6:
+    if q < 2:
         return None
     # 系数提取：对 ℓ 位置次数 <=q-1；系数为 xv 多项式（Fr/SymRat 叶）
     sub = T.subst(f, {leaf: S("_rl")})
