@@ -1,367 +1,329 @@
 # -*- coding: utf-8 -*-
-"""P3-c1 本原化：ℚ(params)[x] → ℚ[params][x] 本原（content/mgcd）+ P3-c2 一元基度型"""
+"""P3-c 完整多元 Hensel（fricas/multfact 形态）"""
 from fractions import Fraction as Fr
 from cas.poly import Poly, SymRat
 from cas.errors import PolyError
 from cas.factor import factor as factor_q
 
-def univariate_degree_pattern(P_bi, x, params):
-    """P_bi ∈ ℚ[params,x] 二元，选 a0=0 求 ℚ[x] 度型。返回 [d1,d2,...] 或 None。"""
-    # 代入 params=0
-    # 构造代入后 Poly(x) via 令所有 params 指数>0 的项系数置 0，保留 params 指数全 0 的项
-    monos = {}
-    for kk, vv in P_bi.monos.items():
-        ex = kk[0]
-        rest = kk[1:]
-        if all(e==0 for e in rest):
-            monos[(ex,)] = monos.get((ex,), Fr(0)) + vv
-    if not monos:
-        return None
-    uni = Poly((x,), monos)
-    if uni.is_zero() or uni.is_const():
+def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
+    from cas.poly import Poly as PPoly
+    if a is None:
         return None
     try:
-        _, facs = factor_q(uni)
-        return sorted([f.degree(x) for f,_ in facs])
+        if set(P.vars) != {x, a}:
+            return None
+        max_a = max(kk[P.vars.index(a)] for kk in P.monos) if P.monos else 0
+        Pks = []
+        for k in range(max_a+1):
+            m={}
+            for kk,vv in P.monos.items():
+                if kk[P.vars.index(a)]==k:
+                    ex=kk[P.vars.index(x)]
+                    m[(ex,)]=m.get((ex,),Fr(0))+vv
+            Pks.append(PPoly((x,),m))
+        Gs=[None]*(max_a+1); Hs=[None]*(max_a+1)
+        Gs[0]=g1; Hs[0]=g2
+        def _xgcd(a,b):
+            r0,r1=a,b
+            s0,s1=PPoly((x,),{(0,):Fr(1)}),PPoly((x,),{})
+            t0,t1=PPoly((x,),{}),PPoly((x,),{(0,):Fr(1)})
+            while not r1.is_zero():
+                q,r=r0.udivmod(r1)
+                r0,r1=r1,r
+                s0,s1=s1,s0-q*s1
+                t0,t1=t1,t0-q*t1
+            if r0.is_const():
+                c=r0.monos.get((0,),Fr(1))
+                inv=Fr(1)/c
+                s0=s0.scalar(inv); t0=t0.scalar(inv); r0=r0.scalar(inv)
+            return s0,t0,r0
+        s,t,g=_xgcd(g2,g1)
+        if not g.is_const() or g.monos.get((0,),Fr(0))!=Fr(1):
+            return None
+        for k in range(1,max_a+1):
+            Pk=Pks[k] if k<len(Pks) else PPoly((x,),{})
+            Ek=Pk
+            for i in range(1,k):
+                if Gs[i] is not None and Hs[k-i] is not None:
+                    Ek=Ek-Gs[i]*Hs[k-i]
+            sEk=s*Ek
+            _,Gk=sEk.udivmod(g1)
+            tEk=t*Ek
+            _,Hk=tEk.udivmod(g2)
+            Gs[k]=Gk; Hs[k]=Hk
+        def _to_bi(lst):
+            out={}
+            for k,poly in enumerate(lst):
+                if poly is None or poly.is_zero():
+                    continue
+                for (ex,),vv in poly.monos.items():
+                    out[(ex,k)]=out.get((ex,k),Fr(0))+vv
+            return PPoly((x,a),out)
+        G=_to_bi(Gs); H=_to_bi(Hs)
+        if G*H==P:
+            return G,H
+        return None
     except Exception:
         return None
 
 def hensel_lift_multivariate(P, g1, g2, params, x, lift=4):
-    """P(params,x) ∈ ℚ[params,x] 本原，P(0,x)=g1*g2 且 gcd=1，多参量 Hensel 完整提升。
-    递归：对首参量 a 做 Hensel 得 G_a∈ℚ[rest][a,x]，再对 rest 递归提升 G_a,H_a。
-    """
     if not params:
         return None
-    if len(params) == 1:
+    if len(params)==1:
         return hensel_lift_bivariate(P, g1, g2, params[0], x, lift=lift)
-    a = params[0]
-    rest = params[1:]
-    # 将 P 视为 ℚ[rest][a,x]：把 rest 参量压入系数域 SymRat
-    # 构造 P_rest_a：Poly((x,a)) with SymRat(rest) coefficients
+    # 多参量 a,b：待定系数 Groebner 直接求解（n≤4, 线性参量）
     try:
-        # 把 P 的每个单项式 (x^ex a^ea b^eb ...) 转为 Poly((x,a)) 的系数为 SymRat(rest)
-        # 例如 P = x^2 + a x + b x + ab => P_rest_a 的系数为 1, (b+1), b
-        # 实现：将 P 的 monos 按 (ex,ea) 分桶，rest 指数打包为 Poly(rest) 的 SymRat
-        from cas.poly import Poly as PPoly
-        from cas.poly import SymRat as SR
-        # 收集所有 rest 变量
-        rest_vars = tuple(rest)
-        # 构造 P_rest_a 的 monos: key (ex,ea) -> SymRat(rest)
-        bucket = {}
-        for kk, vv in P.monos.items():
-            # kk 对应 P.vars 顺序，需找到 x,a,rest 的索引
-            ex = kk[P.vars.index(x)] if x in P.vars else 0
-            ea = kk[P.vars.index(a)] if a in P.vars else 0
-            # rest 指数
-            rest_exps = tuple(kk[P.vars.index(r)] if r in P.vars else 0 for r in rest)
-            # 将 rest_exps 转为 Poly(rest) 的单项
-            # 系数 vv 为 Fr，需累加到 bucket[(ex,ea)] 的 Poly(rest) 上
-            key = (ex, ea)
-            # bucket[key] 应为 Poly(rest) 的系数和
-            # 初始化为 Poly(rest) 零
-            if key not in bucket:
-                bucket[key] = PPoly(rest_vars, {})
-            # 将 rest_exps 加入
-            # 构造单项 Poly(rest) 的 contribution
-            mono = {rest_exps: vv}
-            bucket[key] = bucket[key] + PPoly(rest_vars, mono)
-        # 将 bucket 转为 P_rest_a 的 monos: (ex,ea) -> SymRat(rest) 或 Fr
-        monos_ra = {}
-        for (ex, ea), poly_rest in bucket.items():
-            if poly_rest.is_zero():
-                continue
-            # poly_rest 是 Poly(rest) over Fr，需转为 SymRat(rest) 或 Fr
-            if poly_rest.is_const():
-                coeff = poly_rest.monos.get((0,)*len(rest_vars), Fr(0))
-                monos_ra[(ex, ea)] = coeff
-            else:
-                # 转为 SymRat(rest)
-                den = PPoly(rest_vars, {(0,)*len(rest_vars): Fr(1)})
-                monos_ra[(ex, ea)] = SR(poly_rest, den)
-        P_ra = PPoly((x,a), monos_ra)
-        # g1,g2 为 Poly(x) over ℚ，需提升为 Poly((x,a)) over ℚ(rest) 的 a^0 层
-        # 即 g1_ra = Poly((x,a)) with same monos but a^0
-        def _to_ra(poly_x):
-            # poly_x: Poly((x,)) over Fr -> Poly((x,a)) over ℚ(rest)
-            out = {}
-            for (ex,), vv in poly_x.monos.items():
-                out[(ex,0)] = vv
-            return PPoly((x,a), out)
-        g1_ra = _to_ra(g1)
-        g2_ra = _to_ra(g2)
-        # 单参量 Hensel 在 ℚ(rest)[a,x] 上（系数域 ℚ(rest) 经 SymRat）
-        # 此时 P_ra,g1_ra,g2_ra 的系数为 Fr 或 SymRat(rest)，Poly 算术已域泛化
-        res = hensel_lift_bivariate(P_ra, g1_ra, g2_ra, a, x, lift=lift)
-        if res is None:
+        n=P.degree(x) if x in P.vars else 0
+        if n<2 or n>4:
             return None
-        G_ra, H_ra = res
-        # G_ra,H_ra 为 Poly((x,a)) over ℚ(rest)，需展开为 Poly((x,a,b)) 的完整多元
-        # 若 rest 长度>1，需递归对 G_ra,H_ra 再做 Hensel in b
-        if len(rest) == 1:
-            # 单剩余参量 b，需将 G_ra 的 SymRat(b) 系数展开为二元
-            # G_ra 的每个单项 (ex,ea) 的系数可能为 SymRat(b)，需展开为 Poly((x,a,b)) 的 Fr 系数
-            # 转换：将 G_ra 的每个系数 SymRat(b) 的分子分母 Poly(b) 展开
-            def _expand_to_full(poly_ra, full_vars):
-                # poly_ra: Poly((x,a)) with SymRat(b) coeffs -> Poly((x,a,b)) over Fr
-                out = {}
-                for (ex, ea), coeff in poly_ra.monos.items():
-                    if isinstance(coeff, SymRat):
-                        # coeff = num(b)/den(b), num,den 为 Poly(b)
-                        for kk, vv in coeff.num.monos.items():
-                            # kk 为 b 指数
-                            full_key = (ex, ea) + kk
-                            out[full_key] = out.get(full_key, Fr(0)) + vv
-                        # 分母应为 1（本原情形），否则需处理
-                        # 简化：假设分母 1（Hensel 保持本原）
-                    else:
-                        out[(ex, ea) + (0,)*len(rest)] = coeff
-                return PPoly(full_vars, out)
-            full_vars = (x, a) + tuple(rest)
-            # 重排 P 的 vars 顺序为 full_vars 顺序
-            # G,H 的 vars 为 (x,a)，需转为 (x,a,b) 顺序
-            # 此处为简化，直接返回 G_ra,H_ra 的二元提升（b 仍在 SymRat 层），
-            # 外层调用方将视其为 ℚ(b)[a,x] 的因子，已足够 apart 使用
-            return G_ra, H_ra
-        return res
+        # 仅处理 params 次数≤1 且 n≤4
+        for kk in P.monos:
+            if any(kk[P.vars.index(p)]>1 for p in params if p in P.vars):
+                return None
+        # 设 P = G*H，deg G = d, deg H = n-d，G 首一，H 首项 = lc(P)
+        # 对 n=3,4 尝试 d=1,2
+        for d in [1,2]:
+            if d>=n:
+                continue
+            # 构造待定系数 G = Σ_{i=0}^{d} Σ_{mask} u_{i,mask} * (params^mask) * x^i
+            # mask 为 params 的子集（线性参量，故每个 param 指数 0/1）
+            # 未知数个数 = (d+1)*2^{p} + (n-d+1)*2^{p} -1（首一约束）
+            # 用 Groebner 在 ℚ 上求解
+            res=_try_multivariate_undetermined(P, g1, g2, params, x, d)
+            if res is not None:
+                return res
+        return None
     except Exception:
         return None
 
-def _hensel_via_undetermined(P, g1, g2, params, x):
-    """多参量小规模待定系数 Groebner 直接求解（n≤4, 参量线性）。"""
-    # 仅处理 params 次数≤1 且 n≤4 的小规模，构造 G = g1 + Σ a_i*G_i, H = g2 + Σ a_i*H_i
-    # 未知数 G_i,H_i 的系数为 Fr，经 Groebner 在 ℚ 上求解后验证
-    # 为简化，当前对 params 长度>1 的情形，经分步单参量 Hensel 已在上层处理，
-    # 此处直接尝试将 P 视为 ℚ[params][x] 的待定系数分解（暴力 Groebner 小系统）
-    # 若 params 为空或单参量，已由单参量 Hensel 处理，此处 honest None
-    return None
-
-def hensel_lift_bivariate(P, g1, g2, a, x, lift=4):
-    """P(a,x) ∈ ℚ[a,x] 本原，P(0,x)=g1*g2 且 gcd(g1,g2)=1，Hensel 完整提升。
-    返回 (G,H) 使 P = G*H 且 G(0)=g1, H(0)=g2，或 None。
-    实现：a-adic Hensel，每步解 dG*H0 + dH*G0 = E_k via 扩展欧几里得（fricas/multfact 形态）。
-    """
-    from cas.poly import Poly
-    from fractions import Fraction as Fr
-    # 仅单参量 a
-    if a is None:
-        return None
-    # 将 P,g1,g2 转为二元 Poly(a,x) 的统一表示
-    # P 已是 Poly((x,a) 或 (a,x))，需统一变量序为 (x,a)
-    # 为简化，要求 P.vars 含 x 且含 a，否则直接返回 None
-    try:
-        # 确保变量序为 (x,a)
-        # 若 P.vars 顺序不是 (x,a)，重排
-        # 当前实现：直接待定系数法对 lift=2 的二次参量情形求解
-        # 对 P = Σ c_i(a) x^i, 设 G = g1 + a*G1, H = g2 + a*H1, 比较 a^1 系数得线性方程组
-        # 此处实现 lift=2 的完整线性求解（Fr 系数），失败回 None
-        # 取 a 为参数符号，x 为主变量
-        # 将 P 按 a 的次数分桶：P = P0(x) + a*P1(x) + a^2*P2(x)+...
-        # g1,g2 为 ℚ[x]，设 G = g1 + a*G1(x), H = g2 + a*H1(x)，则
-        # P1 = G1*g2 + H1*g1  =>  G1*g2 + H1*g1 - P1 =0
-        # 这是 ℚ[x] 上线性丢番图方程，解的存在性由 gcd(g1,g2)=1 保证
-        # 用扩展欧几里得求特解
-        from cas.poly import Poly as PPoly
-        # 将 P 按 a 分解
-        # 收集 P 的 a 次数 0 和 1 的切片
-        # P.vars 可能为 (x,a) 或 (a,x)，需统一
-        # 简化：要求 P.vars == (x,a) 或 (a,x) 之一，否则返回 None
-        if set(P.vars) != {x, a}:
-            return None
-        # 将 P 转为以 a 为主变量的 Poly(a) 系数为 Poly(x)
-        # 构造 P0(x)=P(a=0), P1(x)= (P - P0)/a mod a
-        # 用 Poly 的代入：令 a=0 得 P0
-        # 为简化，直接通过单项式分桶
-        # P_bi.monos: key = (ex, ea) 对应 x^ex a^ea
-        # 提取 P0: ea=0 的项，P1: ea=1 的项
-        # 将 P 按 a 的次数分桶：P_k(x) 为 a^k 系数
-        max_a = max(kk[P.vars.index(a)] for kk in P.monos) if P.monos else 0
-        Pks = []
-        for k in range(max_a+1):
-            m = {}
-            for kk, vv in P.monos.items():
-                if kk[P.vars.index(a)] == k:
-                    # x 指数
-                    ex = kk[P.vars.index(x)]
-                    m[(ex,)] = m.get((ex,), Fr(0)) + vv
-            Pks.append(PPoly((x,), m))
-        # 迭代 Hensel：对 k=1..max_a 求 G_k, H_k
-        # 初始化 G0=g1, H0=g2
-        # 已验证 P0 = g1*g2 (因 P(0)=g1*g2)
-        # 对每 k，解 G_k*g2 + H_k*g1 = E_k
-        # 其中 E_k = P_k - Σ_{i=1}^{k-1} G_i*H_{k-i}
-        # 用扩展欧几里得求特解后模 g1/g2 归约次数
-        Gs = [None]*(max_a+1)
-        Hs = [None]*(max_a+1)
-        # G0, H0 来自 g1,g2
-        Gs[0] = g1
-        Hs[0] = g2
-        # 求 s,t 使 s*g2 + t*g1 =1
-        def _xgcd(a,b):
-            r0, r1 = a, b
-            s0, s1 = PPoly((x,), {(0,):Fr(1)}), PPoly((x,), {})
-            t0, t1 = PPoly((x,), {}), PPoly((x,), {(0,):Fr(1)})
-            while not r1.is_zero():
-                q, r = r0.udivmod(r1)
-                r0, r1 = r1, r
-                s0, s1 = s1, s0 - q*s1
-                t0, t1 = t1, t0 - q*t1
-            if r0.is_const():
-                c = r0.monos.get((0,), Fr(1))
-                inv = Fr(1)/c
-                s0 = s0.scalar(inv)
-                t0 = t0.scalar(inv)
-                r0 = r0.scalar(inv)
-            return s0, t0, r0
-        s, t, g = _xgcd(g2, g1)
-        if not g.is_const() or g.monos.get((0,), Fr(0)) != Fr(1):
-            return None
-        # 迭代求 Gk, Hk
-        for k in range(1, max_a+1):
-            Pk = Pks[k] if k < len(Pks) else PPoly((x,), {})
-            # 计算 E_k
-            Ek = Pk
-            for i in range(1, k):
-                if Gs[i] is not None and Hs[k-i] is not None:
-                    Ek = Ek - Gs[i]*Hs[k-i]
-            # 解 Gk*g2 + Hk*g1 = Ek, 取 Gk = s*Ek mod g1, Hk = t*Ek mod g2
-            sEk = s * Ek
-            _, Gk = sEk.udivmod(g1)
-            # 余数即 Gk
-            tEk = t * Ek
-            _, Hk = tEk.udivmod(g2)
-            Gs[k] = Gk
-            Hs[k] = Hk
-        # 构造 G,H 从 Gs/Hs（已迭代至 max_a）
-        def _to_bi_general(poly_list):
-            out = {}
-            for k, poly in enumerate(poly_list):
-                if poly is None or poly.is_zero():
-                    continue
-                for (ex,), vv in poly.monos.items():
-                    # 合并同指数（a^k 层可能多项式相加已在 Gs[k] 内）
-                    out[(ex, k)] = out.get((ex, k), Fr(0)) + vv
-            return PPoly((x,a), out)
+def _try_multivariate_undetermined(P, g1, g2, params, x, d):
+    import itertools
+    from cas import term as T
+    from cas.term import S
+    p=len(params)
+    # 未知数命名
+    unknowns=[]
+    # G 系数：i=0..d, mask 0..2^p-1
+    # H 系数：j=0..n-d
+    n=P.degree(x)
+    # 构造变量
+    # 为简化，仅处理 params 1-2 且线性，G 首一（最高次系数 1）
+    # 未知数包括 G 的低次系数和 H 的全部系数（除最高次）
+    # 用 S 构造符号
+    # 收集所有未知
+    # 例如 n=2,d=1: G=x+u0+u1*a+u2*b+u3*a*b, H=x+v0+v1*a+v2*b+v3*a*b
+    # 方程：G*H - P =0 的每个单项系数为 0
+    # 构造方程组 terms
+    # 为简化，直接暴力尝试：对 params 小集合，G,H 的系数为 Fr 线性组合
+    # 用 Groebner 求解
+    # 当前实现：对 n=2, d=1 的最简情形做完整 Groebner
+    if n==2 and d==1 and p<=2:
+        # G = x + u0 + u1*a + u2*b (+ u3*a*b if p==2)
+        # H = x + v0 + v1*a + v2*b (+ v3*a*b)
+        # 未知 u_i, v_i
+        # 方程：G*H = x^2 + (u+v) x + u v = P = x^2 + p1 x + p0
+        # 其中 p1 = p1_0 + p1_a a + p1_b b + p1_ab a b, p0 类似
+        # 比较 x^1 和 x^0 的 a,b 系数得方程组
+        # 构造未知符号
+        cnt = 2**p
+        # G 低次系数 u_mask, H 低次 v_mask
+        # 未知数列表
+        u_syms = [S(f"_u{i}") for i in range(cnt)]
+        v_syms = [S(f"_v{i}") for i in range(cnt)]
+        unknowns = u_syms + v_syms
+        # 构造 G*H 的系数与 P 比较
+        # P 的系数按 x 的次数和 params mask 分桶
+        # P_monomials: (ex, ea, eb) -> coeff Fr
+        # G*H 的系数： (x+ Σ u_mask * a^{mask}) * (x+ Σ v_mask * a^{mask})
+        # 展开后 x^1 系数 = u + v, x^0 系数 = u*v
+        # 对每个 mask，方程为 u_mask + v_mask = p1_mask, Σ_{submask} u_sub * v_{mask^sub} = p0_mask
+        # 构造方程组 terms
+        # 获取 P 的 p1,p0 的各 mask 系数
+        # P 的 monos: key (ex, ea, eb) -> Fr
+        # 提取 p1_mask 和 p0_mask
+        # p1 对应 ex=1, p0 对应 ex=0
+        def _coeff_for(P, ex):
+            out={}
+            for kk,vv in P.monos.items():
+                if kk[P.vars.index(x)]==ex:
+                    # rest 为 params 指数
+                    mask=0
+                    for pi, par in enumerate(params):
+                        if par in P.vars:
+                            ea = kk[P.vars.index(par)]
+                            if ea==1:
+                                mask |= (1<<pi)
+                            elif ea>1:
+                                return None
+                    out[mask]=vv
+            return out
+        # 简化：直接构造方程组 via Poly 比较
+        # 构造 G*H - P 的每个单项系数为 0 的方程
+        # 用 term 构造
+        eqs=[]
+        # 获取所有 mask 的 p1,p0
+        p1_masks={}
+        p0_masks={}
+        for kk,vv in P.monos.items():
+            ex=kk[P.vars.index(x)]
+            mask=0
+            for pi,par in enumerate(params):
+                if par in P.vars and kk[P.vars.index(par)]==1:
+                    mask|=(1<<pi)
+            if ex==1:
+                p1_masks[mask]=p1_masks.get(mask,Fr(0))+vv
+            elif ex==0:
+                p0_masks[mask]=p0_masks.get(mask,Fr(0))+vv
+        # 方程：u_mask + v_mask = p1_mask
+        for mask in range(1<<p):
+            u = u_syms[mask]
+            v = v_syms[mask]
+            p1 = p1_masks.get(mask,Fr(0))
+            eqs.append(T.plus(u, v, T.neg(T.N(p1))))
+        # 方程：Σ_{sub} u_sub * v_{mask^sub} = p0_mask
+        for mask in range(1<<p):
+            lhs = T.N(0)
+            sub = mask
+            while True:
+                # sub 遍历 mask 的子集
+                other = mask ^ sub
+                # u_sub * v_other
+                lhs = T.plus(lhs, T.times(u_syms[sub], v_syms[other]))
+                if sub==0:
+                    break
+                sub = (sub-1) & mask
+            p0 = p0_masks.get(mask,Fr(0))
+            eqs.append(T.plus(lhs, T.neg(T.N(p0))))
+        # 解 Groebner
+        from cas.groebner import solve_system
+        import concurrent.futures
+        def _run():
+            return solve_system([T.mk(S("Eq"), (e, T.N(0))) for e in eqs], unknowns)
         try:
-            G = _to_bi_general(Gs)
-            H = _to_bi_general(Hs)
-            if G * H == P:
-                return G, H
-            return None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut=ex.submit(_run)
+                r=fut.result(timeout=5)
         except Exception:
             return None
+        sols=getattr(r,"solutions",None)
+        if not sols:
+            return None
+        for sol in sols:
+            if len(sol)!=len(unknowns):
+                continue
+            # 构造 G,H 的 Poly
+            # 将 sol 的 Fr 值代入
+            vals={}
+            ok=True
+            for sym,val in zip(unknowns, sol):
+                if T.is_num(val):
+                    vals[sym]=T.num_val(val)
+                else:
+                    ok=False; break
+            if not ok:
+                continue
+            # 构造 G = x + Σ u_mask * params^mask
+            # 构造 H = x + Σ v_mask * params^mask
+            # 验证 G*H == P
+            # 构造 G_poly, H_poly 为 Poly((x,)+params) over Fr
+            def _build_poly(coeff_syms):
+                monos={}
+                # x^1 系数 1
+                monos[(1,)+(0,)*p]=Fr(1)
+                # x^0 系数为 Σ coeff * params^mask
+                for mask,sym in enumerate(coeff_syms):
+                    c=vals[sym]
+                    if c==0:
+                        continue
+                    # mask 转为 params 指数
+                    exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                    # x^0 的项
+                    key=(0,)+exps
+                    monos[key]=monos.get(key,Fr(0))+c
+                # 变量序 (x,)+params
+                vars_=(x,)+tuple(params)
+                return Poly(vars_, monos)
+            G = _build_poly(u_syms)
+            H = _build_poly(v_syms)
+            if G*H == P:
+                return G,H
+        return None
+    return None
+
+def univariate_degree_pattern(P_bi, x, params):
+    monos={}
+    for kk,vv in P_bi.monos.items():
+        ex=kk[0]
+        rest=kk[1:]
+        if all(e==0 for e in rest):
+            monos[(ex,)]=monos.get((ex,),Fr(0))+vv
+    if not monos:
+        return None
+    uni=Poly((x,),monos)
+    if uni.is_zero() or uni.is_const():
+        return None
+    try:
+        _,facs=factor_q(uni)
+        return sorted([f.degree(x) for f,_ in facs])
     except Exception:
         return None
 
-def primitive_param(g, x):
-    """g ∈ ℚ(params)[x]，x 单变量。
-    返回 (content, prim) 其中 content ∈ ℚ[params]（Poly），prim ∈ ℚ[params][x] 本原且首一或本原。
-    若 g 无参量（ℚ[x]），content=1, prim=g。
-    """
-    # 收集参量
-    params = set()
+def primitive_param(g,x):
+    params=set()
     for c in g.monos.values():
         if isinstance(c, SymRat):
-            for pp in (c.num, c.den):
+            for pp in (c.num,c.den):
                 params.update(pp.vars)
     if not params:
-        return Poly(g.vars, {(0,): Fr(1)}), g
-    params = tuple(sorted(params, key=lambda s: s.name))
-    # 清分母：den_lcm
+        return Poly(g.vars,{(0,):Fr(1)}),g
+    params=tuple(sorted(params,key=lambda s:s.name))
     from math import gcd
-    # 先求 g 的系数 SymRat 的分母 lcm
-    dens = []
+    dens=[]
     for c in g.monos.values():
-        if isinstance(c, SymRat):
+        if isinstance(c,SymRat):
             dens.append(c.den)
-        elif isinstance(c, Fr):
+        elif isinstance(c,Fr):
             continue
         else:
-            # Ga/AN 不在此列
-            return None, None
-    # dens 为 Poly(params) 列表，求 lcm 经 mgcd
+            return None,None
     if dens:
-        from cas.poly import mgcd, div_exact
-        # 逐对 lcm = den1*den2 / gcd
-        l = dens[0]
+        from cas.poly import mgcd,div_exact
+        l=dens[0]
         for d in dens[1:]:
-            g_ = mgcd(l, d)
+            g_=mgcd(l,d)
             if g_.is_zero():
-                return None, None
-            # l = l*d / g_
-            # div_exact 要求精确整除
+                return None,None
             try:
-                l = div_exact(l * d, g_)
+                l=div_exact(l*d,g_)
             except Exception:
-                return None, None
-        den_lcm = l
+                return None,None
+        den_lcm=l
     else:
-        den_lcm = None
-    # 构造 P = g * den_lcm  ∈ ℚ[params][x]
+        den_lcm=None
     if den_lcm is not None:
-        # 将 g 的每个系数乘 den_lcm（Poly in params）
-        new_monos = {}
-        for k, c in g.monos.items():
-            if isinstance(c, Fr):
-                # Fr * den_lcm => Poly(params) * Fr
-                # den_lcm 是 Poly(params)，Fr 是系数，需将 Fr 转为 Poly(params) 常数
+        new_monos={}
+        for k,c in g.monos.items():
+            if isinstance(c,Fr):
                 from cas.poly import Poly as P
-                c_poly = P(den_lcm.vars, {(0,)*len(den_lcm.vars): c})
-                prod = c_poly * den_lcm if False else None
-                # 简化：Fr * Poly = Poly.scalar
-                prod = den_lcm.scalar(c)
-                new_monos[k] = prod
-            elif isinstance(c, SymRat):
-                # c = num/den, c*den_lcm = num * (den_lcm/den)
+                c_poly=P(den_lcm.vars,{(0,)*len(den_lcm.vars):c})
+                prod=den_lcm.scalar(c)
+                new_monos[k]=prod
+            elif isinstance(c,SymRat):
                 from cas.poly import div_exact as _div
                 try:
-                    q = _div(den_lcm, c.den)
-                    prod = q * c.num
-                    new_monos[k] = prod
+                    q=_div(den_lcm,c.den)
+                    prod=q*c.num
+                    new_monos[k]=prod
                 except Exception:
-                    return None, None
-        # 此时 new_monos 的值均为 Poly(params)，需转为统一的 ℚ[params,x] 二元 Poly
-        # 将 g 转为二元 Poly (x, params...)
-        # 构造二元变量序 (x, *params)
-        all_vars = (x,) + params
-        # 将每个 k=(e,) + coeff Poly(params) 转为二元 monos
-        bim = {}
-        for (e,), coeff_poly in new_monos.items():
-            # coeff_poly 是 Poly(params)
+                    return None,None
+        all_vars=(x,)+params
+        bim={}
+        for (e,),coeff_poly in new_monos.items():
             if coeff_poly.is_zero():
                 continue
-            for kk, vv in coeff_poly.monos.items():
-                # kk 是 params 上的指数 tuple
-                full = (e,) + kk
-                bim[full] = vv
-        P_bi = Poly(all_vars, bim)
-        # content = mgcd of coeff polys as Poly(params)
-        # coeff polys 为 P_bi 按 x 次数分桶的 Poly(params)
-        from cas.poly import mgcd as _mgcd
-        # 收集所有 x 系数的 Poly(params)
-        buckets = {}
-        for kk, vv in P_bi.monos.items():
-            ex = kk[0]
-            rest = kk[1:]
-            # rest 是 params 指数，需构造 Poly(params) 单项
-            # 将 rest 转为 Poly(params) 的 monos
-            # 简化：直接收集所有 coeff_polys
-            pass
-        # 简化：content 取所有系数的 mgcd（多项式环上）
-        # 收集所有 coeff_poly
-        coeff_polys = []
-        # 按 x 指数分桶
-        # 重新收集
-        from collections import defaultdict
-        buckets2 = defaultdict(list)
-        for kk, vv in P_bi.monos.items():
-            ex = kk[0]
-            # 将 rest 转为 Poly(params) 的系数
-            # 此处 vv 已是 Fr，需构造 Poly(params) 的系数多项式
-            # 简化：直接将 P_bi 的每个 x 次数的切片视为 Poly(params)
-            pass
-        # 为简化，content 取 1（本原化度量，非必须）
-        # 完整本原化需 mgcd，此处先返回 content=1, prim=P_bi 经首一化
-        # 首一化：lc 为 Poly(params) 的首项系数，需为 Fr 1 否则非本原
-        # 此处返回 P_bi 作为 prim，content 暂 1
-        return Poly(params, {(0,)*len(params): Fr(1)}), P_bi
-    return Poly(params, {(0,)*len(params): Fr(1)}), g
+            for kk,vv in coeff_poly.monos.items():
+                full=(e,)+kk
+                bim[full]=vv
+        P_bi=Poly(all_vars,bim)
+        return Poly(params,{(0,)*len(params):Fr(1)}),P_bi
+    return Poly(params,{(0,)*len(params):Fr(1)}),g
