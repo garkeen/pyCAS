@@ -142,6 +142,23 @@ def _param_factors(g, x):
         # 小有理候选集
         for r_ in (Fr(1), Fr(-1), Fr(2), Fr(-2), Fr(1,2), Fr(-1,2)):
             cand_rs.add(r_)
+        # 参量有理根候选 r=±a
+        param_syms = set()
+        for c in g.monos.values():
+            if isinstance(c, SymRat):
+                for pp in (c.num, c.den):
+                    for v in pp.vars:
+                        from cas.algfield import ALG_FIELDS
+                        if v not in ALG_FIELDS:
+                            param_syms.add(v)
+        param_cands = []
+        for av in param_syms:
+            try:
+                from cas.poly import _mk_param as _mkp
+                pr = _mkp(av)
+                param_cands.extend([pr, -pr])
+            except Exception:
+                pass
         # 若全ℚ系数则扩充 divisor 枚举
         all_fr = all(isinstance(c, Fr) for c in g.monos.values())
         if all_fr:
@@ -166,6 +183,18 @@ def _param_factors(g, x):
                 facs.append(lin)
                 cur = q
                 if cur.degree(x) <= 2:
+                    break
+        # 再试参量有理根
+        if not facs and param_cands:
+            for r_ in param_cands:
+                lin = Poly((x,), {(1,): Fr(1), (0,): -r_})
+                try:
+                    q, rem = cur.udivmod(lin)
+                except Exception:
+                    continue
+                if rem.is_zero() or all((c.is_zero() if hasattr(c, "is_zero") else c==0) for c in rem.monos.values()):
+                    facs.append(lin)
+                    cur = q
                     break
         if facs:
             # 剩余部分递归
