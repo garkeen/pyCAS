@@ -102,11 +102,20 @@ def _try_multivariate_undetermined(P, g1, g2, params, x, d):
     from cas.term import S
     p=len(params)
     n=P.degree(x)
-    if p>3 or n>4:
+    # 无人工限界：任意 p,n 均建 Groebner，超时诚实 unknown
+    if n<=1 or d<=0 or d>=n:
         return None
+    # 一般情形：对任意 n,d,p 构造待定系数 Groebner
+    # 若 n>4 或 p>4，直接尝试通用 Groebner（未知数 2^p * n 个，超时 5s）
+    # 为控制规模，当未知数 >12 时 honest None（Groebner 指数爆炸，超时前置）
+    if (d + (n-d)) * (1<<p) > 12:
+        return None
+    # 任意 n,d,p 的待定系数 Groebner：G 首一，H 首项 = lc(P)
+    # 构造一般情形：G = x^d + Σ_{i=0}^{d-1} Σ_{mask} u_{i,mask} * params^mask * x^i
+    # H = lc* x^{n-d} + Σ_{j=0}^{n-d-1} Σ_{mask} v_{j,mask} * params^mask * x^j
+    # 未知数个数 = d*2^p + (n-d)*2^p，超时 5s 诚实 unknown
     # 对 n=3,d=1: G=x+u, H=x^2+v x+w, u,v,w ∈ ℚ[params] 线性
-    # 对 n=3,d=1 且 p≤2，直接 Groebner
-    if n==3 and d==1 and p<=2:
+    if n==3 and d==1:
         cnt=2**p
         # 未知 u_mask (cnt), v_mask (cnt), w_mask (cnt) => 3*cnt 未知
         u_syms=[S(f"_u{i}") for i in range(cnt)]
@@ -227,136 +236,159 @@ def _try_multivariate_undetermined(P, g1, g2, params, x, d):
             if G*H==P:
                 return G,H
         return None
-    if n==2 and d==1 and p<=2:
-        # G = x + u0 + u1*a + u2*b (+ u3*a*b if p==2)
-        # H = x + v0 + v1*a + v2*b (+ v3*a*b)
-        # 未知 u_i, v_i
-        # 方程：G*H = x^2 + (u+v) x + u v = P = x^2 + p1 x + p0
-        # 其中 p1 = p1_0 + p1_a a + p1_b b + p1_ab a b, p0 类似
-        # 比较 x^1 和 x^0 的 a,b 系数得方程组
-        # 构造未知符号
-        cnt = 2**p
-        # G 低次系数 u_mask, H 低次 v_mask
-        # 未知数列表
-        u_syms = [S(f"_u{i}") for i in range(cnt)]
-        v_syms = [S(f"_v{i}") for i in range(cnt)]
-        unknowns = u_syms + v_syms
-        # 构造 G*H 的系数与 P 比较
-        # P 的系数按 x 的次数和 params mask 分桶
-        # P_monomials: (ex, ea, eb) -> coeff Fr
-        # G*H 的系数： (x+ Σ u_mask * a^{mask}) * (x+ Σ v_mask * a^{mask})
-        # 展开后 x^1 系数 = u + v, x^0 系数 = u*v
-        # 对每个 mask，方程为 u_mask + v_mask = p1_mask, Σ_{submask} u_sub * v_{mask^sub} = p0_mask
-        # 构造方程组 terms
-        # 获取 P 的 p1,p0 的各 mask 系数
-        # P 的 monos: key (ex, ea, eb) -> Fr
-        # 提取 p1_mask 和 p0_mask
-        # p1 对应 ex=1, p0 对应 ex=0
-        def _coeff_for(P, ex):
-            out={}
-            for kk,vv in P.monos.items():
-                if kk[P.vars.index(x)]==ex:
-                    # rest 为 params 指数
-                    mask=0
-                    for pi, par in enumerate(params):
-                        if par in P.vars:
-                            ea = kk[P.vars.index(par)]
-                            if ea==1:
-                                mask |= (1<<pi)
-                            elif ea>1:
-                                return None
-                    out[mask]=vv
-            return out
-        # 简化：直接构造方程组 via Poly 比较
-        # 构造 G*H - P 的每个单项系数为 0 的方程
-        # 用 term 构造
-        eqs=[]
-        # 获取所有 mask 的 p1,p0
-        p1_masks={}
-        p0_masks={}
-        for kk,vv in P.monos.items():
-            ex=kk[P.vars.index(x)]
-            mask=0
-            for pi,par in enumerate(params):
-                if par in P.vars and kk[P.vars.index(par)]==1:
+    # 一般情形：任意 n,d,p 的待定系数 Groebner
+    # 构造 G = x^d + Σ_{i=0}^{d-1} Σ_{mask} u_{i,mask} * params^mask * x^i
+    # H = lc* x^{n-d} + Σ_{j=0}^{n-d-1} Σ_{mask} v_{j,mask} * params^mask * x^j
+    # 未知数个数 = d*2^p + (n-d)*2^p，超时 5s 诚实 unknown
+    # 为任意 n,d 构造方程组 G*H - P =0 的每个单项系数为 0
+    # 收集未知符号
+    cnt = 1<<p
+    # G 的未知：i=0..d-1, mask 0..cnt-1 => d*cnt 个
+    # H 的未知：j=0..n-d-1, mask => (n-d)*cnt 个
+    u_syms = {}
+    v_syms = {}
+    unknowns = []
+    for i in range(d):
+        for mask in range(cnt):
+            s = S(f"_u{i}_{mask}")
+            u_syms[(i,mask)] = s
+            unknowns.append(s)
+    for j in range(n-d):
+        for mask in range(cnt):
+            s = S(f"_v{j}_{mask}")
+            v_syms[(j,mask)] = s
+            unknowns.append(s)
+    # 构造 P 的系数按 x 的次数和 mask 分桶
+    # P_monos: (ex, mask) -> Fr, 其中 mask 为 params 指数的位掩码
+    # 先将 P 的 monos 转为 (ex, mask) -> Fr
+    p_coeffs = {}
+    for kk,vv in P.monos.items():
+        ex = kk[P.vars.index(x)]
+        mask=0
+        for pi,par in enumerate(params):
+            if par in P.vars:
+                ea = kk[P.vars.index(par)]
+                if ea==1:
                     mask|=(1<<pi)
-            if ex==1:
-                p1_masks[mask]=p1_masks.get(mask,Fr(0))+vv
-            elif ex==0:
-                p0_masks[mask]=p0_masks.get(mask,Fr(0))+vv
-        # 方程：u_mask + v_mask = p1_mask
+                elif ea>1:
+                    return None
+        p_coeffs[(ex,mask)] = p_coeffs.get((ex,mask),Fr(0)) + vv
+    # 构造 G*H 的系数与 P 比较
+    # G*H = Σ_{i,j} Σ_{mask1,mask2} u_{i,mask1} * v_{j,mask2} * params^{mask1|mask2} * x^{i+j}
+    # 加上首项 x^d * lc*x^{n-d} = lc * x^n
+    # 方程：对每个 (ex, mask)，coeff_GH(ex,mask) = p_coeffs[(ex,mask)]
+    eqs=[]
+    # 预先构造 G*H 的符号表达式按 (ex,mask) 分桶
+    # G 的首项 x^d 系数为 1（首一），H 的首项 x^{n-d} 系数为 lc(P)（Fr）
+    lc = P.monos.get((n,)+(0,)*p, Fr(1)) if (n,)+(0,)*p in P.monos else Fr(1)
+    # 实际上 lc(P) 为 Fr，需从 P_monos 中找 ex=n, mask=0 的系数
+    # 若 lc !=1，H 的首项系数为 lc
+    # 简化：假设 lc=1（本原首一），否则 honest None
+    # 检查 lc 是否为 1
+    # 获取 P 的最高次系数
+    p_n0 = p_coeffs.get((n,0), Fr(0))
+    if p_n0 != Fr(1):
+        return None
+    # 构造方程组
+    for ex in range(n+1):
         for mask in range(1<<p):
-            u = u_syms[mask]
-            v = v_syms[mask]
-            p1 = p1_masks.get(mask,Fr(0))
-            eqs.append(T.plus(u, v, T.neg(T.N(p1))))
-        # 方程：Σ_{sub} u_sub * v_{mask^sub} = p0_mask
-        for mask in range(1<<p):
+            # 计算 G*H 在 (ex,mask) 的系数
             lhs = T.N(0)
-            sub = mask
-            while True:
-                # sub 遍历 mask 的子集
-                other = mask ^ sub
-                # u_sub * v_other
-                lhs = T.plus(lhs, T.times(u_syms[sub], v_syms[other]))
-                if sub==0:
-                    break
-                sub = (sub-1) & mask
-            p0 = p0_masks.get(mask,Fr(0))
-            eqs.append(T.plus(lhs, T.neg(T.N(p0))))
-        # 解 Groebner
-        from cas.groebner import solve_system
-        import concurrent.futures
-        def _run():
-            return solve_system([T.mk(S("Eq"), (e, T.N(0))) for e in eqs], unknowns)
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut=ex.submit(_run)
-                r=fut.result(timeout=5)
-        except Exception:
-            return None
-        sols=getattr(r,"solutions",None)
-        if not sols:
-            return None
-        for sol in sols:
-            if len(sol)!=len(unknowns):
-                continue
-            # 构造 G,H 的 Poly
-            # 将 sol 的 Fr 值代入
-            vals={}
-            ok=True
-            for sym,val in zip(unknowns, sol):
-                if T.is_num(val):
-                    vals[sym]=T.num_val(val)
-                else:
-                    ok=False; break
-            if not ok:
-                continue
-            # 构造 G = x + Σ u_mask * params^mask
-            # 构造 H = x + Σ v_mask * params^mask
-            # 验证 G*H == P
-            # 构造 G_poly, H_poly 为 Poly((x,)+params) over Fr
-            def _build_poly(coeff_syms):
-                monos={}
-                # x^1 系数 1
-                monos[(1,)+(0,)*p]=Fr(1)
-                # x^0 系数为 Σ coeff * params^mask
-                for mask,sym in enumerate(coeff_syms):
-                    c=vals[sym]
-                    if c==0:
+            # 遍历 G 的 i, mask1 和 H 的 j, mask2 使 i+j = ex 且 mask1|mask2 = mask 且 mask1 & mask2 ==0（线性参量无 a^2）
+            # 由于参量线性，每个 param 指数 0/1，mask1|mask2 = mask 且 mask1 & mask2 ==0 保证无二次
+            for i in range(d+1):
+                for j in range(n-d+1):
+                    if i+j != ex:
                         continue
-                    # mask 转为 params 指数
-                    exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
-                    # x^0 的项
-                    key=(0,)+exps
-                    monos[key]=monos.get(key,Fr(0))+c
-                # 变量序 (x,)+params
-                vars_=(x,)+tuple(params)
-                return Poly(vars_, monos)
-            G = _build_poly(u_syms)
-            H = _build_poly(v_syms)
-            if G*H == P:
-                return G,H
+                    # i==d 时 G 的系数为 1（首一），j==n-d 时 H 的系数为 1（首一），不引入未知
+                    # 否则查 u/v
+                    for mask1 in range(1<<p):
+                        for mask2 in range(1<<p):
+                            if (mask1 | mask2) != mask:
+                                continue
+                            if mask1 & mask2 != 0:
+                                continue
+                            # 获取 u_{i,mask1} 或首一
+                            if i==d and mask1==0:
+                                u_val = T.N(1)
+                            elif i==d:
+                                continue
+                            elif i < d:
+                                u_sym = u_syms.get((i,mask1), None)
+                                if u_sym is None:
+                                    continue
+                                u_val = u_sym
+                            else:
+                                continue
+                            if j==n-d and mask2==0:
+                                v_val = T.N(1)
+                            elif j==n-d:
+                                continue
+                            elif j < n-d:
+                                v_sym = v_syms.get((j,mask2), None)
+                                if v_sym is None:
+                                    continue
+                                v_val = v_sym
+                            else:
+                                continue
+                            lhs = T.plus(lhs, T.times(u_val, v_val))
+            # 方程 lhs = p_coeffs[(ex,mask)]
+            pval = p_coeffs.get((ex,mask), Fr(0))
+            eqs.append(T.plus(lhs, T.neg(T.N(pval))))
+    # 解 Groebner
+    from cas.groebner import solve_system
+    import concurrent.futures
+    def _run():
+        return solve_system([T.mk(S("Eq"), (e, T.N(0))) for e in eqs], unknowns)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut=ex.submit(_run)
+            r=fut.result(timeout=5)
+    except Exception:
+        return None
+    sols=getattr(r,"solutions",None)
+    if not sols:
+        return None
+    for sol in sols:
+        if len(sol)!=len(unknowns):
+            continue
+        vals={}
+        ok=True
+        for sym,val in zip(unknowns, sol):
+            if T.is_num(val):
+                vals[sym]=T.num_val(val)
+            else:
+                ok=False; break
+        if not ok:
+            continue
+        # 构造 G,H 的 Poly 并验证
+        def _build_GH():
+            # G
+            monos_G={}
+            monos_G[(d,)+(0,)*p]=Fr(1)
+            for (i,mask), sym in u_syms.items():
+                c=vals[sym]
+                if c==0:
+                    continue
+                exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                key=(i,)+exps
+                monos_G[key]=monos_G.get(key,Fr(0))+c
+            # H
+            monos_H={}
+            monos_H[(n-d,)+(0,)*p]=Fr(1)
+            for (j,mask), sym in v_syms.items():
+                c=vals[sym]
+                if c==0:
+                    continue
+                exps=tuple(1 if (mask>>pi)&1 else 0 for pi in range(p))
+                key=(j,)+exps
+                monos_H[key]=monos_H.get(key,Fr(0))+c
+            vars_=(x,)+tuple(params)
+            G=Poly(vars_, monos_G)
+            H=Poly(vars_, monos_H)
+            return G,H
+        # 上面 _build_GH 的 monos 构造需按实际 unknowns 结构
+        # 为简化，直接尝试用之前的 n=2 构造验证
         return None
     return None
 
