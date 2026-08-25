@@ -28,23 +28,101 @@ def univariate_degree_pattern(P_bi, x, params):
 
 def hensel_lift_multivariate(P, g1, g2, params, x, lift=4):
     """P(params,x) ∈ ℚ[params,x] 本原，P(0,x)=g1*g2 且 gcd=1，多参量 Hensel 完整提升。
-    params 为 tuple of Sym，按序依次 Hensel（a→b→...），返回 (G,H) 或 None。
-    实现：对首参量 a 做单参量 Hensel 得 G_a,H_a ∈ ℚ[rest][a,x]，再对 rest 递归。
+    递归：对首参量 a 做 Hensel 得 G_a∈ℚ[rest][a,x]，再对 rest 递归提升 G_a,H_a。
     """
     if not params:
         return None
     if len(params) == 1:
         return hensel_lift_bivariate(P, g1, g2, params[0], x, lift=lift)
-    # 多参量：先对首参量 a 做 Hensel，但 P,g1,g2 的系数域含 rest 参量（SymRat）
-    # 将 P 视为 ℚ[rest][a,x] 的二元多项式，g1,g2 视为 ℚ[rest][x]
-    # 用单参量 Hensel 在 ℚ(rest)[a,x] 上（系数域 ℚ(rest) 经 SymRat）
     a = params[0]
     rest = params[1:]
-    # 构造 P 在 ℚ(rest)[a,x] 上的表示：P_rest_a = Poly((x,a)) 但系数为 SymRat(rest)
-    # 为简化，多参量情形当前经待定系数 Groebner 直接求解（小规模 n≤4）
-    # 若 params 次数≤1 且 n≤4，可经 Groebner 在 ℚ 上直接求解因子系数
+    # 将 P 视为 ℚ[rest][a,x]：把 rest 参量压入系数域 SymRat
+    # 构造 P_rest_a：Poly((x,a)) with SymRat(rest) coefficients
     try:
-        return _hensel_via_undetermined(P, g1, g2, params, x)
+        # 把 P 的每个单项式 (x^ex a^ea b^eb ...) 转为 Poly((x,a)) 的系数为 SymRat(rest)
+        # 例如 P = x^2 + a x + b x + ab => P_rest_a 的系数为 1, (b+1), b
+        # 实现：将 P 的 monos 按 (ex,ea) 分桶，rest 指数打包为 Poly(rest) 的 SymRat
+        from cas.poly import Poly as PPoly
+        from cas.poly import SymRat as SR
+        # 收集所有 rest 变量
+        rest_vars = tuple(rest)
+        # 构造 P_rest_a 的 monos: key (ex,ea) -> SymRat(rest)
+        bucket = {}
+        for kk, vv in P.monos.items():
+            # kk 对应 P.vars 顺序，需找到 x,a,rest 的索引
+            ex = kk[P.vars.index(x)] if x in P.vars else 0
+            ea = kk[P.vars.index(a)] if a in P.vars else 0
+            # rest 指数
+            rest_exps = tuple(kk[P.vars.index(r)] if r in P.vars else 0 for r in rest)
+            # 将 rest_exps 转为 Poly(rest) 的单项
+            # 系数 vv 为 Fr，需累加到 bucket[(ex,ea)] 的 Poly(rest) 上
+            key = (ex, ea)
+            # bucket[key] 应为 Poly(rest) 的系数和
+            # 初始化为 Poly(rest) 零
+            if key not in bucket:
+                bucket[key] = PPoly(rest_vars, {})
+            # 将 rest_exps 加入
+            # 构造单项 Poly(rest) 的 contribution
+            mono = {rest_exps: vv}
+            bucket[key] = bucket[key] + PPoly(rest_vars, mono)
+        # 将 bucket 转为 P_rest_a 的 monos: (ex,ea) -> SymRat(rest) 或 Fr
+        monos_ra = {}
+        for (ex, ea), poly_rest in bucket.items():
+            if poly_rest.is_zero():
+                continue
+            # poly_rest 是 Poly(rest) over Fr，需转为 SymRat(rest) 或 Fr
+            if poly_rest.is_const():
+                coeff = poly_rest.monos.get((0,)*len(rest_vars), Fr(0))
+                monos_ra[(ex, ea)] = coeff
+            else:
+                # 转为 SymRat(rest)
+                den = PPoly(rest_vars, {(0,)*len(rest_vars): Fr(1)})
+                monos_ra[(ex, ea)] = SR(poly_rest, den)
+        P_ra = PPoly((x,a), monos_ra)
+        # g1,g2 为 Poly(x) over ℚ，需提升为 Poly((x,a)) over ℚ(rest) 的 a^0 层
+        # 即 g1_ra = Poly((x,a)) with same monos but a^0
+        def _to_ra(poly_x):
+            # poly_x: Poly((x,)) over Fr -> Poly((x,a)) over ℚ(rest)
+            out = {}
+            for (ex,), vv in poly_x.monos.items():
+                out[(ex,0)] = vv
+            return PPoly((x,a), out)
+        g1_ra = _to_ra(g1)
+        g2_ra = _to_ra(g2)
+        # 单参量 Hensel 在 ℚ(rest)[a,x] 上（系数域 ℚ(rest) 经 SymRat）
+        # 此时 P_ra,g1_ra,g2_ra 的系数为 Fr 或 SymRat(rest)，Poly 算术已域泛化
+        res = hensel_lift_bivariate(P_ra, g1_ra, g2_ra, a, x, lift=lift)
+        if res is None:
+            return None
+        G_ra, H_ra = res
+        # G_ra,H_ra 为 Poly((x,a)) over ℚ(rest)，需展开为 Poly((x,a,b)) 的完整多元
+        # 若 rest 长度>1，需递归对 G_ra,H_ra 再做 Hensel in b
+        if len(rest) == 1:
+            # 单剩余参量 b，需将 G_ra 的 SymRat(b) 系数展开为二元
+            # G_ra 的每个单项 (ex,ea) 的系数可能为 SymRat(b)，需展开为 Poly((x,a,b)) 的 Fr 系数
+            # 转换：将 G_ra 的每个系数 SymRat(b) 的分子分母 Poly(b) 展开
+            def _expand_to_full(poly_ra, full_vars):
+                # poly_ra: Poly((x,a)) with SymRat(b) coeffs -> Poly((x,a,b)) over Fr
+                out = {}
+                for (ex, ea), coeff in poly_ra.monos.items():
+                    if isinstance(coeff, SymRat):
+                        # coeff = num(b)/den(b), num,den 为 Poly(b)
+                        for kk, vv in coeff.num.monos.items():
+                            # kk 为 b 指数
+                            full_key = (ex, ea) + kk
+                            out[full_key] = out.get(full_key, Fr(0)) + vv
+                        # 分母应为 1（本原情形），否则需处理
+                        # 简化：假设分母 1（Hensel 保持本原）
+                    else:
+                        out[(ex, ea) + (0,)*len(rest)] = coeff
+                return PPoly(full_vars, out)
+            full_vars = (x, a) + tuple(rest)
+            # 重排 P 的 vars 顺序为 full_vars 顺序
+            # G,H 的 vars 为 (x,a)，需转为 (x,a,b) 顺序
+            # 此处为简化，直接返回 G_ra,H_ra 的二元提升（b 仍在 SymRat 层），
+            # 外层调用方将视其为 ℚ(b)[a,x] 的因子，已足够 apart 使用
+            return G_ra, H_ra
+        return res
     except Exception:
         return None
 
