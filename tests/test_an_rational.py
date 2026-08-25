@@ -143,9 +143,13 @@ class TestAlgebraicRational(unittest.TestCase):
         self.assertEqual(m4, {})
 
     def test_honest_refusal_preserved(self):
-        # 超出切片：代数核（变量底根式）仍诚实拒答，不静默降级
+        # M78.7a：y²=x²+1 经 quadIfCan 已解锁；仍诚实拒答的例子改为 y²=x³+1（椭圆）
         with self.assertRaises(Exception):
-            self.integ("1/sqrt(x^2+1)")
+            self.integ("1/sqrt(x^3+1)")
+        # 解锁验证：1/√(x²+1) 现通（PROBABLE 亦为诚实有理参数化结果，M78.7b 后升级 VERIFIED）
+        F, ok, _, _ = self.integ("1/sqrt(x^2+1)")
+        self.assertIsNotNone(F)
+        self.assertIn("log", to_str(F))
 
     def test_trager_cubic_factorization(self):
         # A3：∫dx/(x³-3x-√2)：x³-3x-√2 = (x+√2)(x²-√2x-1)——
