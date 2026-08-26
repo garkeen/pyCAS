@@ -30,12 +30,7 @@ def _atom_str(a):
 
 def _name_of(h):
     if isinstance(h, Sym):
-        # 打印名来自 FunctionSpec；未注册头回退小写
-        from cas.spec import get as _spec_get
-
-        sp = _spec_get(h.name)
-        if sp is not None and sp.print_name:
-            return sp.print_name
+        # TODO: 打印名改查图书馆条目的 print_name 字段
         return h.name.lower()
     return repr(h)
 

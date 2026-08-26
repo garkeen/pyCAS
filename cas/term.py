@@ -1,7 +1,6 @@
 from fractions import Fraction
 from fractions import Fraction as Fr
 
-from cas.errors import BudgetExceeded
 
 _hc = 0
 
@@ -309,385 +308,19 @@ def sort_key(t):
     return (22, repr(t))
 
 
-def _has_special(args):
-    return any(isinstance(a, Special) for a in args)
 
+def _flatten_ac(head, args):
+    """AC 头的句法折叠：同类嵌套拉平一层 + 确定性排序。
 
-def _fold_ac(head, args):
-    is_times = head.name == "Times"
+    纯表示规范，无数值折叠、无代数合并——标准形归函数结构提供。
+    """
     flat = []
     for a in args:
         if isinstance(a, Expr) and a.head is head:
             flat.extend(a.args)
         else:
             flat.append(a)
-    if UND in flat:
-        return UND
-    special = _has_special(flat)
-    if special:
-        nums = []
-        rest = []
-        for a in flat:
-            if is_num(a):
-                nums.append(a)
-            else:
-                rest.append(a)
-        if not rest:
-            return _fold_num_only(head, nums)
-        flat = sorted(rest + nums)
-    else:
-        acc = None
-        rest = []
-        for a in flat:
-            if is_num(a):
-                if acc is None:
-                    acc = num_val(a)
-                else:
-                    acc = acc + num_val(a) if not is_times else acc * num_val(a)
-            else:
-                rest.append(a)
-        if is_times:
-            if acc == 0:
-                return ZERO
-            if acc is not None and acc != 1:
-                rest.append(N(acc))
-        else:
-            if acc is not None and acc != 0:
-                rest.append(N(acc))
-        flat = sorted(rest)
-    if not flat:
-        return ONE if is_times else ZERO
-    if len(flat) == 1:
-        return flat[0]
-    return flat
-
-
-def _fold_num_only(head, nums):
-    if head.name == "Times":
-        acc = Fraction(1)
-        for n in nums:
-            acc *= num_val(n)
-        return N(acc)
-    acc = Fraction(0)
-    for n in nums:
-        acc += num_val(n)
-    return N(acc)
-
-
-def _fold_bool_ac(head, args):
-    is_or = head.name == "Or"
-    flat = []
-    for a in args:
-        if isinstance(a, Expr) and a.head is head:
-            flat.extend(a.args)
-        else:
-            flat.append(a)
-    seen = []
-    sid = set()
-    for a in flat:
-        if a is (TRUE if is_or else FALSE):
-            return TRUE if is_or else FALSE
-        if a is (FALSE if is_or else TRUE):
-            continue
-        if a._h in sid:
-            continue
-        sid.add(a._h)
-        seen.append(a)
-    if not seen:
-        return FALSE if is_or else TRUE
-    if len(seen) == 1:
-        return seen[0]
-    return sorted(seen)
-
-
-def _folds_numeric(t):
-    """t 是否含数值/i 原子：纯常数乘开折叠的终止性条件。
-
-    π/e/γ 类常数底的幂不乘开（(π-1)^2 乘开后 _norm_times 幂合并会重发
-    Power(π-1, 2) -> 互递归；保持名词形态，语义不变）。
-    """
-    if is_num(t) or t is IU:
-        return True
-    if isinstance(t, Expr):
-        return any(_folds_numeric(a) for a in t.args)
-    return False
-
-
-def _fold_power(b, e):
-    if UND in (b, e) or INFINITY in (b, e):
-        return UND
-    # e^a 规范形 = Exp(a)：两种写法指针同一（替换/判等/微分回验的前提）
-    if b is E:
-        return mk(S("Exp"), (e,))
-    # 虚数单位整数幂：i^n 按 mod 4 折叠（纯符号，无近似）
-    if b is IU and isinstance(e, Int):
-        r = e.v % 4
-        if r == 0:
-            return ONE
-        if r == 1:
-            return IU
-        if r == 2:
-            return MONE
-        return neg(IU)
-    if (
-        isinstance(e, Int)
-        and isinstance(b, Expr)
-        and b.head.name == "Power"
-        and is_num(b.args[0])
-        and num_val(b.args[0]) >= 0
-        and isinstance(b.args[1], Rat)
-    ):
-        # (n^r)^k（n 非负数值）：指数相乘，结果为整数指数时精确折叠（如 (√2)^2 -> 2）
-        new_exp = b.args[1].f * e.v
-        if new_exp.denominator == 1:
-            return N(num_val(b.args[0]) ** new_exp.numerator)
-        return None
-    if (
-        isinstance(e, Int)
-        and 0 < e.v <= 64
-        and isinstance(b, Expr)
-        and not isinstance(b, Special)
-        and not (b.head.name == "Power" and isinstance(b.args[1], Rat))
-        and all(_pure_numeric(a) for a in b.args)
-        and _folds_numeric(b)
-        # 终止性守卫：底含 Plus 因子（分配后数值折叠）或含 i（iⁿ 按 mod 4 折叠）才乘开；
-        # 纯 Const 底（如 exp(1)、π）乘开会重发同形 Power -> 互递归，保持名词。
-        and any((isinstance(a, Expr) and a.head.name == "Plus") or a is IU for a in b.args)
-    ):
-        # 含数值/i 与加法因子的纯常数底正整数幂（如 (1+i)^2）：乘开折叠。
-        # 负指数不在此折叠（避免与倒数构造互递归）；有理指数底由上一分支处理。
-        acc = ONE
-        for _ in range(e.v):
-            acc = mk(S("Times"), (acc, b))
-        return acc
-    if is_num(b) and isinstance(e, Int):
-        bv = num_val(b)
-        ev = e.v
-        if ev == 0:
-            if bv == 0:
-                return UND
-            return ONE
-        if ev > 0:
-            if abs(ev) > 100000:
-                return None
-            return N(bv**ev)
-        if bv == 0:
-            return UND
-        return N(Fraction(1) / (bv ** (-ev)))
-    if (
-        isinstance(e, Int)
-        and isinstance(b, Expr)
-        and b.head.name == "Power"
-        and isinstance(b.args[1], Rat)
-        and b.args[1].f == Fraction(1, 2)
-        and is_num(b.args[0])
-        and num_val(b.args[0]) >= 0
-        and e.v % 2 == 0
-    ):
-        return N(num_val(b.args[0]) ** (e.v // 2))
-    return None
-
-
-def _split_coeff(a):
-    """加法项拆系数：a -> (系数: Fraction, 剩余因子 tuple)。"""
-    if is_num(a):
-        return num_val(a), ()
-    if isinstance(a, Expr) and a.head.name == "Times":
-        nums = [x for x in a.args if is_num(x)]
-        rest = tuple(x for x in a.args if not is_num(x))
-        if not nums:
-            return Fr(1), rest
-        acc = Fr(1)
-        for x in nums:
-            acc *= num_val(x)
-        return acc, rest
-    return Fr(1), (a,)
-
-
-def _norm_plus(args):
-    """Plus 环规范化：合并同类项（按剩余因子签名分组）。
-
-    返回规范项；含 Special（Infinity 等）或无可归约时返回 None（由 mk 原样驻留）。
-    """
-    if any(isinstance(a, Special) for a in args):
-        return None
-    groups = {}
-    const = Fr(0)
-    for a in args:
-        c, rest = _split_coeff(a)
-        if not rest:
-            const += c
-            continue
-        key = tuple(x._h for x in rest)
-        if key in groups:
-            c0, rest0 = groups[key]
-            groups[key] = (c0 + c, rest0)
-        else:
-            groups[key] = (c, rest)
-    out = []
-    if const != 0:
-        out.append(N(const))
-    for c, rest in groups.values():
-        if c == 0:
-            continue
-        if c == 1:
-            if len(rest) == 1:
-                out.append(rest[0])
-            else:
-                out.append(mk(S("Times"), rest))
-        elif len(rest) == 1:
-            out.append(mk(S("Times"), (rest[0], N(c))))
-        else:
-            out.append(mk(S("Times"), tuple(rest) + (N(c),)))
-    if not out:
-        return ZERO
-    if len(out) == 1:
-        return out[0]
-    if len(out) == len(args) and all(o is a for o, a in zip(sorted(out), args)):
-        return None
-    return mk(S("Plus"), tuple(out))
-
-
-def _pure_numeric(t):
-    """t 是否不含任何符号/洞（仅数值与常数，如 1+i）。头不计入（Sin 等由参数判定）。"""
-    if isinstance(t, (Sym, PatVar, PatSeq)):
-        return False
-    if isinstance(t, Expr):
-        return all(_pure_numeric(a) for a in t.args)
-    if isinstance(t, Bound):
-        return False
-    return True
-
-
-def _norm_times(args):
-    """Times 环规范化：合并同底整数幂（x^a*x^b -> x^(a+b)，a,b 整数）、归一系数。
-
-    generic 语义：x*x^-1 -> 1（与主流 CAS 一致）；定义域条件由 dom_condition 按需提取。
-    非整数指数幂视为原子基底，不做指数算术（分支切割安全）；
-    数值有理底根式例外——N1 同次合并（radnorm.merge_same_index，
-    正有理底/负底奇指标无条件，√a·√b→√(ab)）。
-    返回规范项；含 Special 或无可归约时返回 None。
-    """
-    if any(isinstance(a, Special) for a in args):
-        return None
-    from cas.radnorm import merge_same_index
-    nargs = merge_same_index(args)
-    if nargs is not args:
-        return mk(S("Times"), nargs)
-    if (
-        any(isinstance(a, Expr) and a.head.name == "Plus" for a in args)
-        and all(_pure_numeric(a) for a in args)
-    ):
-        # 纯常数乘积且含加法因子（如 (1+i)(1-i)）：分配展开并折叠；
-        # 展开后因子不再含 Plus，不会重入此分支（终止性保证）。
-        from cas.simplify import expand
-
-        return expand(_intern_expr(S("Times"), tuple(args)))
-    coeff = Fr(1)
-    powers = {}
-    for a in args:
-        if is_num(a):
-            coeff *= num_val(a)
-            continue
-        if isinstance(a, Expr) and a.head.name == "Power":
-            b, e = a.args
-            if isinstance(e, Int):
-                key = b._h
-                if key in powers:
-                    powers[key][1] += e.v
-                else:
-                    powers[key] = [b, e.v]
-                continue
-        key = a._h
-        if key in powers:
-            powers[key][1] += 1
-        else:
-            powers[key] = [a, 1]
-    if coeff == 0:
-        return ZERO
-    out = []
-    for b, e in powers.values():
-        if e == 0:
-            continue
-        if e == 1:
-            out.append(b)
-        else:
-            out.append(mk(S("Power"), (b, N(e))))
-    if coeff != 1 or not out:
-        out.append(N(coeff))
-    if len(out) == 1:
-        return out[0]
-    if len(out) == len(args) and all(o is a for o, a in zip(sorted(out), args)):
-        return None
-    return mk(S("Times"), tuple(out))
-
-
-def _sqrt_fac_fold(b, e):
-    """(数值与数值平方根的积)^偶数整数 -> 数值折叠。"""
-    facs = []
-    for a in b.args:
-        if is_num(a):
-            facs.append(N(num_val(a) ** e.v))
-        elif (
-            isinstance(a, Expr)
-            and a.head.name == "Power"
-            and isinstance(a.args[1], Rat)
-            and a.args[1].f == Fr(1, 2)
-            and is_num(a.args[0])
-            and num_val(a.args[0]) >= 0
-        ):
-            facs.append(N(num_val(a.args[0]) ** (e.v // 2)))
-        else:
-            return None
-    return times(*facs)
-
-
-def _norm_power(args):
-    """Power 规范化：x^1 -> x、x^0 -> 1、1^e -> 1、(x^i)^j -> x^(i*j)（i,j 整数）。
-
-    非整数内层指数不合并（分支切割）；根式偶次幂折叠走 _sqrt_fac_fold。
-    """
-    b, e = args
-    if e is ONE:
-        return b
-    if e is ZERO:
-        return ONE
-    if b is ONE:
-        return ONE
-    if (
-        isinstance(e, Int)
-        and e.v % 2 == 0
-        and isinstance(b, Expr)
-        and b.head.name == "Times"
-    ):
-        r = _sqrt_fac_fold(b, e)
-        if r is not None:
-            return r
-    if (
-        isinstance(b, Expr)
-        and b.head.name == "Power"
-        and isinstance(e, Int)
-        and isinstance(b.args[1], Int)
-    ):
-        return mk(S("Power"), (b.args[0], N(b.args[1].v * e.v)))
-    # N1 根式归一：有理数值底 × 非整指数 -> c·r^(1/m) 规范形
-    if isinstance(e, Rat) and e.f.denominator > 1 and is_num(b):
-        from cas.radnorm import split_radical
-
-        bv = num_val(b)
-        if isinstance(bv, Fr):
-            r = split_radical(bv, e.f.numerator, e.f.denominator)
-            if r is not None:
-                return r
-    # N3 落域判定（闸门链②在④前）：常数语境根式若已是已注册域的
-    # 完全幂则就地坍缩，不建嵌套核（√(3+2√2)→1+√2）。
-    if isinstance(e, Rat) and e.f.denominator > 1:
-        from cas.kernelreg import try_collapse
-
-        r = try_collapse(b, e.f)
-        if r is not None:
-            return r
-    return None
+    return sorted(flat)
 
 
 # 每头规范化注册表（L5 扩展入口）：构造器 mk 对非 AC/Power 头应用。
@@ -697,75 +330,6 @@ NORM = {}
 
 def register_norm(name, fn):
     NORM[name] = fn
-
-
-def _norm_conjugate(args):
-    """Conjugate 表示归并（实数域公理）：实常数/数值不变，i -> -i，
-    对 Plus/Times/整数幂分配，双重共轭消去；其余形态驻留为名词。"""
-    (a,) = args
-    if a is IU:          # 必须先于 Const 检查（IU 本身是 Const）
-        return neg(IU)
-    if is_num(a) or isinstance(a, Const):
-        return a
-    if isinstance(a, Expr):
-        n = a.head.name
-        if n == "Conjugate":
-            return a.args[0]
-        if n == "Plus":
-            return mk(S("Plus"), tuple(mk(S("Conjugate"), (x,)) for x in a.args))
-        if n == "Times":
-            return mk(S("Times"), tuple(mk(S("Conjugate"), (x,)) for x in a.args))
-        if n == "Power" and isinstance(a.args[1], Int):
-            return mk(S("Power"), (mk(S("Conjugate"), (a.args[0],)), a.args[1]))
-    return None
-
-
-register_norm("Conjugate", _norm_conjugate)
-
-
-def _norm_piecewise(args):
-    """Piecewise 表示归并：剪除 false 分支；true 默认分支截断其后分支。
-
-    语法：(v1, c1, v2, c2, ...) 偶数长，条件为 BVal/比较项；
-    全 false -> Undefined；奇数长/含洞保持名词（模式语义）。
-    分段边界连续性不做判定（留给 decide/定积分层）。
-    """
-    if len(args) % 2 == 1:
-        return None
-    if any(isinstance(a, (PatVar, PatSeq)) for a in args):
-        return None
-    out = []
-    for i in range(0, len(args), 2):
-        v, c = args[i], args[i + 1]
-        if c is FALSE:
-            continue
-        out.extend([v, c])
-        if c is TRUE:
-            break
-    if not out:
-        return UND
-    # 单分支且条件为 true：塌缩为值本身（表示同一，无定理内容）
-    if len(out) == 2 and out[1] is TRUE:
-        return out[0]
-    if len(out) == len(args) and all(a is b for a, b in zip(out, args)):
-        return None
-    return _intern_expr(S("Piecewise"), tuple(out))
-
-
-register_norm("Piecewise", _norm_piecewise)
-
-
-_SPEC_MOD = None
-
-
-def _spec_lookup(name):
-    """延迟导入 spec（避免 term <-> spec 循环），查函数注册表。"""
-    global _SPEC_MOD
-    if _SPEC_MOD is None:
-        from cas import spec as _s
-
-        _SPEC_MOD = _s
-    return _SPEC_MOD.get(name)
 
 
 def _intern_expr(head, args):
@@ -782,12 +346,15 @@ _CMP_HEADS = {"Eq", "Ne", "Lt", "Le", "Gt", "Ge"}
 
 
 def mk(head, args):
-    """唯一的规范化构造器：构造即规范化。
+    """驻留构造器，唯一入口。
 
-    AC 头（Plus/Times/And/Or）：flatten + 全序 + 常量折叠；
-    Plus/Times 追加环规范化（同类项合并 / 同底整数幂合并，generic 语义）；
-    Power：数值折叠 + 幂规范化；其余头走 NORM 注册表。
-    模式（含 ?x/??x 洞）同样经此构造：规范化是语义保持的（目标项同样规范化）。
+    只做句法不变量：AC 头（Plus/Times/And/Or）拉平同类嵌套并确定性排序，
+    其余头直接驻留。判等退化为指针比较。
+
+    标准形职责已移交函数结构层（docs/cas_v3_arch.md 第五节），本层不再做：
+    数值常量折叠、同类项合并、同底幂合并、i 的整数幂、e^a 到 Exp(a) 的
+    改写、根式归一与落域坍缩、函数头特殊点折叠。以上分别属于 ℚ 算术、
+    多项式机器、高斯域、图书馆命名约定与闸门链。
     """
     name = head.name if isinstance(head, Sym) else None
     if name in AC:
@@ -796,59 +363,8 @@ def mk(head, args):
             if isinstance(r, list):
                 return _intern_expr(head, tuple(r))
             return r
-        r = _fold_ac(head, list(args))
-        if not isinstance(r, list):
-            return r
-        n = _norm_times(r) if name == "Times" else _norm_plus(r)
-        if n is not None:
-            return n
-        return _intern_expr(head, tuple(r))
-    if name == "Power":
-        b, e = args
-        r = _fold_power(b, e)
-        if r is not None:
-            return r
-        r = _norm_power((b, e))
-        if r is not None:
-            return r
-        return _intern_expr(head, tuple(args))
-    if name == "Not":
-        (a,) = args
-        if isinstance(a, BVal):
-            return TRUE if a is FALSE else FALSE
-        if isinstance(a, Expr) and a.head is S("Not"):
-            return a.args[0]
-        return _intern_expr(head, args)
-    if name in _CMP_HEADS:
-        # 比较头参数递归规范化（parser 的 = 等直走 _intern_expr，此处补齐），
-        # 保证账本事实与表达式共享同一规范形（指针判等/替换依赖它）。
-        return _intern_expr(head, tuple(mk(a.head, a.args) if isinstance(a, Expr) else a for a in args))
-    if name == "Quote":
-        (a,) = args
-        if isinstance(a, Expr) and a.head is S("Quote"):
-            return a
-        return _intern_expr(head, args)
-    args = tuple(args)
-    # FunctionSpec 特殊点折叠 + N4 构造期收缩（构造即规范化；
-    # 洞参数不折叠，模式语义保持）
-    sp = _spec_lookup(name)
-    if sp is not None:
-        a0 = args[0]
-        if not isinstance(a0, (PatVar, PatSeq)):
-            if sp.special:
-                r = sp.special.get(a0)
-                if r is not None:
-                    return r
-            if sp.contract is not None:
-                r = sp.contract(a0)
-                if r is not None:
-                    return r
-    norm = NORM.get(name)
-    if norm is not None:
-        r = norm(args)
-        if r is not None:
-            return r
-    return _intern_expr(head, args)
+        return _intern_expr(head, tuple(_flatten_ac(head, list(args))))
+    return _intern_expr(head, tuple(args))
 
 
 def fn(name):

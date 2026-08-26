@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """全模块域声明登记（隐藏域约束上缴为数据——统一管线第一步）。
 
-事实来源：docs/cas_v2_arch.md §系数域支持矩阵（2026-08 实证审计）。
+事实来源：docs/cas_v3_arch.md 域系统节（操作×系数域支持矩阵待重建）。
 导入本模块即完成登记；新能力合入同步更新声明。
 """
 from cas.structure import CoeffBase as C, Layer as L, declare

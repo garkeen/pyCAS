@@ -1,14 +1,17 @@
 from cas import term as T
 from cas.term import PI, E, S, Int, Rat
-from cas import spec as _spec
+
+# 函数头定义域条件注入点：{head_name -> callable(t) -> [constraint]}。
+# 内核不硬连任何函数声明总表；宿主在启动时按需注册。
+DOM_HOOKS = {}
 
 
 def dom_condition(t, out=None):
     """递归提取定义域约束（纯结构，不判值）。
 
-    函数头定义域来自 FunctionSpec.dom（如 Log -> arg>0）；
-    Power 约束为结构性通用规则：负整数幂 a^-k -> a≠0；偶分母有理幂 a^(p/q) -> a≥0；
-    负有理幂 a^-e：偶分母 -> a>0（非负且非零），奇分母 -> a≠0。
+    Power 约束为结构性通用规则：负整数幂 a^-k -> a≠0；偶分母有理幂
+    a^(p/q) -> a≥0；负有理幂 a^-e：偶分母 -> a>0（非负且非零），
+    奇分母 -> a≠0。其余函数头经 DOM_HOOKS 注入。
     """
     if out is None:
         out = []
@@ -27,9 +30,9 @@ def dom_condition(t, out=None):
                     else:
                         out.append(T.mk(S("Ne"), (b, T.ZERO)))
         else:
-            sp = _spec.get(name)
-            if sp is not None and sp.dom is not None:
-                out.extend(sp.dom(t))
+            h = DOM_HOOKS.get(name)
+            if h is not None:
+                out.extend(h(t))
         for a in t.args:
             dom_condition(a, out)
     return out

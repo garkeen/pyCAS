@@ -9,7 +9,6 @@ class T3(Enum):
     YES = "YES"
     NO = "NO"
     UNKNOWN = "UNKNOWN"
-    PROBABLE = "PROBABLE"   # 数值采样支持（探测器，不是证明），不进 YES 通道
 
 
 def and3(a, b):
@@ -91,16 +90,7 @@ def _same(op, a, b):
 
 
 def _poly_eq_check(a, b):
-    from cas.poly import Poly, PolyError
-
-    vs = sorted(T.free_vars(a) | T.free_vars(b), key=lambda s: s.name)
-    try:
-        pa = Poly.from_term(a, tuple(vs))
-        pb = Poly.from_term(b, tuple(vs))
-    except PolyError:
-        return None
-    if pa.monos == pb.monos:
-        return T3.YES
+    # TODO: 多项式机器（第四层公共算法机器）重建后恢复此判定
     return None
 
 
@@ -251,6 +241,9 @@ def _interval(t, ctx, seen=None, depth=0):
     if isinstance(t, T.Expr):
         n = t.head.name
         if n == "Plus":
+            # TODO: 数值常量子项（含字面 0 因子）应先经 ℚ 域算术折叠——
+            # 原由 L0 构造期折叠承担，裁定后职责移至数域层。未折叠时
+            # 本处理器会因单个无界子项整体放弃。
             ivs = [_interval(a, ctx, seen, depth + 1) for a in t.args]
             if all(iv is not None for iv in ivs):
                 slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
@@ -259,6 +252,7 @@ def _interval(t, ctx, seen=None, depth=0):
                 sht = any(iv[3] for iv in ivs if iv[1] is not None)
                 tighten(slo, st, shi, sht)
         elif n == "Times":
+            # TODO: 同上——字面零因子应折叠为零（ℚ 域算术），当前 len(rest)!=1 即放弃
             nums = [a for a in t.args if T.is_num(a)]
             rest = [a for a in t.args if not T.is_num(a)]
             if nums and len(rest) == 1:
@@ -680,37 +674,8 @@ def _axiom_constants(fact, ctx):
     return None
 
 
-@axiom
-def _axiom_spec_bounds(fact, ctx):
-    """有界性公理（由 FunctionSpec.bound 自动生成，不再手写）：
-    f(u) <= c（c ≥ hi）/ f(u) >= c（c ≤ lo）/ |f(u)| <= c（c ≥ max|界|）。"""
-    from cas.spec import SPECS
-
-    if not (isinstance(fact, T.Expr) and fact.head.name in ("Le", "Ge")):
-        return None
-    a, b = fact.args
-    if not T.is_num(b):
-        return None
-    bv = T.num_val(b)
-    u = a
-    wrapped = isinstance(u, T.Expr) and u.head.name == "Abs"
-    if wrapped:
-        u = u.args[0]
-    if not isinstance(u, T.Expr):
-        return None
-    sp = SPECS.get(u.head.name)
-    if sp is None or sp.bound is None or len(u.args) != sp.arity:
-        return None
-    lo, hi = sp.bound
-    if wrapped:
-        if fact.head.name == "Le" and bv >= max(abs(lo), abs(hi)):
-            return T3.YES
-        return None
-    if fact.head.name == "Le" and bv >= hi:
-        return T3.YES
-    if fact.head.name == "Ge" and bv <= lo:
-        return T3.YES
-    return None
+# TODO: 有界性公理由图书馆引理表接替（原 FunctionSpec.bound 自动生成，
+# spec 层已删除）。逐个函数登记 |f| <= c 型引理后恢复。
 
 
 def _family_cmp(fact, ctx, depth):
@@ -873,9 +838,11 @@ def register_eq_stage(name, run, prepend=False):
 
 
 def equivalent(a, b, ctx=None, budget=100000):
-    """统一判等管线（设计调研见 docs/notes.md §2.2）：指针 -> 数值常量
-    -> 环层归零 -> 注册阶段序列（三角层 / 账本·多项式 / 数值采样…）
-    -> 诚实 UNKNOWN。"""
+    """统一判等管线：指针 -> 数值常量 -> 标准形归零 -> 注册阶段序列 -> 诚实 UNKNOWN。
+
+    TODO: 第二步依赖所在域的标准形（多项式机器、塔规范形）——
+    当前多数域的标准形尚未重建，非指针相等的判等大量返回 UNKNOWN，
+    属预期降级而非回归。"""
     from cas.simplify import simplify
     from cas.context import Context
 
@@ -898,33 +865,15 @@ def equivalent(a, b, ctx=None, budget=100000):
     return T3.UNKNOWN
 
 
-def _stage_trig(r, a, b, ctx):
-    # 三角层：单变量三角多项式多角度基归零（层内决策过程）
-    vs = sorted(T.free_vars(r), key=lambda s: s.name)
-    if len(vs) != 1:
-        return None
-    from cas.trig import trig_reduce
-    return T3.YES if trig_reduce(r, vs[0]) is T.ZERO else None
-
-
 def _stage_decide(r, a, b, ctx):
     d = decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
     return None if d is T3.UNKNOWN else d
 
 
-def _stage_sampling(r, a, b, ctx):
-    # 数值采样 PROBABLE 通道（探测器，不是证明；否证必须走符号通道）
-    # 域感知：公共定义域内采样，避免边界/域外误判。
-    from cas.evalnum import sample_agrees
-    from cas.domain import dom_condition
-
-    allv = sorted(T.free_vars(a) | T.free_vars(b), key=lambda s: s.name)
-    dom = list(dom_condition(a)) + list(dom_condition(b))
-    return T3.PROBABLE if sample_agrees(a, b, allv, dom=dom) else T3.UNKNOWN
-
-
-register_eq_stage("trig_basis", _stage_trig)
+# TODO: 三角基归零阶段随函数结构层重建（原走 cas.trig.trig_reduce）
 register_eq_stage("ledger_decide", _stage_decide)
-register_eq_stage("sampling", _stage_sampling)
+
+# TODO: 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
+# 采样从未有资格产出后者；如需概率通道须先修订宪章。
 
 
