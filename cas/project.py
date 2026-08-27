@@ -15,7 +15,7 @@ from cas import term as T
 from cas.domains.q import QDomain
 from cas.domains.z import Z_DOMAIN
 from cas.domains.poly import poly_domain, from_term as poly_from_term, Poly, to_term
-from cas.domains.ratfunc import ratfunc_domain, rf_from_term, RatFunc, rf_reduce
+from cas.domains.ratfunc import ratfunc_domain, rf_from_term, RatFunc, rf_reduce, rf_to_term
 
 _Q_DOMAIN = QDomain()
 
@@ -74,12 +74,7 @@ def normalize(hit: Projected):
     if isinstance(hit.element, Poly):
         return to_term(hit.domain.ring, hit.element)
     if isinstance(hit.element, RatFunc):
-        rf = rf_reduce(hit.domain.ring, hit.element)
-        nt = to_term(hit.domain.ring, rf.num)
-        dt = to_term(hit.domain.ring, rf.den)
-        if T.is_num(dt) and T.num_val(dt) == 1:
-            return nt
-        return T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
+        return rf_to_term(hit.domain.ring, rf_reduce(hit.domain.ring, hit.element))
     raise TypeError(f"unknown projected element {hit.element!r}")
 
 

@@ -2,9 +2,6 @@ from cas import term as T
 from cas.term import Expr, Int
 from cas.errors import BudgetExceeded
 
-WEIGHTS = {"Power": 2}
-DEFAULT_W = 1
-
 # 项 id 记忆化：驻留项不可变且内容寻址，化简结果按 _h 缓存永久有效。
 _MEMO = {}
 
@@ -23,23 +20,12 @@ def _postorder(t):
     return order
 
 
-# 化简层语义 pass 注册表：head -> [pass]。当前为空——一切恒等式由
-# 图书馆声明（library/），经规则引擎通用管线消费，不在此处硬编码。
-# pass 协议：接收已重建的 args 元组，返回新 args 元组或 None（不动）。
-_SIMPLIFY_PASSES = {}
-
-
 def cost(t):
-    """节点加权总和（显式栈后序，深表达式不触及 Python 递归上限）。"""
-    val = {}
-    for u in reversed(_postorder(t)):
-        if isinstance(u, Expr):
-            val[u] = WEIGHTS.get(u.head.name, DEFAULT_W) + sum(val[a] for a in u.args)
-        elif isinstance(u, T.Bound):
-            val[u] = 1 + val[u.body]
-        else:
-            val[u] = 1
-    return val[t]
+    """节点总数（均匀代价，显式栈后序）。良基自然数，供代价下降判据。"""
+    n = 0
+    for _u in _postorder(t):
+        n += 1
+    return n
 
 
 def _mul_expand(a, b):
@@ -110,12 +96,6 @@ def simplify(t, budget=100000):
                 continue
             if isinstance(u, Expr):
                 args = tuple(val[a] for a in u.args)
-                _r = None
-                for _p in _SIMPLIFY_PASSES.get(u.head.name, ()):
-                    _r = _p(args)
-                    if _r is not None:
-                        args = _r
-                        break
                 val[u] = T.mk(u.head, args)
             elif isinstance(u, T.Bound):
                 # 重建已抽象体不得重新 mk_bound（_abstract 会提升体里已有 DB 引用）
@@ -124,15 +104,15 @@ def simplify(t, budget=100000):
                 val[u] = u
         return val[root]
 
+    # 不动点迭代：mk 构造器幂等（已规范化的 args 重建不变），故收敛于至多两轮；
+    # 循环条件即真不动点判据，无轮数魔法。
     prev = t
-    for _ in range(20):
+    while True:
         nxt = rebuild(prev)
         if nxt is prev:
             _MEMO[t._h] = prev
             return prev
         prev = nxt
-    _MEMO[t._h] = prev
-    return prev
 
 
 def autosimplify(t, budget=100000):
@@ -149,9 +129,8 @@ def autosimplify(t, budget=100000):
     rs = library_ruleset()
     auto_rules = [r for r in rs.rules.values() if r.auto and r.guard is None]
     cur = simplify(t, budget)
-    rounds = 0
-    while rounds < 50:
-        rounds += 1
+    # 终止性：每次接受规则都使 cost 严格下降（良基自然数），必达不动点，无轮数上限。
+    while True:
         base = cost(cur)
         nxt = None
         for path in T.all_paths(cur):
@@ -165,4 +144,3 @@ def autosimplify(t, budget=100000):
         if nxt is None:
             return cur
         cur = simplify(nxt, budget)
-    return cur

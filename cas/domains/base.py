@@ -18,8 +18,6 @@
 from abc import ABC, abstractmethod
 from fractions import Fraction as Fr
 
-from cas.term import Expr, Int, Rat, Sym
-
 
 class Ring(ABC):
     """系数环协议：多项式域对系数结构的全部要求。
@@ -64,10 +62,6 @@ class Ring(ABC):
     def divmod_(self, a, b):
         """带余除法 (q, r)。欧几里得环覆写；否则拒答。"""
         raise RingError(f"{type(self).__name__} 非欧几里得环")
-
-    def gcd_coeff(self, a, b):
-        """系数 gcd。欧几里得环覆写。"""
-        raise RingError(f"{type(self).__name__} 无 gcd 能力")
 
     def deriv(self, c):
         """系数导子：常数域上恒为零。扩张环覆写（架构三：导子属于域协议）。"""
@@ -135,29 +129,3 @@ def register(d: Domain) -> Domain:
         raise ValueError(f"domain redeclared: {d.name}")
     _DOMAINS[d.name] = d
     return d
-
-
-def by_name(name: str) -> Domain:
-    return _DOMAINS[name]
-
-
-def all_domains():
-    return dict(_DOMAINS)
-
-
-# ---------------------------------------------------------------------------
-# 公共遍历助手
-# ---------------------------------------------------------------------------
-
-def is_arith_leaf(t) -> bool:
-    return isinstance(t, (Sym, Int, Rat))
-
-
-def walk_heads(t):
-    """产出表达式中出现的全部头名（含嵌套 Bound 体）。"""
-    stack = [t]
-    while stack:
-        u = stack.pop()
-        if isinstance(u, Expr):
-            yield u.head.name
-            stack.extend(u.args)

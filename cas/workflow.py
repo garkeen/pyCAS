@@ -29,11 +29,11 @@ from cas import term as T
 from cas.term import Expr, Sym, S, N
 from cas.verdict import YES, NO, unknown
 from cas.domains.poly import Poly, p_deriv, to_term
-from cas.domains.ratfunc import RatFunc, rf_deriv
+from cas.domains.ratfunc import RatFunc, rf_deriv, rf_to_term
 from cas.domcond import dom_condition
 from cas.context import Context
 from cas.decide import decide
-from cas.qarith import fold, eval_exact, EvalNumError
+from cas.qarith import fold
 from cas.project import project, zero_of, normalize as proj_normalize
 
 
@@ -321,12 +321,7 @@ class Workflow:
             return YES
         if z is False:
             return NO
-        # 投影落空（如含超越函数的解）：退到环层精确求值通道
-        if T.is_num(d.solution):
-            try:
-                return YES if eval_exact(diff, {d.var: T.num_val(d.solution)}) == 0 else NO
-            except EvalNumError:
-                pass
+        # 投影落空（如含超越函数的解）：片段外诚实未决，不退化近似
         return unknown()
 
     def _verify_split(self, content, d: Split):
@@ -375,13 +370,7 @@ class Workflow:
                     if isinstance(hit.element, Poly):
                         expected = to_term(ring, p_deriv(ring, hit.element, idx))
                     elif isinstance(hit.element, RatFunc):
-                        d_ = rf_deriv(ring, hit.element, idx)
-                        nt = to_term(ring, d_.num)
-                        dt = to_term(ring, d_.den)
-                        if T.is_num(dt) and T.num_val(dt) == 1:
-                            expected = nt
-                        else:
-                            expected = T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
+                        expected = rf_to_term(ring, rf_deriv(ring, hit.element, idx))
                     else:
                         continue
             from cas.domains.ratfunc import ratfunc_domain

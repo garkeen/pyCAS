@@ -21,22 +21,19 @@ import library
 
 
 _NEG = {
-    "Gt": ("Le", False),
-    "Ge": ("Lt", False),
-    "Lt": ("Ge", False),
-    "Le": ("Gt", False),
-    "Eq": ("Ne", False),
-    "Ne": ("Eq", False),
+    "Gt": "Le",
+    "Ge": "Lt",
+    "Lt": "Ge",
+    "Le": "Gt",
+    "Eq": "Ne",
+    "Ne": "Eq",
 }
 
 
 def negate(f):
+    """比较谓词的强否定（¬(a>b) ≡ a≤b 等）；其余走句法 Not。"""
     if isinstance(f, T.Expr) and f.head.name in _NEG:
-        name, swap = _NEG[f.head.name]
-        a, b = f.args
-        if swap:
-            a, b = b, a
-        return T.mk(S(name), (a, b))
+        return T.mk(S(_NEG[f.head.name]), f.args)
     if isinstance(f, T.Expr) and f.head.name == "Not":
         return f.args[0]
     return T.mk(S("Not"), (f,))
@@ -263,8 +260,11 @@ def _interval(t, ctx, seen=None, depth=0):
                         )
         elif n == "Power" and isinstance(t.args[1], T.Int) and t.args[1].v % 2 == 0:
             tighten(Fr(0), False, None, False)
-        elif n == "Abs":
-            tighten(Fr(0), False, None, False)
+        else:
+            # 函数值域界（图书馆声明）：端点可达（lo ≤ f ≤ hi），严格性为假
+            bd = _func_bound(n)
+            if bd is not None:
+                tighten(bd[0], False, bd[1], False)
     if lo is None and hi is None:
         return None
     return (lo, hi, los, his)
@@ -325,6 +325,28 @@ def _cmp_interval(op, a, b, ctx):
 # 符号结构引理（原 cas/domain.py RealDomain 的可判定部分，模块废除后归位）
 # ---------------------------------------------------------------------------
 
+def _func_bound(name):
+    """函数值域界（图书馆声明）：返回 (lo|None, hi|None) 或 None。"""
+    d = library.lookup_function(name)
+    return d.bound if d is not None else None
+
+
+def _nonneg_zero_arg(t):
+    """t = g(u) 且 g 声明"非负下界 0 + g(u)=0⟺u=0"（绝对值/范数类）→ 返回 u。
+
+    判定据图书馆声明（zero_iff_arg_zero + bound 下界为 0），不据函数名。"""
+    if not isinstance(t, T.Expr) or not isinstance(t.head, T.Sym) \
+            or len(t.args) != 1:
+        return None
+    d = library.lookup_function(t.head.name)
+    if d is None or not d.zero_iff_arg_zero:
+        return None
+    bd = d.bound
+    if bd is None or bd[0] is None or bd[0] != 0:
+        return None
+    return t.args[0]
+
+
 def _nneg(t, ctx):
     """非负结构判定：True/False/None（不回调 decide，只读结构与账本）。"""
     if T.is_num(t):
@@ -343,7 +365,8 @@ def _nneg(t, ctx):
                 and _pos(b, ctx) is True
             ):
                 return True
-        if name == "Abs":
+        bd = _func_bound(name)
+        if bd is not None and bd[0] is not None and bd[0] >= 0:
             return True
     if ctx is not None:
         for e in ctx.entries:
@@ -546,10 +569,14 @@ def _rule_sign_even_power(f, ctx, q):
     return None
 
 
-@derive("sign-abs", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Abs")
-def _rule_sign_abs(f, ctx, q):
+@derive("sign-nonneg-zero",
+        lambda f: _is_ord(f) and f.args[1] is T.ZERO
+        and _nonneg_zero_arg(f.args[0]) is not None)
+def _rule_sign_nonneg_zero(f, ctx, q):
+    """g(u) 对 0 的符号（g 声明非负且 g(u)=0⟺u=0，如绝对值/范数）：
+    g≥0 恒真、g<0 恒假；g>0⟺u≠0、g≤0⟺u=0。判定据图书馆声明，不据名。"""
     op = f.head.name
-    u = f.args[0].args[0]
+    u = _nonneg_zero_arg(f.args[0])
     if op == "Ge":
         return YES
     if op == "Lt":
@@ -727,7 +754,8 @@ def _axiom_constants(fact, ctx):
 def _axiom_function_bounds(fact, ctx):
     """函数值域粗界引理（图书馆 FunctionDecl.bound 声明）。
 
-    |f| 类界消费留给区间通道；此处只处理 f(u) op 数值 的直接比较。"""
+    |f| 类界消费留给区间通道；此处只处理 f(u) op 数值 的直接比较。
+    界端点可为 None（该侧无界），只就有界的一侧背书。"""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
@@ -741,24 +769,24 @@ def _axiom_function_bounds(fact, ctx):
     op = fact.head.name
     # 界端点可达（lo ≤ f(u) ≤ hi）：严格不等式与弱不等式的背书条件不同
     if op == "Gt":
-        if bv < lo:
+        if lo is not None and bv < lo:
             return YES
-        if bv >= hi:
+        if hi is not None and bv >= hi:
             return NO
     elif op == "Ge":
-        if bv <= lo:
+        if lo is not None and bv <= lo:
             return YES
-        if bv > hi:
+        if hi is not None and bv > hi:
             return NO
     elif op == "Lt":
-        if bv > hi:
+        if hi is not None and bv > hi:
             return YES
-        if bv <= lo:
+        if lo is not None and bv <= lo:
             return NO
     else:  # Le
-        if bv >= hi:
+        if hi is not None and bv >= hi:
             return YES
-        if bv < lo:
+        if lo is not None and bv < lo:
             return NO
     return None
 
@@ -875,10 +903,6 @@ def decide(fact, ctx, _depth=0) -> Verdict:
     return unknown()
 
 
-def decided(fact, ctx) -> Verdict:
-    return decide(fact, ctx, 0)
-
-
 def satisfiable(constraints, ctx) -> Verdict:
     for i, c in enumerate(constraints):
         tmp = ctx.clone()
@@ -898,11 +922,6 @@ def domain_ok(fact, ctx) -> Verdict:
 
 def contradicted(fact, ctx) -> bool:
     return decide(fact, ctx) is NO or decide(negate(fact), ctx) is YES
-
-
-def eval_guard(guard, sub, ctx) -> Verdict:
-    g = T.instantiate(guard, sub)
-    return decide(g, ctx)
 
 
 # 判等阶段注册表：管线分派从硬编码变为声明式数据。

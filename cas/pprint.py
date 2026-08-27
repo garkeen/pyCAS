@@ -30,8 +30,9 @@ def _atom_str(a):
 
 def _name_of(h):
     if isinstance(h, Sym):
-        # TODO: 打印名改查图书馆条目的 print_name 字段
-        return h.name.lower()
+        import library
+        pn = library.print_name(h.name)
+        return pn if pn is not None else h.name.lower()
     return repr(h)
 
 

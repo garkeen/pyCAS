@@ -54,12 +54,6 @@ def _mul(ring, a: dict, b: dict) -> dict:
     return {k: c for k, c in d.items() if not ring.is_zero(c)}
 
 
-def _scale(ring, a: dict, c) -> dict:
-    if ring.is_zero(c):
-        return {}
-    return {k: ring.mul(c, m) for k, m in a.items()}
-
-
 def _pow(ring, a: dict, n: int) -> dict:
     r = {(0,) * _width(a): ring.from_int(1)}
     b = a
@@ -172,6 +166,17 @@ def rf_reduce(ring, rf: RatFunc) -> RatFunc:
     return RatFunc(p_scale(ring, qn, inv), p_scale(ring, qd, inv))
 
 
+def rf_to_term(ring, rf: RatFunc):
+    """RatFunc → 驻留项的标准形渲染：分母为 1 时仅输出分子。
+
+    全局唯一出口，避免 project/workflow/ratfunc 三处重复同一渲染。"""
+    nt = to_term(ring, rf.num)
+    dt = to_term(ring, rf.den)
+    if T.is_num(dt) and T.num_val(dt) == 1:
+        return nt
+    return T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
+
+
 def rf_deriv(ring, rf: RatFunc, var_i: int) -> RatFunc:
     """域内导数（商法则）：D(n/d) = (D(n)·d − n·D(d)) / d²。
 
@@ -205,12 +210,7 @@ class RatFuncDomain(Domain):
         rf = rf_from_term(self.ring, t, self.vars)
         if rf is None:
             return None
-        rf = rf_reduce(self.ring, rf)
-        nt = to_term(self.ring, rf.num)
-        dt = to_term(self.ring, rf.den)
-        if T.is_num(dt) and T.num_val(dt) == 1:
-            return nt
-        return T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
+        return rf_to_term(self.ring, rf_reduce(self.ring, rf))
 
     def equal(self, a, b):
         ra = rf_from_term(self.ring, a, self.vars)

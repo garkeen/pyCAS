@@ -547,5 +547,5 @@ def _lift(t, var, depth):
 
 from cas.termpath import (  # noqa: E402
     _subst_raw, subst, _instantiate_raw, instantiate,
-    free_vars, term_at, _bind_into, replace_at, all_paths, size,
+    free_vars, term_at, _bind_into, replace_at, all_paths,
 )

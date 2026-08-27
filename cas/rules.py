@@ -23,23 +23,8 @@ class Rule:
     pattern: T.Term
     template: T.Term
     guard: object = None
-    direction: str = None
-    channels: tuple = ("manual", "suggest")
     auto: bool = False
-    origin: str = "user"
     priority: int = 100           # 同位多规则时的尝试顺序（小者先，yacas 同款）
-
-
-@dataclass
-class Step:
-    sid: int
-    rule_id: str
-    path: tuple
-    before: T.Term
-    after: T.Term
-    guard: object                 # Verdict
-    dcost: int
-    note: str = ""   # 自由说明：内核算法步记算法名+验证态（kind=algo），规则步留空
 
 
 @dataclass

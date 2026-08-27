@@ -199,11 +199,3 @@ def all_paths(t, base=()):
             yield from all_paths(a, base + (i,))
     elif isinstance(t, T.Bound):
         yield from all_paths(t.body, base + (0,))
-
-
-def size(t):
-    if isinstance(t, T.Expr):
-        return 1 + sum(size(a) for a in t.args)
-    if isinstance(t, T.Bound):
-        return 1 + size(t.body)
-    return 1

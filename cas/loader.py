@@ -1,4 +1,3 @@
-import os
 import re
 
 from cas.errors import ParseError
@@ -6,7 +5,7 @@ from cas.parser import parse
 from cas.rules import Rule
 
 _HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")
-_KWS = ("guard", "as", "channels", "prio", "auto")
+_KWS = ("guard", "prio", "auto")
 _SEP = "\x00"
 
 
@@ -26,7 +25,7 @@ def _split_arrow(s):
     return s[:idx].strip(), s[idx + 2 :].strip()
 
 
-def parse_rule_line(line, origin="dsl"):
+def parse_rule_line(line):
     m = _HEAD.match(line)
     if not m:
         raise ParseError(f"bad rule line: {line}")
@@ -36,8 +35,6 @@ def parse_rule_line(line, origin="dsl"):
     pat = parse(pat_s)
     tpl = parse(tpl_s)
     guard = None
-    direction = None
-    channels = ("manual", "suggest")
     auto = False
     priority = 100
     i = 1
@@ -47,12 +44,6 @@ def parse_rule_line(line, origin="dsl"):
         if kw == "guard":
             guard = parse(val)
             i += 2
-        elif kw == "as":
-            direction = val
-            i += 2
-        elif kw == "channels":
-            channels = tuple(c.strip() for c in val.split(",") if c.strip())
-            i += 2
         elif kw == "prio":
             priority = int(val)
             i += 2
@@ -61,43 +52,5 @@ def parse_rule_line(line, origin="dsl"):
             i += 1
         else:
             i += 1
-    return Rule(
-        id=rid,
-        pattern=pat,
-        template=tpl,
-        guard=guard,
-        direction=direction,
-        channels=channels,
-        auto=auto,
-        origin=origin,
-        priority=priority,
-    )
-
-
-def parse_rules(text, origin="dsl"):
-    out = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        out.append(parse_rule_line(line, origin))
-    return out
-
-
-def load_dir(path, ruleset):
-    n = 0
-    errors = []
-    for fn in sorted(os.listdir(path)):
-        if fn.endswith(".rules"):
-            try:
-                with open(os.path.join(path, fn), encoding="utf-8") as fh:
-                    rules = parse_rules(fh.read(), origin=fn)
-            except ParseError as e:
-                errors.append(f"{fn}: {e}")
-                continue
-            for r in rules:
-                ruleset.add(r)
-                n += 1
-    if errors:
-        raise ParseError("; ".join(errors))
-    return n
+    return Rule(id=rid, pattern=pat, template=tpl, guard=guard,
+                auto=auto, priority=priority)

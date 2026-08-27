@@ -35,9 +35,6 @@ class QRing(FracRing):
     def divmod_(self, a, b):
         return a / b, Fr(0)
 
-    def gcd_coeff(self, a, b):
-        return Fr(1) if (a or b) else Fr(0)
-
 
 Q_RING = QRing()
 

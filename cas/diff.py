@@ -78,6 +78,9 @@ def _diff(t, x):
     tpl, note = library.function_deriv(head)
     if tpl is None:
         raise DiffError(f"{head} 无导数模板" + (f"（{note}）" if note else ""))
+    d = library.lookup_function(head)
+    if d is not None and d.arity is not None and len(t.args) != d.arity:
+        raise DiffError(f"{head} 声明元数 {d.arity}，实收 {len(t.args)} 参")
     if len(t.args) != 1:
         raise DiffError(f"{head} 多参数微分未建（偏导地基未完成）")
     arg = t.args[0]

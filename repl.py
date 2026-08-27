@@ -22,16 +22,17 @@
 import sys
 sys.path.insert(0, ".")
 
-from fractions import Fraction as Fr
-
 from cas import term as T
-from cas.term import S, N, Expr, Sym
+from cas.term import S, Sym
 from cas.parser import parse
 from cas.pprint import to_str
 from cas.qarith import eval_exact, EvalNumError, fold
 from cas.errors import TacticsError
 from cas.tactics import solve_linear
 from cas.diff import differentiate, DiffError
+from cas.decide import decide
+from cas.context import Context
+from cas.verdict import YES, NO
 from cas.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
                           Subst, Split, Diff, _is_eq, _normalize_eq)
 
@@ -39,10 +40,6 @@ from cas.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
 def _fmt(t):
     """显示前 ℚ 折叠（Times(-1,2) → -2 等）。"""
     return to_str(fold(t))
-
-
-def _is_num(t):
-    return T.is_num(t)
 
 
 class REPL:
@@ -304,9 +301,9 @@ class REPL:
             print("  当前步骤或原始方程不是等式")
             return
         cl, cr = cur.content.args
-        if isinstance(cl, Sym) and _is_num(cr):
+        if isinstance(cl, Sym) and T.is_num(cr):
             var, val = cl, cr
-        elif isinstance(cr, Sym) and _is_num(cl):
+        elif isinstance(cr, Sym) and T.is_num(cl):
             var, val = cr, cl
         else:
             print("  当前步骤不是 var = value 形式")
@@ -320,28 +317,22 @@ class REPL:
             if v == 0:
                 print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
                 print(f"        = 0 ✓")
+                # 守卫统一交判定管线裁决（全谓词头 + 复合命题），不白名单、不静默
                 ok = True
                 for g in cur.guards:
                     gsub = fold(T.subst(g, {var: val}))
-                    if isinstance(gsub, Expr) and gsub.head.name in ("Eq", "Ne", "Gt", "Ge"):
-                        try:
-                            gv = eval_exact(T.plus(gsub.args[0],
-                                                   T.neg(gsub.args[1])), {})
-                            head = gsub.head.name
-                            if head == "Ne" and gv == 0:
-                                print(f"        守卫失败: {_fmt(g)} → {_fmt(gsub)} = 0 ✗")
-                                ok = False
-                            elif head == "Gt" and not (gv > 0):
-                                print(f"        守卫失败: {_fmt(g)} ✗")
-                                ok = False
-                            elif head == "Ge" and not (gv >= 0):
-                                print(f"        守卫失败: {_fmt(g)} ✗")
-                                ok = False
-                        except EvalNumError:
-                            pass
+                    gv = decide(gsub, Context())
+                    if gv is NO:
+                        print(f"        守卫失败: {_fmt(g)} → {_fmt(gsub)} ✗")
+                        ok = False
+                    elif gv is not YES:
+                        print(f"        守卫未决: {_fmt(g)} → {_fmt(gsub)}（{gv}）")
+                        ok = False
                 if ok:
                     print("        守卫全部通过 ✓")
                     print("        === VERIFIED ===")
+                else:
+                    print("        存在失败/未决守卫，不能判定为验证通过")
             else:
                 print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
                 print(f"        = {v} ✗ FAILED")

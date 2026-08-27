@@ -43,7 +43,11 @@ class FunctionDecl:
     print_name: str
     arity: int | None                # None = 变元
     real_on_real: bool | None = None # 实输入实值（定义域限制者置 None）
-    bound: tuple[Fr, Fr] | None = None      # 值域粗界 lo ≤ f ≤ hi
+    # 值域粗界 (lo, hi)，端点可为 None（该侧无界）；lo ≤ f(u) ≤ hi 可达。
+    # 例：Sin/Cos=(-1,1)；Abs=(0, None)（仅下界，上无界）。
+    bound: tuple[Fr | None, Fr | None] | None = None
+    # 零点结构引理：f(u)=0 ⟺ u=0（范数/绝对值类）。判定层据此做符号推理。
+    zero_iff_arg_zero: bool = False
     rule_lines: tuple[str, ...] = ()
     deriv: object = None             # 导数模板（Term，DB(0) 占位）
     deriv_note: str = ""
@@ -74,10 +78,11 @@ def constant(*, name: str, print_name: str, real=None, positive=None,
 
 
 def function(*, name: str, print_name: str, arity: int | None,
-             real_on_real=None, bound=None, rule_lines=(),
-             deriv=None, deriv_note="", note=""):
+             real_on_real=None, bound=None, zero_iff_arg_zero=False,
+             rule_lines=(), deriv=None, deriv_note="", note=""):
     d = FunctionDecl(name=name, print_name=print_name, arity=arity,
                      real_on_real=real_on_real, bound=bound,
+                     zero_iff_arg_zero=zero_iff_arg_zero,
                      rule_lines=tuple(rule_lines),
                      deriv=deriv, deriv_note=deriv_note, note=note)
     if name in _FUNCS:
@@ -141,7 +146,8 @@ def function_deriv(name: str):
 
 
 def function_rules(name: str) -> tuple:
-    """规则行的解析缓存。解析失败按纪律拒绝入册（返回已成功的部分）。"""
+    """规则行的解析缓存。损坏的规则行是图书馆声明缺陷——异常向上抛出，
+    绝不静默吞掉（失败是返回值的一部分，禁止隐藏）。"""
     cached = _RULE_CACHE.get(name)
     if cached is not None:
         return cached
@@ -149,13 +155,7 @@ def function_rules(name: str) -> tuple:
     if d is None:
         return ()
     from cas.loader import parse_rule_line
-    out = []
-    for line in d.rule_lines:
-        try:
-            out.append(parse_rule_line(line))
-        except Exception:
-            continue                   # 规则行损坏：拒绝该条，绝不带病入册
-    r = tuple(out)
+    r = tuple(parse_rule_line(line) for line in d.rule_lines)
     _RULE_CACHE[name] = r
     return r
 

@@ -11,10 +11,8 @@
 b>0 时 r ≥ 0），保证 gcd 链单调下降。
 """
 
-import math
 from fractions import Fraction as Fr
 
-from cas import term as T
 from cas.qarith import fold, eval_exact, EvalNumError
 from cas.domains.base import Domain, Ring, RingError, register
 
@@ -52,9 +50,6 @@ class ZZRing(Ring):
             q += 1
             r -= b
         return q, r
-
-    def gcd_coeff(self, a, b):
-        return math.gcd(a, b)
 
     def xgcd(self, a, b):
         """扩展欧几里得：返回 (g, s, t) 使 s*a + t*b = g = gcd(a, b)。"""

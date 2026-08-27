@@ -61,11 +61,10 @@ lib.function(name="Sqrt", print_name="sqrt", arity=1,
              deriv=T.times(T.N(Fr(1, 2)), T.pw(_U, T.N(Fr(-1, 2)))),
              note="主支平方根；√(x²)=±x 分支破裂，未收")
 
-# |x| 的导数是分段函数 sign(x)：Piecewise 容器就位后得以如实声明——
-# u>0 处导为 1、u<0 处导为 −1，u=0 不具分支（不可导），诚实留空。
-# 该模板是图书馆声明事实；链式法则的 D(u) 因子由微分层乘在外面，
-# 不在微分层逐支分布（分布是归一化之责，非求导之责）。
+# |x| 非负、零集恰为 {0}：值域界与零点结构作为图书馆声明数据，
+# 判定层（_nneg/_interval/符号规则）据此消费，不据函数名硬编码。
 lib.function(name="Abs", print_name="abs", arity=1, real_on_real=True,
+             bound=(Fr(0), None), zero_iff_arg_zero=True,
              deriv=mk(S("Piecewise"),
                       (T.ONE, mk(S("Gt"), (_U, T.ZERO)),
                        T.MONE, mk(S("Lt"), (_U, T.ZERO)))),
