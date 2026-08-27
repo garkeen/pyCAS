@@ -1,12 +1,11 @@
 from cas import term as T
-from cas.term import Expr, Int, register_norm  # register_norm：每头规范化扩展入口（见 term.NORM）
+from cas.term import Expr, Int
 from cas.errors import BudgetExceeded
 
-WEIGHTS = {"Power": 2, "Exp": 2, "Log": 2}
+WEIGHTS = {"Power": 2}
 DEFAULT_W = 1
 
 # 项 id 记忆化：驻留项不可变且内容寻址，化简结果按 _h 缓存永久有效。
-# [教训：expreduce 每个项自带 EvaledHash 缓存，求值命中即跳过——驻留使 pyCAS 免费获得同款]
 _MEMO = {}
 
 
@@ -24,37 +23,10 @@ def _postorder(t):
     return order
 
 
-def _pass_exp_add_law(args):
-    """exp 加法定律：exp(a)*exp(b) -> exp(a+b)（无条件恒等，化简层
-    语义——合并后 Exp 因子单调减少，重建循环必终止）。
-
-    B8 入册：原为 rebuild 循环内联特例；化简层语义重写统一在此
-    注册表枚举（构造期折叠不收它——合并是代价选择而非规范形要求）。
-    """
-    exps = [a for a in args if isinstance(a, Expr) and a.head.name == "Exp"]
-    if len(exps) >= 2:
-        rest = [a for a in args if a not in exps]
-        merged = T.mk(T.S("Exp"), (T.plus(*[e.args[0] for e in exps]),))
-        return tuple(rest) + (merged,)
-    return None
-
-
-def _pass_exp_pow_expand(args):
-    """Exp(a)^n -> Exp(n*a)：mk 幂合并会把 e^x*e^x 收为 Exp^2 形态，
-    此处展开回单项指数，使加法定律与判零链完整（整数指数无条件）。"""
-    if (len(args) == 2 and isinstance(args[0], Expr)
-            and args[0].head.name == "Exp" and isinstance(args[1], T.Int)):
-        merged = T.mk(T.S("Exp"), (T.times(args[1], args[0].args[0]),))
-        return (merged,)
-    return None
-
-
-# B8 化简层语义 pass 注册表：head -> [具名 pass]。每个 pass 接收
-# 已重建的 args 元组，返回新 args 或 None（不动）。
-_SIMPLIFY_PASSES = {
-    "Times": [_pass_exp_add_law],
-    "Power": [_pass_exp_pow_expand],
-}
+# 化简层语义 pass 注册表：head -> [pass]。当前为空——一切恒等式由
+# 图书馆声明（library/），经规则引擎通用管线消费，不在此处硬编码。
+# pass 协议：接收已重建的 args 元组，返回新 args 元组或 None（不动）。
+_SIMPLIFY_PASSES = {}
 
 
 def cost(t):
@@ -138,21 +110,12 @@ def simplify(t, budget=100000):
                 continue
             if isinstance(u, Expr):
                 args = tuple(val[a] for a in u.args)
-                # B8 入册：化简层语义 pass 统一走注册表（见
-                # _SIMPLIFY_PASSES），重建循环内不再有游离特例。
-                # 协议：Times 类 pass 返回新 args（同头重建）；Power
-                # 幂展开返回单元素元组 ⟹ 节点整体替换为该单项
-                # （Exp(a)^n -> Exp(n·a)，判零链依赖此形态）。
                 _r = None
                 for _p in _SIMPLIFY_PASSES.get(u.head.name, ()):
                     _r = _p(args)
                     if _r is not None:
+                        args = _r
                         break
-                if _r is not None:
-                    if u.head.name == "Power":
-                        val[u] = _r[0]
-                        continue
-                    args = _r
                 val[u] = T.mk(u.head, args)
             elif isinstance(u, T.Bound):
                 # 重建已抽象体不得重新 mk_bound（_abstract 会提升体里已有 DB 引用）

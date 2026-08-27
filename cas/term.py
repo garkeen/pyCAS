@@ -213,10 +213,8 @@ def C(name):
     return t
 
 
-PI = C("pi")
-E = C("e")
-IU = C("i")
-GAMMA = C("gamma")
+# 数学常数不在此处：一切具体常数由 library 包声明创建（library/constants.py）。
+# 本层只有 Const 这一 ADT 变体，没有 π 也没有 i。
 
 
 def N(v):

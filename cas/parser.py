@@ -3,7 +3,8 @@ import re
 from fractions import Fraction as Fr
 
 from cas import term as T
-from cas.term import S, N, mk, Expr, Sym, PI, E, IU, GAMMA, INFINITY, TRUE, FALSE, PV, PS
+from cas.term import S, N, mk, Expr, Sym, INFINITY, TRUE, FALSE, PV, PS
+from library import PI, E, IU, GAMMA
 from cas.errors import ParseError
 
 _TOKEN = re.compile(

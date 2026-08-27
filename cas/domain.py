@@ -1,5 +1,6 @@
 from cas import term as T
-from cas.term import PI, E, S, Int, Rat
+from cas.term import S, Int, Rat
+import library
 
 # 函数头定义域条件注入点：{head_name -> callable(t) -> [constraint]}。
 # 内核不硬连任何函数声明总表；宿主在启动时按需注册。
@@ -33,6 +34,10 @@ def dom_condition(t, out=None):
             h = DOM_HOOKS.get(name)
             if h is not None:
                 out.extend(h(t))
+            else:
+                fn = library.lookup_domain_cond(name)
+                if fn is not None:
+                    out.extend(fn(t))
         for a in t.args:
             dom_condition(a, out)
     return out
@@ -57,7 +62,7 @@ class RealDomain(Domain):
     def nonneg(self, t, ctx=None):
         if T.is_num(t):
             return T.sign_num(t) >= 0
-        if t is PI or t is E:
+        if library.const_positive(t) is True:
             return True
         if isinstance(t, T.Expr):
             name = t.head.name
@@ -87,7 +92,7 @@ class RealDomain(Domain):
     def pos(self, t, ctx=None):
         if T.is_num(t):
             return T.sign_num(t) > 0
-        if t is PI or t is E:
+        if library.const_positive(t) is True:
             return True
         if ctx is not None:
             for e in ctx.entries:
@@ -101,7 +106,7 @@ class RealDomain(Domain):
         return None
 
     def contains(self, t):
-        if T.is_num(t) or t is PI or t is E:
+        if T.is_num(t) or library.const_real(t) is True:
             return True
         if isinstance(t, T.Sym):
             return True

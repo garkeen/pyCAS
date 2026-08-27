@@ -1,8 +1,10 @@
 from enum import Enum
 
 from cas import term as T
-from cas.term import S, N, PI, E
+from cas.term import S, N
 from cas.domain import R, Q, Z, C, DEFAULT_DOMAIN, domain_of
+from cas.qarith import fold as _qfold
+import library
 
 
 class T3(Enum):
@@ -164,7 +166,7 @@ def _interval(t, ctx, seen=None, depth=0):
     if T.is_num(t):
         v = T.num_val(t)
         return (v, v, False, False)
-    lb = _CONST_BOUNDS.get(id(t))
+    lb = library.const_bounds(t)
     if lb is not None:
         return (Fr(lb[0]), Fr(lb[1]), True, True)
     if depth > 8:
@@ -241,9 +243,6 @@ def _interval(t, ctx, seen=None, depth=0):
     if isinstance(t, T.Expr):
         n = t.head.name
         if n == "Plus":
-            # TODO: 数值常量子项（含字面 0 因子）应先经 ℚ 域算术折叠——
-            # 原由 L0 构造期折叠承担，裁定后职责移至数域层。未折叠时
-            # 本处理器会因单个无界子项整体放弃。
             ivs = [_interval(a, ctx, seen, depth + 1) for a in t.args]
             if all(iv is not None for iv in ivs):
                 slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
@@ -252,7 +251,6 @@ def _interval(t, ctx, seen=None, depth=0):
                 sht = any(iv[3] for iv in ivs if iv[1] is not None)
                 tighten(slo, st, shi, sht)
         elif n == "Times":
-            # TODO: 同上——字面零因子应折叠为零（ℚ 域算术），当前 len(rest)!=1 即放弃
             nums = [a for a in t.args if T.is_num(a)]
             rest = [a for a in t.args if not T.is_num(a)]
             if nums and len(rest) == 1:
@@ -281,8 +279,8 @@ def _interval(t, ctx, seen=None, depth=0):
 
 
 def _cmp_interval(op, a, b, ctx):
-    """把 a op b 归为 d = a - b 对 0 的区间比较（构造器自动合并同类项）。"""
-    d = T.plus(a, T.neg(b))
+    """把 a op b 归为 d = a - b 对 0 的区间比较（d 先经 ℚ 字面折叠）。"""
+    d = _qfold(T.plus(a, T.neg(b)))
     if op in ("Eq", "Ne"):
         if d is T.ZERO:
             return T3.YES if op == "Eq" else T3.NO
@@ -418,7 +416,7 @@ def _sign_of_term(t, ctx, q):
         if s < 0:
             return -1
         return 0
-    if t is PI or t is E:
+    if library.const_positive(t) is True:
         return 1
     r = q(T.mk(S("Gt"), (t, T.ZERO)))
     if r is T3.YES:
@@ -649,28 +647,28 @@ def axiom(fn):
     return fn
 
 
-_CONST_BOUNDS = {id(PI): (3, 4), id(E): (2, 3)}
-
-
 @axiom
 def _axiom_constants(fact, ctx):
+    """常数粗界引理（来自图书馆 const_bounds 声明）。"""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
-    if id(a) in _CONST_BOUNDS and T.is_num(b):
-        lo, hi = _CONST_BOUNDS[id(a)]
-        bv = T.num_val(b)
-        op = fact.head.name
-        if op in ("Gt", "Ge"):
-            if bv <= lo:
-                return T3.YES
-            if bv >= hi:
-                return T3.NO
-        else:
-            if bv >= hi:
-                return T3.YES
-            if bv <= lo:
-                return T3.NO
+    bounds = library.const_bounds(a)
+    if bounds is None or not T.is_num(b):
+        return None
+    lo, hi = bounds
+    bv = T.num_val(b)
+    op = fact.head.name
+    if op in ("Gt", "Ge"):
+        if bv <= lo:
+            return T3.YES
+        if bv >= hi:
+            return T3.NO
+    else:
+        if bv >= hi:
+            return T3.YES
+        if bv <= lo:
+            return T3.NO
     return None
 
 
@@ -846,6 +844,12 @@ def equivalent(a, b, ctx=None, budget=100000):
     from cas.simplify import simplify
     from cas.context import Context
 
+    if a is b:
+        return T3.YES
+    if T.is_num(a) and T.is_num(b):
+        return T3.YES if T.num_val(a) == T.num_val(b) else T3.NO
+    a = _qfold(a)
+    b = _qfold(b)
     if a is b:
         return T3.YES
     if T.is_num(a) and T.is_num(b):

@@ -1,0 +1,62 @@
+"""ℚ 域：字面有理算术。
+
+标准形 = qarith.fold（全数字子树精确折叠，中性元吸收）。
+判等 = 折叠后数值比较，片段内完全判定。
+成员 = 纯数字树（eval_exact 空环境求值成功）。
+"""
+
+from fractions import Fraction as Fr
+
+from cas import term as T
+from cas.qarith import fold, eval_exact, EvalNumError
+from cas.domains.base import Domain, T3, Ring, RingError, FracRing, register
+
+
+class QRing(FracRing):
+    """ℚ 系数环：Fraction 原生运算，零包装。"""
+
+    def from_int(self, n):
+        return Fr(n)
+
+    def from_frac(self, f):
+        return f
+
+    def add(self, a, b):
+        return a + b
+
+    def neg(self, a):
+        return -a
+
+    def mul(self, a, b):
+        return a * b
+
+
+Q_RING = QRing()
+
+
+class QDomain(Domain):
+    """有理数域 ℚ。"""
+
+    name = "Q"
+
+    def member(self, t) -> bool:
+        try:
+            eval_exact(t, {})
+            return True
+        except (EvalNumError, ZeroDivisionError):
+            return False
+
+    def normalize(self, t):
+        if not self.member(t):
+            return None
+        return fold(t)
+
+    def equal(self, a, b) -> T3:
+        fa, fb = fold(a), fold(b)
+        if T.is_num(fa) and T.is_num(fb):
+            return T3.YES if T.num_val(fa) == T.num_val(fb) else T3.NO
+        # 非纯数字子树（含未折叠驻留形态）不在 ℚ 片段内
+        return T3.UNKNOWN
+
+
+register(QDomain())
