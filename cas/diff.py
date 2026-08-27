@@ -8,10 +8,13 @@
 · 函数：图书馆导数模板实例化（DB(0) 提升为参数）× 链式因子
 
 诚实边界：
-· 模板缺失（如 Abs）→ DiffError，附图书馆说明
+· 模板缺失 → DiffError，附图书馆说明
+· 顶层 Piecewise → DiffError（分段点导数须校验连续性/单侧极限，未建，不逐支冒充）
 · 多参数函数、绑定体（Bound）内微分 → DiffError（未建）
 结果经 fold 收拢；项层产物可由域层导数（p_deriv/rf_deriv）独立
 交叉验证（见 workflow Diff 步骤验证器与 stress/stress_diff.py）。
+分段值模板（如 Abs 的 sign 导数）经链式法则留在驻留项，源在域外时
+工作流验证器诚实返回 UNKNOWN（步骤 open），不自证。
 """
 
 from cas import term as T
@@ -67,11 +70,10 @@ def _diff(t, x):
     if head in ("Eq", "Ne", "Lt", "Le", "Gt", "Ge", "And", "Or", "Not"):
         raise DiffError("谓词不可微分")
     if head == "Piecewise":
-        # 逐分支微分：条件不动，各分支体对 x 求导后重组分段结构。
-        # 分段函数的导数在分段点是否成立属重叠/覆盖之责（cas.piecewise），
-        # 此处只忠实应用"段内可导则段内求导"。
-        from cas.piecewise import branches, piecewise
-        return piecewise([(_diff(v, x), c) for v, c in branches(t)])
+        # 逐支求导在分段点不安全：闭区域边界上的导数须另校验连续性与单侧导数，
+        # 段内导数拼起来不等于整体导数（例 x²(x≤0)|x(x>0) 在 0 处左右导不等却
+        # 逐支给出 0）。分段求导的审慎通道未建——诚实拒答，不冒充结果。
+        raise DiffError("分段函数逐支求导在分段点须校验连续性与单侧导数，未建")
     # 函数应用：查图书馆导数模板
     tpl, note = library.function_deriv(head)
     if tpl is None:
@@ -80,9 +82,4 @@ def _diff(t, x):
         raise DiffError(f"{head} 多参数微分未建（偏导地基未完成）")
     arg = t.args[0]
     inner = T._lift(tpl, arg, 0)            # DB(0) 实例化为参数
-    darg = _diff(arg, x)                    # 链式因子
-    if isinstance(inner, Expr) and inner.head.name == "Piecewise":
-        # 分段模板（如 Abs）× 链式因子逐分支
-        from cas.piecewise import lift
-        return lift(T.times, inner, darg)
-    return T.times(inner, darg)             # 链式法则
+    return T.times(inner, _diff(arg, x))    # 链式法则：模板值 × 内层导数

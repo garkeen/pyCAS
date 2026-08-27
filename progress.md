@@ -28,8 +28,8 @@
 - **公共算法机器**：
   - 线性代数（`cas/domains/linalg.py`）：域上高斯消元、秩、零空间基、方程组求解（特解+齐次基/不相容判定）、Bareiss 整数行列式
   - 结式与无平方（`cas/domains/polytools.py`）：结式（余式序列递归，共根判据+求值锚点）、Yun 无平方分解（monic 因子×重数）
-- **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则/**分段逐支求导**；缺模板诚实抛 `DiffError`
-- **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——分支体**独立投影**无共享宿主（`project_pw`）、条件交判定管线（`select` 首个真支且其前皆假、`coverage` 覆盖、`conflicts` 重叠一致性逐对判等，判不动以 Unknown 诚实传播）、运算**逐支笛卡尔提升**（`lift`）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`Abs` 导数据此以 Piecewise 如实入册（`sign`）
+- **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则；缺模板、顶层 Piecewise（分段点导数须校验连续性/单侧极限，未建）均诚实抛 `DiffError`，不逐支冒充整体导数
+- **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——求值语义为**有序首中**（if/elif/else，`⊤`=否则支；每点至多落一支 → 取值天然唯一，无求值层冲突）：`select` 取值、`coverage` 覆盖；分支体**独立投影**无共享宿主（`project_pw`）；运算**逐支笛卡尔提升**（`lift`，`(f⊕g)(x)=f(x)⊕g(x)`，条件取合取、空组合丢弃）；`conflicts` 作**顺序无关性 lint**（交叠处值不等→提示收紧为互斥守卫，判不动即 Unknown，不作求值闸）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`Abs` 导数据此以 Piecewise 如实入册（`sign`，u=0 无支）
 - **REPL**（`repl.py`）：claim/both/norm/solve/subst/**split/diff/rules/apply**/check/steps/undo
 - **压力台架**（`stress/`）：24 条性质，全自证无外部真值
   - P1-P4：折叠保真、幂等指针、区间真值表、回代判官

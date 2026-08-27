@@ -3,16 +3,22 @@
 
 结构：`Piecewise(v1, c1, v2, c2, ...)`——值 / 条件成对，驻留项。
 
-三条裁定落地：
+求值语义（唯一，全模块一致）：**有序首中**（if / elif / else，标准 Piecewise）。
+某点的值 = 声明序中第一个条件成立的分支之值；`c=⊤` 即"否则"支（仅在此前
+各支都不成立处生效）。因每点至多落在一支上，取值**天然唯一**——不存在、
+也绝不允许求值层面的语义冲突。三条落地裁定：
 
 · 分支体不要求同一宿主结构——每个分支独立投影（`project_pw`），
   域是分支局部的，找不到共同宿主不是失败。
 · 条件可以是任意命题——交判定管线，判得动给真值，判不动以 GUARDED
-  未决传播（`select` / `coverage`）。
-· 唯一被约束处是重叠区——两分支条件同时可满足时其值必须一致，
-  能检出冲突就标注（`conflicts`）；覆盖完全性是使用者声明，可判时标注。
+  未决传播（`select` 取值、`coverage` 覆盖）。
+· `conflicts` 是**顺序无关性 lint**（非求值闸）：若两支区域交叠处值不相等，
+  则该处取值取决于声明顺序——提示作者收紧为互斥守卫。判定不动即 Unknown，
+  绝不谎报良定义。覆盖完全性是使用者声明，可判则判，不擅自补全。
 
-运算提升（`lift`）：域内运算逐分支进行，分支间互斥性由条件的合取保证。
+运算提升（`lift`）：分段参与运算按点定义 `(f⊕g)(x)=f(x)⊕g(x)`，逐支笛卡尔
+展开，条件取合取。注意：分段函数的**求导与积分在分段点须另行校验连续性
+与单侧极限**，非逐支可交——该审慎逻辑不在本容器，见 cas/diff.py 的诚实拒答。
 """
 
 from cas import term as T
@@ -69,10 +75,6 @@ def conditions(t):
     return [c for _v, c in branches(t)]
 
 
-def values(t):
-    return [v for v, _c in branches(t)]
-
-
 # ---------------------------------------------------------------------------
 # 分支独立投影（架构核心裁定：无共享宿主）
 # ---------------------------------------------------------------------------
@@ -90,36 +92,38 @@ def project_pw(t):
 # ---------------------------------------------------------------------------
 
 def select(t, ctx):
-    """在上下文 ctx 下选分支。
+    """分段函数在 ctx 下取值——有序首中（if/elif/else）：第一个可证成立的条件。
+
+    自顶向下扫：可证假的支跳过；可证真的支，若其前无非假支（首中）则定值。
+    每点至多落一支 → 取值唯一，无求值层冲突。`c=⊤` 为"否则"支。
 
     返回 (状态, 载荷)：
-    · ("value", v)     恰有一分支被证明命中且其前皆假 → 坍缩为该值
-    · ("residual", (pw, undecided))
-                       无法唯一选定；pw 为已剔除可证假分支的剩余分段，
-                       undecided 为该次判定传播的未决理由（首个 Unknown）
+    · ("value", v)          唯一命中；或所有支可证不成立 → v = Undefined
+    · ("residual", (pw, r)) 有更早的支条件未决，遮蔽关系待定；pw 为残段，
+                            r 为该次判定的未决理由
     """
     bs = branches(t)
-    survivors = []
+    survivors = []              # 首中未定前需保留的更靠后候选
     first_unknown = None
     for v, c in bs:
         if c is T.TRUE:
-            if not survivors:                       # 恒真且为分支 0：直接命中
+            if not survivors:                   # 否则支，且其前皆已判假 → 命中
                 return ("value", v)
-            survivors.append((v, c))
+            survivors.append((v, c))            # 其前有未决支，遮蔽待定 → 残段
             break
         verdict = ctx.decide(c)
         if verdict is NO:
-            continue                                # 恒假分支永不命中，剔除
+            continue                            # 此支不成立，看下一支
         if verdict is YES:
-            if not survivors:                       # 首个真分支且其前皆假
+            if not survivors:                   # 首个真支且其前皆假 → 命中
                 return ("value", v)
-            survivors.append((v, c))                # 重叠：先中优先，保留待标
+            survivors.append((v, c))
             continue
-        if first_unknown is None:
+        if first_unknown is None:               # 未决支：可能成立，遮蔽后续
             first_unknown = verdict.reason
         survivors.append((v, c))
     if not survivors:
-        return ("residual", (T.SP("Undefined"), Reason.FRAGMENT))
+        return ("value", T.SP("Undefined"))     # 全支可证不成立：此点无定义
     return ("residual", (piecewise(survivors),
                          first_unknown or Reason.FRAGMENT))
 
@@ -143,16 +147,18 @@ def coverage(t, ctx):
     return unknown(Reason.GUARDED) if guarded else NO
 
 
-def conflicts(t, ctx, budget=100000):
-    """重叠一致性：条件可同时成立处两值是否相等。
+def conflicts(t, ctx):
+    """顺序无关性 lint（非求值闸）：交叠处值不等 → 该点取值依赖声明顺序。
 
-    逐对检测（不判覆盖，只看重叠是否良定义）。返回 [(i, j, Verdict)]——
-    Verdict 是"此重叠区良定义"的判定：
-    · YES 空重叠，或重叠处值恒等（良性 / 天然良定义）
-    · NO 检出不一致：重叠可满足且两值在重叠处不等
+    求值走 `select` 的有序首中，永不歧义。本函数是**作者体检**：若两支区域
+    可同时成立（`ci ∧ cj` 可满足）而值不等，则调换声明顺序会改变该处结果——
+    提示作者把守卫写成互斥。返回 [(i, j, Verdict)]，Verdict 是"此重叠良定义
+    （顺序无关）"的判定：
+    · YES 空重叠，或重叠处值恒等
+    · NO  重叠可满足且两值不等——顺序敏感，作者应收紧守卫
     · Unknown 判定力所不及（GUARDED/FRAGMENT/UNDECIDABLE/BUDGET）
 
-    判定失败绝不伪装成一致。"""
+    判不动绝不伪装成一致。"""
     from cas.decide import satisfiable
     bs = branches(t)
     out = []
@@ -163,13 +169,13 @@ def conflicts(t, ctx, budget=100000):
             vj, cj = bs[j]
             sat = satisfiable([ci, cj], ctx)      # 重叠区是否可满足
             if sat is NO:
-                out.append((i, j, YES))            # 空重叠，天然良定义
+                out.append((i, j, YES))            # 空重叠，天然顺序无关
                 continue
-            out.append((i, j, _agree(vi, vj, (ci, cj), ctx, budget)))
+            out.append((i, j, _agree(vi, vj, (ci, cj), ctx)))
     return out
 
 
-def _agree(vi, vj, conds, ctx, budget):
+def _agree(vi, vj, conds, ctx):
     """两值在重叠条件 conds 下是否相等：临时上下文注入条件后判等。"""
     if vi is vj:
         return YES
@@ -178,19 +184,21 @@ def _agree(vi, vj, conds, ctx, budget):
         if c is not T.TRUE:
             tmp.assume(c, origin="_overlap", kind="guard")
     from cas.decide import equivalent
-    return equivalent(vi, vj, tmp, budget)
+    return equivalent(vi, vj, tmp)
 
 
 # ---------------------------------------------------------------------------
 # 逐分支运算提升
 # ---------------------------------------------------------------------------
 
-def lift(op, *terms, prune=True):
+def lift(op, *terms):
     """把 n 元运算 op 逐分支提升到 Piecewise 参数上（笛卡尔展开）。
 
+    语义依据：分段函数参与运算按点定义——`(f⊕g)(x) = f(x)⊕g(x)`。故每个
+    (p-支, q-支…) 组合产出一新支，值取 op(各支值)，条件取各支条件的合取；
+    合取可证恒假的组合（两支不能同时成立）天然空重叠，直接丢弃。
     op 接收驻留项返回驻留项（如 T.plus / T.times）。非 Piecewise 参数视作
-    恒真单分支。结果按 `piecewise` 规范化；prune=True 时丢弃合取条件可判
-    为恒假的分支。"""
+    恒真单分支。结果按 `piecewise` 规范化。"""
     if not any(is_piecewise(x) for x in terms):
         return op(*terms)
     exps = [branches(x) for x in terms]
@@ -202,7 +210,7 @@ def lift(op, *terms, prune=True):
         vals = [v for v, _c in combo]
         conds = [c for _v, c in combo]
         conj = _and_all(conds)
-        if prune and conj is T.FALSE:
+        if conj is T.FALSE:                 # 空组合：条件不能同时成立
             continue
         pairs.append((op(*vals), conj))
     return piecewise(pairs)

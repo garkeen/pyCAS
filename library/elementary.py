@@ -63,7 +63,8 @@ lib.function(name="Sqrt", print_name="sqrt", arity=1,
 
 # |x| 的导数是分段函数 sign(x)：Piecewise 容器就位后得以如实声明——
 # u>0 处导为 1、u<0 处导为 −1，u=0 不具分支（不可导），诚实留空。
-# 链式法则的 D(u) 因子由微分层乘上，逐分支保持分段结构。
+# 该模板是图书馆声明事实；链式法则的 D(u) 因子由微分层乘在外面，
+# 不在微分层逐支分布（分布是归一化之责，非求导之责）。
 lib.function(name="Abs", print_name="abs", arity=1, real_on_real=True,
              deriv=mk(S("Piecewise"),
                       (T.ONE, mk(S("Gt"), (_U, T.ZERO)),
