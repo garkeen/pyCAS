@@ -9,11 +9,13 @@ from fractions import Fraction as Fr
 
 from cas import term as T
 from cas.qarith import fold, eval_exact, EvalNumError
-from cas.domains.base import Domain, T3, Ring, RingError, FracRing, register
+from cas.domains.base import Domain, Ring, RingError, FracRing, register
 
 
 class QRing(FracRing):
     """ℚ 系数环：Fraction 原生运算，零包装。"""
+
+    is_euclidean = True
 
     def from_int(self, n):
         return Fr(n)
@@ -30,6 +32,12 @@ class QRing(FracRing):
     def mul(self, a, b):
         return a * b
 
+    def divmod_(self, a, b):
+        return a / b, Fr(0)
+
+    def gcd_coeff(self, a, b):
+        return Fr(1) if (a or b) else Fr(0)
+
 
 Q_RING = QRing()
 
@@ -38,6 +46,9 @@ class QDomain(Domain):
     """有理数域 ℚ。"""
 
     name = "Q"
+    is_field = True
+    is_ordered = True
+    is_euclidean = True
 
     def member(self, t) -> bool:
         try:
@@ -51,12 +62,10 @@ class QDomain(Domain):
             return None
         return fold(t)
 
-    def equal(self, a, b) -> T3:
-        fa, fb = fold(a), fold(b)
-        if T.is_num(fa) and T.is_num(fb):
-            return T3.YES if T.num_val(fa) == T.num_val(fb) else T3.NO
-        # 非纯数字子树（含未折叠驻留形态）不在 ℚ 片段内
-        return T3.UNKNOWN
+    def equal(self, a, b):
+        if not (self.member(a) and self.member(b)):
+            return None                  # 非成员：调用方越界
+        return T.num_val(fold(a)) == T.num_val(fold(b))
 
 
 register(QDomain())

@@ -321,6 +321,40 @@ def _flatten_ac(head, args):
     return sorted(flat)
 
 
+def _fold_bool_ac(head, args):
+    """And/Or 句法折叠：拉平 + 指针去重 + 真值常元吸收 + 排中/矛盾律。
+
+    纯句法（a∧¬a 是句法对），无谓词语义判定。返回坍缩常元或排序后的
+    参数列表（mk 据此驻留）。
+    """
+    name = head.name
+    flat = []
+    for a in args:
+        if isinstance(a, Expr) and a.head is head:
+            flat.extend(a.args)
+        else:
+            flat.append(a)
+    out, seen = [], set()
+    for a in flat:
+        if isinstance(a, BVal):
+            if (name == "And" and not a.val) or (name == "Or" and a.val):
+                return a                       # 零元：And 中 False / Or 中 True
+            continue                           # 单位元吸收
+        if a._h in seen:
+            continue
+        seen.add(a._h)
+        out.append(a)
+    for a in out:
+        if isinstance(a, Expr) and a.head.name == "Not" \
+                and a.args[0]._h in seen:
+            return FALSE if name == "And" else TRUE
+    if not out:
+        return TRUE if name == "And" else FALSE
+    if len(out) == 1:
+        return out[0]
+    return sorted(out)
+
+
 # 每头规范化注册表（L5 扩展入口）：构造器 mk 对非 AC/Power 头应用。
 # Plus/Times/Power 属 L0 环规范化，内建于 mk，不经此表。
 NORM = {}

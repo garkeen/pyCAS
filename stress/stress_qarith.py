@@ -20,7 +20,8 @@ sys.path.insert(0, ".")
 from cas.term import S, N, mk, plus, times, pw, neg, Expr, Int
 from cas.qarith import fold, eval_exact, EvalNumError
 from cas.context import Context
-from cas.decide import decide, T3
+from cas.decide import decide
+from cas.verdict import YES, Unknown
 from cas.simplify import expand
 
 X, Y = S("x"), S("y")
@@ -115,12 +116,15 @@ def prop_interval(rounds, rng):
         ctx.assume(mk(S("Gt"), (X, N(k))))
         for j in range(-7, 8):
             got = decide(mk(S("Gt"), (X, N(j))), ctx)
-            want = T3.YES if j <= k else T3.UNKNOWN
-            if got is not want:
+            if j <= k:
+                ok = got is YES
+            else:
+                ok = isinstance(got, Unknown)
+            if not ok:
                 fail(f"P3 区间 assume x>{k} 查 x>{j}: got {got}", k)
         b = ctx.branch(mk(S("Lt"), (X, N(k + 10))))[0]
         got = decide(mk(S("Lt"), (X, N(k + 100))), b.ctx)
-        if got is not T3.YES:
+        if got is not YES:
             fail(f"P3 分支帧继承", k)
 
 

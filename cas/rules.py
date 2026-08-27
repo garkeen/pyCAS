@@ -1,7 +1,20 @@
-from dataclasses import dataclass, field
+# -*- coding: utf-8 -*-
+"""规则引擎（全系统唯一重写引擎）。
+
+规则来源只有图书馆声明（准入纪律见 library/api.py）；guard 判定走
+判定管线（Verdict ADT），不存在第二套规则机制、第二套守卫词汇。
+
+消费面：
+· simplify.autosimplify —— auto 规则定点化简（自动通道）
+· REPL apply 命令 —— 定向应用（交互通道）
+两者共用 apply_rule，验证经 workflow Rewrite 步骤。
+"""
+
+from dataclasses import dataclass
 
 from cas import term as T
 from cas.match import matches
+from cas.verdict import YES, NO, unknown
 
 
 @dataclass(frozen=True)
@@ -24,7 +37,7 @@ class Step:
     path: tuple
     before: T.Term
     after: T.Term
-    guard: str
+    guard: object                 # Verdict
     dcost: int
     note: str = ""   # 自由说明：内核算法步记算法名+验证态（kind=algo），规则步留空
 
@@ -32,9 +45,10 @@ class Step:
 @dataclass
 class ApplyResult:
     ok: bool
-    guard: str
+    guard: object                 # Verdict（YES 才可落）
     term: T.Term = None
     subst: dict = None
+    rule_id: str = ""
 
 
 def root_key(p):
@@ -79,17 +93,37 @@ class RuleSet:
 
 
 def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
+    """在 expr 的 path 处尝试应用规则。
+
+    guard_eval: (guard_term, subst) -> Verdict。缺省（无守卫）视为 YES；
+    有守卫但无评估器视为 UNKNOWN——诚实不落地。"""
     sub_t = T.term_at(expr, path)
     for sub in matches(rule.pattern, sub_t, budget=budget):
         if rule.guard is None:
-            g = "YES"
+            g = YES
         else:
-            g = guard_eval(rule.guard, sub) if guard_eval else "UNKNOWN"
-        if g == "YES":
+            g = guard_eval(rule.guard, sub) if guard_eval else unknown()
+        if g is YES:
             inst = T.instantiate(rule.template, sub)
             after = T.replace_at(expr, path, inst)
-            return ApplyResult(True, "YES", after, sub)
-        if g == "NO":
+            return ApplyResult(True, YES, after, sub, rule.id)
+        if g is NO:
             continue
-        return ApplyResult(False, "UNKNOWN", expr, sub)
-    return ApplyResult(False, "NOMATCH", expr, None)
+        return ApplyResult(False, g, expr, sub, rule.id)
+    return ApplyResult(False, None, expr, None, rule.id)
+
+
+_LIB_RULESET = None
+
+
+def library_ruleset() -> RuleSet:
+    """从图书馆声明装配规则集（幂等缓存）。"""
+    global _LIB_RULESET
+    if _LIB_RULESET is None:
+        import library
+        rs = RuleSet()
+        for decl in library.all_functions():
+            for rule in library.function_rules(decl.name):
+                rs.add(rule)
+        _LIB_RULESET = rs
+    return _LIB_RULESET

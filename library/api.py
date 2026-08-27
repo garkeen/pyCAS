@@ -34,6 +34,10 @@ class FunctionDecl:
 
     rules 是规则行字符串（loader DSL），惰性解析缓存——图书馆模块
     保持纯数据，解析器故障不污染注册表。
+
+    deriv 是导数模板：含 DB(0) 占位的驻留项，语义为
+    f'(u) = 模板[DB(0) := u]；链式法则的 D(u) 因子由微分层乘上。
+    分支破裂者（如 |x| 的符号导数）不收，置 None 并写入 deriv_note。
     """
     name: str                        # 头名，如 "Sin"
     print_name: str
@@ -41,6 +45,8 @@ class FunctionDecl:
     real_on_real: bool | None = None # 实输入实值（定义域限制者置 None）
     bound: tuple[Fr, Fr] | None = None      # 值域粗界 lo ≤ f ≤ hi
     rule_lines: tuple[str, ...] = ()
+    deriv: object = None             # 导数模板（Term，DB(0) 占位）
+    deriv_note: str = ""
     note: str = ""
 
 
@@ -68,10 +74,12 @@ def constant(*, name: str, print_name: str, real=None, positive=None,
 
 
 def function(*, name: str, print_name: str, arity: int | None,
-             real_on_real=None, bound=None, rule_lines=(), note=""):
+             real_on_real=None, bound=None, rule_lines=(),
+             deriv=None, deriv_note="", note=""):
     d = FunctionDecl(name=name, print_name=print_name, arity=arity,
                      real_on_real=real_on_real, bound=bound,
-                     rule_lines=tuple(rule_lines), note=note)
+                     rule_lines=tuple(rule_lines),
+                     deriv=deriv, deriv_note=deriv_note, note=note)
     if name in _FUNCS:
         raise ValueError(f"function redeclared: {name}")
     _FUNCS[name] = d
@@ -117,6 +125,19 @@ def register_domain_cond(name: str, fn):
 
 def lookup_domain_cond(name: str):
     return _DOMAIN_CONDS.get(name)
+
+
+def all_functions() -> tuple:
+    """全部函数声明（按注册序）。规则引擎装配与清单展示用。"""
+    return tuple(_FUNCS.values())
+
+
+def function_deriv(name: str):
+    """导数模板查询：返回 (模板 | None, 说明)。查无此名返回 (None, "")。"""
+    d = _FUNCS.get(name)
+    if d is None:
+        return None, ""
+    return d.deriv, d.deriv_note
 
 
 def function_rules(name: str) -> tuple:

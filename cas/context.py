@@ -4,7 +4,7 @@ from cas import term as T
 from cas.decide import decide as _decide
 from cas.decide import contradicted as _contradicted
 from cas.decide import domain_ok as _domain_ok
-from cas.decide import T3
+from cas.verdict import YES, NO
 
 
 @dataclass
@@ -32,12 +32,12 @@ class Context:
         return e
 
     def check_and_assume(self, fact, origin="user", kind="fact"):
-        if _domain_ok(fact, self) is T3.NO:
-            return T3.NO, "domain"
+        if _domain_ok(fact, self) is NO:
+            return NO, "domain"
         if _contradicted(fact, self):
-            return T3.NO, "contradiction"
+            return NO, "contradiction"
         self.assume(fact, origin=origin, kind=kind)
-        return T3.YES, None
+        return YES, None
 
     def clone(self):
         c = self.__class__()
@@ -49,7 +49,7 @@ class Context:
         for c in conds:
             bctx = self.clone()
             st, why = bctx.check_and_assume(c, origin="branch", kind="branch")
-            if st is T3.NO:
+            if st is NO:
                 out.append(Branch(c, bctx, "empty"))
             else:
                 out.append(Branch(c, bctx, "open"))

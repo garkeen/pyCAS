@@ -90,6 +90,8 @@ def fold(t):
     if head == "Power":
         b, e = args
         if isinstance(e, Int) and abs(e.v) <= _MAX_EXP:
+            if e.v == 1:
+                return b                      # b^1 = b：幺半群恒等，普适
             if e.v == 0:
                 return t                      # u^0：0^0 争议，驻留给域层
             if T.is_num(b):

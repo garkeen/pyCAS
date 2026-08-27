@@ -1,4 +1,5 @@
-"""数域系统基座：三值判定、系数环协议、域协议。
+# -*- coding: utf-8 -*-
+"""数域系统基座：域协议、系数环协议。
 
 层位纪律：本包只依赖 cas.term，被 decide/simplify 上层消费，
 永不反向导入——域是地基，判定管线在域之上。
@@ -6,28 +7,33 @@
 设计裁定（docs/cas_v3_arch.md 三）：
 · 每个域自带 normalize（标准形）/ equal（完全判定判等）/ member（成员测试）；
 · 域由显式声明进入，不做叶嗅探（v2 病根）；
-· 三值判定 YES/NO/UNKNOWN 是域判等协议的一部分，UNKNOWN 在域片段外
-  出现即调用方越界。
+· equal 仅对成员有定义，片段内完全判定——返回值是 bool，
+  非成员返回 None 表示调用方越界，域内绝不产生"不知道"。
+  （判定的三值性属于判定层 cas/verdict，域层不携带。）
+· 导子 D 属于域协议：系数环的导子默认为零（常数域），
+  扩张生长时覆写——代数扩张 D(α) = −D(m)(α)/m'(α)，
+  超越扩张由生成元定义方程指定。
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from fractions import Fraction as Fr
 
 from cas.term import Expr, Int, Rat, Sym
-
-
-class T3(Enum):
-    YES = "YES"
-    NO = "NO"
-    UNKNOWN = "UNKNOWN"
 
 
 class Ring(ABC):
     """系数环协议：多项式域对系数结构的全部要求。
 
     系数值本身是不透明对象；环负责其算术与判等。ℚ 环直接用
-    Fraction 原生运算实现（零包装开销）。"""
+    Fraction 原生运算实现（零包装开销）。
+
+    能力字段（架构 3.2）：上层算法按能力分派，不按类型特判。
+    · is_field：非零元可除（精确除法可用）
+    · is_euclidean：带余除法可用（divmod/gcd 有实现）
+    """
+
+    is_field = False
+    is_euclidean = False
 
     @abstractmethod
     def from_int(self, n: int):
@@ -55,6 +61,18 @@ class Ring(ABC):
     def sub(self, a, b):
         return self.add(a, self.neg(b))
 
+    def divmod_(self, a, b):
+        """带余除法 (q, r)。欧几里得环覆写；否则拒答。"""
+        raise RingError(f"{type(self).__name__} 非欧几里得环")
+
+    def gcd_coeff(self, a, b):
+        """系数 gcd。欧几里得环覆写。"""
+        raise RingError(f"{type(self).__name__} 无 gcd 能力")
+
+    def deriv(self, c):
+        """系数导子：常数域上恒为零。扩张环覆写（架构三：导子属于域协议）。"""
+        return self.from_int(0)
+
     def pow_pos(self, a, n: int):
         """a ** n，n ≥ 0，快速幂。"""
         r = self.from_int(1)
@@ -73,6 +91,8 @@ class RingError(Exception):
 class FracRing(Ring):
     """含 ℚ 的域系数环的公共部分：精确除法、零一常量、相等。"""
 
+    is_field = True
+
     def div_exact(self, a, b):
         """域中非零元的精确除法。"""
         if self.is_zero(b):
@@ -88,22 +108,31 @@ class Domain(ABC):
 
     · normalize(t) -> Term | None：非成员返回 None；成员返回标准形
       （驻留项，内容寻址保证同形同指针）。
-    · equal(a, b) -> T3：仅对成员有定义；片段内完全判定，绝不 UNKNOWN。
+    · equal(a, b) -> bool | None：仅对成员有定义；片段内完全判定。
+      非成员返回 None（调用方越界），不产生三值。
+
+    能力字段：is_field（乘法非零元可逆）、is_ordered（有序，序判定可用）、
+    is_euclidean（带余除法）。算法按能力分派。
     """
 
     name: str = "?"
+    is_field = False
+    is_ordered = False
+    is_euclidean = False
 
     @abstractmethod
     def normalize(self, t): ...
 
     @abstractmethod
-    def equal(self, a, b) -> T3: ...
+    def equal(self, a, b): ...
 
 
 _DOMAINS = {}
 
 
 def register(d: Domain) -> Domain:
+    if d.name in _DOMAINS and _DOMAINS[d.name] is not d:
+        raise ValueError(f"domain redeclared: {d.name}")
     _DOMAINS[d.name] = d
     return d
 

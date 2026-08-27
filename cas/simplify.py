@@ -133,3 +133,36 @@ def simplify(t, budget=100000):
         prev = nxt
     _MEMO[t._h] = prev
     return prev
+
+
+def autosimplify(t, budget=100000):
+    """自动通道化简：环层重建 + 图书馆 auto 规则定点迭代。
+
+    纪律：
+    · 只应用 auto 且无守卫的规则——守卫评估要回调判定管线，
+      而判定管线消费本函数，有守卫的 auto 规则会形成循环；
+      带守卫的规则走交互通道（REPL apply，守卫过 decide）。
+    · 每步代价必须严格下降——终止性由良基性保证，不靠轮数魔法。
+    """
+    from cas.rules import library_ruleset, apply_rule
+
+    rs = library_ruleset()
+    auto_rules = [r for r in rs.rules.values() if r.auto and r.guard is None]
+    cur = simplify(t, budget)
+    rounds = 0
+    while rounds < 50:
+        rounds += 1
+        base = cost(cur)
+        nxt = None
+        for path in T.all_paths(cur):
+            for rule in sorted(auto_rules, key=lambda r: r.priority):
+                res = apply_rule(rule, cur, path, budget=budget)
+                if res.ok and cost(res.term) < base:
+                    nxt = res.term
+                    break
+            if nxt is not None:
+                break
+        if nxt is None:
+            return cur
+        cur = simplify(nxt, budget)
+    return cur

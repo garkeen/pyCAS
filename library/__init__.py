@@ -9,6 +9,7 @@ from library.api import (load_all, constant, function,
                          const_positive, const_real, const_bounds,
                          function_rules, register_domain_cond,
                          lookup_domain_cond,
+                         all_functions, function_deriv,
                          ConstantDecl, FunctionDecl)
 from library.constants import PI, E, IU, GAMMA
 

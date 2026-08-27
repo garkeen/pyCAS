@@ -16,7 +16,6 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.domains.base import T3
 from cas.term import S, N, mk, plus, times, pw
 from cas.parser import parse
 from cas.pprint import to_str
@@ -98,13 +97,13 @@ def prop_equal(rounds, rng):
         t1 = times(to_term(Q_RING, a), to_term(Q_RING, b))
         t2 = to_term(Q_RING, p_mul(Q_RING, a, b))
         r = P.equal(t1, t2)
-        if r is not T3.YES:
+        if r is not True:
             fail("P6 因式 vs 展开失败", i, to_str(t1), to_str(t2))
         # 不等否定：p vs p + 常数
         p = a if not a.is_zero() else p_const(Q_RING, (X,), Fr(1))
         q = p_add(Q_RING, p, p_const(Q_RING, p.vars, Fr(rng.randint(1, 9))))
         r = P.equal(to_term(Q_RING, p), to_term(Q_RING, q))
-        if r is not T3.NO:
+        if r is not False:
             fail("P7 不等否定失败", i, to_str(to_term(Q_RING, p)),
                  to_str(to_term(Q_RING, q)))
 

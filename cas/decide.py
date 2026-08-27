@@ -1,40 +1,23 @@
-from enum import Enum
+# -*- coding: utf-8 -*-
+"""判定管线：命题复合 + 域特定可判定原子（架构第七节）。
+
+返回值是判定 ADT（cas/verdict）：Yes/No/Unknown(理由)。
+Unknown 的理由区分片段没覆盖（FRAGMENT）、被条件挡住（GUARDED）、
+根本不可判定（UNDECIDABLE）、预算耗尽（BUDGET）——四种后果不同，
+禁止折叠成同一个"不知道"。
+
+原子通道（按序）：指针/数值 → 账本直查 → 投影判零（域标准形）→
+区间传播 → 序链推理 → 规则派生层 → 图书馆引理（常数粗界、函数值域界）。
+"""
+
+from collections import deque
 
 from cas import term as T
 from cas.term import S, N
-from cas.domain import R, Q, Z, C, DEFAULT_DOMAIN, domain_of
 from cas.qarith import fold as _qfold
+from cas.verdict import (Verdict, Yes, No, Unknown, Reason,
+                          YES, NO, unknown, and3, or3, not3)
 import library
-
-
-class T3(Enum):
-    YES = "YES"
-    NO = "NO"
-    UNKNOWN = "UNKNOWN"
-
-
-def and3(a, b):
-    if a is T3.NO or b is T3.NO:
-        return T3.NO
-    if a is T3.YES and b is T3.YES:
-        return T3.YES
-    return T3.UNKNOWN
-
-
-def or3(a, b):
-    if a is T3.YES or b is T3.YES:
-        return T3.YES
-    if a is T3.NO and b is T3.NO:
-        return T3.NO
-    return T3.UNKNOWN
-
-
-def not3(a):
-    if a is T3.YES:
-        return T3.NO
-    if a is T3.NO:
-        return T3.YES
-    return T3.UNKNOWN
 
 
 _NEG = {
@@ -80,19 +63,28 @@ def _cmp_numeric(op, a, b):
         r = av == bv
     else:
         r = av != bv
-    return T3.YES if r else T3.NO
+    return YES if r else NO
 
 
 def _same(op, a, b):
     if a is not b:
         return None
     if op in ("Eq", "Le", "Ge"):
-        return T3.YES
-    return T3.NO
+        return YES
+    return NO
 
 
 def _poly_eq_check(a, b):
-    # TODO: 多项式机器（第四层公共算法机器）重建后恢复此判定
+    """投影判零通道：a−b 落入 ℚ/K[x]/K(x) 时域标准形完全判定。"""
+    d = _qfold(T.plus(a, T.neg(b)))
+    if d is T.ZERO:
+        return YES
+    from cas.project import zero_of
+    r = zero_of(d)
+    if r is True:
+        return YES
+    if r is False:
+        return NO
     return None
 
 
@@ -100,9 +92,9 @@ def _facts_lookup(fact, ctx):
     for e in ctx.entries:
         f = e.fact
         if f is fact:
-            return T3.YES
+            return YES
         if f is negate(fact):
-            return T3.NO
+            return NO
         if isinstance(f, T.Expr) and isinstance(fact, T.Expr):
             if f.head.name in _CMP_INV and fact.head.name in _CMP_INV:
                 if (
@@ -110,14 +102,15 @@ def _facts_lookup(fact, ctx):
                     and f.args[0] is fact.args[1]
                     and f.args[1] is fact.args[0]
                 ):
-                    return T3.YES
+                    return YES
     return None
 
 
 def _chain_query(op, a, b, ctx):
     """序链 BFS：账本不等式建边，传递闭包回答 a<b 型查询。
 
-    数值界推理（x>2 -> x+1>3）与等式代入由 _interval 区间通道负责，此处只走图边。
+    状态为 (节点, 路径是否含严格边)，按节点记录最优严格性；
+    数值界推理与等式代入由 _interval 区间通道负责，此处只走图边。
     """
     adj = {}
     strict = op in ("Lt", "Gt")
@@ -134,23 +127,22 @@ def _chain_query(op, a, b, ctx):
                 opf = "Lt" if opf == "Gt" else "Le"
             adj.setdefault(u, []).append((v, opf == "Lt"))
     if a is b:
-        return T3.YES if op in ("Le", "Ge", "Eq") else T3.NO
-    from collections import deque
-
+        return YES if op in ("Le", "Ge", "Eq") else NO
     start, goal = want
-    q = deque([(start, False)])
-    seen = {start._h}
-    while q:
-        cur, ever_strict = q.popleft()
+    best = {start._h: False}
+    queue = deque([(start, False)])
+    while queue:
+        cur, evs = queue.popleft()
+        if best.get(cur._h, False) != evs:
+            continue                       # 过期状态（已有更优严格性）
         for nxt, st in adj.get(cur, ()):
-            ns = ever_strict or st
-            if nxt is goal:
-                if not strict or ns:
-                    return T3.YES
-            key = (nxt._h, ns)
-            if nxt._h not in seen or (nxt._h, False) in seen and ns:
-                seen.add(key)
-                q.append((nxt, ns))
+            ns = evs or st
+            if nxt is goal and (not strict or ns):
+                return YES
+            prev = best.get(nxt._h)
+            if prev is None or (ns and not prev):
+                best[nxt._h] = ns
+                queue.append((nxt, ns))
     return None
 
 
@@ -283,16 +275,16 @@ def _cmp_interval(op, a, b, ctx):
     d = _qfold(T.plus(a, T.neg(b)))
     if op in ("Eq", "Ne"):
         if d is T.ZERO:
-            return T3.YES if op == "Eq" else T3.NO
+            return YES if op == "Eq" else NO
         iv = _interval(d, ctx)
         if iv is not None:
             lo, hi, _, _ = iv
             away = (lo is not None and lo > 0) or (hi is not None and hi < 0)
             if away:
-                return T3.NO if op == "Eq" else T3.YES
+                return NO if op == "Eq" else YES
         return None
     if d is T.ZERO:
-        return T3.YES if op in ("Le", "Ge") else T3.NO
+        return YES if op in ("Le", "Ge") else NO
     iv = _interval(d, ctx)
     if iv is None:
         return None
@@ -300,32 +292,86 @@ def _cmp_interval(op, a, b, ctx):
     if lo is not None and hi is not None and lo == hi and not los and not his:
         # 闭区间退化为单点 = 精确值，直接裁决
         if op == "Gt":
-            return T3.YES if lo > 0 else T3.NO
+            return YES if lo > 0 else NO
         if op == "Ge":
-            return T3.YES if lo >= 0 else T3.NO
+            return YES if lo >= 0 else NO
         if op == "Lt":
-            return T3.YES if lo < 0 else T3.NO
-        return T3.YES if lo <= 0 else T3.NO
+            return YES if lo < 0 else NO
+        return YES if lo <= 0 else NO
     if op == "Gt":
         if (lo is not None and lo > 0) or (lo == 0 and los):
-            return T3.YES
+            return YES
         if (hi is not None and hi < 0) or (hi == 0 and his):
-            return T3.NO
+            return NO
     elif op == "Ge":
         if lo is not None and lo >= 0:
-            return T3.YES
+            return YES
         if (hi is not None and hi < 0) or (hi == 0 and his):
-            return T3.NO
+            return NO
     elif op == "Lt":
         if (hi is not None and hi < 0) or (hi == 0 and his):
-            return T3.YES
+            return YES
         if (lo is not None and lo > 0) or (lo == 0 and los):
-            return T3.NO
+            return NO
     else:  # Le
         if hi is not None and hi <= 0:
-            return T3.YES
+            return YES
         if (lo is not None and lo > 0) or (lo == 0 and los):
-            return T3.NO
+            return NO
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 符号结构引理（原 cas/domain.py RealDomain 的可判定部分，模块废除后归位）
+# ---------------------------------------------------------------------------
+
+def _nneg(t, ctx):
+    """非负结构判定：True/False/None（不回调 decide，只读结构与账本）。"""
+    if T.is_num(t):
+        return T.sign_num(t) >= 0
+    if isinstance(t, T.Const) and library.const_positive(t) is True:
+        return True
+    if isinstance(t, T.Expr):
+        name = t.head.name
+        if name == "Power":
+            b, e = t.args
+            if isinstance(e, T.Int) and e.v % 2 == 0:
+                return True
+            if (
+                isinstance(e, T.Rat)
+                and e.f.denominator % 2 == 1
+                and _pos(b, ctx) is True
+            ):
+                return True
+        if name == "Abs":
+            return True
+    if ctx is not None:
+        for e in ctx.entries:
+            f = e.fact
+            if isinstance(f, T.Expr) and f.head.name in ("Gt", "Ge"):
+                if f.args[0] is t and f.args[1] is T.ZERO:
+                    return True
+            if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le"):
+                if f.args[0] is t and f.args[1] is T.ZERO:
+                    return False
+    return None
+
+
+def _pos(t, ctx):
+    """正性结构判定：True/False/None。"""
+    if T.is_num(t):
+        return T.sign_num(t) > 0
+    if isinstance(t, T.Const) and library.const_positive(t) is True:
+        return True
+    if ctx is not None:
+        for e in ctx.entries:
+            f = e.fact
+            if isinstance(f, T.Expr) and f.head.name == "Gt":
+                if f.args[0] is t and f.args[1] is T.ZERO:
+                    return True
+            if isinstance(f, T.Expr) and f.head.name == "Le":
+                if f.args[0] is t and f.args[1] is T.ZERO:
+                    return False
     return None
 
 
@@ -349,35 +395,35 @@ def _is_ord(f):
 
 
 def _zero_cmp_of(a, ctx, q, op):
-    nneg = R.nonneg(a, ctx)
-    pos = R.pos(a, ctx)
+    nneg = _nneg(a, ctx)
+    pos = _pos(a, ctx)
     if op == "Gt":
         if pos is True:
-            return T3.YES
+            return YES
         if nneg is False or (nneg is True and pos is False):
-            return T3.NO
+            return NO
         return None
     if op == "Ge":
         if nneg is True:
-            return T3.YES
+            return YES
         if nneg is False:
-            return T3.NO
+            return NO
         return None
     if op == "Lt":
         if pos is True:
-            return T3.NO
+            return NO
         if nneg is False:
-            return T3.YES
+            return YES
         if nneg is True and pos is False:
-            return T3.NO
+            return NO
         return None
     if op == "Le":
         if pos is True:
-            return T3.NO
+            return NO
         if nneg is False:
-            return T3.YES
+            return YES
         if nneg is True and pos is False:
-            return T3.YES
+            return YES
         return None
     return None
 
@@ -385,10 +431,10 @@ def _zero_cmp_of(a, ctx, q, op):
 @derive("ne-from-ord", lambda f: f.head.name == "Ne")
 def _rule_ne_from_ord(f, ctx, q):
     a, b = f.args
-    if q(T.mk(S("Gt"), (a, b))) is T3.YES or q(T.mk(S("Lt"), (a, b))) is T3.YES:
-        return T3.YES
-    if q(T.mk(S("Eq"), (a, b))) is T3.YES:
-        return T3.NO
+    if q(T.mk(S("Gt"), (a, b))) is YES or q(T.mk(S("Lt"), (a, b))) is YES:
+        return YES
+    if q(T.mk(S("Eq"), (a, b))) is YES:
+        return NO
     return None
 
 
@@ -416,19 +462,19 @@ def _sign_of_term(t, ctx, q):
         if s < 0:
             return -1
         return 0
-    if library.const_positive(t) is True:
+    if isinstance(t, T.Const) and library.const_positive(t) is True:
         return 1
     r = q(T.mk(S("Gt"), (t, T.ZERO)))
-    if r is T3.YES:
+    if r is YES:
         return 1
     r = q(T.mk(S("Lt"), (t, T.ZERO)))
-    if r is T3.YES:
+    if r is YES:
         return -1
     r = q(T.mk(S("Eq"), (t, T.ZERO)))
-    if r is T3.YES:
+    if r is YES:
         return 0
     r = q(T.mk(S("Ge"), (t, T.ZERO)))
-    if r is T3.YES:
+    if r is YES:
         return 2
     return None
 
@@ -456,21 +502,23 @@ def _rule_sign_times(f, ctx, q):
         elif s == 2:
             s_nn = True
     if s_zero:
-        return T3.NO if op in ("Gt", "Lt") else T3.YES
+        return NO if op in ("Gt", "Lt") else YES
     odd = neg_count % 2 == 1
+    # 存在未定非负因子：被未确认条件挡住，答案可随条件清偿翻转
+    guarded = unknown(Reason.GUARDED) if s_nn else unknown()
     if op == "Gt":
         if odd:
-            return T3.NO
-        return T3.YES if not s_nn else T3.UNKNOWN
+            return NO
+        return YES if not s_nn else guarded
     if op == "Ge":
         if odd and not s_nn:
-            return T3.NO
-        return T3.UNKNOWN if odd else T3.YES
+            return NO
+        return guarded if odd else YES
     if op == "Lt":
         if odd and not s_nn:
-            return T3.YES
-        return T3.UNKNOWN if odd else T3.NO
-    return T3.YES if odd else (T3.UNKNOWN if s_nn else T3.NO)
+            return YES
+        return guarded if odd else NO
+    return YES if odd else (guarded if s_nn else NO)
 
 
 @derive("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0)
@@ -478,23 +526,23 @@ def _rule_sign_even_power(f, ctx, q):
     op = f.head.name
     b = f.args[0].args[0]
     if op in ("Ge",):
-        return T3.YES
+        return YES
     if op == "Lt":
-        return T3.NO
+        return NO
     if op == "Gt":
         r = q(T.mk(S("Ne"), (b, T.ZERO)))
-        if r is T3.YES:
-            return T3.YES
+        if r is YES:
+            return YES
         r = q(T.mk(S("Eq"), (b, T.ZERO)))
-        if r is T3.YES:
-            return T3.NO
+        if r is YES:
+            return NO
         return None
     r = q(T.mk(S("Eq"), (b, T.ZERO)))
-    if r is T3.YES:
-        return T3.YES
+    if r is YES:
+        return YES
     r = q(T.mk(S("Ne"), (b, T.ZERO)))
-    if r is T3.YES:
-        return T3.NO
+    if r is YES:
+        return NO
     return None
 
 
@@ -503,23 +551,23 @@ def _rule_sign_abs(f, ctx, q):
     op = f.head.name
     u = f.args[0].args[0]
     if op == "Ge":
-        return T3.YES
+        return YES
     if op == "Lt":
-        return T3.NO
+        return NO
     if op == "Gt":
         r = q(T.mk(S("Ne"), (u, T.ZERO)))
-        if r is T3.YES:
-            return T3.YES
+        if r is YES:
+            return YES
         r = q(T.mk(S("Eq"), (u, T.ZERO)))
-        if r is T3.YES:
-            return T3.NO
+        if r is YES:
+            return NO
         return None
     r = q(T.mk(S("Eq"), (u, T.ZERO)))
-    if r is T3.YES:
-        return T3.YES
+    if r is YES:
+        return YES
     r = q(T.mk(S("Ne"), (u, T.ZERO)))
-    if r is T3.YES:
-        return T3.NO
+    if r is YES:
+        return NO
     return None
 
 
@@ -538,64 +586,67 @@ def _rule_sign_sum(f, ctx, q):
         any_pos = False
         for t_ in a.args:
             r = q(T.mk(S("Ge"), (t_, T.ZERO)))
-            if r is not T3.YES:
+            if r is not YES:
                 all_ge = False
                 break
             r2 = q(T.mk(S("Gt"), (t_, T.ZERO)))
-            if r2 is T3.YES:
+            if r2 is YES:
                 any_pos = True
         if all_ge and any_pos:
-            return T3.YES
+            return YES
         all_le = True
         any_neg = False
         for t_ in a.args:
             r = q(T.mk(S("Le"), (t_, T.ZERO)))
-            if r is not T3.YES:
+            if r is not YES:
                 all_le = False
                 break
             r2 = q(T.mk(S("Lt"), (t_, T.ZERO)))
-            if r2 is T3.YES:
+            if r2 is YES:
                 any_neg = True
         if all_le and any_neg:
-            return T3.NO
+            return NO
         return None
     all_le = True
     any_neg = False
     for t_ in a.args:
         r = q(T.mk(S("Le"), (t_, T.ZERO)))
-        if r is not T3.YES:
+        if r is not YES:
             all_le = False
             break
         r2 = q(T.mk(S("Lt"), (t_, T.ZERO)))
-        if r2 is T3.YES:
+        if r2 is YES:
             any_neg = True
     if all_le and any_neg:
-        return T3.YES
+        return YES
     all_ge = True
     any_pos = False
     for t_ in a.args:
         r = q(T.mk(S("Ge"), (t_, T.ZERO)))
-        if r is not T3.YES:
+        if r is not YES:
             all_ge = False
             break
         r2 = q(T.mk(S("Gt"), (t_, T.ZERO)))
-        if r2 is T3.YES:
+        if r2 is YES:
             any_pos = True
     if all_ge and any_pos:
-        return T3.NO
+        return NO
     return None
 
 
 @derive("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
 def _rule_eq_times_zero(f, ctx, q):
+    """积判零。前提：本系统构造的系数结构（ℚ、K[x]、K(x)、代数/超越塔）
+    均为整环——ab=0 ⟺ a=0 ∨ b=0。将来若引入矩阵环等非整环结构，
+    本规则必须按环境域门控。"""
     a = f.args[0]
-    any_zero = T3.NO
+    any_zero = NO
     for fac in a.args:
         r = q(T.mk(S("Eq"), (fac, T.ZERO)))
-        if r is T3.YES:
-            return T3.YES
-        if r is T3.UNKNOWN:
-            any_zero = T3.UNKNOWN
+        if r is YES:
+            return YES
+        if r is not NO:
+            any_zero = unknown()
     return any_zero
 
 
@@ -604,19 +655,19 @@ def _rule_sign_num(f, ctx, q):
     s = T.sign_num(f.args[0])
     op = f.head.name
     if op == "Gt":
-        return T3.YES if s > 0 else T3.NO
+        return YES if s > 0 else NO
     if op == "Ge":
-        return T3.YES if s >= 0 else T3.NO
+        return YES if s >= 0 else NO
     if op == "Lt":
-        return T3.YES if s < 0 else T3.NO
-    return T3.YES if s <= 0 else T3.NO
+        return YES if s < 0 else NO
+    return YES if s <= 0 else NO
 
 
 @derive("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]))
 def _rule_eq_num(f, ctx, q):
     if f.head.name == "Eq":
-        return T3.YES if T.num_val(f.args[0]) == T.num_val(f.args[1]) else T3.NO
-    return T3.YES if T.num_val(f.args[0]) != T.num_val(f.args[1]) else T3.NO
+        return YES if T.num_val(f.args[0]) == T.num_val(f.args[1]) else NO
+    return YES if T.num_val(f.args[0]) != T.num_val(f.args[1]) else NO
 
 
 @derive("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO)
@@ -661,19 +712,55 @@ def _axiom_constants(fact, ctx):
     op = fact.head.name
     if op in ("Gt", "Ge"):
         if bv <= lo:
-            return T3.YES
+            return YES
         if bv >= hi:
-            return T3.NO
+            return NO
     else:
         if bv >= hi:
-            return T3.YES
+            return YES
         if bv <= lo:
-            return T3.NO
+            return NO
     return None
 
 
-# TODO: 有界性公理由图书馆引理表接替（原 FunctionSpec.bound 自动生成，
-# spec 层已删除）。逐个函数登记 |f| <= c 型引理后恢复。
+@axiom
+def _axiom_function_bounds(fact, ctx):
+    """函数值域粗界引理（图书馆 FunctionDecl.bound 声明）。
+
+    |f| 类界消费留给区间通道；此处只处理 f(u) op 数值 的直接比较。"""
+    if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
+        return None
+    a, b = fact.args
+    if not (isinstance(a, T.Expr) and isinstance(a.head, T.Sym)) or not T.is_num(b):
+        return None
+    d = library.lookup_function(a.head.name)
+    if d is None or d.bound is None:
+        return None
+    lo, hi = d.bound
+    bv = T.num_val(b)
+    op = fact.head.name
+    # 界端点可达（lo ≤ f(u) ≤ hi）：严格不等式与弱不等式的背书条件不同
+    if op == "Gt":
+        if bv < lo:
+            return YES
+        if bv >= hi:
+            return NO
+    elif op == "Ge":
+        if bv <= lo:
+            return YES
+        if bv > hi:
+            return NO
+    elif op == "Lt":
+        if bv > hi:
+            return YES
+        if bv <= lo:
+            return NO
+    else:  # Le
+        if bv >= hi:
+            return YES
+        if bv < lo:
+            return NO
+    return None
 
 
 def _family_cmp(fact, ctx, depth):
@@ -719,7 +806,7 @@ def _family_cmp(fact, ctx, depth):
         r = ax(fact, ctx)
         if r is not None:
             return r
-    return T3.UNKNOWN
+    return unknown()
 
 
 def _contains(t, pat):
@@ -749,18 +836,18 @@ def _eq_subst(fact, ctx, depth):
                 if na is a and nb is b:
                     continue
                 r = decide(T.mk(S("Eq"), (na, nb)), ctx, depth + 1)
-                if r is not T3.UNKNOWN:
+                if not r.is_unknown():
                     return r
     return None
 
 
-def decide(fact, ctx, _depth=0):
+def decide(fact, ctx, _depth=0) -> Verdict:
     if _depth > _MAX_DEPTH:
-        return T3.UNKNOWN
+        return unknown(Reason.BUDGET)
     if fact is T.TRUE:
-        return T3.YES
+        return YES
     if fact is T.FALSE:
-        return T3.NO
+        return NO
     if isinstance(fact, T.Expr):
         name = fact.head.name
         if name in _CMP:
@@ -770,59 +857,58 @@ def decide(fact, ctx, _depth=0):
                     return r
             return _family_cmp(fact, ctx, _depth)
         if name == "And":
-            r = T3.YES
+            r = YES
             for a in fact.args:
                 r = and3(r, decide(a, ctx, _depth))
-                if r is T3.NO:
+                if r is NO:
                     return r
             return r
         if name == "Or":
-            r = T3.NO
+            r = NO
             for a in fact.args:
                 r = or3(r, decide(a, ctx, _depth))
-                if r is T3.YES:
+                if r is YES:
                     return r
             return r
         if name == "Not":
             return not3(decide(fact.args[0], ctx, _depth))
-    return T3.UNKNOWN
+    return unknown()
 
 
-def decided(fact, ctx):
+def decided(fact, ctx) -> Verdict:
     return decide(fact, ctx, 0)
 
 
-def satisfiable(constraints, ctx):
+def satisfiable(constraints, ctx) -> Verdict:
     for i, c in enumerate(constraints):
         tmp = ctx.clone()
         for j, d in enumerate(constraints):
             if j != i:
                 tmp.assume(d, origin="_sat")
-        if decide(c, tmp) is T3.NO or decide(negate(c), tmp) is T3.YES:
-            return T3.NO
-    return T3.YES if not constraints else T3.UNKNOWN
+        if decide(c, tmp) is NO or decide(negate(c), tmp) is YES:
+            return NO
+    return YES if not constraints else unknown()
 
 
-def domain_ok(fact, ctx):
-    from cas.domain import dom_condition
+def domain_ok(fact, ctx) -> Verdict:
+    from cas.domcond import dom_condition
 
     return satisfiable(dom_condition(fact), ctx)
 
 
-def contradicted(fact, ctx):
-    return decide(fact, ctx) is T3.NO or decide(negate(fact), ctx) is T3.YES
+def contradicted(fact, ctx) -> bool:
+    return decide(fact, ctx) is NO or decide(negate(fact), ctx) is YES
 
 
-def eval_guard(guard, sub, ctx):
+def eval_guard(guard, sub, ctx) -> Verdict:
     g = T.instantiate(guard, sub)
-    r = decide(g, ctx)
-    return r.value
+    return decide(g, ctx)
 
 
-# 判等阶段注册表（Step 4：管线分派从硬编码变为声明式数据）。
-# 阶段契约：run(r, a, b, ctx) -> T3 结论 | None（无结论则继续下阶段）。
-# 内置序 = 原硬编码顺序；外部（如 diff.py 的塔零判定/分数幂合并）
-# 经 register_eq_stage 追加——三处重复分派的最后一份消除。
+# 判等阶段注册表：管线分派从硬编码变为声明式数据。
+# 阶段契约：run(r, a, b, ctx) -> Verdict 结论 | None（无结论则继续下阶段）。
+# 阶段内部异常 = 阶段实现有 bug，直接向上传播（失败是返回值的一部分，
+# 禁止吞掉；确需"无结论"请显式返回 None）。
 _EQ_STAGES = []
 
 
@@ -835,49 +921,48 @@ def register_eq_stage(name, run, prepend=False):
     return name
 
 
-def equivalent(a, b, ctx=None, budget=100000):
+def equivalent(a, b, ctx=None, budget=100000) -> Verdict:
     """统一判等管线：指针 -> 数值常量 -> 标准形归零 -> 注册阶段序列 -> 诚实 UNKNOWN。
 
-    TODO: 第二步依赖所在域的标准形（多项式机器、塔规范形）——
-    当前多数域的标准形尚未重建，非指针相等的判等大量返回 UNKNOWN，
-    属预期降级而非回归。"""
-    from cas.simplify import simplify
+    域标准形归零经 autosimplify + 投影判零；塔规范形重建后由注册阶段接入。"""
+    from cas.simplify import autosimplify
     from cas.context import Context
 
     if a is b:
-        return T3.YES
+        return YES
     if T.is_num(a) and T.is_num(b):
-        return T3.YES if T.num_val(a) == T.num_val(b) else T3.NO
+        return YES if T.num_val(a) == T.num_val(b) else NO
     a = _qfold(a)
     b = _qfold(b)
     if a is b:
-        return T3.YES
+        return YES
     if T.is_num(a) and T.is_num(b):
-        return T3.YES if T.num_val(a) == T.num_val(b) else T3.NO
-    r = simplify(T.plus(a, T.neg(b)), budget)
+        return YES if T.num_val(a) == T.num_val(b) else NO
+    r = autosimplify(T.plus(a, T.neg(b)), budget)
     if r is T.ZERO:
-        return T3.YES
+        return YES
+    from cas.project import zero_of
+    z = zero_of(r)
+    if z is True:
+        return YES
+    if z is False:
+        return NO
     if ctx is None:
         ctx = Context()
     for _name, run in _EQ_STAGES:
-        try:
-            d = run(r, a, b, ctx)
-        except Exception:
-            continue          # 阶段内部失败 = 无结论（绝不污染判等）
-        if d is not None and d is not T3.UNKNOWN:
+        d = run(r, a, b, ctx)
+        if d is not None and not d.is_unknown():
             return d
-    return T3.UNKNOWN
+    return unknown()
 
 
 def _stage_decide(r, a, b, ctx):
     d = decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
-    return None if d is T3.UNKNOWN else d
+    return None if d.is_unknown() else d
 
 
 # TODO: 三角基归零阶段随函数结构层重建（原走 cas.trig.trig_reduce）
 register_eq_stage("ledger_decide", _stage_decide)
 
-# TODO: 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
+# 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
 # 采样从未有资格产出后者；如需概率通道须先修订宪章。
-
-

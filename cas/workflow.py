@@ -1,8 +1,14 @@
+# -*- coding: utf-8 -*-
 """工作流引擎：步骤 DAG + 带类型推导边 + 守卫传播。
 
 步骤不是等式链条——步骤间的逻辑关系由推导类型（derivation）决定：
 rewrite 是等价，both-sides 可逆时是等价、不可逆时是蕴含，solve 是
 "解集等价"，split 是析取。验证器按推导类型分派到域判定器。
+
+验证独立性（架构总纲条款）：验证器不重跑求解算法。
+· Solve：求解器输出解，验证器只做回代判官（代入 + 域标准形判零）
+· Diff ：项层微分的结果由域层导数（独立实现）交叉验证
+· 规则重写：信任锚是图书馆准入纪律，验证器复核匹配产物
 
 逻辑层 = 命题复合（and3/or3）+ 域特定可判定原子（domain.equal/
 decide/dom_condition）。不含运行时量词推理——全称事实是图书馆
@@ -10,22 +16,25 @@ decide/dom_condition）。不含运行时量词推理——全称事实是图书
 
 守卫条件：步骤创建时自动从内容经 dom_condition 提取定义域约束，
 存入步骤载荷；BothSides 传播前驱守卫 + 运算元守卫；mul/div 额外
-要求运算元 ≠ 0，由 decide 在已积累守卫的上下文中检查。
+要求运算元 ≠ 0，由 decide 在已积累守卫的上下文中检查。守卫按指针
+去重；Split 分支上被切割的条件从守卫中清偿。
+
+域归属：步骤创建时经投影层（cas/project）成员测试记录所属域——
+域由投影赋予，不做叶嗅探。
 """
 
 from dataclasses import dataclass
-from fractions import Fraction as Fr
 
 from cas import term as T
-from cas.term import Expr, Sym, Int, S, N
-from cas.domains.base import T3
-from cas.domains import poly_domain, ratfunc_domain
-from cas.domains.poly import from_term as poly_from_term
-from cas.domains.q import Q_RING
-from cas.qarith import fold, eval_exact, EvalNumError
-from cas.domain import dom_condition
+from cas.term import Expr, Sym, S, N
+from cas.verdict import YES, NO, unknown
+from cas.domains.poly import Poly, p_deriv, to_term
+from cas.domains.ratfunc import RatFunc, rf_deriv
+from cas.domcond import dom_condition
 from cas.context import Context
 from cas.decide import decide
+from cas.qarith import fold, eval_exact, EvalNumError
+from cas.project import project, zero_of, normalize as proj_normalize
 
 
 # ---------------------------------------------------------------------------
@@ -55,24 +64,29 @@ class BothSides(Derivation):
 
 @dataclass(frozen=True, slots=True)
 class Rewrite(Derivation):
-    """域标准形重写——前驱经 normalize 后等价。"""
+    """重写——域标准形（rule=""）或图书馆规则应用（rule=规则 id）。"""
     pred: int
-    domain: str = ""       # 域名（空=多项式域自动）
+    rule: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class Solve(Derivation):
-    """解线性方程——输入等式步骤，输出 var = 解。
-    逻辑地位：解集等价（完备时 ⟺）。"""
+    """输入等式输出解。逻辑地位：解集等价（完备时 ⟺）。
+
+    solution 是求解器交出的证书；验证器只做回代判官，不重跑求解。"""
     pred: int
     var: Sym
+    solution: object       # Term（解的值）
 
 
 @dataclass(frozen=True, slots=True)
 class Split(Derivation):
-    """条件分支切割——一步析取为多步。"""
+    """条件分支切割——一步析取为两步（condition 与 ¬condition）。
+    negate=False 是条件成立分支，negate=True 是否定分支。
+    排中律保证两支覆盖全空间。"""
     pred: int
     condition: object      # 切割条件（Term）
+    negate: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +95,13 @@ class Subst(Derivation):
     pred: int
     var: Sym
     value: object           # Term
+
+
+@dataclass(frozen=True, slots=True)
+class Diff(Derivation):
+    """对前驱表达式（或等式两边）关于 var 求导。"""
+    pred: int
+    var: Sym
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +113,13 @@ class Step:
     id: int
     content: object        # Term（等式 / 表达式 / 不等式）
     derivation: Derivation
-    guards: tuple          # (Term, ...) 守卫条件
+    guards: tuple          # (Term, ...) 守卫条件（已清偿的不在内）
     status: str = "open"   # "open" | "dead"
     note: str = ""
+    target: tuple = ()     # 操作对象路径（架构 2.3 步骤七字段之 target）
+    reads: tuple = ()      # 本步读取/咨询过的条件
+    clears: tuple = ()     # 本步清偿的未确认条件
+    domain: str = ""       # 内容所属域（投影赋予）
 
 
 # ---------------------------------------------------------------------------
@@ -104,56 +129,105 @@ class Step:
 class Workflow:
     """步骤 DAG + 验证器。
 
-    步骤创建时自动提取守卫、验证推导合理性。验证失败标 dead。
-    步骤引用前驱用 id（不可变 DAG），不持 Python 对象引用。
+    步骤创建时自动提取守卫、验证推导合理性。验证失败标 dead；
+    前驱 dead 的步骤沿依赖边级联 dead。步骤引用前驱用 id
+    （不可变 DAG），不持 Python 对象引用。
     """
 
     def __init__(self):
         self._steps: dict[int, Step] = {}
         self._next_id = 0
+        self._deps: dict[int, list[int]] = {}   # pred id -> [后继 id]
 
     def get(self, sid: int) -> Step:
         return self._steps[sid]
 
     def all_steps(self):
-        return list(self._steps.values())
+        return [self._steps[i] for i in range(self._next_id)]
 
-    def add(self, content, derivation, note="") -> Step:
-        """创建步骤：提取守卫 → 验证 → 存储。"""
-        guards = self._extract_guards(content, derivation)
+    def add(self, content, derivation, note="", target=()) -> Step:
+        """创建步骤：守卫收集 → 验证 → 域归属 → 存储 → 死步骤级联。"""
+        guards, reads, clears = self._collect(content, derivation)
         verdict = self._verify(content, derivation, guards)
-        status = "dead" if verdict is T3.NO else "open"
+        status = "dead" if verdict is NO else "open"
+        domain = self._domain_of(content)
         step = Step(id=self._next_id, content=content,
                     derivation=derivation, guards=guards,
-                    status=status, note=note)
+                    status=status, note=note, target=tuple(target),
+                    reads=reads, clears=clears, domain=domain)
         self._steps[self._next_id] = step
         self._next_id += 1
-        return step
+        pred_id = getattr(derivation, "pred", None)
+        if pred_id is not None:
+            self._deps.setdefault(pred_id, []).append(step.id)
+            if self._steps[pred_id].status == "dead" and step.status == "open":
+                self._mark_dead(step.id, "前驱 dead，级联")
+        return self._steps[step.id]
 
-    # --- 守卫提取 ---
+    # --- 死步骤级联 ---
 
-    def _extract_guards(self, content, derivation) -> tuple:
-        guards = list(dom_condition(content))
+    def _mark_dead(self, sid, why):
+        s = self._steps[sid]
+        self._steps[sid] = Step(s.id, s.content, s.derivation, s.guards,
+                                "dead", why, s.target, s.reads, s.clears,
+                                s.domain)
+        for dep in list(self._deps.get(sid, ())):
+            if self._steps[dep].status == "open":
+                self._mark_dead(dep, f"依赖 #{sid} dead，级联")
+
+    # --- 域归属（投影赋予，不嗅探）---
+
+    def _domain_of(self, content) -> str:
+        t = content
+        if _is_eq(content):
+            la, ra = content.args
+            t = T.plus(la, T.neg(ra))
+        hit = project(t)
+        return hit.name if hit is not None else ""
+
+    # --- 守卫收集（去重 + 清偿 + 读写清单）---
+
+    def _collect(self, content, derivation):
+        guards = []
+
+        def push(gs):
+            for g in gs:
+                if not any(g is k for k in guards):
+                    guards.append(g)
+
+        reads = ()
+        clears = ()
+        push(dom_condition(content))
         if isinstance(derivation, BothSides):
             pred = self._steps.get(derivation.pred)
             if pred is not None:
-                guards = list(pred.guards) + guards
-            guards += list(dom_condition(derivation.operand))
+                push(pred.guards)
+            push(dom_condition(derivation.operand))
             if derivation.op in ("mul", "div"):
-                guards.append(T.mk(S("Ne"), (derivation.operand, T.ZERO)))
-        elif isinstance(derivation, (Rewrite, Solve, Split, Subst)):
+                nz = T.mk(S("Ne"), (derivation.operand, T.ZERO))
+                push([nz])
+                reads = (nz,)
+        elif isinstance(derivation, Split):
+            pred = self._steps.get(derivation.pred)
+            cond = derivation.condition
+            if pred is not None:
+                # 切割条件在本分支上已被裁决：从开放守卫中清偿
+                push([g for g in pred.guards if g is not cond])
+            push(dom_condition(cond))
+            clears = (cond,)
+        elif isinstance(derivation, (Rewrite, Solve, Subst, Diff)):
             pred = self._steps.get(derivation.pred)
             if pred is not None:
-                guards = list(pred.guards) + guards
+                push(pred.guards)
             if isinstance(derivation, Subst):
-                guards += list(dom_condition(derivation.value))
-        return tuple(guards)
+                push(dom_condition(derivation.value))
+        return tuple(guards), reads, clears
 
     # --- 验证 ---
 
-    def _verify(self, content, derivation, guards) -> T3:
+    def _verify(self, content, derivation, guards):
         if isinstance(derivation, Claim):
-            return T3.YES
+            return YES
         if isinstance(derivation, BothSides):
             return self._verify_both_sides(content, derivation, guards)
         if isinstance(derivation, Rewrite):
@@ -164,12 +238,14 @@ class Workflow:
             return self._verify_split(content, derivation)
         if isinstance(derivation, Subst):
             return self._verify_subst(content, derivation)
-        return T3.UNKNOWN
+        if isinstance(derivation, Diff):
+            return self._verify_diff(content, derivation)
+        return unknown()
 
-    def _verify_both_sides(self, content, d: BothSides, guards) -> T3:
+    def _verify_both_sides(self, content, d: BothSides, guards):
         pred = self._steps.get(d.pred)
         if pred is None or not _is_eq(pred.content):
-            return T3.NO
+            return NO
         lhs, rhs = pred.content.args
         op = d.op
         if op == "add":
@@ -183,80 +259,145 @@ class Workflow:
             exp = T.eq(T.times(lhs, T.pw(d.operand, T.N(-1))),
                        T.times(rhs, T.pw(d.operand, T.N(-1))))
         else:
-            return T3.NO
-        # 内容检查：poly 域判等（多项式方程完全判定）
+            return NO
         if not _eq_equal(content, exp):
-            return T3.NO
-        # 守卫检查：mul/div 要求运算元 ≠ 0
+            return NO
+        # 守卫检查：mul/div 要求运算元 ≠ 0（在已积累守卫上下文中判定）
         if op in ("mul", "div"):
             ctx = Context()
             for g in guards:
                 ctx.assume(g)
             r = decide(T.mk(S("Ne"), (d.operand, T.ZERO)), ctx)
-            if r is T3.NO:
-                return T3.NO          # 运算元为零：变换不可逆，标 dead
+            if r is NO:
+                return NO          # 运算元为零：变换不可逆，标 dead
             # UNKNOWN 允许——守卫未定，步骤 open 但带条件
-        return T3.YES
+        return YES
 
-    def _verify_rewrite(self, content, d: Rewrite) -> T3:
+    def _verify_rewrite(self, content, d: Rewrite):
         pred = self._steps.get(d.pred)
         if pred is None:
-            return T3.NO
+            return NO
+        if d.rule:
+            # 图书馆规则重写：复核规则产物（信任锚 = 图书馆准入纪律）
+            from cas.rules import library_ruleset, apply_rule
+            rule = library_ruleset().rules.get(d.rule)
+            if rule is None:
+                return NO
+            for path in T.all_paths(pred.content):
+                res = apply_rule(rule, pred.content, path)
+                if res.ok and _eq_equal(content, res.term):
+                    return YES
+            return NO
         n = _normalize_eq(pred.content)
         if _eq_equal(content, n):
-            return T3.YES
-        return T3.NO
+            return YES
+        return NO
 
-    def _verify_subst(self, content, d: Subst) -> T3:
+    def _verify_subst(self, content, d: Subst):
         pred = self._steps.get(d.pred)
         if pred is None:
-            return T3.NO
-        substituted = _substitute(pred.content, d.var, d.value)
+            return NO
+        substituted = T.subst(pred.content, {d.var: d.value})
         if _eq_equal(content, substituted):
-            return T3.YES
+            return YES
         n = _normalize_eq(substituted)
         if _eq_equal(content, n):
-            return T3.YES
-        return T3.NO
+            return YES
+        return NO
 
-    def _verify_solve(self, content, d: Solve) -> T3:
+    def _verify_solve(self, content, d: Solve):
+        """回代判官：代入证书后域标准形判零。不重跑求解公式。"""
         pred = self._steps.get(d.pred)
         if pred is None or not _is_eq(pred.content):
-            return T3.NO
+            return NO
+        if not (_is_eq(content) and content.args[0] is d.var
+                and content.args[1] is d.solution):
+            return NO
         lhs, rhs = pred.content.args
         diff = T.plus(lhs, T.neg(rhs))
-        p = poly_from_term(Q_RING, diff, (d.var,))
-        if p is None:
-            return T3.UNKNOWN
-        # 线性：a*x + b = 0 → x = -b/a
-        deg = p.deg_in(0)
-        if deg != 1:
-            return T3.UNKNOWN          # 非线性：demo 不处理
-        a = _coef(p, 1)
-        b = _coef(p, 0)
-        if a == 0:
-            return T3.NO
-        sol = -b / a
-        # 预期内容：var = sol
-        exp = T.eq(d.var, N(sol))
-        if not _eq_equal(content, exp):
-            return T3.NO
-        # 回代验证
-        try:
-            v = eval_exact(diff, {d.var: sol})
-            if v != 0:
-                return T3.NO
-        except EvalNumError:
-            pass
-        return T3.YES
+        substituted = fold(T.subst(diff, {d.var: d.solution}))
+        z = zero_of(substituted)
+        if z is True:
+            return YES
+        if z is False:
+            return NO
+        # 投影落空（如含超越函数的解）：退到环层精确求值通道
+        if T.is_num(d.solution):
+            try:
+                return YES if eval_exact(diff, {d.var: T.num_val(d.solution)}) == 0 else NO
+            except EvalNumError:
+                pass
+        return unknown()
 
-    def _verify_split(self, content, d: Split) -> T3:
+    def _verify_split(self, content, d: Split):
+        """排中律覆盖验证：分支内容 ⟺ 前驱 ∧ (¬)条件。"""
         pred = self._steps.get(d.pred)
         if pred is None:
-            return T3.NO
-        # split 的验证：条件 + ¬条件 覆盖全空间（排中律）
-        # demo：接受任何 split（验证留给上层逻辑复合）
-        return T3.YES
+            return NO
+        cond = d.condition
+        branch_cond = T.mk(S("Not"), (cond,)) if d.negate else cond
+        expected = T.mk(S("And"), (pred.content, branch_cond))
+        if content is expected:
+            return YES
+        return decide(T.mk(S("Eq"), (content, expected)), Context())
+
+    def _verify_diff(self, content, d: Diff):
+        """独立交叉验证：域层导数（另一实现）复核项层微分结果。
+
+        源在域内（K[x] 或 K(x)）时用域导数重建期望值，与步骤内容
+        在有理函数域判等；源在域外（超越塔未建）时没有独立通道，
+        诚实返回 UNKNOWN（步骤 open，非 dead）。"""
+        pred = self._steps.get(d.pred)
+        if pred is None:
+            return NO
+        x = d.var
+        if _is_eq(pred.content):
+            if not (_is_eq(content)):
+                return NO
+            pairs = ((pred.content.args[0], content.args[0]),
+                     (pred.content.args[1], content.args[1]))
+        else:
+            pairs = ((pred.content, content),)
+        checked = False
+        for src, got in pairs:
+            hit = project(src)
+            if hit is None:
+                continue
+            if hit.element is None:
+                expected = T.ZERO          # 常数格（ℤ/ℚ）导数为 0
+            else:
+                vs = hit.domain.vars
+                if x not in vs:
+                    expected = T.ZERO
+                else:
+                    idx = vs.index(x)
+                    ring = hit.domain.ring
+                    if isinstance(hit.element, Poly):
+                        expected = to_term(ring, p_deriv(ring, hit.element, idx))
+                    elif isinstance(hit.element, RatFunc):
+                        d_ = rf_deriv(ring, hit.element, idx)
+                        nt = to_term(ring, d_.num)
+                        dt = to_term(ring, d_.den)
+                        if T.is_num(dt) and T.num_val(dt) == 1:
+                            expected = nt
+                        else:
+                            expected = T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
+                    else:
+                        continue
+            from cas.domains.ratfunc import ratfunc_domain
+            allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
+                                key=lambda s: s.name))
+            if not allv:
+                if fold(T.plus(expected, T.neg(got))) is T.ZERO:
+                    checked = True
+                    continue
+                return NO
+            rfd = ratfunc_domain(*allv)
+            if rfd.equal(expected, got) is True:
+                checked = True
+            else:
+                return NO
+        return YES if checked else unknown()
 
 
 # ---------------------------------------------------------------------------
@@ -268,75 +409,30 @@ def _is_eq(t) -> bool:
 
 
 def _eq_equal(a, b) -> bool:
-    """等式判等：先试 ratfunc 域（K(x) ⊇ K[x]，含除法），退化试 poly。"""
+    """等式判等：两侧差值经投影判零（K(x) ⊇ K[x] ⊇ ℚ）。"""
     if not _is_eq(a) or not _is_eq(b):
         return a is b
     la, ra = a.args
     lb, rb = b.args
-    da = T.plus(la, T.neg(ra))
-    db = T.plus(lb, T.neg(rb))
-    vs = sorted(T.free_vars(da) | T.free_vars(db), key=lambda s: s.name)
-    if vs:
-        rf = ratfunc_domain(*vs)
-        r = rf.equal(da, db)
-        if r is T3.YES:
-            return True
-        if r is T3.NO:
-            return False
-    fa, fb = fold(da), fold(db)
-    return fa is fb
-
-
-def _vars_of(t):
-    """从等式提取变量集。"""
-    if not _is_eq(t):
-        return sorted(T.free_vars(t), key=lambda s: s.name)
-    la, ra = t.args
-    d = T.plus(la, T.neg(ra))
-    return sorted(T.free_vars(d), key=lambda s: s.name)
-
-
-def _coef(p, power: int) -> Fr:
-    """单变量 Poly 的指定幂次系数。"""
-    for k, c in p.monos:
-        if k[0] == power:
-            return c
-    return Fr(0)
-
-
-def _substitute(t, var: Sym, value):
-    """树代换：var → value，纯句法。不穿透绑定体（demo 级别）。"""
-    if isinstance(t, Sym):
-        return value if t is var else t
-    if isinstance(t, Expr):
-        return T.mk(t.head, tuple(_substitute(a, var, value) for a in t.args))
-    return t
+    d = T.plus(T.plus(la, T.neg(ra)), T.neg(T.plus(lb, T.neg(rb))))
+    z = zero_of(d)
+    if z is True:
+        return True
+    if z is False:
+        return False
+    return fold(T.plus(la, T.neg(ra))) is fold(T.plus(lb, T.neg(rb)))
 
 
 def _normalize_eq(t):
-    """等式或表达式的域标准形：先试 ratfunc（K(x) ⊇ K[x]），退化试 poly。"""
-    if not _is_eq(t):
-        vs = sorted(T.free_vars(t), key=lambda s: s.name)
-        if vs:
-            rf = ratfunc_domain(*vs)
-            n = rf.normalize(t)
-            if n is not None:
-                return n
-            dom = poly_domain(*vs)
-            n = dom.normalize(t)
-            if n is not None:
-                return n
+    """等式或表达式的域标准形：投影命中则取域标准形，落空原样返回。"""
+    if _is_eq(t):
+        lhs, rhs = t.args
+        d = T.plus(lhs, T.neg(rhs))
+        hit = project(d)
+        if hit is not None:
+            return T.eq(proj_normalize(hit), T.ZERO)
         return t
-    lhs, rhs = t.args
-    d = T.plus(lhs, T.neg(rhs))
-    vs = sorted(T.free_vars(d), key=lambda s: s.name)
-    if vs:
-        rf = ratfunc_domain(*vs)
-        n = rf.normalize(d)
-        if n is not None:
-            return T.eq(n, T.ZERO)
-        dom = poly_domain(*vs)
-        n = dom.normalize(d)
-        if n is not None:
-            return T.eq(n, T.ZERO)
+    hit = project(t)
+    if hit is not None:
+        return proj_normalize(hit)
     return t

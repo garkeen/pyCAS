@@ -19,10 +19,10 @@ from dataclasses import dataclass
 
 from cas import term as T
 from cas.term import Expr, Int
-from cas.domains.base import Domain, T3, Ring
+from cas.domains.base import Domain, Ring
 from cas.domains.poly import (Poly, p_add, p_mul, p_neg, p_scale, _norm,
                               to_term, from_term as poly_from_term,
-                              p_gcd_univar, p_divmod_field)
+                              p_gcd_univar, p_divmod_field, p_deriv)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +172,21 @@ def rf_reduce(ring, rf: RatFunc) -> RatFunc:
     return RatFunc(p_scale(ring, qn, inv), p_scale(ring, qd, inv))
 
 
+def rf_deriv(ring, rf: RatFunc, var_i: int) -> RatFunc:
+    """域内导数（商法则）：D(n/d) = (D(n)·d − n·D(d)) / d²。
+
+    出口经 rf_reduce 快路径约简（单变量）。系数导子经 ring.deriv。"""
+    dn = p_deriv(ring, rf.num, var_i)
+    dd = p_deriv(ring, rf.den, var_i)
+    num = _norm(ring, rf.num.vars,
+                _add(ring, _mul(ring, dict(dn.monos), dict(rf.den.monos)),
+                     {k: ring.neg(c) for k, c in
+                      _mul(ring, dict(rf.num.monos), dict(dd.monos)).items()}))
+    den = _norm(ring, rf.den.vars,
+                _mul(ring, dict(rf.den.monos), dict(rf.den.monos)))
+    return rf_reduce(ring, RatFunc(num, den))
+
+
 class RatFuncDomain(Domain):
     """K(x₁..xₙ)。"""
 
@@ -179,6 +194,9 @@ class RatFuncDomain(Domain):
         self.vars = tuple(vars_)
         self.ring = ring
         self.name = name or "K(" + ",".join(v.name for v in self.vars) + ")"
+        # 能力（架构 3.2）：K(x) 恒为域；单变量时是欧几里得整环
+        self.is_field = True
+        self.is_euclidean = bool(ring.is_field and len(self.vars) == 1)
 
     def member(self, t) -> bool:
         return rf_from_term(self.ring, t, self.vars) is not None
@@ -194,12 +212,12 @@ class RatFuncDomain(Domain):
             return nt
         return T.mk(T.S("Times"), (nt, T.pw(dt, T.N(-1))))
 
-    def equal(self, a, b) -> T3:
+    def equal(self, a, b):
         ra = rf_from_term(self.ring, a, self.vars)
         rb = rf_from_term(self.ring, b, self.vars)
         if ra is None or rb is None:
-            return T3.UNKNOWN          # 调用方越界：非成员
-        return T3.YES if rf_equal(self.ring, ra, rb) else T3.NO
+            return None                  # 非成员：调用方越界
+        return rf_equal(self.ring, ra, rb)
 
 
 _rfx_cache = {}

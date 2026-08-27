@@ -15,7 +15,7 @@ from fractions import Fraction as Fr
 
 from cas import term as T
 from cas.term import Expr, Int, Sym
-from cas.domains.base import Domain, T3, Ring, register
+from cas.domains.base import Domain, Ring, RingError, register
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +154,24 @@ def p_gcd_univar(ring: Ring, p: Poly, q: Poly) -> Poly:
     return monic
 
 
+def p_deriv(ring: Ring, p: Poly, var_i: int) -> Poly:
+    """对第 var_i 个变元求形式导数（域内导子，留在 K[x] 内）。
+
+    D(Σ c·x^k) = Σ (D(c)·x^k + c·k_i·x^(k-e_i))：系数导子经
+    ring.deriv 委托——常数域为零，含参/代数扩张覆写即生效。"""
+    d = {}
+    for k, c in p.monos:
+        dc = ring.deriv(c)
+        if not ring.is_zero(dc):
+            d[k] = ring.add(d.get(k, ring.from_int(0)), dc)
+        ki = k[var_i]
+        if ki:
+            kk = tuple(kj - (1 if j == var_i else 0) for j, kj in enumerate(k))
+            d[kk] = ring.add(d.get(kk, ring.from_int(0)),
+                             ring.mul(ring.from_int(ki), c))
+    return _norm(ring, p.vars, d)
+
+
 # ---------------------------------------------------------------------------
 # 项 <-> 多项式
 # ---------------------------------------------------------------------------
@@ -278,6 +296,8 @@ class PolyDomain(Domain):
         self.vars = tuple(vars_)
         self.ring = ring
         self.name = name or "K[" + ",".join(v.name for v in self.vars) + "]"
+        # 能力（架构 3.2）：K[x] 单变量且系数为域时才是欧几里得整环
+        self.is_euclidean = bool(ring.is_field and len(self.vars) == 1)
 
     def member(self, t) -> bool:
         return from_term(self.ring, t, self.vars) is not None
@@ -288,12 +308,12 @@ class PolyDomain(Domain):
             return None
         return to_term(self.ring, p)
 
-    def equal(self, a, b) -> T3:
+    def equal(self, a, b):
         pa = from_term(self.ring, a, self.vars)
         pb = from_term(self.ring, b, self.vars)
         if pa is None or pb is None:
-            return T3.UNKNOWN          # 调用方越界：非成员
-        return T3.YES if pa.monos == pb.monos else T3.NO
+            return None                  # 非成员：调用方越界
+        return pa.monos == pb.monos
 
 
 _ring_cache = {}
