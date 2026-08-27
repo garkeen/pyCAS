@@ -18,7 +18,7 @@
 - **图书馆**（`library/`）：`ConstantDecl`/`FunctionDecl` 冻结 dataclass + 注册表 + 定义域条件注册
   - 常数：π, e, i, γ（正性、粗界、实性声明）
   - 函数：sin, cos, tan, exp, log, sqrt, abs, atan, sinh, cosh, tanh（印名、元数、值域界、定义域条件）
-  - **导数模板作为数据**：每函数声明 `deriv` 模板（de Bruijn `DB(0)` 占位）；无条件恒等式才入册（Abs 诚实留白待 Split 通道）
+  - **导数模板作为数据**：每函数声明 `deriv` 模板（de Bruijn `DB(0)` 占位）；无条件恒等式才入册；分支破裂者以 Piecewise 容器如实声明（`Abs` 导数 = `piecewise(1 if u>0, -1 if u<0)`，u=0 无支即不可导）
   - 规则声明（exp_add 等）经统一规则引擎装配
 - **规则引擎**（`cas/rules.py`）：单引擎；守卫经 decide Verdict；auto 规则仅限无守卫（防 decide↔simplify 互递归）；`autosimplify` 严格代价下降保终止
 - **工作流**（`cas/workflow.py`）：Step DAG（七字段：id/content/derivation/guards/status/target/reads/clears/domain）+ 七种推导类型（Claim/BothSides/Rewrite/Solve/Subst/Split/**Diff**）+ 守卫指针去重与 Split 清偿 + 死步骤级联
@@ -28,14 +28,16 @@
 - **公共算法机器**：
   - 线性代数（`cas/domains/linalg.py`）：域上高斯消元、秩、零空间基、方程组求解（特解+齐次基/不相容判定）、Bareiss 整数行列式
   - 结式与无平方（`cas/domains/polytools.py`）：结式（余式序列递归，共根判据+求值锚点）、Yun 无平方分解（monic 因子×重数）
-- **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则；缺模板诚实抛 `DiffError`
+- **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则/**分段逐支求导**；缺模板诚实抛 `DiffError`
+- **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——分支体**独立投影**无共享宿主（`project_pw`）、条件交判定管线（`select` 首个真支且其前皆假、`coverage` 覆盖、`conflicts` 重叠一致性逐对判等，判不动以 Unknown 诚实传播）、运算**逐支笛卡尔提升**（`lift`）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`Abs` 导数据此以 Piecewise 如实入册（`sign`）
 - **REPL**（`repl.py`）：claim/both/norm/solve/subst/**split/diff/rules/apply**/check/steps/undo
-- **压力台架**（`stress/`）：20 条性质，全自证无外部真值
+- **压力台架**（`stress/`）：24 条性质，全自证无外部真值
   - P1-P4：折叠保真、幂等指针、区间真值表、回代判官
   - P5-P9：多项式往返、判等完备、交叉相乘、GCD 整除
   - P10-P13：项层微分 × 域层导数交叉、线性/莱布尼茨/商规则恒等、泰勒 h¹ 系数、验证器独立性
   - P14-P17：秩-零化度、相容/不相容判定、Bareiss 乘法性、丢番图证书（裴蜀/周期本原/整数根全集）
   - P18-P20：结式求值锚点、共根判据×对称性（结式 vs GCD 双算法交叉）、无平方往返
+  - P21-P24：分段投影逐支独立、选支语义（具体点参照扫描）、运算逐支提升×逐点一致、守卫条件化+重叠一致性
 
 ### 架构整修（2026-08-27）
 - 裸 `T3` 三值全部替换为带理由的 Verdict ADT
@@ -56,6 +58,7 @@
 用户指令：完整 Risch（含参数积分与超越数积分，参照 FriCAS）是最终目标，但**地基完工前不启动**。地基 = 下述算术与结构机器全部就位。
 
 ### 交互通道
+- [ ] √(u²)→|u| 改写规则：Piecewise 容器与 Abs 导数就位后，尚缺实性假设通道（u 为任意实数才成立），入册前须先接通
 - [ ] 工作流序列化与回放
 - [ ] 撤销/重做的真正实现（当前只移动指针不删步骤）
 - [ ] 版本化上下文折叠（读写双向索引）

@@ -17,12 +17,20 @@ import library
 DOM_HOOKS = {}
 
 
+def _guarded(cond, guards):
+    """分支守卫的条件化：¬cond ∨ guard（该分支只在 cond 成立处生效，
+    其定义域义务随之只在 cond 下需要兑现）。"""
+    neg = T.mk(S("Not"), (cond,)) if cond is not T.TRUE else T.FALSE
+    return [T.mk(S("Or"), (neg, g)) for g in guards]
+
+
 def dom_condition(t, out=None):
     """递归提取定义域约束（纯结构，不判值）。
 
     Power 约束为结构性通用规则：负整数幂 a^-k -> a≠0；偶分母有理幂
     a^(p/q) -> a≥0；负有理幂 a^-e：偶分母 -> a>0（非负且非零），
-    奇分母 -> a≠0。其余函数头经 DOM_HOOKS / 图书馆声明注入。
+    奇分母 -> a≠0。Piecewise 逐分支提取体约束并条件化（¬cond ∨ 约束），
+    分支间的并由判定层按析取处理。其余函数头经 DOM_HOOKS / 图书馆声明注入。
     """
     if out is None:
         out = []
@@ -40,6 +48,14 @@ def dom_condition(t, out=None):
                         out.append(T.mk(S("Gt"), (b, T.ZERO)))
                     else:
                         out.append(T.mk(S("Ne"), (b, T.ZERO)))
+        elif name == "Piecewise" and len(t.args) % 2 == 0:
+            a = t.args
+            for i in range(0, len(a), 2):
+                v, c = a[i], a[i + 1]
+                body = []
+                dom_condition(v, body)          # 分支体自身约束（含嵌套）
+                out.extend(_guarded(c, body))
+            return out                          # 条件是命题，不作值域守卫
         else:
             h = DOM_HOOKS.get(name)
             if h is not None:
@@ -48,8 +64,8 @@ def dom_condition(t, out=None):
                 fn = library.lookup_domain_cond(name)
                 if fn is not None:
                     out.extend(fn(t))
-        for a in t.args:
-            dom_condition(a, out)
+        for x in t.args:
+            dom_condition(x, out)
     elif isinstance(t, T.Bound):
         dom_condition(t.body, out)
     return out

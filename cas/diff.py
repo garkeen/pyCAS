@@ -66,6 +66,12 @@ def _diff(t, x):
                                  T.times(e, db, T.pw(b, T.MONE))))
     if head in ("Eq", "Ne", "Lt", "Le", "Gt", "Ge", "And", "Or", "Not"):
         raise DiffError("谓词不可微分")
+    if head == "Piecewise":
+        # 逐分支微分：条件不动，各分支体对 x 求导后重组分段结构。
+        # 分段函数的导数在分段点是否成立属重叠/覆盖之责（cas.piecewise），
+        # 此处只忠实应用"段内可导则段内求导"。
+        from cas.piecewise import branches, piecewise
+        return piecewise([(_diff(v, x), c) for v, c in branches(t)])
     # 函数应用：查图书馆导数模板
     tpl, note = library.function_deriv(head)
     if tpl is None:
@@ -74,4 +80,9 @@ def _diff(t, x):
         raise DiffError(f"{head} 多参数微分未建（偏导地基未完成）")
     arg = t.args[0]
     inner = T._lift(tpl, arg, 0)            # DB(0) 实例化为参数
-    return T.times(inner, _diff(arg, x))    # 链式法则
+    darg = _diff(arg, x)                    # 链式因子
+    if isinstance(inner, Expr) and inner.head.name == "Piecewise":
+        # 分段模板（如 Abs）× 链式因子逐分支
+        from cas.piecewise import lift
+        return lift(T.times, inner, darg)
+    return T.times(inner, darg)             # 链式法则

@@ -61,9 +61,14 @@ lib.function(name="Sqrt", print_name="sqrt", arity=1,
              deriv=T.times(T.N(Fr(1, 2)), T.pw(_U, T.N(Fr(-1, 2)))),
              note="主支平方根；√(x²)=±x 分支破裂，未收")
 
+# |x| 的导数是分段函数 sign(x)：Piecewise 容器就位后得以如实声明——
+# u>0 处导为 1、u<0 处导为 −1，u=0 不具分支（不可导），诚实留空。
+# 链式法则的 D(u) 因子由微分层乘上，逐分支保持分段结构。
 lib.function(name="Abs", print_name="abs", arity=1, real_on_real=True,
-             deriv=None,
-             deriv_note="D|x| = sign(x)（x≠0）：分支破裂，待 Split 通道，未收")
+             deriv=mk(S("Piecewise"),
+                      (T.ONE, mk(S("Gt"), (_U, T.ZERO)),
+                       T.MONE, mk(S("Lt"), (_U, T.ZERO)))),
+             note="D|x| = piecewise(1 if x>0, -1 if x<0)；x=0 无分支（不可导）")
 
 lib.function(name="Atan", print_name="atan", arity=1, real_on_real=True,
              deriv=T.pw(T.plus(T.ONE, T.pw(_U, T.TWO)), T.N(-1)),
