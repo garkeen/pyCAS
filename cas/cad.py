@@ -35,10 +35,14 @@ class Cell:
 
     kind=="open"：开区间，sample 为腔内无根有理样本点。
     kind=="point"：单根胞腔，iso=(a, b) 为该根的隔离区间
-                   （a==b 为精确有理根）。"""
+                   （a==b 为精确有理根）。
+    lo / hi：本胞腔下/上界根的隔离区间；None 表示无界（−∞ / +∞）。
+             点胞腔 lo==hi==iso；开胞腔为其两侧根的隔离区间。"""
     kind: str
     sample: object = None     # Fr（open）
     iso: tuple = None         # (a, b)（point）
+    lo: object = None         # 下界根隔离区间或 None（−∞）
+    hi: object = None         # 上界根隔离区间或 None（+∞）
 
 
 # ---------------------------------------------------------------------------
@@ -91,23 +95,24 @@ def extract_boundary_polys(cond, x):
 def cells(polys):
     """由边界多项式集合产出有序胞腔。无实根 → 单开区间 (−∞, ∞)。"""
     if not polys:
-        return [Cell("open", Fr(0))]
+        return [Cell("open", sample=Fr(0))]
     P = polys[0]
     for q in polys[1:]:
         P = p_mul(Q_RING, P, q)
     ivs = real_roots_intervals(Q_RING, P)
     if not ivs:
-        return [Cell("open", Fr(0))]
+        return [Cell("open", sample=Fr(0))]
     out = []
-    a1, b1 = ivs[0]
-    out.append(Cell("open", a1 - 1))          # 最左开区间，样本在最左根之左
+    a1, _b1 = ivs[0]
+    out.append(Cell("open", sample=a1 - 1, hi=ivs[0]))       # (−∞, r₁)
     for i, (a, b) in enumerate(ivs):
-        out.append(Cell("point", None, (a, b)))
+        out.append(Cell("point", iso=(a, b), lo=(a, b), hi=(a, b)))
         if i + 1 < len(ivs):
-            na, _nb = ivs[i + 1]
-            out.append(Cell("open", (b + na) / 2))   # 相邻根间隙样本（无根）
+            na, nb = ivs[i + 1]
+            out.append(Cell("open", sample=(b + na) / 2,    # (rᵢ, rᵢ₊₁)
+                            lo=(a, b), hi=(na, nb)))
     _ak, bk = ivs[-1]
-    out.append(Cell("open", bk + 1))          # 最右开区间，样本在最右根之右
+    out.append(Cell("open", sample=bk + 1, lo=ivs[-1]))      # (rₖ, +∞)
     return out
 
 

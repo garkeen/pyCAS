@@ -230,3 +230,112 @@ def _and_all(conds):
     if not keep:
         return T.TRUE
     return T.and_(*keep)
+
+
+# ---------------------------------------------------------------------------
+# 嵌套展平 + 域提取（消费 cas/cad 胞腔，分段求导/积分/解方程的前置）
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass          # noqa: E402
+from cas.errors import PiecewiseError       # noqa: E402
+from cas.cad import resolve_partition       # noqa: E402
+
+_UNDEF = T.SP("Undefined")
+
+
+def _conj(a, b):
+    if a is T.FALSE or b is T.FALSE:
+        return T.FALSE
+    if a is T.TRUE:
+        return b
+    if b is T.TRUE:
+        return a
+    return T.and_(a, b)
+
+
+def fold_nested(t):
+    """嵌套分段展平为单层：值是分段的，用合取分配进外层条件。
+
+    `pw(pw(a,ca,b,cb), c) → pw(a, ca∧c, b, cb∧c)`。结构重写，非特判；
+    展平后一切算法只面对单层分区。条件位置出现分段是病态结构，拒答。"""
+    if not is_piecewise(t):
+        return t
+    pairs = []
+    for v, c in branches(t):
+        if is_piecewise(c):
+            raise PiecewiseError("条件位置不允许分段值")
+        fv = fold_nested(v)
+        if is_piecewise(fv):
+            for iv, ic in branches(fv):
+                pairs.append((iv, _conj(ic, c)))
+        else:
+            pairs.append((fv, c))
+    return piecewise(pairs)
+
+
+def domain_cells(t, x):
+    """分段函数关于 x 的定义域胞腔分解。
+
+    返回 [(Cell, 值|Undefined)]：每个胞腔上按有序首中取第一个条件成立的
+    分支值；无条件成立则为 Undefined（该胞腔不在定义域内）。条件含超越/
+    多变量分区时透传 cad.CadError（UNDECIDABLE / FRAGMENT）。"""
+    t = fold_nested(t)
+    bs = branches(t)
+    conds = [c for _v, c in bs]
+    out = []
+    for cell, labels in resolve_partition(conds, x):
+        val = _UNDEF
+        for (v, _c), holds in zip(bs, labels):
+            if holds:
+                val = v
+                break
+        out.append((cell, val))
+    return out
+
+
+@dataclass(frozen=True, slots=True)
+class Component:
+    """定义域的一个连通分量。
+
+    cells：分量内的 (Cell, 值) 序列；
+    lo / hi：下/上界根的隔离区间，None 为无界；
+    lo_closed / hi_closed：对应端点是否包含（开区间端点不含，点胞腔含）。"""
+    cells: tuple
+    lo: object
+    lo_closed: bool
+    hi: object
+    hi_closed: bool
+
+
+def _mk_component(run):
+    first_cell = run[0][0]
+    last_cell = run[-1][0]
+    if first_cell.kind == "point":
+        lo, lo_closed = first_cell.iso, True
+    else:
+        lo, lo_closed = first_cell.lo, False      # 开胞腔左端不含；None 为 −∞
+    if last_cell.kind == "point":
+        hi, hi_closed = last_cell.iso, True
+    else:
+        hi, hi_closed = last_cell.hi, False       # 开胞腔右端不含；None 为 +∞
+    return Component(tuple(run), lo, lo_closed, hi, hi_closed)
+
+
+def connected_components(domain):
+    """把 `domain_cells` 的已定义胞腔并成极大连通分量。
+
+    未定义胞腔（Undefined）切断连通性——不定积分独立常数、定积分分段
+    求和都以连通分量为单位，绝不把缺口两侧的分支当作一体。"""
+    comps = []
+    run = []
+    for cell, val in domain:
+        if val is _UNDEF:
+            if run:
+                comps.append(_mk_component(run))
+                run = []
+        else:
+            run.append((cell, val))
+    if run:
+        comps.append(_mk_component(run))
+    return comps
+

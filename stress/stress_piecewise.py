@@ -212,6 +212,116 @@ def prop_guards(rounds, rng):
             fail("P24 常量冲突未检出", i, vs)
 
 
+# ---------------------------------------------------------------------------
+# P29-P31：嵌套展平 + 定义域胞腔 + 连通分量（消费 CAD）
+# ---------------------------------------------------------------------------
+
+from cas.piecewise import fold_nested, domain_cells, connected_components
+from cas.qarith import eval_exact
+
+
+def eval_prop(c, a):
+    """命题在 x=a（有理）处的真值（参照实现，独立于 CAD）。"""
+    if c is T.TRUE:
+        return True
+    if c is T.FALSE:
+        return False
+    h = c.head.name
+    if h == "And":
+        return all(eval_prop(x, a) for x in c.args)
+    if h == "Or":
+        return any(eval_prop(x, a) for x in c.args)
+    if h == "Not":
+        return not eval_prop(c.args[0], a)
+    l = eval_exact(c.args[0], {X: T.num_val(N(a))})
+    r = eval_exact(c.args[1], {X: T.num_val(N(a))})
+    return {"Lt": l < r, "Le": l <= r, "Gt": l > r,
+            "Ge": l >= r, "Eq": l == r, "Ne": l != r}[h]
+
+
+def ref_eval(t, a):
+    """嵌套分段在 x=a 的首中取值（递归参照实现）。"""
+    if not is_piecewise(t):
+        return t
+    for v, c in branches(t):
+        if eval_prop(c, a):
+            return ref_eval(v, a)
+    return T.SP("Undefined")
+
+
+def _same(u, v):
+    if T.is_num(u) and T.is_num(v):
+        return T.num_val(u) == T.num_val(v)
+    return u is v
+
+
+def prop_fold_nested(rounds, rng):
+    vals = [N(k) for k in range(1, 6)]
+    for i in range(rounds):
+        inner = piecewise([(rng.choice(vals), rand_cmp(rng)),
+                           (rng.choice(vals), rand_cmp(rng)),
+                           (rng.choice(vals), T.TRUE)])
+        outer = piecewise([(inner, rand_cmp(rng)),
+                           (rng.choice(vals), rand_cmp(rng)),
+                           (rng.choice(vals), T.TRUE)])
+        fl = fold_nested(outer)
+        if not is_piecewise(fl):
+            fail("P29 展平后非分段", i)
+        if any(is_piecewise(v) for v, _c in branches(fl)):
+            fail("P29 展平不彻底", i, to_str(fl))
+        if fold_nested(fl) is not fl:
+            fail("P29 展平不幂等", i)
+        # 逐点一致：嵌套原式与展平式在随机点取值相同
+        for _ in range(12):
+            a = rng.randint(-6, 6)
+            if not _same(ref_eval(outer, a), ref_eval(fl, a)):
+                fail("P29 展平逐点不符", i, f"a={a}",
+                     to_str(outer), to_str(fl))
+
+
+def prop_components(rounds, rng):
+    vals = [N(k) for k in range(1, 4)]
+    for i in range(rounds):
+        t = rand_pw(rng, vals, minb=2, maxb=4)
+        dom = domain_cells(t, X)
+        comps = connected_components(dom)
+        # 分量内胞腔总数 == 已定义胞腔数（Undefined 不入分量）
+        defined = sum(1 for _c, v in dom if v is not T.SP("Undefined"))
+        got = sum(len(c.cells) for c in comps)
+        if got != defined:
+            fail("P30 分量胞腔数不符", i, got, defined)
+        # 有 TRUE 兜底 → 全域覆盖 → 恰一个连通分量
+        if any(c is T.TRUE for _v, c in branches(t)) and len(comps) != 1:
+            fail("P30 全覆盖应单分量", i, len(comps))
+
+
+def prop_gap(rounds, rng):
+    for i in range(rounds):
+        lo = rng.randint(-5, -1)
+        hi = rng.randint(1, 5)
+        # 定义域为 x<lo 或 x>hi：中间是缺口 → 恰两个连通分量
+        t = piecewise([(N(1), mk(S("Lt"), (X, N(lo)))),
+                       (N(2), mk(S("Gt"), (X, N(hi))))])
+        dom = domain_cells(t, X)
+        comps = connected_components(dom)
+        if len(comps) != 2:
+            fail("P31 缺口应恰断为2分量", i, lo, hi, len(comps))
+        # 两分量取值应分别为 1 与 2（左右区域）
+        vals = set()
+        for c in comps:
+            v = c.cells[0][1]
+            if not T.is_num(v):
+                fail("P31 分量值非数", i, to_str(v))
+            vals.add(T.num_val(v))
+        if vals != {T.num_val(N(1)), T.num_val(N(2))}:
+            fail("P31 分量取值不符", i, vals)
+        # 缺口内开胞腔（上下界根俱全）必须未定义——不对缺口积分出 0
+        for cell, v in dom:
+            if cell.kind == "open" and cell.lo is not None \
+                    and cell.hi is not None and v is not T.SP("Undefined"):
+                fail("P31 缺口胞腔被定义", i, lo, hi)
+
+
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
@@ -225,4 +335,10 @@ if __name__ == "__main__":
     print(f"P23 运算逐支          {min(rounds,200)} 轮通过")
     prop_guards(rounds, rng)
     print(f"P24 守卫条件化+重叠   {rounds} 轮通过")
+    prop_fold_nested(rounds, rng)
+    print(f"P29 嵌套展平逐点一致  {rounds} 轮通过")
+    prop_components(rounds, rng)
+    print(f"P30 连通分量划分      {rounds} 轮通过")
+    prop_gap(rounds, rng)
+    print(f"P31 缺口断开          {rounds} 轮通过")
     print("== 全部通过 ==")

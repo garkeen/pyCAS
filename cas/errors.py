@@ -32,3 +32,7 @@ class CadError(Exception):
     def __init__(self, message, reason=None):
         super().__init__(message)
         self.reason = reason
+
+
+class PiecewiseError(Exception):
+    """分段容器拒答：病态结构（如条件位置放了分段值）或片段不支持。"""
