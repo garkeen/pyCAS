@@ -22,3 +22,13 @@ class TacticsError(Exception):
 
 class DiffError(Exception):
     """微分拒答：缺导数模板或结构不支持（如绑定变量下微分）。"""
+
+
+class CadError(Exception):
+    """柱面分解拒答。reason 取自 verdict.Reason：
+    FRAGMENT=片段未覆盖（如多变量/非多项式分区），
+    UNDECIDABLE=定理级不可判定（超越条件、超越根比大小，拒答表 §7）。"""
+
+    def __init__(self, message, reason=None):
+        super().__init__(message)
+        self.reason = reason
