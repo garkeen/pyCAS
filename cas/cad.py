@@ -20,6 +20,7 @@ from fractions import Fraction as Fr
 from cas import term as T
 from cas.errors import CadError
 from cas.verdict import Reason
+from cas.qarith import fold
 from cas.domains.q import Q_RING
 from cas.domains.poly import from_term, p_mul
 from cas.domains.polytools import p_deg
@@ -57,9 +58,12 @@ def _refusal_reason(d, x):
 
 
 def _boundary(cond, x):
-    """比较命题两侧之差 → 单变量多项式；非多项式分区拒答。"""
+    """比较命题两侧之差 → 单变量多项式；非多项式分区拒答。
+
+    差值先经 ℚ 折叠——解析产物中未收拢的负指数幂（如 -1/2 的
+    (2^-1)·(-1)）折叠后即是常数，折叠后仍非多项式才是真拒答。"""
     a, b = cond.args
-    d = T.plus(a, T.neg(b))
+    d = fold(T.plus(a, T.neg(b)))
     p = from_term(Q_RING, d, (x,))
     if p is None:
         raise CadError(f"条件非单变量多项式分区: {cond!r}",

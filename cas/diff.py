@@ -9,7 +9,8 @@
 
 诚实边界：
 · 模板缺失 → DiffError，附图书馆说明
-· 顶层 Piecewise → DiffError（分段点导数须校验连续性/单侧极限，未建，不逐支冒充）
+· 顶层 Piecewise → DiffError（整体逐支求导在分段点不安全，见下）；审慎
+  通道 `differentiate_piecewise` 提供逐支导数 + 分段点显式未验证标注
 · 多参数函数、绑定体（Bound）内微分 → DiffError（未建）
 结果经 fold 收拢；项层产物可由域层导数（p_deriv/rf_deriv）独立
 交叉验证（见 workflow Diff 步骤验证器与 stress/stress_diff.py）。
@@ -86,3 +87,20 @@ def _diff(t, x):
     arg = t.args[0]
     inner = T._lift(tpl, arg, 0)            # DB(0) 实例化为参数
     return T.times(inner, _diff(arg, x))    # 链式法则：模板值 × 内层导数
+
+
+def differentiate_piecewise(t, x: Sym):
+    """分段求导（审慎通道）：逐支对开区间胞腔求导，分段点显式标注未验证。
+
+    导数只在开区间胞腔（单一分支主宰的开邻域）上成立；分段点（点胞腔）
+    的可导性须连续性与单侧导数校验（极限层 §6.5，未建），故单独列出，
+    绝不把逐支导数冒充为分段点导数。
+
+    返回 (导数分段, 未验证分段点胞腔列表)。条件非单变量多项式分区时
+    透传 cad.CadError。"""
+    from cas.piecewise import branches, piecewise, fold_nested, domain_cells
+    t = fold_nested(t)
+    deriv = piecewise([(differentiate(v, x), c) for v, c in branches(t)])
+    boundaries = [cell for cell, _v in domain_cells(t, x)
+                  if cell.kind == "point"]
+    return deriv, boundaries

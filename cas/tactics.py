@@ -11,7 +11,7 @@ from fractions import Fraction as Fr
 from cas import term as T
 from cas.term import Sym
 from cas.errors import TacticsError
-from cas.project import project
+from cas.project import project, zero_of
 from cas.domains.poly import Poly
 from cas.domains.ratfunc import RatFunc, rf_reduce
 
@@ -125,3 +125,44 @@ def integer_roots(p, var):
         if acc == 0:
             roots.append(r)
     return sorted(set(roots))
+
+
+def solve_piecewise(f, x: Sym, target):
+    """解分段方程 pw(...)=target：逐支求解 + 分支条件成员判定。
+
+    可判定片段：
+    · 常值支——支值恒等于 target 则整支区域为解（区域解），否则无贡献；
+    · 线性支——线性求解得候选，代入分支条件经判定管线裁决（成立收、
+      不成立弃、未决记条件）。
+    任一支非线性即拒——漏掉它可能丢解，完备性无法保证，诚实拒答。
+
+    返回 {"points": [点解], "regions": [区域条件], "conditional": [(解,条件)]}。"""
+    from cas.piecewise import fold_nested, branches, is_piecewise
+    from cas.decide import decide
+    from cas.context import Context
+    from cas.verdict import YES, NO
+    from cas.qarith import fold
+    if not is_piecewise(f):
+        raise TacticsError("solve_piecewise 需分段函数")
+    f = fold_nested(f)
+    points, regions, conditional = [], [], []
+    for v, c in branches(f):
+        if x not in T.free_vars(v):
+            z = zero_of(T.plus(v, T.neg(target)))
+            if z is True:
+                regions.append(c)                 # 常值支恒等 → 整支区域为解
+            elif z is None:
+                conditional.append((None, c))     # 常值支是否相等未决
+            continue
+        try:
+            sol = solve_linear(T.eq(v, target), x)
+        except TacticsError as e:
+            raise TacticsError(f"分支非线性，分段求解完备性无法保证：{e}")
+        verdict = decide(fold(T.subst(c, {x: sol})), Context())
+        if verdict is YES:
+            points.append(sol)
+        elif verdict is NO:
+            continue
+        else:
+            conditional.append((sol, c))
+    return {"points": points, "regions": regions, "conditional": conditional}
