@@ -36,3 +36,13 @@ class CadError(Exception):
 
 class PiecewiseError(Exception):
     """分段容器拒答：病态结构（如条件位置放了分段值）或片段不支持。"""
+
+
+class IntegrateError(Exception):
+    """积分拒答。reason 取自 verdict.Reason：
+    FRAGMENT=片段未覆盖（如有理/超越被积式、需极限的反常端点），
+    UNDECIDABLE=不可判定。诚实拒答，不启发式凑原函数。"""
+
+    def __init__(self, message, reason=None):
+        super().__init__(message)
+        self.reason = reason

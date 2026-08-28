@@ -104,6 +104,18 @@ class Diff(Derivation):
     var: Sym
 
 
+@dataclass(frozen=True, slots=True)
+class Integrate(Derivation):
+    """积分——前驱被积式关于 var 求原函数（antideriv），或定积分（bounds=(a,b)）。
+
+    逻辑地位：不定为"原函数等式"，定为"积分值等式"。验证器独立于积分器：
+    用微分层复核 d/dx antideriv == 被积式，定积分再核 值 == antideriv(b)−antideriv(a)。"""
+    pred: int
+    var: Sym
+    antideriv: object          # 声称的原函数（Wit 证书）
+    bounds: tuple = None       # (a, b) 项 | None=不定
+
+
 # ---------------------------------------------------------------------------
 # 步骤：不可变记录
 # ---------------------------------------------------------------------------
@@ -215,7 +227,7 @@ class Workflow:
                 push([g for g in pred.guards if g is not cond])
             push(dom_condition(cond))
             clears = (cond,)
-        elif isinstance(derivation, (Rewrite, Solve, Subst, Diff)):
+        elif isinstance(derivation, (Rewrite, Solve, Subst, Diff, Integrate)):
             pred = self._steps.get(derivation.pred)
             if pred is not None:
                 push(pred.guards)
@@ -240,6 +252,8 @@ class Workflow:
             return self._verify_subst(content, derivation)
         if isinstance(derivation, Diff):
             return self._verify_diff(content, derivation)
+        if isinstance(derivation, Integrate):
+            return self._verify_integrate(content, derivation)
         return unknown()
 
     def _verify_both_sides(self, content, d: BothSides, guards):
@@ -387,6 +401,32 @@ class Workflow:
             else:
                 return NO
         return YES if checked else unknown()
+
+    def _verify_integrate(self, content, d: Integrate):
+        """独立复核：d/dx antideriv == 被积式（走微分层，另一套实现）；
+        定积分再核 值 == antideriv(b) − antideriv(a)（精确求值）。"""
+        pred = self._steps.get(d.pred)
+        if pred is None:
+            return NO
+        f = pred.content
+        x = d.var
+        G = d.antideriv
+        from cas.integrate import verify_antideriv
+        from cas.piecewise import is_piecewise
+        if not verify_antideriv(G, f, x):
+            return NO
+        if d.bounds is None:
+            want = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, f),)), G)
+            return YES if _eq_equal(content, want) else NO
+        a_t, b_t = d.bounds
+        if is_piecewise(f) or not (T.is_num(a_t) and T.is_num(b_t)):
+            # 分段定积分逐段/代数限需额外通道，独立复核未接——诚实未决
+            return unknown()
+        Fa = fold(T.subst(G, {x: a_t}))
+        Fb = fold(T.subst(G, {x: b_t}))
+        val = fold(T.plus(Fb, T.neg(Fa)))
+        want = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(x, f), a_t, b_t)), val)
+        return YES if _eq_equal(content, want) else NO
 
 
 # ---------------------------------------------------------------------------

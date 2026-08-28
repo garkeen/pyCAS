@@ -78,6 +78,15 @@ def to_str(t, prec=0, hint=None, src=False):
         if name == "Quote":
             val[u] = ("'" + _wrap(val[u.args[0]], 0), _ATOM_P)
             continue
+        if name == "DefIntegrate" and len(u.args) == 3 and isinstance(u.args[0], Bound):
+            b, lo, hi = u.args
+            _v, ob = T.open_bound(b)
+            if src:
+                val[u] = (f"int({to_str(ob, src=True)}, {b.hint}, "
+                          f"{to_str(lo, src=True)}, {to_str(hi, src=True)})", _ATOM_P)
+            else:
+                val[u] = (f"∫_{to_str(lo)}^{to_str(hi)}[{to_str(ob)}] d{b.hint}", _ATOM_P)
+            continue
         if name in ("Integrate", "Sum", "Product", "Limit") and len(u.args) == 1 and isinstance(u.args[0], Bound):
             b = u.args[0]
             sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]

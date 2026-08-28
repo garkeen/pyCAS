@@ -30,11 +30,13 @@ from cas.qarith import eval_exact, EvalNumError, fold
 from cas.errors import TacticsError
 from cas.tactics import solve_linear
 from cas.diff import differentiate, DiffError
+from cas.integrate import integrate_term, definite_integrate, IntegrateError
+from cas.piecewise import is_piecewise, fold_nested
 from cas.decide import decide
 from cas.context import Context
 from cas.verdict import YES, NO
 from cas.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
-                          Subst, Split, Diff, _is_eq, _normalize_eq)
+                          Subst, Split, Diff, Integrate, _is_eq, _normalize_eq)
 
 
 def _fmt(t):
@@ -68,6 +70,8 @@ class REPL:
                 "subst": self.cmd_subst,
                 "split": self.cmd_split,
                 "diff": self.cmd_diff,
+                "integrate": self.cmd_integrate,
+                "int": self.cmd_int,
                 "rules": self.cmd_rules,
                 "apply": self.cmd_apply,
                 "check": self.cmd_check,
@@ -84,7 +88,7 @@ class REPL:
         d = s.derivation
         kind = type(d).__name__
         extra = ""
-        if isinstance(d, (BothSides, Rewrite, Solve, Subst, Split, Diff)):
+        if isinstance(d, (BothSides, Rewrite, Solve, Subst, Split, Diff, Integrate)):
             extra = f" <-#{d.pred}"
         if isinstance(d, BothSides):
             extra += f" {d.op}({_fmt(d.operand)})"
@@ -98,6 +102,10 @@ class REPL:
             extra += f" {'¬' if d.negate else ''}{_fmt(d.condition)}"
         if isinstance(d, Diff):
             extra += f" d/d{_fmt(d.var)}"
+        if isinstance(d, Integrate):
+            extra += f" ∫d{_fmt(d.var)}"
+            if d.bounds is not None:
+                extra += f" [{_fmt(d.bounds[0])},{_fmt(d.bounds[1])}]"
         guards = ""
         if s.guards:
             guards = "  | " + ", ".join(_fmt(g) for g in s.guards)
@@ -254,6 +262,55 @@ class REPL:
         s = self.wf.add(content, Diff(pred=self.current, var=var))
         if s.status == "dead":
             print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
+        self.current = s.id
+        self._show_step(s)
+
+    def cmd_integrate(self, rest):
+        pred = self._cur()
+        if pred is None:
+            return
+        var = S(rest.strip())
+        f = pred.content
+        try:
+            G = integrate_term(f, var)
+        except IntegrateError as e:
+            print(f"  积分拒答: {e}")
+            return
+        content = T.eq(T.mk(S("Integrate"), (T.mk_bound(var, f),)), G)
+        s = self.wf.add(content, Integrate(pred=self.current, var=var,
+                                           antideriv=G))
+        if s.status == "dead":
+            print(f"  步骤 dead：{s.note or '原函数独立验证否决'}")
+        self.current = s.id
+        self._show_step(s)
+
+    def cmd_int(self, rest):
+        pred = self._cur()
+        if pred is None:
+            return
+        parts = rest.split()
+        if len(parts) < 3:
+            print("  用法: int <var> <a> <b>")
+            return
+        var = S(parts[0])
+        try:
+            a = fold(parse(parts[1]))
+            b = fold(parse(parts[2]))
+        except Exception as e:
+            print(f"  解析错误: {e}")
+            return
+        f = pred.content
+        try:
+            G = integrate_term(f, var)
+            V = definite_integrate(f, var, a, b)
+        except IntegrateError as e:
+            print(f"  定积分拒答: {e}")
+            return
+        content = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(var, f), a, b)), V)
+        s = self.wf.add(content, Integrate(pred=self.current, var=var,
+                                           antideriv=G, bounds=(a, b)))
+        if s.status == "dead":
+            print(f"  步骤 dead：{s.note or '定积分独立验证否决'}")
         self.current = s.id
         self._show_step(s)
 

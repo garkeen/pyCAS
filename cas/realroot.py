@@ -176,7 +176,69 @@ def squarefree_part(ring, p: Poly) -> Poly:
     return p_div_exact(ring, p_monic(ring, p), g)
 
 
+def _divisors(n):
+    n = abs(n)
+    if n == 0:
+        return []
+    out = []
+    d = 1
+    while d * d <= n:
+        if n % d == 0:
+            out.append(d)
+            if d != n // d:
+                out.append(n // d)
+        d += 1
+    return out
+
+
+def rational_roots(p: Poly):
+    """精确有理根全集（有理根定理），升序去重。
+
+    清分母成整系数后，有理根必为 ±(常数项因子)/(首项系数因子)，有限候选
+    逐个精确验证——这是可判定碎片，不是近似。"""
+    if p_deg(p, 0) <= 0:
+        return []
+    from math import gcd
+    coefs = {k[0]: Fr(c) for k, c in p.monos}
+    lcm = 1
+    for c in coefs.values():
+        lcm = lcm * c.denominator // gcd(lcm, c.denominator)
+    ic = {e: int(coefs[e] * lcm) for e in coefs}
+    roots = []
+    while ic and ic.get(0, 0) == 0:          # 0 根：逐个降幂
+        roots.append(Fr(0))
+        ic = {e - 1: c for e, c in ic.items() if e > 0}
+    if not ic:
+        return sorted(set(roots))
+    deg = max(ic)
+    a0 = ic.get(0, 0)
+    an = ic[deg]
+    cands = set()
+    for d in _divisors(a0):
+        for e in _divisors(an):
+            cands.add(Fr(d, e))
+            cands.add(Fr(-d, e))
+    for r in cands:
+        if coef_sign(p_eval_at(p, r)) == 0:
+            roots.append(r)
+    return sorted(set(roots))
+
+
 def real_roots_intervals(ring, p: Poly):
-    """任意单变量多项式的实根隔离（先取无平方部分）。"""
+    """任意单变量多项式的实根隔离。
+
+    有理根由有理根定理精确命中为 (r, r)；它们把实轴切成开区间，无理根
+    在各自开区间内走 Sturm 隔离（被限制在间隙里，与有理根天然不相交）。
+    结果升序、互不相交、相邻严格留隙。"""
+    if p_deg(p, 0) <= 0:
+        return []
     sf = squarefree_part(ring, p)
-    return isolate_squarefree(ring, sf)
+    seq = sturm_sequence(ring, sf)
+    rat = rational_roots(sf)
+    M = cauchy_bound(sf)
+    ivs = [(r, r) for r in rat]
+    bounds = [Fr(-M)] + rat + [Fr(M)]
+    for i in range(len(bounds) - 1):
+        _iso_open(seq, sf, bounds[i], bounds[i + 1], ivs)   # 间隙内无理根
+    ivs.sort(key=lambda iv: iv[0])
+    return _refine_gaps(seq, sf, ivs)
