@@ -18,7 +18,8 @@
 
 运算提升（`lift`）：分段参与运算按点定义 `(f⊕g)(x)=f(x)⊕g(x)`，逐支笛卡尔
 展开，条件取合取。注意：分段函数的**求导与积分在分段点须另行校验连续性
-与单侧极限**，非逐支可交——该审慎逻辑不在本容器，见 cas/diff.py 的诚实拒答。
+与单侧极限**，非逐支可交——审慎通道见 cas/diff.py 的 `differentiate_piecewise`
+（分段点显式未验证）与 cas/integrate.py 的分段定积分（缺口/点洞拒答）。
 """
 
 from cas import term as T
@@ -145,6 +146,33 @@ def coverage(t, ctx):
             continue
         guarded = True
     return unknown(Reason.GUARDED) if guarded else NO
+
+
+def collapse(t, ctx):
+    """点塌缩：把项中每个 Piecewise 子项替换为其在 ctx 下的选支值。
+
+    数值点回代判定的公共通道——条件在 ctx 下可判时，每个分段按有序
+    首中塌缩为单一支值，逐层外推后整项成为普通项，可走域判零/求值。
+    任一分段选支未决（条件判不动）则整体 None（诚实未决，不猜测）。
+
+    分段可出现在运算的任意深度（如 `pw(...) + 2`）；条件位置出现
+    分段是病态结构（fold_nested 已拒），此处不会遇到。"""
+    if is_piecewise(t):
+        status, load = select(t, ctx)
+        if status != "value":
+            return None                        # 选支未决：遮蔽关系定不了
+        return collapse(load, ctx)             # 支值仍含分段则继续塌缩
+    if not isinstance(t, Expr) or not t.args:
+        return t
+    new_args = []
+    changed = False
+    for a in t.args:
+        na = collapse(a, ctx)
+        if na is None:
+            return None
+        changed = changed or (na is not a)
+        new_args.append(na)
+    return T.mk(t.head, tuple(new_args)) if changed else t
 
 
 def conflicts(t, ctx):

@@ -320,7 +320,10 @@ class Workflow:
         return NO
 
     def _verify_solve(self, content, d: Solve):
-        """回代判官：代入证书后域标准形判零。不重跑求解公式。"""
+        """回代判官：代入证书后域标准形判零。不重跑求解公式。
+
+        代入结果是分段项时先按有序首中选支（数值点至多落一支，
+        取值唯一），再对选出的支值判零。"""
         pred = self._steps.get(d.pred)
         if pred is None or not _is_eq(pred.content):
             return NO
@@ -330,7 +333,7 @@ class Workflow:
         lhs, rhs = pred.content.args
         diff = T.plus(lhs, T.neg(rhs))
         substituted = fold(T.subst(diff, {d.var: d.solution}))
-        z = zero_of(substituted)
+        z = _piecewise_aware_zero(substituted)
         if z is True:
             return YES
         if z is False:
@@ -369,38 +372,72 @@ class Workflow:
             pairs = ((pred.content, content),)
         checked = False
         for src, got in pairs:
-            hit = project(src)
-            if hit is None:
-                continue
-            if hit.element is None:
-                expected = T.ZERO          # 常数格（ℤ/ℚ）导数为 0
-            else:
-                vs = hit.domain.vars
-                if x not in vs:
-                    expected = T.ZERO
-                else:
-                    idx = vs.index(x)
-                    ring = hit.domain.ring
-                    if isinstance(hit.element, Poly):
-                        expected = to_term(ring, p_deriv(ring, hit.element, idx))
-                    elif isinstance(hit.element, RatFunc):
-                        expected = rf_to_term(ring, rf_deriv(ring, hit.element, idx))
-                    else:
-                        continue
-            from cas.domains.ratfunc import ratfunc_domain
-            allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
-                                key=lambda s: s.name))
-            if not allv:
-                if fold(T.plus(expected, T.neg(got))) is T.ZERO:
-                    checked = True
-                    continue
-                return NO
-            rfd = ratfunc_domain(*allv)
-            if rfd.equal(expected, got) is True:
+            if _is_piecewise(src):
+                # 分段源：逐支域层交叉验证。分支条件必须逐对相同
+                # （导数分段沿用原分区）；每个支值独立投影取域导数
+                # 与步骤对应支值在有理函数域判等。分段点（点胞腔）
+                # 的可导性不在本验证器裁决范围（见 REPL 分段求导通道
+                # 的未验证标注），逐支成立即视为整体验证通过。
+                from cas.piecewise import fold_nested, branches
+                if not _is_piecewise(got):
+                    return NO
+                sbs = branches(fold_nested(src))
+                gbs = branches(fold_nested(got))
+                if len(sbs) != len(gbs):
+                    return NO
+                for (sv, sc), (gv, gc) in zip(sbs, gbs):
+                    if sc is not gc:
+                        return NO
+                    r = self._cross_diff(sv, gv, x)
+                    if r is None:          # 该支在投影域外：无独立通道
+                        return unknown()
+                    if r is not YES:
+                        return r
                 checked = True
-            else:
-                return NO
+                continue
+            r = self._cross_diff(src, got, x)
+            if r is None:                    # 源在投影域外：无独立通道
+                continue
+            if r is not YES:
+                return r
+            checked = True
         return YES if checked else unknown()
+
+    def _cross_diff(self, src, got, x):
+        """单项交叉验证：域层导数重建期望值 vs 项层结果。
+
+        返回 None 表示源在投影域外（无独立通道，交上层未决）；
+        YES 域层重建与项层结果在有理函数域判等；NO 不等；其余为
+        判等所需的域上无法完成的诚实未决。"""
+        hit = project(src)
+        if hit is None:
+            return None
+        if hit.element is None:
+            expected = T.ZERO              # 常数格（ℤ/ℚ）导数为 0
+        else:
+            vs = hit.domain.vars
+            if x not in vs:
+                expected = T.ZERO
+            else:
+                idx = vs.index(x)
+                ring = hit.domain.ring
+                if isinstance(hit.element, Poly):
+                    expected = to_term(ring, p_deriv(ring, hit.element, idx))
+                elif isinstance(hit.element, RatFunc):
+                    expected = rf_to_term(ring, rf_deriv(ring, hit.element, idx))
+                else:
+                    return None
+        from cas.domains.ratfunc import ratfunc_domain
+        allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
+                            key=lambda s: s.name))
+        if not allv:
+            return YES if fold(T.plus(expected, T.neg(got))) is T.ZERO else NO
+        rfd = ratfunc_domain(*allv)
+        if rfd.equal(expected, got) is True:
+            return YES
+        if rfd.equal(expected, got) is False:
+            return NO
+        return unknown()
 
     def _verify_integrate(self, content, d: Integrate):
         """独立复核：d/dx antideriv == 被积式（走微分层，另一套实现）；
@@ -435,6 +472,46 @@ class Workflow:
 
 def _is_eq(t) -> bool:
     return isinstance(t, Expr) and t.head.name == "Eq"
+
+
+def _is_piecewise(t) -> bool:
+    from cas.piecewise import is_piecewise
+    return is_piecewise(t)
+
+
+def _has_piecewise(t) -> bool:
+    """项中任意深度是否出现分段容器（如 pw(...) + 2 的加法包裹）。"""
+    if _is_piecewise(t):
+        return True
+    if isinstance(t, Expr):
+        return any(_has_piecewise(a) for a in t.args)
+    return False
+
+
+def _has_undef(t) -> bool:
+    """项中是否出现 Undefined（该点不在定义域内）。"""
+    if t is T.SP("Undefined"):
+        return True
+    if isinstance(t, Expr):
+        return any(_has_undef(a) for a in t.args)
+    return False
+
+
+def _piecewise_aware_zero(t):
+    """判零通道：普通项走域标准形判零；含分段项先点塌缩（有序首中
+    选支）再判。数值点至多落一支，塌缩后取值唯一——判零无歧义。
+
+    返回 True/False/None（None 为判不动）。塌缩出 Undefined 的点不在
+    定义域内，等式在此点无值——不是解，返回 False。"""
+    if not _has_piecewise(t):
+        return zero_of(t)
+    from cas.piecewise import collapse
+    c = collapse(t, Context())
+    if c is None:
+        return None                        # 选支未决：条件判不动
+    if _has_undef(c):
+        return False                       # 定义域外：等式无值，非解
+    return zero_of(fold(c))
 
 
 def _eq_equal(a, b) -> bool:

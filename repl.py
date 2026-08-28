@@ -5,10 +5,12 @@
   <表达式>              断言方程/表达式入账（Claim）
   both <op> <expr>      两边施加运算（add/sub/mul/div）
   norm                  域标准形重写
-  solve <var>           线性求解（战术层求解，验证器独立回代判定）
+  solve <var>           线性求解（战术层求解，验证器独立回代判定；分段
+                        方程自动走逐支求解通道：点解入账、区域解/条件解如实报告）
   subst <var> = <expr>  代换
   split <cond>          条件切割（加 <cond> 分支；前缀 ! 取否定分支）
-  diff <var>            对当前步骤关于 <var> 微分（域层导数交叉验证）
+  diff <var>            对当前步骤关于 <var> 微分（域层导数交叉验证；分段
+                        自动走审慎通道，分段点显式标注未验证）
   rules                 列出图书馆规则
   apply <rid>           应用指定图书馆规则
   check                 回代验证当前解
@@ -28,8 +30,9 @@ from cas.parser import parse
 from cas.pprint import to_str
 from cas.qarith import eval_exact, EvalNumError, fold
 from cas.errors import TacticsError
-from cas.tactics import solve_linear
-from cas.diff import differentiate, DiffError
+from cas.tactics import solve_linear, solve_piecewise
+from cas.diff import differentiate, DiffError, differentiate_piecewise
+from cas.cad import CadError
 from cas.integrate import integrate_term, definite_integrate, IntegrateError
 from cas.piecewise import is_piecewise, fold_nested
 from cas.decide import decide
@@ -42,6 +45,14 @@ from cas.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
 def _fmt(t):
     """显示前 ℚ 折叠（Times(-1,2) → -2 等）。"""
     return to_str(fold(t))
+
+
+def _iso_str(cell):
+    """点胞腔隔离区间的显示：精确有理根直接给出，无理根给隔离区间。"""
+    a, b = cell.iso
+    if a == b:
+        return str(a)
+    return f"≈({a}, {b})"
 
 
 class REPL:
@@ -188,6 +199,10 @@ class REPL:
         if pred is None:
             return
         var = S(rest.strip())
+        if _is_eq(pred.content) and (is_piecewise(pred.content.args[0])
+                                     or is_piecewise(pred.content.args[1])):
+            self._solve_piecewise(pred, var)
+            return
         try:
             sol = solve_linear(pred.content, var)
         except TacticsError as e:
@@ -200,6 +215,34 @@ class REPL:
             print(f"  步骤 dead：{s.note or '回代判官否决'}")
         self.current = s.id
         self._show_step(s)
+
+    def _solve_piecewise(self, pred, var):
+        """分段方程求解通道：逐支线性求解 + 条件裁决（战术层），
+        点解逐个入账（回代判官独立验证），区域解/条件解如实报告。"""
+        lhs, rhs = pred.content.args
+        if is_piecewise(rhs):              # 分段在右侧：翻转保持分段在左
+            lhs, rhs = rhs, lhs
+        try:
+            res = solve_piecewise(lhs, var, rhs)
+        except TacticsError as e:
+            print(f"  分段求解拒答: {e}")
+            return
+        base = self.current
+        for sol in res["points"]:
+            content = T.eq(var, sol)
+            s = self.wf.add(content, Solve(pred=base, var=var,
+                                           solution=sol))
+            if s.status == "dead":
+                print(f"  步骤 dead：{s.note or '回代判官否决'}")
+            self.current = s.id
+            self._show_step(s)
+        for c in res["regions"]:
+            print(f"  区域解: {_fmt(c)}（该支上恒成立）")
+        for sol, c in res["conditional"]:
+            so = _fmt(sol) if sol is not None else "该支值"
+            print(f"  条件解: x = {so} 需 {_fmt(c)}（未决）")
+        if not (res["points"] or res["regions"] or res["conditional"]):
+            print("  无解（各支候选均被分支条件否决）")
 
     def cmd_subst(self, rest):
         pred = self._cur()
@@ -249,6 +292,10 @@ class REPL:
         if pred is None:
             return
         var = S(rest.strip())
+        sides = pred.content.args if _is_eq(pred.content) else (pred.content,)
+        if any(is_piecewise(s) for s in sides):
+            self._diff_piecewise(pred, var, sides)
+            return
         try:
             if _is_eq(pred.content):
                 la, ra = pred.content.args
@@ -264,6 +311,28 @@ class REPL:
             print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
         self.current = s.id
         self._show_step(s)
+
+    def _diff_piecewise(self, pred, var, sides):
+        """分段求导通道（审慎）：逐支求导入账，分段点显式标注未验证——
+        开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不冒充。"""
+        try:
+            parts = [differentiate_piecewise(s, var) for s in sides]
+        except (DiffError, CadError) as e:
+            print(f"  分段微分拒答: {e}")
+            return
+        derivs = [d for d, _b in parts]
+        content = T.eq(derivs[0], derivs[1]) if len(derivs) == 2 else derivs[0]
+        s = self.wf.add(content, Diff(pred=self.current, var=var))
+        if s.status == "dead":
+            print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
+        self.current = s.id
+        self._show_step(s)
+        for d, bounds in parts:
+            if bounds:
+                pts = ", ".join(
+                    f"x∈[{_iso_str(c)}]" for c in bounds)
+                print(f"  ⚠ 分段点 {pts} 处的可导性未验证"
+                      "（需连续性与单侧导数校验，极限层未建）")
 
     def cmd_integrate(self, rest):
         pred = self._cur()
@@ -371,6 +440,17 @@ class REPL:
         diff = fold(T.plus(sl, T.neg(sr)))
         try:
             v = eval_exact(diff, {})
+        except EvalNumError:
+            # 含分段/超越结构：eval_exact 通道外——分段项点塌缩后判零
+            from cas.workflow import _piecewise_aware_zero
+            z = _piecewise_aware_zero(diff)
+            if z is True:
+                v = 0
+            elif z is False:
+                v = 1                      # 非零：走下方 FAILED 分支
+            else:
+                print(f"  回代失败: {diff} 判零未决（选支/域外）")
+                return
             if v == 0:
                 print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
                 print(f"        = 0 ✓")
