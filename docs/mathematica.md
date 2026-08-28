@@ -267,3 +267,4 @@ Sum / Product   ~100 页 WL
 广义超几何化简法则   ~70 页 WL
 
 以上即为该文档中所有与符号计算直接相关的内部实现描述，已排除数值近似计算（NIntegrate、NDSolve、FindRoot、FindMinimum、FFT、数值线性代数等）及前端/图形/接口部分。
+(https://reference.wolfram.com/language/tutorial/SomeNotesOnInternalImplementation.html)
