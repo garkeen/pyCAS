@@ -10,10 +10,11 @@
 - **域系统**（`cas/domains/`）：`Domain` 协议（normalize/equal/member，`equal` 返回 `bool|None`——None 为非成员越界，片段内无 UNKNOWN）+ `Ring` 协议（含系数导数 `deriv`）。**能力字段**（架构 3.2）：`is_field`/`is_ordered`/`is_euclidean`，算法按能力分派不按类型特判
   - ℤ：`ZZRing`（带余除法/gcd/扩展gcd）+ `ZDomain`——有序欧几里得整环，非域；丢番图可判定碎片的宿主
   - ℚ：`QRing` + `QDomain`
+  - ℚ(i)：`QIRing` + `QIDomain`（`cas/domains/qi.py`）——第一个代数扩张 = ℚ[z]/(z²+1)：元素为 (re, im) 标准形对（结构判等），除法走共轭×范数；成员通道 = 闭项 i↦z → ℚ(z) 有理函数 → 模 z²+1 约化（Maxima 代数量模式）；i 常数身份由图书馆声明在投影层注入，不做名字嗅探；能力 is_field=True / **is_ordered=False（复数无序，序判定按能力查表拒绝）** / is_euclidean=False（欧几里得结构属于 ℤ[i]）。参照经验见 reference.md"已消化经验"
   - K[x₁..xₙ]：`PolyDomain`，稀疏系数字典，泛 Ring 协议，单变量欧几里得 GCD + 域系数精确除法 + **域导数 `p_deriv`**；能力：单变量+域系数才是欧几里得
   - K(x₁..xₙ)：`RatFuncDomain`，交叉相乘判等 + 单变量 GCD 约简 + **域导数 `rf_deriv`（商规则）**；能力：恒为域，单变量欧几里得
 - **判定契约**（`cas/verdict.py`）：Verdict ADT（`Yes(proof)/No/Unknown(reason)`），理由枚举 FRAGMENT/GUARDED/UNDECIDABLE/BUDGET，and3/or3/not3 传播首个 Unknown 理由
-- **域投影层**（`cas/project.py`）：成员测试阶梯 ℤ → ℚ → K[x] → K(x)——域由投影赋予，不做叶嗅探；`zero_of` 判零快捷通道
+- **域投影层**（`cas/project.py`）：成员测试阶梯 ℤ → ℚ → **ℚ(i)** → K[x] → K(x)——域由投影赋予，不做叶嗅探；`zero_of` 判零快捷通道（常数格统一走域判等，任意常数域泛化）
 - **判定管线**（`cas/decide.py`）：全通道返回 Verdict；区间通道（BFS 链查询已修）、结构符号引理、图书馆常数界与函数值域界（端点语义按算子分治）、深度上限 BUDGET 诚实
 - **图书馆**（`library/`）：`ConstantDecl`/`FunctionDecl` 冻结 dataclass + 注册表 + 定义域条件注册
   - 常数：π, e, i, γ（正性、粗界、实性声明）
@@ -33,7 +34,7 @@
 - **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则；缺模板、绑定体内微分诚实抛 `DiffError`。**分段求导审慎通道**（`differentiate_piecewise`）：逐支求导 + 分段点（点胞腔）显式列出未验证——开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不逐支冒充整体导数
 - **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——求值语义为**有序首中**（if/elif/else，`⊤`=否则支；每点至多落一支 → 取值天然唯一，无求值层冲突）：`select` 取值、`coverage` 覆盖、**`collapse` 点塌缩**（任意深度的分段子项按有序首中塌缩为支值，数值点回代判定的公共通道）；分支体**独立投影**无共享宿主（`project_pw`）；运算**逐支笛卡尔提升**（`lift`，`(f⊕g)(x)=f(x)⊕g(x)`，条件取合取、空组合丢弃）；`conflicts` 作**顺序无关性 lint**（交叠处值不等→提示收紧为互斥守卫，判不动即 Unknown，不作求值闸）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`fold_nested` 嵌套展平、`domain_cells`/`connected_components` 定义域胞腔与连通分量；`Abs` 导数据此以 Piecewise 如实入册（`sign`，u=0 无支）
 - **REPL**（`repl.py`）：claim/both/norm/solve/subst/**split/diff/rules/apply/integrate/int**/check/steps/undo——solve/diff 对分段自动路由：分段方程逐支求解（点解入账走回代判官、区域解/条件解如实报告）、分段求导走审慎通道（分段点未验证标注）；check 对含分段项点塌缩后判零
-- **压力台架**（`stress/`）：38 条性质，全自证无外部真值
+- **压力台架**（`stress/`）：41 条性质，全自证无外部真值
   - P1-P4：折叠保真、幂等指针、区间真值表、回代判官
   - P5-P9：多项式往返、判等完备、交叉相乘、GCD 整除
   - P10-P13：项层微分 × 域层导数交叉、线性/莱布尼茨/商规则恒等、泰勒 h¹ 系数、验证器独立性
@@ -44,6 +45,7 @@
   - P29-P31：分段归一化往返、连通分量划分、缺口断开
   - P32-P35：不定积分往返+两通道、可加性/FTC、分段定积分、积分拒答边界
   - P36-P38：分段求导两通道交叉+分段点定位、分段解方程独立参照（含区域解/拒答）、工作流端到端（真解入账/伪解否决/Diff 逐支交叉验证）
+  - P39-P41：ℚ(i) 双通道交叉（环对偶运算 vs i↦z→ℚ(z)→模约化成员通道）+域公理、成员边界+规范化幂等、阶梯×判零×能力字段×积分常数通道
 
 ### 阶段1-5：分段通道（CAD 地基 → 解方程/求导 → REPL 接线）
 - 阶段1：最简 CAD——一维实根隔离（Sturm）+ 胞腔分解（开区间/点），条件符号精确判定
@@ -84,7 +86,9 @@
 - [ ] 多参数函数偏导、绑定体内微分（依赖量词/积分地基）
 
 ### 数域扩展（Risch 前置）
-- [ ] ℚ(i) 高斯域（Ring 协议实现）
+- [ ] ℚ(i)[x]/ℚ(i)(x) 系数环挂载：poly/ratfunc 的闭项系数吸收通道（Ring 吸收 ℚ(i) 常数子项）+ project 多环阶梯（ℚ[x] 落空后试 ℚ(i)[x]）；消费方审计（cad/tactics/workflow 的 Q_RING 硬编码处按能力改派）
+- [ ] ℤ[i] 高斯整环：范数带余除法 + gcd（欧几里得）+ 高斯因式分解（参考 fricas gaussfac.spad）
+- [ ] ℚ(α) 代数扩张通用化（mod-m 余式 + Thom 编码；元素表示取模 minpoly 多项式形——参考 fricas algext.spad SAE 的 Rep := UP）
 - [ ] ℚ(α) 代数扩张（mod-m 余式 + Thom 编码）
 - [ ] 参数分式域 ℚ(t₁..tₙ) 作系数环
 - [ ] 多变量 GCD（接入 ratfunc 约简标准形）

@@ -12,12 +12,18 @@
 from dataclasses import dataclass
 
 from cas import term as T
+from cas.domains.base import register
 from cas.domains.q import QDomain
 from cas.domains.z import Z_DOMAIN
+from cas.domains.qi import QIDomain
 from cas.domains.poly import poly_domain, from_term as poly_from_term, Poly, to_term
 from cas.domains.ratfunc import ratfunc_domain, rf_from_term, RatFunc, rf_reduce, rf_to_term
 
 _Q_DOMAIN = QDomain()
+# ℚ(i)：i 常数身份由图书馆声明注入（域由显式声明进入，不做名字嗅探）；
+# library 只依赖 cas.term，无导入环
+from library import IU as _I_CONST            # noqa: E402
+_QI_DOMAIN = register(QIDomain(_I_CONST))
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +47,8 @@ def project(t) -> Projected | None:
             return Projected(Z_DOMAIN, None, t, Z_DOMAIN.name)
         if _Q_DOMAIN.member(t):
             return Projected(_Q_DOMAIN, None, t, _Q_DOMAIN.name)
+        if _QI_DOMAIN.member(t):
+            return Projected(_QI_DOMAIN, None, t, _QI_DOMAIN.name)
         return None
     pd = poly_domain(*vs)
     p = poly_from_term(pd.ring, t, vs)
@@ -54,11 +62,13 @@ def project(t) -> Projected | None:
 
 
 def is_zero(hit: Projected) -> bool:
-    """投影元素判零（域标准形比较，片段内完全判定）。"""
-    if hit.element is None:                 # 常数格（ℤ/ℚ）：直接看项
-        from cas.qarith import fold
-        f = fold(hit.term)
-        return T.is_num(f) and T.num_val(f) == 0
+    """投影元素判零（域标准形比较，片段内完全判定）。
+
+    常数格（ℤ/ℚ/ℚ(i)）经域判等裁决——对任意常数域统一，不按域
+    类型特判：hit 的项是该域成员（投影命中保证），T.ZERO 是一切
+    数域的成员，equal 即值比较。"""
+    if hit.element is None:
+        return hit.domain.equal(hit.term, T.ZERO) is True
     if isinstance(hit.element, Poly):
         return hit.element.is_zero()
     if isinstance(hit.element, RatFunc):
@@ -68,9 +78,8 @@ def is_zero(hit: Projected) -> bool:
 
 def normalize(hit: Projected):
     """投影元素 → 域标准形驻留项。"""
-    if hit.element is None:                 # 常数格（ℤ/ℚ）
-        from cas.qarith import fold
-        return fold(hit.term)
+    if hit.element is None:                 # 常数格（ℤ/ℚ/ℚ(i)）：域标准形
+        return hit.domain.normalize(hit.term)
     if isinstance(hit.element, Poly):
         return to_term(hit.domain.ring, hit.element)
     if isinstance(hit.element, RatFunc):
