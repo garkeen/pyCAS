@@ -143,6 +143,50 @@ def prop_piecewise_solve(rounds, rng):
             fail("P37 非线性支未拒答", i)
         except TacticsError:
             pass
+        # 含 x 的目标：常值支方程 k1 = m·x+b 的解不得因分支分类丢失；
+        # 退化支（恒等→区域解、矛盾→无贡献）不得误拒。参照为直算算术。
+        k1 = Fr(rng.randint(-5, 5), 1)
+        m = Fr(rng.randint(-4, 4), rng.choice((1, 1, 2)))
+        while m == 0:
+            m = Fr(rng.randint(-4, 4), 2)
+        b = Fr(rng.randint(-5, 5), 1)
+        a2v = Fr(rng.randint(-4, 4), rng.choice((1, 1, 2)))
+        while a2v == m:                    # 同斜率退化单独测（见下）
+            a2v = Fr(rng.randint(-4, 4), 2)
+        b2v = Fr(rng.randint(-5, 5), 1)
+        tgt = fold(T.plus(T.times(T.N(m), X), T.N(b)))
+        pw3 = piecewise([(T.N(k1), parse(f"x <= {r}")),
+                         (fold(T.plus(T.times(T.N(a2v), X), T.N(b2v))),
+                          parse(f"x > {r}"))])
+        res3 = solve_piecewise(pw3, X, tgt)
+        want3 = []
+        x1 = (k1 - b) / m                  # k1 = m·x + b
+        if x1 <= r:
+            want3.append(x1)
+        x2 = (b - b2v) / (a2v - m)         # a2·x + b2 = m·x + b
+        if x2 > r:
+            want3.append(x2)
+        got3 = sorted(T.num_val(s) for s in res3["points"])
+        if got3 != sorted(want3) or res3["regions"] or res3["conditional"]:
+            fail("P37 含x目标丢解/多解", i, k1, m, b, a2v, b2v, r,
+                 got3, sorted(want3), res3)
+        # 恒等支（v ≡ target，差值形状含 x、投影后恒零）→ 区域解
+        id_pw = piecewise([(tgt, parse(f"x <= {r}")),
+                           (T.N(k1), parse(f"x > {r}"))])
+        res4 = solve_piecewise(id_pw, X, tgt)
+        want4 = [x1] if x1 > r else []
+        got4 = sorted(T.num_val(s) for s in res4["points"])
+        if len(res4["regions"]) != 1 or got4 != sorted(want4) \
+                or res4["conditional"]:
+            fail("P37 恒等支未给区域解", i, k1, m, b, r, res4, want4)
+        # 矛盾支（v = target+1，差值投影后非零常数）→ 无贡献
+        con_pw = piecewise([(fold(T.plus(tgt, T.N(1))), parse(f"x <= {r}")),
+                            (T.N(k1), parse(f"x > {r}"))])
+        res5 = solve_piecewise(con_pw, X, tgt)
+        want5 = [x1] if x1 > r else []
+        got5 = sorted(T.num_val(s) for s in res5["points"])
+        if got5 != sorted(want5) or res5["regions"] or res5["conditional"]:
+            fail("P37 矛盾支未静默无贡献", i, k1, m, b, r, res5, want5)
 
 
 # ---------------------------------------------------------------------------

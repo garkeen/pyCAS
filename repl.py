@@ -34,7 +34,7 @@ from cas.tactics import solve_linear, solve_piecewise
 from cas.diff import differentiate, DiffError, differentiate_piecewise
 from cas.cad import CadError
 from cas.integrate import integrate_term, definite_integrate, IntegrateError
-from cas.piecewise import is_piecewise, fold_nested
+from cas.piecewise import is_piecewise
 from cas.decide import decide
 from cas.context import Context
 from cas.verdict import YES, NO
@@ -438,43 +438,40 @@ class REPL:
         sl = T.subst(ol, {var: val})
         sr = T.subst(orr, {var: val})
         diff = fold(T.plus(sl, T.neg(sr)))
+        print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
+        zero = None
+        shown = "≠ 0"
         try:
             v = eval_exact(diff, {})
         except EvalNumError:
-            # 含分段/超越结构：eval_exact 通道外——分段项点塌缩后判零
+            # eval_exact 通道外（含分段/超越项）——分段项点塌缩后判零
             from cas.workflow import _piecewise_aware_zero
-            z = _piecewise_aware_zero(diff)
-            if z is True:
-                v = 0
-            elif z is False:
-                v = 1                      # 非零：走下方 FAILED 分支
-            else:
-                print(f"  回代失败: {diff} 判零未决（选支/域外）")
-                return
-            if v == 0:
-                print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
-                print(f"        = 0 ✓")
-                # 守卫统一交判定管线裁决（全谓词头 + 复合命题），不白名单、不静默
-                ok = True
-                for g in cur.guards:
-                    gsub = fold(T.subst(g, {var: val}))
-                    gv = decide(gsub, Context())
-                    if gv is NO:
-                        print(f"        守卫失败: {_fmt(g)} → {_fmt(gsub)} ✗")
-                        ok = False
-                    elif gv is not YES:
-                        print(f"        守卫未决: {_fmt(g)} → {_fmt(gsub)}（{gv}）")
-                        ok = False
-                if ok:
-                    print("        守卫全部通过 ✓")
-                    print("        === VERIFIED ===")
-                else:
-                    print("        存在失败/未决守卫，不能判定为验证通过")
-            else:
-                print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
-                print(f"        = {v} ✗ FAILED")
-        except EvalNumError as e:
-            print(f"  回代失败: {e}")
+            zero = _piecewise_aware_zero(diff)
+        else:
+            zero, shown = (v == 0), f"= {v}"
+        if zero is None:
+            print("        判零未决（选支/域外），不能判定为验证通过")
+            return
+        if not zero:
+            print(f"        {shown} ✗ FAILED")
+            return
+        print("        = 0 ✓")
+        # 守卫统一交判定管线裁决（全谓词头 + 复合命题），不白名单、不静默
+        ok = True
+        for g in cur.guards:
+            gsub = fold(T.subst(g, {var: val}))
+            gv = decide(gsub, Context())
+            if gv is NO:
+                print(f"        守卫失败: {_fmt(g)} → {_fmt(gsub)} ✗")
+                ok = False
+            elif gv is not YES:
+                print(f"        守卫未决: {_fmt(g)} → {_fmt(gsub)}（{gv}）")
+                ok = False
+        if ok:
+            print("        守卫全部通过 ✓")
+            print("        === VERIFIED ===")
+        else:
+            print("        存在失败/未决守卫，不能判定为验证通过")
 
     def cmd_steps(self, _):
         for s in self.wf.all_steps():

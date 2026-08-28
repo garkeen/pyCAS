@@ -11,58 +11,71 @@ from fractions import Fraction as Fr
 from cas import term as T
 from cas.term import Sym
 from cas.errors import TacticsError
-from cas.project import project, zero_of
+from cas.project import project, zero_of, is_zero
 from cas.domains.poly import Poly
 from cas.domains.ratfunc import RatFunc, rf_reduce
 
 
-def _poly_coefs(p: Poly, var):
-    """单变量视图系数：返回 {次数: 系数}。混有其他变元则拒答。"""
-    if var not in p.vars:
-        raise TacticsError(f"{var.name} 不在多项式变元中")
-    i = p.vars.index(var)
-    others = [j for j in range(len(p.vars)) if j != i]
-    coefs = {}
-    for k, c in p.monos:
-        if any(k[j] for j in others):
-            raise TacticsError("含其他变元的系数：当前仅支持单变量线性")
-        coefs[k[i]] = c
-    return coefs
+def _lin_core(diff, var: Sym):
+    """方程差值的线性分类：在投影标准形上裁决——语义判据，非形状判据。
+
+    谁含 var 不是看原始项的形状（x+1 与 x 的差值形状上含 x、语义上是
+    常数），而是看投影后的域元素。返回：
+    ("zero", None)     差值恒为零（零多项式/零有理式/ℚ 零）——恒等式
+    ("nonzero", None)  差值与 var 无关且可证非零——永不成零
+    ("linear", 项)     关于 var 恰一次——唯一候选解（证书项）
+    ("refuse", 理由)   其余：非线性/含其他变元/域外——完备性无法保证
+    """
+    hit = project(diff)
+    if hit is None:
+        return ("refuse", "差值不在 ℚ/多项式/有理函数域内")
+    if hit.element is None:
+        # ℚ 常数格：恒等或矛盾，与 var 无关
+        return ("zero", None) if is_zero(hit) else ("nonzero", None)
+    ring = hit.domain.ring
+    el = hit.element
+    if isinstance(el, RatFunc):
+        red = rf_reduce(ring, el)
+        if red.num.is_zero():
+            return ("zero", None)            # num ≡ 0 ⟺ 分式 ≡ 0（den≠0 归守卫）
+        el = red.num
+    if not isinstance(el, Poly):
+        return ("refuse", "投影元素非多项式")
+    if el.is_zero():
+        return ("zero", None)
+    if any(v is not var for v in el.vars):
+        return ("refuse", "含其他变元：当前仅支持单变量线性")
+    if var not in el.vars:
+        return ("nonzero", None)             # 与 var 无关的非零常数多项式
+    i = el.vars.index(var)
+    coefs = {k[i]: c for k, c in el.monos}
+    deg = max(coefs)
+    if deg == 0:
+        return ("nonzero", None)             # var 次数为 0：非零常数
+    if deg != 1:
+        return ("refuse", f"{deg} 次方程，当前战术仅支持线性")
+    a = coefs[1]
+    b = coefs.get(0, ring.from_int(0))
+    return ("linear", T.N(-b / a))
 
 
 def solve_linear(content, var: Sym):
     """线性求解战术：等式 -> 解项（证书）。
 
-    路径：投影到 K[x]/K(x) -> （有理式取约简后分子）-> 次数必须为 1
-    -> -b/a 转驻留项。验证由工作流回代判官独立完成，本函数不重复。
-    """
+    差值经 `_lin_core` 在投影标准形上分类——恰一次方程给出 -b/a 证书；
+    恒等（解集全域）/矛盾（无解）/非线性按语义拒答。验证由工作流
+    回代判官独立完成，本函数不重复。"""
     if not (isinstance(content, T.Expr) and content.head.name == "Eq"):
         raise TacticsError("solve 需要等式")
     lhs, rhs = content.args
-    diff = T.plus(lhs, T.neg(rhs))
-    hit = project(diff)
-    if hit is None:
-        raise TacticsError("等式差值不在 ℚ/多项式/有理函数域内")
-    if hit.element is None:
-        raise TacticsError("等式不含该变元")
-    ring = hit.domain.ring
-    el = hit.element
-    if isinstance(el, RatFunc):
-        el = rf_reduce(ring, el).num      # num/den = 0 ⟺ num = 0（den≠0 归守卫）
-        if el.is_zero():
-            raise TacticsError("分子恒零：恒等式，无唯一解")
-    if not isinstance(el, Poly):
-        raise TacticsError("投影元素非多项式")
-    coefs = _poly_coefs(el, var)
-    deg = max(coefs) if coefs else 0
-    if deg != 1:
-        raise TacticsError(f"{deg} 次方程，当前战术仅支持线性")
-    a = coefs.get(1)
-    if a is None or ring.is_zero(a):
-        raise TacticsError("首项系数为零")
-    b = coefs.get(0, ring.from_int(0))
-    sol = -b / a
-    return T.N(sol)
+    kind, payload = _lin_core(T.plus(lhs, T.neg(rhs)), var)
+    if kind == "linear":
+        return payload
+    if kind == "zero":
+        raise TacticsError("恒等式：解集为全域，无唯一解")
+    if kind == "nonzero":
+        raise TacticsError("矛盾等式：与该变元无关且永不成零，无解")
+    raise TacticsError(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +143,14 @@ def integer_roots(p, var):
 def solve_piecewise(f, x: Sym, target):
     """解分段方程 pw(...)=target：逐支求解 + 分支条件成员判定。
 
-    可判定片段：
-    · 常值支——支值恒等于 target 则整支区域为解（区域解），否则无贡献；
-    · 线性支——线性求解得候选，代入分支条件经判定管线裁决（成立收、
+    每支取支方程差值 d = v − target（折叠）后两步分类：
+    · d 不含自由变元 x（闭式）：判零通道裁决——恒零 → 整支区域为解，
+      可证非零 → 无贡献，判不动 → 记条件解；
+    · d 含 x：交 `_lin_core` 在投影标准形上分类（x+1≡x+1 的差值形状
+      含 x、投影后恒零，照样给区域解；x+1 与 x 的差值投影后是常数，
+      照样无贡献）——线性得候选，代入分支条件经判定管线裁决（成立收、
       不成立弃、未决记条件）。
-    任一支非线性即拒——漏掉它可能丢解，完备性无法保证，诚实拒答。
+    任一支超出线性片段即拒——漏掉它可能丢解，完备性无法保证，诚实拒答。
 
     返回 {"points": [点解], "regions": [区域条件], "conditional": [(解,条件)]}。"""
     from cas.piecewise import fold_nested, branches, is_piecewise
@@ -147,22 +163,27 @@ def solve_piecewise(f, x: Sym, target):
     f = fold_nested(f)
     points, regions, conditional = [], [], []
     for v, c in branches(f):
-        if x not in T.free_vars(v):
-            z = zero_of(T.plus(v, T.neg(target)))
+        d = fold(T.plus(v, T.neg(target)))
+        if x not in T.free_vars(d):
+            z = zero_of(d)
             if z is True:
-                regions.append(c)                 # 常值支恒等 → 整支区域为解
+                regions.append(c)                 # 支方程恒成立 → 整支区域为解
             elif z is None:
-                conditional.append((None, c))     # 常值支是否相等未决
+                conditional.append((None, c))     # 是否恒等未决
             continue
-        try:
-            sol = solve_linear(T.eq(v, target), x)
-        except TacticsError as e:
-            raise TacticsError(f"分支非线性，分段求解完备性无法保证：{e}")
-        verdict = decide(fold(T.subst(c, {x: sol})), Context())
+        kind, payload = _lin_core(d, x)
+        if kind == "zero":
+            regions.append(c)                     # 投影后恒零（如 v ≡ target）
+            continue
+        if kind == "nonzero":
+            continue                              # 支方程永不成零，无贡献
+        if kind == "refuse":
+            raise TacticsError(f"分支方程超出线性片段，完备性无法保证：{payload}")
+        verdict = decide(fold(T.subst(c, {x: payload})), Context())
         if verdict is YES:
-            points.append(sol)
+            points.append(payload)
         elif verdict is NO:
             continue
         else:
-            conditional.append((sol, c))
+            conditional.append((payload, c))
     return {"points": points, "regions": regions, "conditional": conditional}

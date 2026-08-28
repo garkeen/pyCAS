@@ -373,21 +373,23 @@ class Workflow:
         checked = False
         for src, got in pairs:
             if _is_piecewise(src):
-                # 分段源：逐支域层交叉验证。分支条件必须逐对相同
-                # （导数分段沿用原分区）；每个支值独立投影取域导数
-                # 与步骤对应支值在有理函数域判等。分段点（点胞腔）
-                # 的可导性不在本验证器裁决范围（见 REPL 分段求导通道
-                # 的未验证标注），逐支成立即视为整体验证通过。
+                # 分段源：逐支域层交叉验证。分支条件逐对相同（导数分段
+                # 沿用原分区）时每个支值独立投影取域导数，与步骤对应支值
+                # 在有理函数域判等；NO 只在携带 K(x) 判等证据时给出。
+                # 结构不匹配（未分段表示/分支数不同/条件不同）可能是
+                # 等价重划——无否证证据，未决（open），不冒充否决。
+                # 分段点（点胞腔）的可导性不在本验证器裁决范围（见 REPL
+                # 分段求导通道的未验证标注），逐支成立即视为整体验证通过。
                 from cas.piecewise import fold_nested, branches
                 if not _is_piecewise(got):
-                    return NO
+                    return unknown()
                 sbs = branches(fold_nested(src))
                 gbs = branches(fold_nested(got))
                 if len(sbs) != len(gbs):
-                    return NO
+                    return unknown()
                 for (sv, sc), (gv, gc) in zip(sbs, gbs):
                     if sc is not gc:
-                        return NO
+                        return unknown()
                     r = self._cross_diff(sv, gv, x)
                     if r is None:          # 该支在投影域外：无独立通道
                         return unknown()
