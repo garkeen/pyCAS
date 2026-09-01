@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycas"
+version = "0.3.0"
+description = "通用纯符号计算机代数系统（自动与交互双通道）"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["cas", "cas.domains", "library"]

@@ -68,6 +68,14 @@
 - simplify 的 Exp 合并特判删除，规则作为图书馆数据声明
 - parser 常数表从图书馆导入
 
+### 审查修正（2026-09-01）
+- **Diff 推导关闭等式通道**：等式两边求导不保真（点解方程 x=3 会推出 1=0），REPL 与 workflow 验证器一律拒答/否证；隐函数求导留作带依赖声明的独立命令
+- **注册纪律机械化**：`Domain.scoped` 标记 + `domain_scope()` 作用域注册（退出即注销、重名即拒）+ `lookup()`，架构 §3.4 从文字纪律变为强制
+- **library→内核反向依赖消除**：规则 DSL 解析从 `library/api.py` 移至消费方 `cas/rules.py` 装配点，图书馆回归纯数据
+- **parser 双通道合一**：raw（quote 保 held 形）与正常通道共享一套文法，仅构造原语分通道；顺带清除除法解析的 ×1 残余（两通道语义漂移）
+- **整数根候选枚举** O(|a₀|) → O(√|a₀|)（复用 `realroot.divisors`）
+- **工程**：stress 台架 pytest 收集层（`stress/test_stress.py`，台架脚本零改动）、pyproject.toml、CI 工作流；`qarith.fold` 驻留分支子项折叠归一
+
 ## 未完成（地基优先——Risch 门控）
 
 用户指令：完整 Risch（含参数积分与超越数积分，参照 FriCAS）是最终目标，但**地基完工前不启动**。地基 = 下述算术与结构机器全部就位。
@@ -86,6 +94,7 @@
 - [ ] 多参数函数偏导、绑定体内微分（依赖量词/积分地基）
 
 ### 数域扩展（Risch 前置）
+- [ ] 隐函数求导命令：依赖声明（y 关于 x）入上下文 + 求解导数（Diff 已拒等式，入口已留）
 - [ ] ℚ(i)[x]/ℚ(i)(x) 系数环挂载：poly/ratfunc 的闭项系数吸收通道（Ring 吸收 ℚ(i) 常数子项）+ project 多环阶梯（ℚ[x] 落空后试 ℚ(i)[x]）；消费方审计（cad/tactics/workflow 的 Q_RING 硬编码处按能力改派）
 - [ ] ℤ[i] 高斯整环：范数带余除法 + gcd（欧几里得）+ 高斯因式分解（参考 fricas gaussfac.spad）
 - [ ] ℚ(α) 代数扩张通用化（mod-m 余式 + Thom 编码；元素表示取模 minpoly 多项式形——参考 fricas algext.spad SAE 的 Rep := UP）
