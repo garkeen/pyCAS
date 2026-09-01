@@ -99,7 +99,10 @@ class Subst(Derivation):
 
 @dataclass(frozen=True, slots=True)
 class Diff(Derivation):
-    """对前驱表达式（或等式两边）关于 var 求导。"""
+    """对前驱表达式求导。
+
+    等式不是合法输入：等式两边求导不保真（点解方程 x=3 会"推出" 1=0），
+    验证器对标 dead。隐函数求导是带依赖声明的独立命令（未建）。"""
     pred: int
     var: Sym
 
@@ -356,54 +359,45 @@ class Workflow:
     def _verify_diff(self, content, d: Diff):
         """独立交叉验证：域层导数（另一实现）复核项层微分结果。
 
-        源在域内（K[x] 或 K(x)）时用域导数重建期望值，与步骤内容
-        在有理函数域判等；源在域外（超越塔未建）时没有独立通道，
-        诚实返回 UNKNOWN（步骤 open，非 dead）。"""
+        等式前驱一律否证（见 Diff 类 docstring）。源在域内（K[x] 或
+        K(x)）时用域导数重建期望值，与步骤内容在有理函数域判等；源在
+        域外（超越塔未建）时没有独立通道，诚实返回 UNKNOWN（步骤 open，
+        非 dead）。"""
         pred = self._steps.get(d.pred)
         if pred is None:
             return NO
-        x = d.var
         if _is_eq(pred.content):
-            if not (_is_eq(content)):
-                return NO
-            pairs = ((pred.content.args[0], content.args[0]),
-                     (pred.content.args[1], content.args[1]))
-        else:
-            pairs = ((pred.content, content),)
-        checked = False
-        for src, got in pairs:
-            if _is_piecewise(src):
-                # 分段源：逐支域层交叉验证。分支条件逐对相同（导数分段
-                # 沿用原分区）时每个支值独立投影取域导数，与步骤对应支值
-                # 在有理函数域判等；NO 只在携带 K(x) 判等证据时给出。
-                # 结构不匹配（未分段表示/分支数不同/条件不同）可能是
-                # 等价重划——无否证证据，未决（open），不冒充否决。
-                # 分段点（点胞腔）的可导性不在本验证器裁决范围（见 REPL
-                # 分段求导通道的未验证标注），逐支成立即视为整体验证通过。
-                from cas.piecewise import fold_nested, branches
-                if not _is_piecewise(got):
+            return NO
+        x = d.var
+        src, got = pred.content, content
+        if _is_piecewise(src):
+            # 分段源：逐支域层交叉验证。分支条件逐对相同（导数分段
+            # 沿用原分区）时每个支值独立投影取域导数，与步骤对应支值
+            # 在有理函数域判等；NO 只在携带 K(x) 判等证据时给出。
+            # 结构不匹配（未分段表示/分支数不同/条件不同）可能是
+            # 等价重划——无否证证据，未决（open），不冒充否决。
+            # 分段点（点胞腔）的可导性不在本验证器裁决范围（见 REPL
+            # 分段求导通道的未验证标注），逐支成立即视为整体验证通过。
+            from cas.piecewise import fold_nested, branches
+            if not _is_piecewise(got):
+                return unknown()
+            sbs = branches(fold_nested(src))
+            gbs = branches(fold_nested(got))
+            if len(sbs) != len(gbs):
+                return unknown()
+            for (sv, sc), (gv, gc) in zip(sbs, gbs):
+                if sc is not gc:
                     return unknown()
-                sbs = branches(fold_nested(src))
-                gbs = branches(fold_nested(got))
-                if len(sbs) != len(gbs):
+                r = self._cross_diff(sv, gv, x)
+                if r is None:              # 该支在投影域外：无独立通道
                     return unknown()
-                for (sv, sc), (gv, gc) in zip(sbs, gbs):
-                    if sc is not gc:
-                        return unknown()
-                    r = self._cross_diff(sv, gv, x)
-                    if r is None:          # 该支在投影域外：无独立通道
-                        return unknown()
-                    if r is not YES:
-                        return r
-                checked = True
-                continue
-            r = self._cross_diff(src, got, x)
-            if r is None:                    # 源在投影域外：无独立通道
-                continue
-            if r is not YES:
-                return r
-            checked = True
-        return YES if checked else unknown()
+                if r is not YES:
+                    return r
+            return YES
+        r = self._cross_diff(src, got, x)
+        if r is None:                        # 源在投影域外：无独立通道
+            return unknown()
+        return r
 
     def _cross_diff(self, src, got, x):
         """单项交叉验证：域层导数重建期望值 vs 项层结果。

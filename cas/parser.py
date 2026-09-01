@@ -3,7 +3,7 @@ import re
 from fractions import Fraction as Fr
 
 from cas import term as T
-from cas.term import S, N, mk, Expr, Sym, INFINITY, TRUE, FALSE, PV, PS
+from cas.term import S, N, mk, INFINITY, TRUE, FALSE, PV, PS
 from library import PI, E, IU, GAMMA
 from cas.errors import ParseError
 
@@ -23,6 +23,11 @@ _BINDERS = {"Integrate", "Sum", "Product", "Limit"}
 
 _PREC = {"=": 1, "==": 2, "!=": 2, "<": 2, ">": 2, "<=": 2, ">=": 2,
          "+": 3, "-": 3, "*": 4, "/": 4, "^": 6}
+
+_HEADMAP = {
+    "==": "Eq", "!=": "Ne", "<": "Lt", ">": "Gt", "<=": "Le", ">=": "Ge",
+    "+": "Plus", "-": "Plus", "*": "Times", "/": "Times", "^": "Power",
+}
 
 
 def tokenize(s):
@@ -44,9 +49,34 @@ def tokenize(s):
 
 
 class Parser:
-    def __init__(self, toks):
+    """表达式解析器。
+
+    raw 通道（quote 内容，'...' 内部自动切换）：构造走 _intern_expr 纯驻留，
+    保留反化简形——不合并同类项/同底幂、不折叠常量，'cos(x)/cos(x)^2 保留为
+    Times(cos, Power(cos, -2))；域约束随之保留（dom_condition 递归 Quote 提取）。
+    正常通道构造走 mk（AC 拉平排序）。两通道共用同一套文法，仅构造原语不同。
+    """
+
+    def __init__(self, toks, raw=False):
         self.toks = toks
         self.i = 0
+        self.raw = raw
+
+    # --- 构造原语：两通道唯一的差异点 ---
+
+    def _mk(self, head, args):
+        return T._intern_expr(head, tuple(args)) if self.raw \
+            else mk(head, tuple(args))
+
+    def _neg(self, e):
+        return T._intern_expr(S("Times"), (T.MONE, e)) if self.raw \
+            else T.neg(e)
+
+    def _recip(self, e):
+        # a/b 的倒数因子即 b^-1（两通道统一；历史上的 ×1 残余已清除）
+        return self._mk(S("Power"), (e, T.MONE))
+
+    # --- 文法 ---
 
     def peek(self):
         return self.toks[self.i]
@@ -87,7 +117,7 @@ class Parser:
                 self.next()
                 right = self.expr(p + 1)
                 head = S("And") if op == "&&" else S("Or")
-                left = mk(head, (left, right))
+                left = self._mk(head, (left, right))
                 continue
             p = _PREC.get(v)
             if p is None or p < minp:
@@ -97,16 +127,12 @@ class Parser:
                 v = "=="
             # ^ 右结合（2^3^2 = 2^(3^2)）；其余算子左结合
             right = self.expr(p if v == "^" else p + 1)
-            headmap = {
-                "==": "Eq", "!=": "Ne", "<": "Lt", ">": "Gt", "<=": "Le", ">=": "Ge",
-                "+": "Plus", "-": "Plus", "*": "Times", "/": "Times", "^": "Power",
-            }
-            hname = headmap[v]
+            hname = _HEADMAP[v]
             if v == "-":
-                right = T.neg(right)
+                right = self._neg(right)
             if v == "/":
-                right = T.div(T.ONE, right)
-            left = mk(S(hname), (left, right))
+                right = self._recip(right)
+            left = self._mk(S(hname), (left, right))
         return left
 
     def unary(self):
@@ -118,20 +144,25 @@ class Parser:
             if self.peek() == ("op", "^"):
                 self.next()
                 rhs = self.expr(_PREC["^"])
-                e = mk(S("Power"), (e, rhs))
-            return T.neg(e)
+                e = self._mk(S("Power"), (e, rhs))
+            return self._neg(e)
         if k == "op" and v == "'":
             self.next()
-            return T.quote(self._raw_expr(1))
+            # quote 内容保 held 形：本子表达式切 raw 通道，返回后恢复原通道
+            old, self.raw = self.raw, True
+            try:
+                return T.quote(self.expr(1))
+            finally:
+                self.raw = old
         if k == "op" and v == "(":
             self.next()
             e = self.expr(0)
             self.expect(")")
-            return self.postfix(e)
+            return e
         if k == "num":
             self.next()
             f = Fr(v)
-            return self.postfix(N(f))
+            return N(f)
         if k == "seq":
             self.next()
             return PS(v[2:])
@@ -146,7 +177,7 @@ class Parser:
         if k == "id":
             self.next()
             if v in _CONSTS:
-                return self.postfix(_CONSTS[v])
+                return _CONSTS[v]
             nk, nv = self.peek()
             if nk == "op" and nv == "(":
                 self.next()
@@ -160,128 +191,16 @@ class Parser:
                 # 绑定词大小写不敏感（integrate/Integrate 都生成绑定形式）
                 bv = v[0].upper() + v[1:] if v else v
                 if bv in _BINDERS and len(args) == 2:
-                    return self.postfix(mk(S(bv), (T.mk_bound(args[1], args[0]),)))
+                    return self._mk(S(bv), (T.mk_bound(args[1], args[0]),))
                 if v == "sqrt" and len(args) == 1:
-                    return self.postfix(T.sqrt(args[0]))
+                    return self._mk(S("Power"), (args[0], N(Fr(1, 2))))
                 if v == "ln":
                     v = "Log"
                 if v[0].islower() and len(v) > 1 and v not in ("and", "or", "not"):
                     v = v[0].upper() + v[1:]
-                return self.postfix(mk(S(v), tuple(args)))
-            return self.postfix(S(v))
+                return self._mk(S(v), tuple(args))
+            return S(v)
         raise ParseError(f"unexpected {v!r}")
-
-    def postfix(self, e):
-        return e
-
-    def _raw_expr(self, minp):
-        """原始结构构造（跳过 mk 规范化）：quote 内容保留反化简形与域约束。
-
-        与 expr 同构但所有构造走 _intern_expr（纯驻留，不合并同类项/同底幂、
-        不折叠常量）——'cos(x)/cos(x)^2 保留为 Times(cos, Power(cos, -2))，
-        'ln(x-k)/ln(x-k) 保留为 Times(log(x-k), Power(log(x-k), -1))。
-        域约束随之保留：dom_condition 递归 Quote 提取（x-k>0 等）。
-        """
-        left = self._raw_unary()
-        while True:
-            k, v = self.peek()
-            op = None
-            if k == "id" and v == "and":
-                op, p = "&&", 1
-            elif k == "id" and v == "or":
-                op, p = "||", 1
-            elif k == "op" and v in ("&&", "||"):
-                op, p = v, 1
-            if op is None and not (k == "op" and _PREC.get(v) is not None):
-                break
-            if op is not None:
-                if p < minp:
-                    break
-                self.next()
-                right = self._raw_expr(p + 1)
-                head = S("And") if op == "&&" else S("Or")
-                left = T._intern_expr(head, (left, right))
-                continue
-            p = _PREC.get(v)
-            if p is None or p < minp:
-                break
-            self.next()
-            if v == "=":
-                v = "=="
-            right = self._raw_expr(p if v == "^" else p + 1)
-            headmap = {
-                "==": "Eq", "!=": "Ne", "<": "Lt", ">": "Gt", "<=": "Le", ">=": "Ge",
-                "+": "Plus", "-": "Plus", "*": "Times", "/": "Times", "^": "Power",
-            }
-            hname = headmap[v]
-            if v == "-":
-                right = T._intern_expr(S("Times"), (T.MONE, right))
-            if v == "/":
-                right = T._intern_expr(S("Power"), (right, T.MONE))
-            left = T._intern_expr(S(hname), (left, right))
-        return left
-
-    def _raw_unary(self):
-        k, v = self.peek()
-        if k == "op" and v == "-":
-            self.next()
-            e = self._raw_unary()
-            if self.peek() == ("op", "^"):
-                self.next()
-                rhs = self._raw_expr(_PREC["^"])
-                e = T._intern_expr(S("Power"), (e, rhs))
-            return T._intern_expr(S("Times"), (T.MONE, e))
-        if k == "op" and v == "'":
-            self.next()
-            return T.quote(self._raw_expr(1))
-        if k == "op" and v == "(":
-            self.next()
-            e = self._raw_expr(0)
-            self.expect(")")
-            return self._raw_postfix(e)
-        if k == "num":
-            self.next()
-            f = Fr(v)
-            return self._raw_postfix(N(f))
-        if k == "seq":
-            self.next()
-            return PS(v[2:])
-        if k == "pvar":
-            self.next()
-            body = v[1:]
-            if "::" in body:
-                nm, pd = body.split("::", 1)
-                return PV(nm, pd)
-            return PV(body)
-        if k == "id":
-            self.next()
-            if v in _CONSTS:
-                return self._raw_postfix(_CONSTS[v])
-            nk, nv = self.peek()
-            if nk == "op" and nv == "(":
-                self.next()
-                args = []
-                if not (self.peek()[0] == "op" and self.peek()[1] == ")"):
-                    args.append(self._raw_expr(0))
-                    while self.peek() == ("op", ","):
-                        self.next()
-                        args.append(self._raw_expr(0))
-                self.expect(")")
-                bv = v[0].upper() + v[1:] if v else v
-                if bv in _BINDERS and len(args) == 2:
-                    return self._raw_postfix(T._intern_expr(S(bv), (T.mk_bound(args[1], args[0]),)))
-                if v == "sqrt" and len(args) == 1:
-                    return self._raw_postfix(T._intern_expr(S("Power"), (args[0], N(Fr(1, 2)))))
-                if v == "ln":
-                    v = "Log"
-                if v[0].islower() and len(v) > 1 and v not in ("and", "or", "not"):
-                    v = v[0].upper() + v[1:]
-                return self._raw_postfix(T._intern_expr(S(v), tuple(args)))
-            return self._raw_postfix(S(v))
-        raise ParseError(f"unexpected {v!r}")
-
-    def _raw_postfix(self, e):
-        return e
 
 
 def parse(s):

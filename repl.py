@@ -9,8 +9,9 @@
                         方程自动走逐支求解通道：点解入账、区域解/条件解如实报告）
   subst <var> = <expr>  代换
   split <cond>          条件切割（加 <cond> 分支；前缀 ! 取否定分支）
-  diff <var>            对当前步骤关于 <var> 微分（域层导数交叉验证；分段
-                        自动走审慎通道，分段点显式标注未验证）
+  diff <var>            对当前表达式关于 <var> 微分（域层导数交叉验证；分段
+                        自动走审慎通道，分段点显式标注未验证；等式拒答——
+                        隐函数求导为独立命令，未建）
   rules                 列出图书馆规则
   apply <rid>           应用指定图书馆规则
   check                 回代验证当前解
@@ -291,18 +292,17 @@ class REPL:
         pred = self._cur()
         if pred is None:
             return
+        if _is_eq(pred.content):
+            # 等式不是 diff 的合法输入：两边求导不保真（点解方程 x=3 会
+            # "推出" 1=0）。隐函数求导是带依赖声明的独立命令（未建）。
+            print("  等式不可求导（两边求导不保真）；隐函数求导为独立命令（未建）")
+            return
         var = S(rest.strip())
-        sides = pred.content.args if _is_eq(pred.content) else (pred.content,)
-        if any(is_piecewise(s) for s in sides):
-            self._diff_piecewise(pred, var, sides)
+        if is_piecewise(pred.content):
+            self._diff_piecewise(pred, var)
             return
         try:
-            if _is_eq(pred.content):
-                la, ra = pred.content.args
-                content = T.eq(differentiate(la, var),
-                               differentiate(ra, var))
-            else:
-                content = differentiate(pred.content, var)
+            content = differentiate(pred.content, var)
         except DiffError as e:
             print(f"  微分拒答: {e}")
             return
@@ -312,27 +312,23 @@ class REPL:
         self.current = s.id
         self._show_step(s)
 
-    def _diff_piecewise(self, pred, var, sides):
+    def _diff_piecewise(self, pred, var):
         """分段求导通道（审慎）：逐支求导入账，分段点显式标注未验证——
         开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不冒充。"""
         try:
-            parts = [differentiate_piecewise(s, var) for s in sides]
+            deriv, bounds = differentiate_piecewise(pred.content, var)
         except (DiffError, CadError) as e:
             print(f"  分段微分拒答: {e}")
             return
-        derivs = [d for d, _b in parts]
-        content = T.eq(derivs[0], derivs[1]) if len(derivs) == 2 else derivs[0]
-        s = self.wf.add(content, Diff(pred=self.current, var=var))
+        s = self.wf.add(deriv, Diff(pred=self.current, var=var))
         if s.status == "dead":
             print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
         self.current = s.id
         self._show_step(s)
-        for d, bounds in parts:
-            if bounds:
-                pts = ", ".join(
-                    f"x∈[{_iso_str(c)}]" for c in bounds)
-                print(f"  ⚠ 分段点 {pts} 处的可导性未验证"
-                      "（需连续性与单侧导数校验，极限层未建）")
+        if bounds:
+            pts = ", ".join(f"x∈[{_iso_str(c)}]" for c in bounds)
+            print(f"  ⚠ 分段点 {pts} 处的可导性未验证"
+                  "（需连续性与单侧导数校验，极限层未建）")
 
     def cmd_integrate(self, rest):
         pred = self._cur()

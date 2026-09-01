@@ -127,10 +127,10 @@ def integer_roots(p, var):
             return roots
     deg = max(coefs)
     a0 = coefs[0]
+    from cas.realroot import divisors
     cands = set()
-    for d in range(1, abs(a0) + 1):
-        if a0 % d == 0:
-            cands.update((d, -d))
+    for d in divisors(a0):                 # 整数根 ⟹ d | a₀，O(√|a₀|) 枚举
+        cands.update((d, -d))
     for r in sorted(cands):
         acc = coefs[deg]
         for e in range(deg - 1, -1, -1):   # Horner

@@ -93,14 +93,14 @@ def fold(t):
             if e.v == 1:
                 return b                      # b^1 = b：幺半群恒等，普适
             if e.v == 0:
-                return t                      # u^0：0^0 争议，驻留给域层
+                return T.mk(t.head, (b, e))   # u^0：0^0 争议，驻留给域层（子项仍折叠）
             if T.is_num(b):
                 bv = T.num_val(b)
                 if bv != 0:
                     return N(bv ** e.v if e.v > 0 else Fr(1) / (bv ** -e.v))
                 if e.v > 0:
                     return N(0)
-                return t                      # 0^负：未定义，驻留
+                return T.mk(t.head, (b, e))   # 0^负：未定义，驻留（子项仍折叠）
         return T.mk(t.head, (b, e))
 
     return T.mk(t.head, tuple(args))

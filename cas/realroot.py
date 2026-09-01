@@ -176,7 +176,8 @@ def squarefree_part(ring, p: Poly) -> Poly:
     return p_div_exact(ring, p_monic(ring, p), g)
 
 
-def _divisors(n):
+def divisors(n):
+    """n 的正因子列表（试除到 √n）。有理根定理候选枚举的公共通道。"""
     n = abs(n)
     if n == 0:
         return []
@@ -214,8 +215,8 @@ def rational_roots(p: Poly):
     a0 = ic.get(0, 0)
     an = ic[deg]
     cands = set()
-    for d in _divisors(a0):
-        for e in _divisors(an):
+    for d in divisors(a0):
+        for e in divisors(an):
             cands.add(Fr(d, e))
             cands.add(Fr(-d, e))
     for r in cands:

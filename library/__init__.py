@@ -7,7 +7,7 @@ cas.term 不再携带任何具体数学常数。
 from library.api import (load_all, constant, function,
                          const_by_atom, lookup_function, print_name,
                          const_positive, const_real, const_bounds,
-                         function_rules, register_domain_cond,
+                         register_domain_cond,
                          lookup_domain_cond,
                          all_functions, function_deriv,
                          ConstantDecl, FunctionDecl)

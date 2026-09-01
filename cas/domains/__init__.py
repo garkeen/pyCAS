@@ -5,7 +5,8 @@
 判定的三值性属于判定层（cas/verdict）；域层 equal 返回 bool|None。
 """
 
-from cas.domains.base import Ring, RingError, FracRing, Domain, register
+from cas.domains.base import (Ring, RingError, FracRing, Domain, register,
+                              domain_scope, lookup)
 from cas.domains import q
 from cas.domains import poly
 from cas.domains import ratfunc

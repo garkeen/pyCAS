@@ -32,8 +32,8 @@ class ConstantDecl:
 class FunctionDecl:
     """数学函数：头名 + 印名 + 性质 + 恒等式规则源。
 
-    rules 是规则行字符串（loader DSL），惰性解析缓存——图书馆模块
-    保持纯数据，解析器故障不污染注册表。
+    rules 是规则行字符串（loader DSL）。图书馆保持纯数据：解析由
+    内核消费方（cas/rules 装配规则集时）负责，本模块不导入内核。
 
     deriv 是导数模板：含 DB(0) 占位的驻留项，语义为
     f'(u) = 模板[DB(0) := u]；链式法则的 D(u) 因子由微分层乘上。
@@ -57,7 +57,6 @@ class FunctionDecl:
 _CONSTS: dict[str, ConstantDecl] = {}       # 内部名 -> 条目
 _CONSTS_BY_ATOM: dict[int, ConstantDecl] = {}   # id(atom) -> 条目
 _FUNCS: dict[str, FunctionDecl] = {}
-_RULE_CACHE: dict[str, tuple] = {}
 _DOMAIN_CONDS: dict[str, object] = {}   # name -> callable(Expr) -> [Term]
 
 
@@ -143,21 +142,6 @@ def function_deriv(name: str):
     if d is None:
         return None, ""
     return d.deriv, d.deriv_note
-
-
-def function_rules(name: str) -> tuple:
-    """规则行的解析缓存。损坏的规则行是图书馆声明缺陷——异常向上抛出，
-    绝不静默吞掉（失败是返回值的一部分，禁止隐藏）。"""
-    cached = _RULE_CACHE.get(name)
-    if cached is not None:
-        return cached
-    d = _FUNCS.get(name)
-    if d is None:
-        return ()
-    from cas.loader import parse_rule_line
-    r = tuple(parse_rule_line(line) for line in d.rule_lines)
-    _RULE_CACHE[name] = r
-    return r
 
 
 # ---------------------------------------------------------------------------

@@ -102,13 +102,18 @@ _LIB_RULESET = None
 
 
 def library_ruleset() -> RuleSet:
-    """从图书馆声明装配规则集（幂等缓存）。"""
+    """从图书馆声明装配规则集（幂等缓存）。
+
+    图书馆只持规则行字符串（纯数据），DSL 解析在本消费点完成——
+    内核消费图书馆条目，图书馆不反向导入内核。损坏的规则行是图书馆
+    声明缺陷：解析异常向上抛出，绝不静默吞掉。"""
     global _LIB_RULESET
     if _LIB_RULESET is None:
         import library
+        from cas.loader import parse_rule_line
         rs = RuleSet()
         for decl in library.all_functions():
-            for rule in library.function_rules(decl.name):
-                rs.add(rule)
+            for line in decl.rule_lines:
+                rs.add(parse_rule_line(line))
         _LIB_RULESET = rs
     return _LIB_RULESET
