@@ -7,23 +7,49 @@
 
 变元序取自由符号的字典序：同一表达式投影结果确定。将来塔结构加入后，
 阶梯在塔上继续生长，本协议不变。
+
+本层同时是**域的装配点**：把常驻基域（ℤ/ℚ/ℚ(i)）注册进阶梯是投影层
+的职责，全系统仅此一处调用 register()。域包 cas/domains 只声明、零导入
+副作用。分工理由见 cas/domains/__init__.py 的模块串——核心是 ℚ(i) 必须
+注入图书馆声明的 i 常数，而域包只依赖 cas.term，拿不到 library。
 """
 
 from dataclasses import dataclass
 
 from cas import term as T
-from cas.domains.base import register
-from cas.domains.q import QDomain
+from cas.domains.base import register, lookup
+from cas.domains.q import Q_DOMAIN
 from cas.domains.z import Z_DOMAIN
 from cas.domains.qi import QIDomain
 from cas.domains.poly import poly_domain, from_term as poly_from_term, Poly, to_term
 from cas.domains.ratfunc import ratfunc_domain, rf_from_term, RatFunc, rf_reduce, rf_to_term
 
-_Q_DOMAIN = QDomain()
-# ℚ(i)：i 常数身份由图书馆声明注入（域由显式声明进入，不做名字嗅探）；
-# library 只依赖 cas.term，无导入环
+# ℚ(i)：i 常数身份由图书馆声明注入（域由显式声明进入，不做名字嗅探）。
+# library 只依赖 cas.term，放在此处导入不与域包成环。
 from library import IU as _I_CONST            # noqa: E402
-_QI_DOMAIN = register(QIDomain(_I_CONST))
+
+_QI_DOMAIN = QIDomain(_I_CONST)
+
+
+def _install_base_domains():
+    """常驻基域注册进阶梯——全系统唯一的域注册点。
+
+    此前注册散在四处：q.py / z.py 自注册、poly.py 运行时按变元集懒注册、
+    本模块代注册 ℚ(i)。散开的后果是注册表内容取决于谁碰巧被 import
+    （新增一个域模块而无人 import，它就静默从 lookup() 里消失），且
+    poly 的懒注册让参数化实例无界涌入一张本该只装常驻基域的表。
+    """
+    for d in (Z_DOMAIN, Q_DOMAIN, _QI_DOMAIN):
+        register(d)
+
+
+_install_base_domains()
+
+# 阶梯的常数格经注册表按名取用——注册表由本层消费，不是只写不读的死设施。
+# import 时解析一次，热路径（project 每调一次）不再查表。
+_Z_DOMAIN = lookup(Z_DOMAIN.name)
+_Q_DOMAIN = lookup(Q_DOMAIN.name)
+_QI_DOMAIN = lookup(QIDomain.name)
 
 
 @dataclass(frozen=True, slots=True)

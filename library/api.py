@@ -98,11 +98,33 @@ def const_by_atom(atom: Const) -> ConstantDecl | None:
     return _CONSTS_BY_ATOM.get(id(atom))
 
 
+def const_by_name(name: str) -> ConstantDecl | None:
+    """按内部名查常数声明。
+
+    解析器的常数字面量表由此查询，不在内核里另存一份名字→原子的
+    硬编码表（design_requirements 二：图书馆是唯一语义居所）。
+    """
+    return _CONSTS.get(name)
+
+
+def is_const_name(name: str) -> bool:
+    return name in _CONSTS
+
+
 def lookup_function(name: str) -> FunctionDecl | None:
     return _FUNCS.get(name)
 
 
 def print_name(head_name: str) -> str | None:
+    """展示名查询：常数与函数两个表都查。
+
+    常数按内部名（"pi"/"gamma"），函数按头名（"Sin"/"Cos"）——两个
+    命名空间不重叠，先常数后函数。常数此前无出口，印名被迫在内核
+    （cas/pprint）另存一份硬编码表，此处补齐。
+    """
+    c = _CONSTS.get(head_name)
+    if c is not None:
+        return c.print_name
     d = _FUNCS.get(head_name)
     return d.print_name if d else None
 

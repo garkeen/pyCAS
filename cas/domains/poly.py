@@ -15,7 +15,7 @@ from fractions import Fraction as Fr
 
 from cas import term as T
 from cas.term import Expr, Int, Sym
-from cas.domains.base import Domain, Ring, RingError, register
+from cas.domains.base import Domain, Ring, RingError
 
 
 # ---------------------------------------------------------------------------
@@ -320,11 +320,17 @@ _ring_cache = {}
 
 
 def poly_domain(*vars_) -> PolyDomain:
-    """按变量集缓存域对象（域是值对象，同变集共享实例）。"""
+    """按变量集取域对象（同变集共享实例）。
+
+    只走工厂缓存，**不进域注册表**：注册表管常驻基域（ℤ/ℚ/ℚ(i)），
+    K[x] 是按变元集参数化的实例，变元集无界 —— 每遇一个新变元集就往
+    注册表灌一条等于让它无界增长，且把"常驻基域"与"参数化实例"两种
+    职责混在一个表里。参数化域一律由工厂缓存持有（K(x) 同理）。
+    """
     key = tuple(vars_)
     d = _ring_cache.get(key)
     if d is None:
-        d = register(PolyDomain(key, _default_ring()))
+        d = PolyDomain(key, _default_ring())
         _ring_cache[key] = d
     return d
 

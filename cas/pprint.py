@@ -1,16 +1,28 @@
+import library
+
 from cas import term as T
 from cas.term import Expr, Int, Rat, Sym, Const, Bound, PatVar, PatSeq, BVal, Special, DB, S
+from cas.termpath import postorder
 
 _PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times": 4, "Power": 6}
 
-_SYM_REPR = {"pi": "π"}
 
+def _atom_str(a, src=False):
+    """原子渲染。
 
-def _atom_str(a):
+    Sym 是用户符号，不做任何重映射——重映射会让名为 pi 的自定义符号被
+    印成 π。只有图书馆声明的常数才吃 print_name。
+
+    src=True（可解析源码形）一律输出内部名：展示名 π/γ 不在词法里，
+    输出即不可重解析——展示与源码是两种用途，各走各的。
+    """
     if isinstance(a, Sym):
-        return _SYM_REPR.get(a.name, a.name)
+        return a.name
     if isinstance(a, Const):
-        return _SYM_REPR.get(a.name, a.name)
+        if src:
+            return a.name
+        d = library.const_by_atom(a)
+        return d.print_name if d is not None else a.name
     if isinstance(a, BVal):
         return "true" if a.val else "false"
     if isinstance(a, Int):
@@ -30,24 +42,9 @@ def _atom_str(a):
 
 def _name_of(h):
     if isinstance(h, Sym):
-        import library
         pn = library.print_name(h.name)
         return pn if pn is not None else h.name.lower()
     return repr(h)
-
-
-def _postorder(t):
-    """显式栈后序遍历（与 simplify._postorder 同构，避免跨模块依赖）。"""
-    order = []
-    stack = [t]
-    while stack:
-        u = stack.pop()
-        order.append(u)
-        if isinstance(u, Expr):
-            stack.extend(u.args)
-        elif isinstance(u, Bound):
-            stack.append(u.body)
-    return order
 
 
 def _wrap(child, need):
@@ -67,12 +64,12 @@ def to_str(t, prec=0, hint=None, src=False):
     product(f,x)/limit(f,x,pt)），供 % 历史展开后重新解析。
     """
     val = {}
-    for u in reversed(_postorder(t)):
+    for u in reversed(postorder(t)):
         if not isinstance(u, Expr):
             if isinstance(u, Bound):
                 val[u] = val[u.body]
             else:
-                val[u] = (_atom_str(u), _ATOM_P)
+                val[u] = (_atom_str(u, src), _ATOM_P)
             continue
         name = u.head.name
         if name == "Quote":

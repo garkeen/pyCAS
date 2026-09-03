@@ -22,8 +22,8 @@
   - **导数模板作为数据**：每函数声明 `deriv` 模板（de Bruijn `DB(0)` 占位）；无条件恒等式才入册；分支破裂者以 Piecewise 容器如实声明（`Abs` 导数 = `piecewise(1 if u>0, -1 if u<0)`，u=0 无支即不可导）
   - 规则声明（exp_add 等）经统一规则引擎装配
 - **规则引擎**（`cas/rules.py`）：单引擎；守卫经 decide Verdict；auto 规则仅限无守卫（防 decide↔simplify 互递归）；`autosimplify` 严格代价下降保终止
-- **工作流**（`cas/workflow.py`）：Step DAG（七字段：id/content/derivation/guards/status/target/reads/clears/domain）+ 七种推导类型（Claim/BothSides/Rewrite/Solve/Subst/Split/**Diff**）+ 守卫指针去重与 Split 清偿 + 死步骤级联
-  - **验证器-求解器独立**：Solve 验证器只做回代判官（代入+投影判零，不重跑求解）；Diff 验证器用域层导数交叉复核项层结果；Rewrite 复核图书馆规则产物；Split 排中律覆盖验证
+- **工作流**（`cas/workflow.py`）：Step DAG（七字段：id/content/derivation/guards/status/target/reads/clears/domain）+ **八种**推导类型（Claim/BothSides/Rewrite/Solve/Subst/Split/Diff/**Integrate**）+ 守卫指针去重与 Split 清偿 + 死步骤级联
+  - **验证器-求解器独立**：Solve 验证器只做回代判官（代入+投影判零，不重跑求解）；Diff 验证器用域层导数交叉复核项层结果；Integrate 验证器用微分层复核原函数、定积分再核端点差；Rewrite 复核图书馆规则产物；Split 排中律覆盖验证
   - 域归属：步骤内容经投影记录所属域（步骤展示 ∈K[x]/K(x)/Q）
 - **战术层**（`cas/tactics.py`）：线性求解战术 + 丢番图碎片——线性丢番图（扩展欧几里得，裴蜀证书+周期参数化）、单变量整数根（有理根定理完备候选）+ **分段方程求解**（`solve_piecewise`）。线性分类内核 `_lin_core` 在**投影标准形**上裁决（语义判据非形状判据）：恒零→恒等式/区域解、无变元非零→矛盾/无贡献、恰一次→-b/a 证书、其余（非线性/多变量/域外）拒答；分段求解逐支消费同一分类（闭式支走判零通道），任支超出片段整体拒答保完备性；只交证书，验证独立
 - **公共算法机器**：
@@ -34,7 +34,10 @@
 - **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则；缺模板、绑定体内微分诚实抛 `DiffError`。**分段求导审慎通道**（`differentiate_piecewise`）：逐支求导 + 分段点（点胞腔）显式列出未验证——开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不逐支冒充整体导数
 - **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——求值语义为**有序首中**（if/elif/else，`⊤`=否则支；每点至多落一支 → 取值天然唯一，无求值层冲突）：`select` 取值、`coverage` 覆盖、**`collapse` 点塌缩**（任意深度的分段子项按有序首中塌缩为支值，数值点回代判定的公共通道）；分支体**独立投影**无共享宿主（`project_pw`）；运算**逐支笛卡尔提升**（`lift`，`(f⊕g)(x)=f(x)⊕g(x)`，条件取合取、空组合丢弃）；`conflicts` 作**顺序无关性 lint**（交叠处值不等→提示收紧为互斥守卫，判不动即 Unknown，不作求值闸）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`fold_nested` 嵌套展平、`domain_cells`/`connected_components` 定义域胞腔与连通分量；`Abs` 导数据此以 Piecewise 如实入册（`sign`，u=0 无支）
 - **REPL**（`repl.py`）：claim/both/norm/solve/subst/**split/diff/rules/apply/integrate/int**/check/steps/undo——solve/diff 对分段自动路由：分段方程逐支求解（点解入账走回代判官、区域解/条件解如实报告）、分段求导走审慎通道（分段点未验证标注）；check 对含分段项点塌缩后判零
-- **压力台架**（`stress/`）：41 条性质，全自证无外部真值
+- **压力台架**（`stress/`）：41 条性质，全自证无外部真值（随机、覆盖数学性质全域）
+- **钉子库**（`tests/`）：57 条确定性单测（退化形态、修过的 bug、职责边界；失败定位到断言）
+  - 图书馆查询出口、印名展示形/源码形分离、回代判官各分支、域注册集中化与作用域机制、全模块独立导入、decide 公理层兜底
+  - 与 stress/ 分工：stress 管"数学没错"，tests 管"结构与契约没退化"；CI 两步都跑
   - P1-P4：折叠保真、幂等指针、区间真值表、回代判官
   - P5-P9：多项式往返、判等完备、交叉相乘、GCD 整除
   - P10-P13：项层微分 × 域层导数交叉、线性/莱布尼茨/商规则恒等、泰勒 h¹ 系数、验证器独立性
@@ -70,11 +73,33 @@
 
 ### 审查修正（2026-09-01）
 - **Diff 推导关闭等式通道**：等式两边求导不保真（点解方程 x=3 会推出 1=0），REPL 与 workflow 验证器一律拒答/否证；隐函数求导留作带依赖声明的独立命令
-- **注册纪律机械化**：`Domain.scoped` 标记 + `domain_scope()` 作用域注册（退出即注销、重名即拒）+ `lookup()`，架构 §3.4 从文字纪律变为强制
+- **注册纪律机制就位**：`Domain.scoped` 标记 + `domain_scope()` 作用域注册（退出即注销、重名即拒）+ `lookup()`。当时机制已建但**零消费者**（`lookup`/`domain_scope` 全项目无调用、`scoped` 无域声明），属空壳；2026-09-03 的职责唯一化把它接上真消费者，见下节
 - **library→内核反向依赖消除**：规则 DSL 解析从 `library/api.py` 移至消费方 `cas/rules.py` 装配点，图书馆回归纯数据
 - **parser 双通道合一**：raw（quote 保 held 形）与正常通道共享一套文法，仅构造原语分通道；顺带清除除法解析的 ×1 残余（两通道语义漂移）
 - **整数根候选枚举** O(|a₀|) → O(√|a₀|)（复用 `realroot.divisors`）
 - **工程**：stress 台架 pytest 收集层（`stress/test_stress.py`，台架脚本零改动）、pyproject.toml、CI 工作流；`qarith.fold` 驻留分支子项折叠归一
+
+### 职责唯一化（2026-09-03）
+
+审计发现一类反复出现的结构病：**同一职责有两个负责人——设计上的那个是空壳，实际干活的那个是硬编码**。本轮逐项收敛，原则是每个职责唯一负责人。
+
+| 职责 | 原设计负责人（空壳） | 原实际负责人 | 收敛后 |
+|---|---|---|---|
+| 域的注册 | 各域模块自注册（4 处，内容取决于谁被 import） | 同左 | `cas/project` 唯一注册点，域包纯声明、零导入副作用 |
+| 域的取用 | `lookup()`（0 调用） | `project` 自建单例 | 阶梯常数格经 `lookup()` 取用 |
+| 参数化域 | `poly` 运行时按变元集灌注册表（无界增长）；`ratfunc` 从不注册 | — | 两者同策略：只走工厂缓存，不进注册表 |
+| 常数印名 | `library.print_name`（只查函数，不查常数） | `pprint._SYM_REPR` | 图书馆补 `const_by_name`/`is_const_name`，`print_name` 覆盖常数；废 `_SYM_REPR` |
+| 常数按名查询 | 无此出口 | `parser._CONSTS` 硬编码 | 查 `library.const_by_name`；`infinity/true/false` 是句法原子，留内核 |
+| 定义域条件 | `domcond.DOM_HOOKS`（恒空） | `library._DOMAIN_CONDS` | 废 `DOM_HOOKS`，只留图书馆通道 |
+| 回代判官 | `workflow._piecewise_aware_zero`（私有） | `repl` 内联副本 + 盗用私有 | 新建 `cas/judge.py`，两处共用一套 |
+| 树遍历 | 两份同构 `_postorder` | pprint / simplify 各一份 | 归一到 `cas/termpath.postorder` |
+
+- **判官裁决权威归一**：此前 repl 先试 `eval_exact`、workflow 只走 `zero_of`，两处通道顺序已分叉。现裁决一律走 `zero_of`（域标准形，覆盖严格广于环层 `eval_exact`），`eval_exact` 只取展示值。差分验证 1432 例零冲突
+- **模块图修复**：`term.py` 末尾回接 `termpath` 改为 PEP 562 惰性 `__getattr__`。此前 `import cas.termpath` 基线即 ImportError，而注释却称"无导入环"。现全部 34 个模块均可独立导入
+- **印名两种用途分清**：展示形吃图书馆 `print_name`（π/γ），`src=True` 源码形输出内部名（`pi`/`gamma`）——此前 `src=True` 承诺"可解析源码形"却输出词法不认的 π，往返断裂
+- **死代码**：删 `RuleSet.for_term`（0 调用）、`domcond.DOM_HOOKS`、`pprint._SYM_REPR`
+- **decide 公理层保留**：审计初判为死代码，实测否——屏蔽 `_cmp_interval` 后仍能正确裁决 `pi>3`/`e>2`/`sin(x)>2`。它是可用兜底，与区间通道同源数据但覆盖更窄，已在分派处写明关系并由 `tests/` 锁定
+- **钉子库 `tests/` 建立**：此前只有 `stress/` 的随机压力测试（41 条性质），失败粒度是整个脚本、无单测级定位。现 `tests/` 放确定性钉子，与 stress 分工（stress 管随机性质全域，tests 管退化形态/bug/职责边界），57 条、CI 两步都跑。覆盖：图书馆查询出口、印名展示形与源码形分离、回代判官各分支、域注册集中化与作用域机制、全模块独立导入、公理层兜底
 
 ## 未完成（地基优先——Risch 门控）
 

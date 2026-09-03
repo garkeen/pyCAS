@@ -199,3 +199,21 @@ def all_paths(t, base=()):
             yield from all_paths(a, base + (i,))
     elif isinstance(t, T.Bound):
         yield from all_paths(t.body, base + (0,))
+
+
+def postorder(t):
+    """显式栈后序遍历（不依赖 Python 递归栈，深表达式安全）。
+
+    全系统只此一份：此前 pprint 与 simplify 各存一份同构副本（pprint
+    那份的注释还写着"避免跨模块依赖"），树遍历工具归本模块。
+    """
+    order = []
+    stack = [t]
+    while stack:
+        u = stack.pop()
+        order.append(u)
+        if isinstance(u, T.Expr):
+            stack.extend(u.args)
+        elif isinstance(u, T.Bound):
+            stack.append(u.body)
+    return order

@@ -35,7 +35,7 @@ from fractions import Fraction as Fr
 from cas import term as T
 from cas.term import Sym
 from cas.qarith import fold
-from cas.domains.base import Domain, Ring, register
+from cas.domains.base import Domain, Ring
 from cas.domains.q import Q_RING
 from cas.domains.poly import Poly
 from cas.domains.ratfunc import rf_from_term

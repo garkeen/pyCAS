@@ -14,7 +14,7 @@ b>0 时 r ≥ 0），保证 gcd 链单调下降。
 from fractions import Fraction as Fr
 
 from cas.qarith import fold, eval_exact, EvalNumError
-from cas.domains.base import Domain, Ring, RingError, register
+from cas.domains.base import Domain, Ring, RingError
 
 
 class ZZRing(Ring):
@@ -94,5 +94,6 @@ class ZDomain(Domain):
         return eval_exact(a, {}) == eval_exact(b, {})
 
 
+# 单例。注册不是本模块的事：域包只声明，装配（含注册进阶梯）归
+# 投影层 cas/project——见 cas/domains/__init__.py 的分工说明。
 Z_DOMAIN = ZDomain()
-register(Z_DOMAIN)

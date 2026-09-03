@@ -224,6 +224,11 @@ _rfx_cache = {}
 
 
 def ratfunc_domain(*vars_) -> RatFuncDomain:
+    """按变量集取域对象（同变集共享实例）。
+
+    与 poly_domain 同一策略：只走工厂缓存，不进域注册表（理由见
+    poly_domain 的文档串）。两族参数化域的行为必须对称。
+    """
     key = tuple(vars_)
     d = _rfx_cache.get(key)
     if d is None:

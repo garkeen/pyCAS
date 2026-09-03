@@ -3,7 +3,7 @@ name: stress
 on: [push, pull_request]
 
 jobs:
-  stress:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,4 +11,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pytest pytest-timeout
-      - run: python -m pytest stress/test_stress.py -q
+      # 钉子库：确定性单测，失败直接定位到断言
+      - name: 钉子库
+        run: python -m pytest tests/ -q
+      # 随机压力台架：41 条性质，全自证无外部真值
+      - name: 压力台架
+        run: python -m pytest stress/test_stress.py -q

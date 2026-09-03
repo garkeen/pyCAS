@@ -33,6 +33,7 @@ from cas.domains.ratfunc import RatFunc, rf_deriv, rf_to_term
 from cas.domcond import dom_condition
 from cas.context import Context
 from cas.decide import decide
+from cas.judge import back_substitute
 from cas.qarith import fold
 from cas.project import project, zero_of, normalize as proj_normalize
 
@@ -323,20 +324,18 @@ class Workflow:
         return NO
 
     def _verify_solve(self, content, d: Solve):
-        """回代判官：代入证书后域标准形判零。不重跑求解公式。
+        """回代判官（cas/judge）：代入证书后域标准形判零。不重跑求解公式。
 
-        代入结果是分段项时先按有序首中选支（数值点至多落一支，
-        取值唯一），再对选出的支值判零。"""
+        代入结果是分段项时先按有序首中点塌缩（数值点至多落一支，
+        取值唯一），再对选出的支值判零。判零实现只有一处，本处只做
+        分派与 Verdict 组装。"""
         pred = self._steps.get(d.pred)
         if pred is None or not _is_eq(pred.content):
             return NO
         if not (_is_eq(content) and content.args[0] is d.var
                 and content.args[1] is d.solution):
             return NO
-        lhs, rhs = pred.content.args
-        diff = T.plus(lhs, T.neg(rhs))
-        substituted = fold(T.subst(diff, {d.var: d.solution}))
-        z = _piecewise_aware_zero(substituted)
+        z = back_substitute(pred.content, d.var, d.solution).zero
         if z is True:
             return YES
         if z is False:
@@ -475,39 +474,6 @@ def _is_piecewise(t) -> bool:
     return is_piecewise(t)
 
 
-def _has_piecewise(t) -> bool:
-    """项中任意深度是否出现分段容器（如 pw(...) + 2 的加法包裹）。"""
-    if _is_piecewise(t):
-        return True
-    if isinstance(t, Expr):
-        return any(_has_piecewise(a) for a in t.args)
-    return False
-
-
-def _has_undef(t) -> bool:
-    """项中是否出现 Undefined（该点不在定义域内）。"""
-    if t is T.SP("Undefined"):
-        return True
-    if isinstance(t, Expr):
-        return any(_has_undef(a) for a in t.args)
-    return False
-
-
-def _piecewise_aware_zero(t):
-    """判零通道：普通项走域标准形判零；含分段项先点塌缩（有序首中
-    选支）再判。数值点至多落一支，塌缩后取值唯一——判零无歧义。
-
-    返回 True/False/None（None 为判不动）。塌缩出 Undefined 的点不在
-    定义域内，等式在此点无值——不是解，返回 False。"""
-    if not _has_piecewise(t):
-        return zero_of(t)
-    from cas.piecewise import collapse
-    c = collapse(t, Context())
-    if c is None:
-        return None                        # 选支未决：条件判不动
-    if _has_undef(c):
-        return False                       # 定义域外：等式无值，非解
-    return zero_of(fold(c))
 
 
 def _eq_equal(a, b) -> bool:

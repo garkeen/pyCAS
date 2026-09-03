@@ -830,6 +830,13 @@ def _family_cmp(fact, ctx, depth):
     r = _derive_layer(fact, ctx, depth)
     if r is not None:
         return r
+    # 公理层（图书馆界数据）是**兜底**，不是死代码：
+    # 它与区间通道消费同一份图书馆声明（const_bounds / FunctionDecl.bound），
+    # 但区间通道更通用（能对复合表达式 a−b 整体求区间），故通常先由它
+    # 定案，本层只在所有前序通道都让位（返回 None）时才轮到。
+    # 实测：屏蔽 _cmp_interval 后本层仍能正确裁决 pi>3 / e>2 / sin(x)>2。
+    # 二者不是重复实现——区间通道覆盖广，本层是引理直读，删它会让
+    # 图书馆界数据只剩单一消费路径。关系由 tests/test_decide_axioms.py 锁定。
     for ax in _AXIOM_CHECKS:
         r = ax(fact, ctx)
         if r is not None:
@@ -945,6 +952,10 @@ def equivalent(a, b, ctx=None, budget=100000) -> Verdict:
 
     域标准形归零经 autosimplify + 投影判零；塔规范形重建后由注册阶段接入。"""
     from cas.simplify import autosimplify
+    # 延迟导入：这是 cas.decide ↔ cas.context 环的回边。context 顶层
+    # `from cas.decide import decide/contradicted/domain_ok`（去边），
+    # 本处是反向。环的成因是上下文把判定当作事实查询的实现，而判定又
+    # 需要造默认上下文；把默认上下文的构造移出 decide 即可拆环。
     from cas.context import Context
 
     if a is b:

@@ -29,15 +29,14 @@ from cas import term as T
 from cas.term import S, Sym
 from cas.parser import parse
 from cas.pprint import to_str
-from cas.qarith import eval_exact, EvalNumError, fold
+from cas.qarith import fold
+from cas.judge import back_substitute, guard_report
 from cas.errors import TacticsError
 from cas.tactics import solve_linear, solve_piecewise
 from cas.diff import differentiate, DiffError, differentiate_piecewise
 from cas.cad import CadError
 from cas.integrate import integrate_term, definite_integrate, IntegrateError
 from cas.piecewise import is_piecewise
-from cas.decide import decide
-from cas.context import Context
 from cas.verdict import YES, NO
 from cas.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
                           Subst, Split, Diff, Integrate, _is_eq, _normalize_eq)
@@ -430,38 +429,26 @@ class REPL:
         else:
             print("  当前步骤不是 var = value 形式")
             return
-        ol, orr = orig.content.args
-        sl = T.subst(ol, {var: val})
-        sr = T.subst(orr, {var: val})
-        diff = fold(T.plus(sl, T.neg(sr)))
         print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
-        zero = None
-        shown = "≠ 0"
-        try:
-            v = eval_exact(diff, {})
-        except EvalNumError:
-            # eval_exact 通道外（含分段/超越项）——分段项点塌缩后判零
-            from cas.workflow import _piecewise_aware_zero
-            zero = _piecewise_aware_zero(diff)
-        else:
-            zero, shown = (v == 0), f"= {v}"
-        if zero is None:
+        # 判零与守卫的裁决权在 cas/judge（唯一实现），此处只做展示
+        bs = back_substitute(orig.content, var, val)
+        if bs.zero is None:
             print("        判零未决（选支/域外），不能判定为验证通过")
             return
-        if not zero:
+        if bs.zero is False:
+            shown = f"= {bs.exact}" if bs.exact is not None else "≠ 0"
             print(f"        {shown} ✗ FAILED")
             return
-        print("        = 0 ✓")
+        print(f"        = {bs.exact if bs.exact is not None else 0} ✓")
         # 守卫统一交判定管线裁决（全谓词头 + 复合命题），不白名单、不静默
         ok = True
-        for g in cur.guards:
-            gsub = fold(T.subst(g, {var: val}))
-            gv = decide(gsub, Context())
-            if gv is NO:
-                print(f"        守卫失败: {_fmt(g)} → {_fmt(gsub)} ✗")
+        for c in guard_report(cur.guards, var, val):
+            if c.verdict is NO:
+                print(f"        守卫失败: {_fmt(c.guard)} → {_fmt(c.subst)} ✗")
                 ok = False
-            elif gv is not YES:
-                print(f"        守卫未决: {_fmt(g)} → {_fmt(gsub)}（{gv}）")
+            elif c.verdict is not YES:
+                print(f"        守卫未决: {_fmt(c.guard)} → {_fmt(c.subst)}"
+                      f"（{c.verdict}）")
                 ok = False
         if ok:
             print("        守卫全部通过 ✓")

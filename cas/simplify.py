@@ -1,29 +1,16 @@
 from cas import term as T
 from cas.term import Expr, Int
 from cas.errors import BudgetExceeded
+from cas.termpath import postorder
 
 # 项 id 记忆化：驻留项不可变且内容寻址，化简结果按 _h 缓存永久有效。
 _MEMO = {}
 
 
-def _postorder(t):
-    """显式栈后序遍历（不依赖 Python 递归栈，深表达式安全）。"""
-    order = []
-    stack = [t]
-    while stack:
-        u = stack.pop()
-        order.append(u)
-        if isinstance(u, Expr):
-            stack.extend(u.args)
-        elif isinstance(u, T.Bound):
-            stack.append(u.body)
-    return order
-
-
 def cost(t):
     """节点总数（均匀代价，显式栈后序）。良基自然数，供代价下降判据。"""
     n = 0
-    for _u in _postorder(t):
+    for _u in postorder(t):
         n += 1
     return n
 
@@ -38,9 +25,15 @@ def _mul_expand(a, b):
 
 
 def expand(t):
-    """环层全展开（显式栈后序重建：子项先展开，向上只做分配）。"""
+    """环层全展开（显式栈后序重建：子项先展开，向上只做分配）。
+
+    注意：生产路径目前不消费本函数，唯一调用方是压力台架
+    （stress/stress_qarith.py）。它不是死代码（被测试使用），但与
+    cas/domains/poly 的 Times 展开存在功能重叠——合并前需先确认
+    压力台架改用哪一侧。
+    """
     val = {}
-    for u in reversed(_postorder(t)):
+    for u in reversed(postorder(t)):
         if isinstance(u, Expr):
             name = u.head.name
             if name == "Plus":
@@ -88,7 +81,7 @@ def simplify(t, budget=100000):
     def rebuild(root):
         nonlocal spent
         val = {}
-        for u in reversed(_postorder(root)):
+        for u in reversed(postorder(root)):
             spent -= 1
             if spent < 0:
                 raise BudgetExceeded()

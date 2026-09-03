@@ -60,19 +60,6 @@ class RuleSet:
             if r in lst:
                 lst.remove(r)
 
-    def for_term(self, t):
-        seen = set()
-        keys = ["*"]
-        if isinstance(t, T.Expr):
-            keys.append(t.head.name)
-        else:
-            keys.append(t.__class__.__name__ + ":" + repr(t))
-        for k in keys:
-            for r in sorted(self.index.get(k, ()), key=lambda r: r.priority):
-                if r.id not in seen:
-                    seen.add(r.id)
-                    yield r
-
     def ids(self):
         return list(self.rules)
 
@@ -110,6 +97,10 @@ def library_ruleset() -> RuleSet:
     global _LIB_RULESET
     if _LIB_RULESET is None:
         import library
+        # 延迟导入：这是 cas.rules ↔ cas.loader 环的回边。loader 顶层
+        # `from cas.rules import Rule`（去边），本处若要也提到顶层，两侧
+        # 都会撞上半初始化模块。环的成因是规则行 DSL 的解析产物是 Rule，
+        # 而装配点在本模块——解析与装配同居一处时此环即消失。
         from cas.loader import parse_rule_line
         rs = RuleSet()
         for decl in library.all_functions():

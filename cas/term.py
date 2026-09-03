@@ -541,11 +541,29 @@ def _lift(t, var, depth):
 
 # ---------------------------------------------------------------------------
 # 树遍历与重写工具（M6.7 拆分）：subst/instantiate/path 操作移居
-# cas/termpath.py（对 term 只持模块引用，无导入环）；此处回接名字，
-# `from cas.term import subst` 等既有导入面不变。
+# cas/termpath.py，此处回接名字，`from cas.term import subst` 等既有
+# 导入面不变。
+#
+# 回接走 PEP 562 模块级 __getattr__ 惰性解析，不在 import 期执行：
+# termpath 顶部 `from cas import term as T`，若本模块末尾再直接
+# `from cas.termpath import ...`，则 `import cas.termpath` 作为入口时
+# 必然撞上 term 的半初始化状态而 ImportError（基线即崩，旧注释却称
+# "无导入环"）。惰性解析后两个方向都能独立导入。
 # ---------------------------------------------------------------------------
 
-from cas.termpath import (  # noqa: E402
-    _subst_raw, subst, _instantiate_raw, instantiate,
-    free_vars, term_at, _bind_into, replace_at, all_paths,
-)
+_TERMPATH_REEXPORT = frozenset((
+    "_subst_raw", "subst", "_instantiate_raw", "instantiate",
+    "free_vars", "term_at", "_bind_into", "replace_at", "all_paths",
+))
+
+
+def __getattr__(name):
+    """惰性回接 cas/termpath 的名字（PEP 562）。
+
+    仅在常规属性查找失败时被调用，故 term 自身的定义优先；查不到的
+    名字仍抛 AttributeError，不静默吞错。
+    """
+    if name in _TERMPATH_REEXPORT:
+        from cas import termpath
+        return getattr(termpath, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

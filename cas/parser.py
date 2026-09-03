@@ -2,9 +2,10 @@ import re
 
 from fractions import Fraction as Fr
 
+import library
+
 from cas import term as T
 from cas.term import S, N, mk, INFINITY, TRUE, FALSE, PV, PS
-from library import PI, E, IU, GAMMA
 from cas.errors import ParseError
 
 _TOKEN = re.compile(
@@ -17,7 +18,9 @@ _TOKEN = re.compile(
     r")"
 )
 
-_CONSTS = {"pi": PI, "e": E, "i": IU, "gamma": GAMMA, "infinity": INFINITY, "true": TRUE, "false": FALSE}
+# 句法层原子：属于语言的记号（Special/BVal），不是数学常数，不进图书馆。
+# 数学常数一律经 library 按名查询，内核不存名字→原子的副本。
+_SYNTAX_ATOMS = {"infinity": INFINITY, "true": TRUE, "false": FALSE}
 
 _BINDERS = {"Integrate", "Sum", "Product", "Limit"}
 
@@ -176,8 +179,11 @@ class Parser:
             return PV(body)
         if k == "id":
             self.next()
-            if v in _CONSTS:
-                return _CONSTS[v]
+            if v in _SYNTAX_ATOMS:
+                return _SYNTAX_ATOMS[v]
+            d = library.const_by_name(v)
+            if d is not None:
+                return d.atom
             nk, nv = self.peek()
             if nk == "op" and nv == "(":
                 self.next()
