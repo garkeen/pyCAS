@@ -1,4 +1,4 @@
-"""域层随机压力台架（docs/cas_v3_arch.md 九 验收方法论）。
+"""域层随机压力台架（cas_v3_arch.md 九 验收方法论）。
 
 五条性质，全部自证：
   P5 多项式往返    random Poly -> to_term -> from_term == 原 monos

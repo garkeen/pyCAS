@@ -4,7 +4,7 @@
 层位纪律：本包只依赖 cas.term，被 decide/simplify 上层消费，
 永不反向导入——域是地基，判定管线在域之上。
 
-设计裁定（docs/cas_v3_arch.md 三）：
+设计裁定（cas_v3_arch.md 三）：
 · 每个域自带 normalize（标准形）/ equal（完全判定判等）/ member（成员测试）；
 · 域由显式声明进入，不做叶嗅探（v2 病根）；
 · equal 仅对成员有定义，片段内完全判定——返回值是 bool，

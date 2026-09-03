@@ -1,4 +1,4 @@
-"""随机压力台架（docs/cas_v3_arch.md 九 验收方法论：生成验证，非手写案例）。
+"""随机压力台架（cas_v3_arch.md 九 验收方法论：生成验证，非手写案例）。
 
 四条性质，全部自证、无需外部真值：
   P1 折叠保真    eval_exact(t, env) == eval_exact(fold(t), env)
