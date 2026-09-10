@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""pyCAS v3 交互式 REPL。
+"""pyCAS 交互式 REPL（v4 架构）。
 
 命令：
   <表达式>              断言方程/表达式入账（Claim）
@@ -12,8 +12,8 @@
   diff <var>            对当前表达式关于 <var> 微分（域层导数交叉验证；分段
                         自动走审慎通道，分段点显式标注未验证；等式拒答——
                         隐函数求导为独立命令，未建）
-  rules                 列出图书馆规则
-  apply <rid>           应用指定图书馆规则
+  rules                 列出运行期声明的规则
+  apply <rid>           应用指定规则
   check                 回代验证当前解
   steps                 列出全部步骤
   undo                  撤销最近一步（仅回退指针）
@@ -22,10 +22,7 @@
 运行：python repl.py
 """
 
-import sys
-sys.path.insert(0, ".")
-
-from cas.runtime import new_workflow
+from cas.runtime import get_runtime, new_workflow
 from cas.syntax import term as T
 from cas.syntax.term import S, Sym
 from cas.frontend.parser import parse
@@ -43,9 +40,6 @@ from cas.workflow.workflow import (Claim, BothSides, Rewrite, Solve,
                           Subst, Split, Diff, Integrate, _is_eq)
 from cas.runtime.dispatch import domain_normal_form
 
-from cas.runtime import bootstrap
-bootstrap()
-
 
 def _fmt(t):
     """显示前 ℚ 折叠（Times(-1,2) → -2 等）。"""
@@ -62,12 +56,14 @@ def _iso_str(cell):
 
 class REPL:
     def __init__(self):
+        # 显式装配（v4 §7.1）：装配由应用发起，import 期不改全局状态。
+        get_runtime()
         self.wf = new_workflow()
         self.current = None
         self.original = None
 
     def run(self):
-        print("pyCAS v3 REPL. 输入 'help' 查看命令。\n")
+        print("pyCAS REPL. 输入 'help' 查看命令。\n")
         while True:
             try:
                 line = input("> ").strip()
@@ -387,7 +383,7 @@ class REPL:
         from cas.math.rules import declared_ruleset
         rs = declared_ruleset()
         if not rs.rules:
-            print("  图书馆无规则")
+            print("  运行期声明里无规则")
             return
         for rid, r in rs.rules.items():
             auto = " auto" if r.auto else ""
