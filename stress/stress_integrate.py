@@ -79,7 +79,7 @@ def prop_indefinite(rounds, rng):
         p, coefs = rand_poly(rng)
         f = to_term(Q_RING, p)
         F = integrate_term(f, X)
-        if not verify_antideriv(F, f, X):
+        if verify_antideriv(F, f, X) is not True:
             fail("P32 原函数验证失败", i, to_str(f), to_str(F))
         a = Fr(rng.randint(-5, 5), 1)
         b = Fr(rng.randint(-5, 5), 1)

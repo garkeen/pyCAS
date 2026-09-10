@@ -393,8 +393,12 @@ class IntegrateChecker:
         d = proposal.evidence.payload
         f, x, G = pred, d.var, d.antideriv
         from cas.math.integrate import verify_antideriv
-        if not verify_antideriv(G, f, x):
+        ok = verify_antideriv(G, f, x)
+        if ok is False:
             return Rejected(Reason.FRAGMENT, "微分层复核不通过")
+        if ok is None:
+            # 判零通道覆盖不到（如 exp/sin 组合）——能力缺失，诚实未决，不是反驳
+            return UnknownResult(Reason.FRAGMENT, "微分层无法判定（缺展开归零通道）")
         if d.bounds is None:
             want = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, f),)), G)
             if _eq_equal(content, want):

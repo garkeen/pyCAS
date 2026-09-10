@@ -320,6 +320,19 @@ class Workflow:
                            outputs=(Ref("constraint", c.id),))
         return c
 
+    def solve_constraints(self, unknowns):
+        """求解约束系统并复核。求解器**不可信**（可以给错候选），复核归 checker。
+
+        返回 `(valuation, steps, complete)`；求解器拒答返回 `(None, (), False)`。
+        """
+        from cas.math.constraints import solve_linear_constraints
+        rels = tuple(c.relation for c in self.constraints.all())
+        res = solve_linear_constraints(rels, unknowns)
+        if res is None:
+            return None, (), False
+        valuation, complete = res
+        return valuation, self.verify_valuation(valuation), complete
+
     def verify_valuation(self, valuation):
         """逐条复核「这组赋值满足约束系统」。
 

@@ -82,6 +82,12 @@ def integrate_piecewise_indefinite(f, x: Sym):
 # ---------------------------------------------------------------------------
 
 def _judge_zero_diff(dF, f):
+    """dF − f 是否恒零。**三值**：True 证零 / False 证非零 / None 未决。
+
+    未决必须与「非零」分开：判零通道覆盖不到的函数（exp/sin 组合之类，三角基
+    归零阶段尚未重建，见 decide.py 的 TODO）属于**能力缺失**，不是反驳。把
+    None 说成 False 会伪造否证——「未找到与不存在是两个结论」。
+    """
     diff = fold(T.plus(dF, T.neg(f)))
     if diff is T.ZERO:
         return True
@@ -93,12 +99,21 @@ def _judge_zero_diff(dF, f):
     allv = tuple(sorted(T.free_vars(dF) | T.free_vars(f),
                         key=lambda s: s.name))
     if not allv:
-        return False
-    return ratfunc_domain(*allv).equal(dF, f) is True
+        return None
+    r = ratfunc_domain(*allv).equal(dF, f)
+    if r is True:
+        return True
+    if r is False:
+        return False                          # 两者都是域成员且不等：真反驳
+    return None                               # 非成员（超越式）：判零通道外，未决
 
 
-def verify_antideriv(F, f, x: Sym) -> bool:
-    """独立验证 F 是 f 的原函数（与积分器无关）。"""
+def verify_antideriv(F, f, x: Sym):
+    """独立验证 F 是 f 的原函数（与积分器无关）。
+
+    返回 `True` / `False` / `None`（未决）。**三值**：判零通道覆盖不到时诚实
+    返回 None，绝不把「判不了」报成「不是原函数」。
+    """
     from cas.math.piecewise import is_piecewise, fold_nested, branches
     if is_piecewise(f) or is_piecewise(F):
         ff = fold_nested(f)
@@ -106,12 +121,16 @@ def verify_antideriv(F, f, x: Sym) -> bool:
         bf, bF = branches(ff), branches(FF)
         if len(bf) != len(bF):
             return False
+        unknown = False
         for (vf, cf), (vF, cF) in zip(bf, bF):
             if cf is not cF:
                 return False
-            if not _judge_zero_diff(differentiate(vF, x), vf):
+            r = _judge_zero_diff(differentiate(vF, x), vf)
+            if r is False:
                 return False
-        return True
+            if r is None:
+                unknown = True
+        return None if unknown else True
     return _judge_zero_diff(differentiate(F, x), f)
 
 

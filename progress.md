@@ -93,6 +93,40 @@ proposition 与 requirements 逐位相同——§四.3 的机械检查）、
 
 验收：`tests/test_workflow_graphs.py` 8 条；全量 104 passed + 1 xfailed；stress 10 passed。
 
+### 阶段 4 收尾：约束求解（不可信侧）+ 一个真缺陷（2026-09-10）
+
+**求解器** `cas/math/constraints.py`：从等式约束提取未知量的线性系统并求解。
+- `_decompose`：**句法**线性形式分析（`Σ cᵢuᵢ + c₀`），不靠化简器、不靠语义判零，
+  因此对超越系数同样有效；`sin(u)`／`u⁻¹`／`u·u` 一律拒答（非线性不硬凑）。
+- `TermField`：把**项**适配成域接口（`is_zero` 走域投影、四则走域标准形），
+  从而直接复用 `linalg.solve_system` 的通用高斯消元，不重写消元器。
+- `Workflow.solve_constraints(unknowns)`：求解 + 逐条经 `constraint.satisfied` 复核。
+  求解器自报不算（§7.3）。
+
+修掉两个自己引入的缺陷（都是测试/实测抓出来的）：
+1. `Times` 分解漏乘同因子里的常数部分，把 `-1·v` 的系数算成 `+1` → 整个系统判成
+   不相容。已加回归测试 `test_系数带常数因子不丢号`。
+2. 系数归一前就交给消元器（`0 + 1` 这类未折叠形式），使主元判零与除法失效。
+
+**真缺陷（既有代码，非本次引入）**：`integrate._judge_zero_diff` 在判零通道覆盖不到
+时返回 `False`，等于**把「判不了」报成「不是原函数」**——伪造否证，违反
+「未找到与不存在是两个结论」。触发点正是 v4 §9.5 自己的例子：`∫e^x sin x dx` 的
+原函数 `(e^x(sin x − cos x))/2` 经微分层求导后是
+`1/2e^x(cos x + sin x) + 1/2e^x(sin x − cos x)`，需**展开合并同类项**才能看出等于
+`e^x sin x`，而三角基归零阶段尚未重建（`decide.py:994` 的 TODO），三条判零通道
+（`fold` / 域投影 / ratfunc 判等）全部落空。
+
+修法：`_judge_zero_diff` 与 `verify_antideriv` 改为**三值**（True/False/None），
+`None` 只表示能力缺失；`calculus.antiderivative` checker 把 `None` 映射为未决而非
+rejected。于是循环积分那条链现在是「求解成功、验证诚实未决」，而不是「正确解被判
+dead」。stress 调用点同步改为只认 `is True`。
+
+**未做（真实缺口，需立项）**：三角/指数表达式的**展开与同类项合并**（原 `cas.trig.
+trig_reduce` 已随函数结构层拆除而未重建）。不补它，§9.5 的原函数永远只能到
+「未决」——这是能力缺口，不是纪律问题。
+
+验收：`tests/test_constraint_solver.py` 5 条；全量 117 passed + 1 xfailed；stress 10 passed。
+
 
 
 ### 阶段 1b：模式元语言（2026-09-10）

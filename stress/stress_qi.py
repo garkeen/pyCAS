@@ -162,7 +162,7 @@ def prop_ladder(rounds, rng):
         # 积分常数通道：∫(a+bi)dx = (a+bi)x，微分层独立验证
         f = DOM.to_term(a)
         F = integrate_term(f, X)
-        if not verify_antideriv(F, f, X):
+        if verify_antideriv(F, f, X) is not True:
             fail("P41 积分常数验证失败", i, to_str(f), to_str(F))
 
 
