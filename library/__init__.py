@@ -1,7 +1,7 @@
 """图书馆包出口：装载 + 常数原子再导出。
 
 内核引用常数一律 `from library import PI, E, IU, GAMMA`——
-cas.term 不再携带任何具体数学常数。
+cas.syntax.term 不再携带任何具体数学常数。
 """
 
 from library.api import (load_all, constant, function,

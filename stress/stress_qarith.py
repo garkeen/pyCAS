@@ -17,12 +17,12 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.term import S, N, mk, plus, times, pw, neg, Expr, Int
-from cas.qarith import fold, eval_exact, EvalNumError
-from cas.context import Context
-from cas.decide import decide
-from cas.verdict import YES, Unknown
-from cas.simplify import expand
+from cas.syntax.term import S, N, mk, plus, times, pw, neg, Expr, Int
+from cas.math.qarith import fold, eval_exact, EvalNumError
+from cas.kernel.context import Context
+from cas.math.decide import decide
+from cas.kernel.verdict import YES, Unknown
+from cas.math.simplify import expand
 
 X, Y = S("x"), S("y")
 

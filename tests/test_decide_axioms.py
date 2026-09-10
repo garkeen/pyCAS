@@ -12,10 +12,10 @@ FunctionDecl.bound），但区间通道更通用（能对复合式 a−b 整体�
 
 import pytest
 
-import cas.decide as D
-from cas.parser import parse
-from cas.context import Context
-from cas.verdict import YES, NO
+import cas.math.decide as D
+from cas.frontend.parser import parse
+from cas.kernel.context import Context
+from cas.kernel.verdict import YES, NO
 
 
 @pytest.fixture

@@ -18,12 +18,12 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.domains.q import Q_RING as R
-from cas.domains.z import Z_RING
-from cas.domains.linalg import rank, nullspace, solve_system, det_bareiss
-from cas.domains.poly import _norm, p_mul
-from cas.tactics import solve_diophantine_linear, integer_roots, TacticsError
-from cas.term import S
+from cas.math.domains.q import Q_RING as R
+from cas.math.domains.z import Z_RING
+from cas.math.domains.linalg import rank, nullspace, solve_system, det_bareiss
+from cas.math.domains.poly import _norm, p_mul
+from cas.math.tactics import solve_diophantine_linear, integer_roots, TacticsError
+from cas.syntax.term import S
 
 X = S("x")
 

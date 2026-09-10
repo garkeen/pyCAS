@@ -13,8 +13,8 @@
 from fractions import Fraction as Fr
 
 import library.api as lib
-from cas import term as T
-from cas.term import S, mk
+from cas.syntax import term as T
+from cas.syntax.term import S, mk
 
 _U = T.DB_(0)   # 导数模板占位：参数位置
 

@@ -7,9 +7,9 @@
    往返断裂（pi 在改动前就已断裂）。
 """
 
-from cas import term as T
-from cas.parser import parse
-from cas.pprint import to_str
+from cas.syntax import term as T
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
 
 
 def test_Sym_不被重映射():

@@ -10,7 +10,7 @@
 from dataclasses import dataclass, field
 from fractions import Fraction as Fr
 
-from cas.term import C as _mk_const, Const
+from cas.syntax.term import C as _mk_const, Const
 
 
 # ---------------------------------------------------------------------------

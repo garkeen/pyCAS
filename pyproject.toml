@@ -9,4 +9,13 @@ description = "通用纯符号计算机代数系统（自动与交互双通道�
 requires-python = ">=3.10"
 
 [tool.setuptools]
-packages = ["cas", "cas.domains", "library"]
+packages = [
+    "cas",
+    "cas.syntax",
+    "cas.kernel",
+    "cas.workflow",
+    "cas.math",
+    "cas.math.domains",
+    "cas.frontend",
+    "library",
+]

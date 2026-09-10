@@ -1,8 +1,37 @@
 # 进度
 
-本文记录当前实现状态与下一步。与 `cas_v3_arch.md`（设计权威）分开维护。
+本文记录当前实现状态与下一步。与 `cas_v4_arch.md`（设计权威）分开维护；`cas_v3_arch.md` 已废止，仅历史追溯。
 
-## 已完成
+## 文件架构（v4 §三 目标树落位，2026-09-10）
+
+纯移动 + import 重写，行为零变；tests(57)/stress(41) 全绿验收；`git mv` 保留历史。环解药原样保留（均有注释）：term↔termpath PEP 562 惰性回接、rules↔loader 函数内回边、piecewise 底部 E402 导入、project 的 import 期域注册、library 的 `load_all()`。新子包 `__init__.py` 全空——eager re-export 会把惰性环变回硬导入环。
+
+| 位置 | 内容 |
+|---|---|
+| `cas/syntax/` | term（驻留项层）、termpath（树遍历/重写）、match（模式匹配） |
+| `cas/kernel/` | verdict（判定 ADT）、context（v3 可变 Context，阶段5 换持久化 Scope；decide 依赖已方法内惰性化——kernel 不拉 math） |
+| `cas/workflow/` | workflow（Step DAG，v3 遗留，阶段3 拆） |
+| `cas/math/` | domains/（base/q/z/qi/poly/ratfunc/polytools/linalg）、decide、qarith、project、diff、integrate、cad、tactics、piecewise、domcond、rules、simplify、judge、realroot、loader |
+| `cas/frontend/` | parser、pprint、repl（根目录 `repl.py` 留入口壳，`python repl.py` 不变） |
+| 留根 | `cas/errors.py`（共享异常）；`library/`（阶段6 迁为 math/*，搬两次是浪费） |
+
+已知容忍的结构债：workflow→math 顶层依赖（v3 遗留，阶段3 拆 checker 注册表时解决）；syntax/termpath、match → `cas/errors`（基础设施，留根）。
+
+## v4 迁移路线图（v4 §十一 六阶段）
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10（本次） |
+| 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ⬜ 数据结构设计项，不变量 2 应红 |
+| 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ⬜ 未开始 |
+| 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 应红） |
+| 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 应红） |
+| 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
+| 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
+
+不变量 CI 门禁（AGENTS.md 清单 5 条）：红灯/绿灯测试尚未落成，随迁移轮次挂上。
+
+## 已完成（v3 实现基线，稳定全绿）
 
 ### 地基
 - **L0 驻留项层**（`cas/term.py`）：不可变 hash-consing 树，AC 拉平+排序，绑定变量（de Bruijn），纯句法无域语义；And/Or 句法折叠（真值常元吸收、排中/矛盾律坍缩）
@@ -33,7 +62,7 @@
   - 积分骨架（`cas/integrate.py`）：多项式幂规则不定积分、分段逐支；定积分遵定义域∩[a,b]（缺口不对 0 积分、点洞拒答）；`verify_antideriv` 微分层独立复核
 - **微分**（`cas/diff.py`）：任意数域系数 × 任意已声明函数域的结构微分——线性/莱布尼茨/幂-指数-一般幂规则/图书馆模板实例化×链式法则；缺模板、绑定体内微分诚实抛 `DiffError`。**分段求导审慎通道**（`differentiate_piecewise`）：逐支求导 + 分段点（点胞腔）显式列出未验证——开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不逐支冒充整体导数
 - **分段容器**（`cas/piecewise.py`）：`Piecewise(v,c,...)` 语法容器（非数值域）——求值语义为**有序首中**（if/elif/else，`⊤`=否则支；每点至多落一支 → 取值天然唯一，无求值层冲突）：`select` 取值、`coverage` 覆盖、**`collapse` 点塌缩**（任意深度的分段子项按有序首中塌缩为支值，数值点回代判定的公共通道）；分支体**独立投影**无共享宿主（`project_pw`）；运算**逐支笛卡尔提升**（`lift`，`(f⊕g)(x)=f(x)⊕g(x)`，条件取合取、空组合丢弃）；`conflicts` 作**顺序无关性 lint**（交叠处值不等→提示收紧为互斥守卫，判不动即 Unknown，不作求值闸）；`domcond` 对分段产出条件化守卫 ¬cond∨支约束；`fold_nested` 嵌套展平、`domain_cells`/`connected_components` 定义域胞腔与连通分量；`Abs` 导数据此以 Piecewise 如实入册（`sign`，u=0 无支）
-- **REPL**（`repl.py`）：claim/both/norm/solve/subst/**split/diff/rules/apply/integrate/int**/check/steps/undo——solve/diff 对分段自动路由：分段方程逐支求解（点解入账走回代判官、区域解/条件解如实报告）、分段求导走审慎通道（分段点未验证标注）；check 对含分段项点塌缩后判零
+- **REPL**（`cas/frontend/repl.py`，根目录 `repl.py` 为入口壳）：claim/both/norm/solve/subst/**split/diff/rules/apply/integrate/int**/check/steps/undo——solve/diff 对分段自动路由：分段方程逐支求解（点解入账走回代判官、区域解/条件解如实报告）、分段求导走审慎通道（分段点未验证标注）；check 对含分段项点塌缩后判零
 - **压力台架**（`stress/`）：41 条性质，全自证无外部真值（随机、覆盖数学性质全域）
 - **钉子库**（`tests/`）：57 条确定性单测（退化形态、修过的 bug、职责边界；失败定位到断言）
   - 图书馆查询出口、印名展示形/源码形分离、回代判官各分支、域注册集中化与作用域机制、全模块独立导入、decide 公理层兜底
@@ -107,7 +136,7 @@
 
 ### 交互通道
 - [ ] √(u²)→|u| 改写规则：Piecewise 容器与 Abs 导数就位后，尚缺实性假设通道（u 为任意实数才成立），入册前须先接通
-- [ ] 工作流序列化与回放
+- [ ] 工作流序列化与回放（**DSL 保存/复现**：步骤/守卫/证据/分支，文本即推导文档，可回放同一推导链）
 - [ ] 撤销/重做的真正实现（当前只移动指针不删步骤）
 - [ ] 版本化上下文折叠（读写双向索引）
 - [ ] Split 分支的后续求解（切完未消费）
@@ -140,6 +169,6 @@
 - [ ] 超越塔结构（tower 表示 + 初等扩张判定）——FriCAS 对应层；微分塔上先行，积分塔随后
 
 ### 远期
-- 不定积分（Risch 完整版）、定积分、极限级数、求和差分、ODE
-- 不等式求解与 CAD
+- **终极目标三项**：完整 Risch（参数积分与超越数积分，地基完工前不启动）；完整 CAD（一维胞腔 → 多变量实代数投影 + 胞腔分解）；Gröbner 基方法（理想属员/方程系统/代数预处理，属公共算法机器层）
+- 定积分、极限级数、求和差分、ODE、不等式求解（消费上述地基）
 - transseries

@@ -24,13 +24,13 @@ sys.path.insert(0, ".")
 import library
 library.load_all()
 
-import cas.term as T
-from cas.term import S
-from cas.parser import parse
-from cas.pprint import to_str
-from cas.project import project, zero_of, normalize
-from cas.domains.qi import QI_RING, qi_of_term
-from cas.integrate import integrate_term, verify_antideriv
+import cas.syntax.term as T
+from cas.syntax.term import S
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
+from cas.math.project import project, zero_of, normalize
+from cas.math.domains.qi import QI_RING, qi_of_term
+from cas.math.integrate import integrate_term, verify_antideriv
 
 X = S("x")
 I = library.IU

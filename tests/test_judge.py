@@ -8,12 +8,12 @@ zero_of）。收敛后裁决权威只认 zero_of（域标准形）。
 
 import pytest
 
-from cas import term as T
-from cas.term import S
-from cas.parser import parse
-from cas.piecewise import piecewise
-from cas.verdict import YES, NO
-from cas.judge import (back_substitute, is_zero, guard_report,
+from cas.syntax import term as T
+from cas.syntax.term import S
+from cas.frontend.parser import parse
+from cas.math.piecewise import piecewise
+from cas.kernel.verdict import YES, NO
+from cas.math.judge import (back_substitute, is_zero, guard_report,
                        verify_solution, has_piecewise, has_undef)
 
 
@@ -127,8 +127,8 @@ def test_守卫报告逐条给出裁决():
 
 def test_判官只在judge一处实现():
     """workflow 不得再持有判零副本，repl 不得盗用私有函数。"""
-    import cas.workflow as W
-    import cas.judge as J
+    import cas.workflow.workflow as W
+    import cas.math.judge as J
     for name in ("_piecewise_aware_zero", "_has_piecewise", "_has_undef"):
         assert not hasattr(W, name), f"workflow 仍持有判官副本: {name}"
     assert J.is_zero is not None
@@ -136,5 +136,5 @@ def test_判官只在judge一处实现():
 
 def test_repl不盗用workflow私有函数():
     import pathlib
-    src = pathlib.Path("repl.py").read_text(encoding="utf-8")
+    src = pathlib.Path("cas/frontend/repl.py").read_text(encoding="utf-8")
     assert "_piecewise_aware_zero" not in src

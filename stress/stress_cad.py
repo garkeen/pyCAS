@@ -21,15 +21,15 @@ sys.path.insert(0, ".")
 import library
 library.load_all()
 
-from cas.term import S
-from cas.parser import parse
+from cas.syntax.term import S
+from cas.frontend.parser import parse
 from cas.errors import CadError
-from cas.verdict import Reason
-from cas.domains.q import Q_RING
-from cas.domains.poly import from_term
-from cas.realroot import (real_roots_intervals, p_eval_at, coef_sign,
+from cas.kernel.verdict import Reason
+from cas.math.domains.q import Q_RING
+from cas.math.domains.poly import from_term
+from cas.math.realroot import (real_roots_intervals, p_eval_at, coef_sign,
                           squarefree_part)
-from cas.cad import resolve_partition, extract_boundary_polys, cells, sign_at_cell
+from cas.math.cad import resolve_partition, extract_boundary_polys, cells, sign_at_cell
 
 X = S("x")
 
@@ -109,7 +109,7 @@ def prop_partition(rounds, rng):
             s = cell.sample
             for ci, c in enumerate(conds):
                 a, b = c.args
-                from cas.qarith import eval_exact
+                from cas.math.qarith import eval_exact
                 da = eval_exact(a, {X: s})
                 db = eval_exact(b, {X: s})
                 op = c.head.name

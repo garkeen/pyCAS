@@ -35,11 +35,11 @@ def test_print_name_覆盖常数与函数两类():
 
 def test_常数字面量在图书馆而非内核():
     """内核不得再存名字→常数原子的副本表。"""
-    import cas.parser as P
+    import cas.frontend.parser as P
     assert not hasattr(P, "_CONSTS")                   # 旧硬编码表已废
     assert set(P._SYNTAX_ATOMS) == {"infinity", "true", "false"}
 
 
 def test_定义域条件只有图书馆一个注册通道():
-    import cas.domcond as DC
+    import cas.math.domcond as DC
     assert not hasattr(DC, "DOM_HOOKS")                # 空壳通道已废

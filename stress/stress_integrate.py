@@ -19,17 +19,17 @@ sys.path.insert(0, ".")
 import library
 library.load_all()
 
-import cas.term as T
-from cas.term import S
-from cas.parser import parse
-from cas.pprint import to_str
-from cas.qarith import fold
-from cas.integrate import (integrate_term, definite_integrate,
+import cas.syntax.term as T
+from cas.syntax.term import S
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
+from cas.math.qarith import fold
+from cas.math.integrate import (integrate_term, definite_integrate,
                            verify_antideriv)
 from cas.errors import IntegrateError
-from cas.domains.q import Q_RING
-from cas.domains.poly import _norm, to_term
-from cas.piecewise import piecewise
+from cas.math.domains.q import Q_RING
+from cas.math.domains.poly import _norm, to_term
+from cas.math.piecewise import piecewise
 
 X = S("x")
 

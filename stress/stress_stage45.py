@@ -23,18 +23,18 @@ sys.path.insert(0, ".")
 import library
 library.load_all()
 
-import cas.term as T
-from cas.term import S
-from cas.parser import parse
-from cas.pprint import to_str
-from cas.qarith import fold
-from cas.diff import differentiate_piecewise
-from cas.tactics import solve_piecewise, TacticsError
+import cas.syntax.term as T
+from cas.syntax.term import S
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
+from cas.math.qarith import fold
+from cas.math.diff import differentiate_piecewise
+from cas.math.tactics import solve_piecewise, TacticsError
 from cas.errors import DiffError, CadError
-from cas.domains.q import Q_RING
-from cas.domains.poly import from_term, p_deriv, to_term
-from cas.piecewise import piecewise, fold_nested, branches
-from cas.workflow import Workflow, Claim, Solve, Diff
+from cas.math.domains.q import Q_RING
+from cas.math.domains.poly import from_term, p_deriv, to_term
+from cas.math.piecewise import piecewise, fold_nested, branches
+from cas.workflow.workflow import Workflow, Claim, Solve, Diff
 
 X = S("x")
 

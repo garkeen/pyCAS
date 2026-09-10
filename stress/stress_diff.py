@@ -19,18 +19,18 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.term import S, N, mk, plus, times, pw, neg
-from cas import term as T
-from cas.parser import parse
-from cas.pprint import to_str
-from cas.qarith import fold
-from cas.diff import differentiate
-from cas.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
+from cas.syntax.term import S, N, mk, plus, times, pw, neg
+from cas.syntax import term as T
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
+from cas.math.qarith import fold
+from cas.math.diff import differentiate
+from cas.math.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
                               to_term, _norm)
-from cas.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
+from cas.math.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
                                  ratfunc_domain)
-from cas.domains.q import Q_RING
-from cas.workflow import Workflow, Claim, Diff
+from cas.math.domains.q import Q_RING
+from cas.workflow.workflow import Workflow, Claim, Diff
 
 X, Y, H = S("x"), S("y"), S("h")
 

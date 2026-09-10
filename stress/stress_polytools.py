@@ -17,10 +17,10 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.domains.q import Q_RING as R
-from cas.domains.poly import (_norm, p_mul, p_pow, p_gcd_univar, p_deriv)
-from cas.domains.polytools import resultant, squarefree, p_monic, p_deg
-from cas.term import S
+from cas.math.domains.q import Q_RING as R
+from cas.math.domains.poly import (_norm, p_mul, p_pow, p_gcd_univar, p_deriv)
+from cas.math.domains.polytools import resultant, squarefree, p_monic, p_deg
+from cas.syntax.term import S
 
 X = S("x")
 V = (X,)

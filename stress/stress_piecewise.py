@@ -24,15 +24,15 @@ sys.path.insert(0, ".")
 import library
 library.load_all()
 
-from cas import term as T
-from cas.term import S, N, mk, plus, times, pw
-from cas.parser import parse
-from cas.pprint import to_str
-from cas.context import Context
-from cas.project import project
-from cas.verdict import YES, NO
-from cas.domcond import dom_condition
-from cas.piecewise import (piecewise, branches, project_pw, select, coverage,
+from cas.syntax import term as T
+from cas.syntax.term import S, N, mk, plus, times, pw
+from cas.frontend.parser import parse
+from cas.frontend.pprint import to_str
+from cas.kernel.context import Context
+from cas.math.project import project
+from cas.kernel.verdict import YES, NO
+from cas.math.domcond import dom_condition
+from cas.math.piecewise import (piecewise, branches, project_pw, select, coverage,
                            conflicts, lift, is_piecewise)
 
 X = S("x")
@@ -216,8 +216,8 @@ def prop_guards(rounds, rng):
 # P29-P31：嵌套展平 + 定义域胞腔 + 连通分量（消费 CAD）
 # ---------------------------------------------------------------------------
 
-from cas.piecewise import fold_nested, domain_cells, connected_components
-from cas.qarith import eval_exact
+from cas.math.piecewise import fold_nested, domain_cells, connected_components
+from cas.math.qarith import eval_exact
 
 
 def eval_prop(c, a):
