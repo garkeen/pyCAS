@@ -105,23 +105,6 @@ def cauchy_bound(p: Poly) -> Fr:
     return Fr(1) + m
 
 
-def isolate_squarefree(ring, p: Poly):
-    """无平方单变量多项式的实根隔离。
-
-    返回升序、两两不交且**相邻严格留隙**（b_i < a_{i+1}）的区间列表：
-    无理根为 (a, b)（a<b，根严格在内），有理根为 (r, r)。二分的终止由
-    根个数递减保证；留隙由 _refine_gaps 向各自根收缩保证（根互异、间距为正，
-    几何收敛必停），供 CAD 在间隙中取无根样本点。"""
-    if p_deg(p, 0) <= 0:
-        return []
-    seq = sturm_sequence(ring, p)
-    M = cauchy_bound(p)
-    out = []
-    _iso_open(seq, p, Fr(-M), Fr(M), out)
-    out.sort(key=lambda iv: iv[0])
-    return _refine_gaps(seq, p, out)
-
-
 def _shrink(seq, p: Poly, iv):
     """把单根隔离区间向根收缩一步（退化 (r, r) 不动）。"""
     a, b = iv

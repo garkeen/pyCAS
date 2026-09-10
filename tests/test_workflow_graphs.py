@@ -126,10 +126,11 @@ def test_split建一对互补分支且覆盖成立():
     assert g.cases[0].condition is cond
     assert g.cases[1].condition is T.not_(cond)
     assert g.cases[0].scope != g.cases[1].scope
-    # 覆盖经 checker 复核后登记（排中律 → 句法重言式 ⊤）
+    # 覆盖经 checker 独立复核后登记：记录的是**被验证的那个命题**
+    # （互补析取本身；不靠构造期把 c ∨ ¬c 坍缩成 ⊤，v4 §2.1）
     assert g.coverage is not None
     cov = wf.store.get_judgment(g.coverage)
-    assert cov.proposition is T.TRUE
+    assert cov.proposition is T.or_(cond, T.not_(cond))
 
 
 def test_分支作用域携带条件假设():

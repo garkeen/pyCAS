@@ -1,5 +1,5 @@
 from cas.syntax import term as T
-from cas.syntax.term import Expr, Int
+from cas.syntax.term import Expr
 from cas.errors import BudgetExceeded
 from cas.syntax.termpath import postorder
 
@@ -15,63 +15,14 @@ def cost(t):
     return n
 
 
-def _mul_expand(a, b):
-    """乘法对加法分配：构造器 flatten 保证 Plus 参数不含 Plus，分配仅一层。"""
-    as_ = list(a.args) if isinstance(a, Expr) and a.head.name == "Plus" else [a]
-    bs = list(b.args) if isinstance(b, Expr) and b.head.name == "Plus" else [b]
-    if len(as_) == 1 and len(bs) == 1:
-        return T.times(a, b)
-    return T.plus(*[T.times(x, y) for x in as_ for y in bs])
-
-
-def expand(t):
-    """环层全展开（显式栈后序重建：子项先展开，向上只做分配）。
-
-    注意：生产路径目前不消费本函数，唯一调用方是压力台架
-    （stress/stress_qarith.py）。它不是死代码（被测试使用），但与
-    cas/domains/poly 的 Times 展开存在功能重叠——合并前需先确认
-    压力台架改用哪一侧。
-    """
-    val = {}
-    for u in reversed(postorder(t)):
-        if isinstance(u, Expr):
-            name = u.head.name
-            if name == "Plus":
-                val[u] = T.plus(*[val[a] for a in u.args])
-            elif name == "Times":
-                acc = T.ONE
-                for a in u.args:
-                    acc = _mul_expand(acc, val[a])
-                val[u] = acc
-            elif name == "Power":
-                b, e = u.args
-                if isinstance(e, Int) and e.v >= 2:
-                    base = val[b]
-                    acc = base
-                    for _ in range(e.v - 1):
-                        acc = _mul_expand(acc, base)
-                    val[u] = acc
-                elif isinstance(e, Int) and e.v == 1:
-                    val[u] = val[b]
-                elif isinstance(e, Int) and e.v == 0:
-                    val[u] = T.ONE
-                else:
-                    val[u] = u
-            else:
-                val[u] = u
-        elif isinstance(u, T.Bound):
-            val[u] = T._mk_bound_canon(u.hint, val[u.body])
-        else:
-            val[u] = u
-    return val[t]
-
-
 def simplify(t, budget=100000):
-    """自底向上重建：每层经规范化构造器 mk（构造即规范化）。
+    """自底向上重建：每层经驻留构造器 mk 重新驻留。
 
-    环层（Plus/Times/Power）的规范形由 mk 保证；本函数负责把子项变化向上传播。
-    实现为显式工作栈（文档 §2 工程约束），预算按节点计；
-    结果按项 id 记忆化（项不可变，缓存永久有效）。
+    mk 只做**表示**规范化（AC 拉平/排序/幂等去重/单位元吸收），不做环层
+    代数标准形（v4 §2.1：项是纯语法，构造期不判定）。因此对已驻留的项，
+    重建后重新驻留必得同一节点——本函数在常规输入下即恒等，唯一作用是
+    把「子项被替换过」的情形沿父链重新驻留（预算按节点计，超限抛
+    BudgetExceeded）。结果按项 id 记忆化（项不可变，缓存永久有效）。
     """
     hit = _MEMO.get(t._h)
     if hit is not None:

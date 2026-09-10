@@ -1,5 +1,4 @@
 from fractions import Fraction
-from fractions import Fraction as Fr
 
 
 _hc = 0
@@ -277,10 +276,13 @@ def _flatten_ac(head, args):
 
 
 def _fold_bool_ac(head, args):
-    """And/Or 句法折叠：拉平 + 指针去重 + 真值常元吸收 + 排中/矛盾律。
+    """And/Or 的 AC 表示规范形：拉平 + 指针去重 + 单位元/零元吸收。
 
-    纯句法（a∧¬a 是句法对），无谓词语义判定。返回坍缩常元或排序后的
-    参数列表（mk 据此驻留）。
+    **只做表示规范化，不做判定**（v4 §2.1「项只回答这个表达式长什么样」）：
+    结合/交换/幂等下的规范形（空合取=⊤、空析取=⊥、吸收单位元、零元吸收）
+    是驻留判等（指针比较）的前提，属句法层。互补对消解（`c ∨ ¬c → ⊤`）
+    **不在这里做**——那是对「是否恒真」的判定，归分支覆盖 checker
+    （v4 §7.3：验证独立于构造，不靠构造期塌缩）。
     """
     name = head.name
     flat = []
@@ -299,24 +301,11 @@ def _fold_bool_ac(head, args):
             continue
         seen.add(a._h)
         out.append(a)
-    for a in out:
-        if isinstance(a, Expr) and a.head.name == "Not" \
-                and a.args[0]._h in seen:
-            return FALSE if name == "And" else TRUE
     if not out:
         return TRUE if name == "And" else FALSE
     if len(out) == 1:
         return out[0]
     return sorted(out)
-
-
-# 每头规范化注册表（L5 扩展入口）：构造器 mk 对非 AC/Power 头应用。
-# Plus/Times/Power 属 L0 环规范化，内建于 mk，不经此表。
-NORM = {}
-
-
-def register_norm(name, fn):
-    NORM[name] = fn
 
 
 def _intern_expr(head, args):
@@ -335,13 +324,16 @@ _CMP_HEADS = {"Eq", "Ne", "Lt", "Le", "Gt", "Ge"}
 def mk(head, args):
     """驻留构造器，唯一入口。
 
-    只做句法不变量：AC 头（Plus/Times/And/Or）拉平同类嵌套并确定性排序，
-    其余头直接驻留。判等退化为指针比较。
+    只做**表示**规范化：AC 头（Plus/Times/And/Or）拉平同类嵌套、确定性排序、
+    幂等去重、单位元/零元吸收；其余头直接驻留。判等退化为指针比较。
+
+    本层**不判定任何语义**（v4 §2.1「项是纯语法」）：恒真/恒假的判定（如
+    `c ∨ ¬c`）不在这里坍缩，归对应 checker。
 
     标准形职责已移交函数结构层（cas_v3_arch.md 第五节），本层不再做：
     数值常量折叠、同类项合并、同底幂合并、i 的整数幂、e^a 到 Exp(a) 的
     改写、根式归一与落域坍缩、函数头特殊点折叠。以上分别属于 ℚ 算术、
-    多项式机器、高斯域、图书馆命名约定与闸门链。
+    多项式机器、高斯域、声明命名约定与闸门链。
     """
     name = head.name if isinstance(head, Sym) else None
     if name in AC:

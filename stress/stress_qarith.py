@@ -22,7 +22,8 @@ from cas.math.qarith import fold, eval_exact, EvalNumError
 from cas.kernel.scope import Assumptions
 from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
-from cas.math.simplify import expand
+from cas.math.domains.poly import from_term as _poly_from_term, to_term as _poly_to_term
+from cas.math.domains.q import Q_RING
 
 from cas.runtime import bootstrap
 bootstrap()
@@ -145,7 +146,11 @@ def prop_backsub(rounds, rng):
         p = N(1)
         for r in roots:
             p = times(p, plus(X, neg(N(r))))
-        expanded = expand(p)
+        # 展开走生产侧多项式机器（职责唯一：term 层不再自备展开实现）
+        poly = _poly_from_term(Q_RING, p, (X,))
+        if poly is None:
+            fail("P4 乘积不可表示为 ℚ[x]", i, p)
+        expanded = _poly_to_term(Q_RING, poly)
         folded = fold(expanded)
         for r in roots:
             if eval_exact(folded, {X: r}) != 0:

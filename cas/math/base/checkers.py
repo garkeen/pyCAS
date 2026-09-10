@@ -240,12 +240,27 @@ class SplitChecker:
         return UnknownResult(v.reason, "分支等价判定未决")
 
 
+def _is_tautology(t) -> bool:
+    """句法重言式：析取中出现互补对（`c` 与 `¬c`），或常元真。
+
+    判据在**验证侧**，不靠构造期坍缩（v4 §2.1：项不判定语义；§7.3：
+    验证独立于构造）。只认排中律这一条，其余覆盖需真证明。
+    """
+    if isinstance(t, T.BVal):
+        return t.val
+    if not (isinstance(t, T.Expr) and t.head.name == "Or"):
+        return False
+    disjuncts = {a._h for a in t.args}
+    return any(isinstance(a, T.Expr) and a.head.name == "Not"
+               and a.args[0]._h in disjuncts for a in t.args)
+
+
 class BranchCoverageChecker:
     """分支覆盖（v4 §8.8）：分支条件之析取是否覆盖父问题。
 
-    只认**句法重言式**：排中律 `c ∨ ¬c` 已被 And/Or 的 AC 折叠为 `⊤`（`BVal`），
-    故命题恰为真即覆盖成立。非互补的覆盖需要真覆盖证明，此处诚实返回未决，
-    不冒充。
+    只认**句法重言式**——排中律 `c ∨ ¬c`。该判定在此独立完成，不依赖
+    `mk` 构造期把互补对坍缩成 `⊤`（v4 §2.1 禁止驻留期判定语义）。非互补的
+    覆盖需要真覆盖证明，此处诚实返回未决，不冒充。
     """
     id = "branch.coverage"
 
@@ -253,7 +268,7 @@ class BranchCoverageChecker:
         content, bad = _one_conclusion(proposal)
         if bad is not None:
             return bad
-        if isinstance(content, T.BVal) and content.val:
+        if _is_tautology(content):
             return Accepted()
         return UnknownResult(Reason.FRAGMENT, "覆盖不是句法重言式，需真覆盖证明")
 

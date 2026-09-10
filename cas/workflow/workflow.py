@@ -372,7 +372,8 @@ class Workflow:
             cases.append(BranchCase(condition=cond, scope=child.id, label=label))
         group = self.branches.create(self.scope, cases)
 
-        # 覆盖：条件之析取（排中律下 AC 折叠为 ⊤），经 checker 复核后登记
+        # 覆盖：条件之析取，交 checker 独立复核（互补对 ⇒ 句法重言式；
+        # 判定在验证侧，不靠构造期坍缩，v4 §2.1）
         prop = T.or_(*[c.condition for c in cases])
         r = commit(self.store,
                    StepProposal(scope=self.scope, conclusions=(prop,),
