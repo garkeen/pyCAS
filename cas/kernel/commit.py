@@ -24,7 +24,7 @@
 原子写入），是完整流程的可证明子集（AGENTS.md §四.4）。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from cas.syntax import term as T
@@ -52,6 +52,8 @@ class StepProposal:
     conclusions: tuple = ()
     evidence: Evidence = None
     guard_policy: GuardPolicy = GuardPolicy.REQUIRE_PROVED
+    # commit 解析前提后回填（checker 只许读这里，不得信任调用方自报的前提）
+    premise_propositions: tuple = field(default=())
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ def commit(store, proposal, context=None, services=None,
 
     # --- 2. premise 可见性（子作用域结论不得反向使用；兄弟分支互不可见）---
     inherited = []
+    premise_props = []
     for pid in proposal.premises:
         try:
             pj = store.get_judgment(pid)
@@ -128,6 +131,9 @@ def commit(store, proposal, context=None, services=None,
         if not store.scopes.is_visible(pj.scope, proposal.scope):
             return Refused(Reason.FRAGMENT, f"前提 {pid} 在 scope {proposal.scope} 不可见")
         inherited.extend(pj.requirements)
+        premise_props.append(pj.proposition)
+    # 回填前提命题：调用方自报的值一律丢弃（checker 只读内核解析出来的）
+    proposal = replace(proposal, premise_propositions=tuple(premise_props))
 
     # --- 3. checker ---
     checker = store.checkers.get(proposal.evidence.checker_id)

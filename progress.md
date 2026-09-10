@@ -23,13 +23,13 @@
 |---|---|---|
 | 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10 |
 | 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ✅ 2026-09-10（本次，不变量 2 转绿） |
-| 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | 🔶 2a 完成（模型+提交协议）；2b 待接旧验证器 |
+| 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ✅ 2026-09-10（2a 模型+协议，2b 接线） |
 | 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 红） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
 
-不变量 CI 门禁（`tests/test_v4_invariants.py`）：1/2/18 绿，14/16 挂 xfail 红灯
+不变量 CI 门禁（`tests/test_v4_invariants.py`）：1/2/16/18 绿；14 挂 xfail 红灯
 （reason 写明迁移阶段），随阶段落地翻绿。
 
 ### 阶段 1b：模式元语言（2026-09-10）
@@ -81,6 +81,38 @@
 - 无条件、无前驱的情形走四步特化（AGENTS.md §四.4），是十步的可证明子集。
 
 验收：`tests/test_kernel_model.py` 16 条；全量 78 passed + 2 xfailed。
+
+### 阶段 2b：接线（2026-09-10）
+
+把工作流的验证从「自己验」改成「交 `kernel.commit` 验」，并删除旧验证器。
+
+- **`cas/workflow/checkers.py`（新）**：八个旧 verifier 搬成 checker adapter，
+  签名改为 v4 §6.7 的 `check(proposal, context, services) -> CheckResult`。两处
+  实质变化：不再读工作流内部状态（前驱命题由 `commit` 解析前提后回填到
+  `proposal.premise_propositions`，checker 不得信任调用方自报）；守卫由 checker
+  判定并回报（`Accepted.direct_requirements`），内核据此建 Requirement、尝试
+  清偿、并从前驱自动继承——不再逐类型手工 push。
+- **`workflow.py`**：删除 `_verify` 的 isinstance 分派与八个 `_verify_*`、
+  `_cross_diff`、`_collect`；`add` 组装 `StepProposal` 交 `commit`。状态由提交
+  结果决定：`open`（Committed）/ `dead`（Refused）/ **`unverified`**（Undecided
+  或 NeedsSplit）。**删除前驱 dead 的级联销毁**（v4 §6.10 反向修正：原结论保留，
+  适用性由内核按作用域计算）。`Step` 去掉 `reads`/`clears`，新增 `judgment`
+  （内核结论 id）。手工/交互通道用 `ALLOW_CONDITIONAL`（显式应用允许条件性结论），
+  `REQUIRE_PROVED` 留给自动化简。
+- **条件不再在化简中丢失**：`ClaimChecker` 回报表达式自身的定义域条件，
+  故 `x/x` 断言即带 `x != 0`，后续重写经内核继承（v4 §9.1）。此前该条件在
+  `norm` 后被丢掉。
+- `repl.py` 的 `_normalize_eq` 改从 `checkers` 导入（旧实现已随验证器搬走）。
+
+不变量 16（未验证候选不参与可信推导）**转绿**：checker 未决的候选状态是
+`unverified` 而非 `open`，且不持有内核结论、不对账本产生任何写入。
+
+验收：`tests/` 79 passed + 1 xfailed（不变量 14 红灯）；`stress/` 10 passed；
+REPL 端到端冒烟（claim/diff/norm/solve/split/rules/apply/steps）正常。
+
+依赖债延续并记录：`workflow/checkers.py` 仍依赖 `cas.math.*`（v3 遗留的
+workflow→math 顶层依赖），v4 §三 的目标位置是各 `math/*/checkers.py`，阶段6 迁移。
+
 
 
 

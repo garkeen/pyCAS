@@ -39,7 +39,8 @@ from cas.math.integrate import integrate_term, definite_integrate, IntegrateErro
 from cas.math.piecewise import is_piecewise
 from cas.kernel.verdict import YES, NO
 from cas.workflow.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
-                          Subst, Split, Diff, Integrate, _is_eq, _normalize_eq)
+                          Subst, Split, Diff, Integrate, _is_eq)
+from cas.workflow.checkers import _normalize_eq
 
 
 def _fmt(t):

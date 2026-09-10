@@ -7,11 +7,11 @@
 
 本文件按迁移阶段分批点亮：
 
-· 1  Term 无 guard/context/proof 字段      —— 绿（本阶段）
+· 1  Term 无 guard/context/proof 字段      —— 绿（阶段1b）
 · 2  Pattern 不是 Term                      —— 绿（阶段1b，模式元语言）
 · 14 checker 不导入自身搜索算法            —— 红（阶段3：拆 Derivation ADT）
-· 16 未验证候选不参与可信推导              —— 红（阶段4：Artifact/Task/Judgment）
-· 18 自动化简不应用未证明的条件规则        —— 绿（本阶段）
+· 16 未验证候选不参与可信推导              —— 绿（阶段2b，接入 commit）
+· 18 自动化简不应用未证明的条件规则        —— 绿
 """
 
 import inspect
@@ -94,28 +94,29 @@ def test_不变量18_自动化简不应用未证明的条件规则():
     assert not bad, f"auto 规则携带守卫: {bad}"
 
 
-@pytest.mark.xfail(reason="v4 阶段3：_verify_rewrite 仍导入并调用 apply_rule"
+@pytest.mark.xfail(reason="v4 阶段3：wf.rewrite checker 仍导入并调用 apply_rule"
                           "（验证器依赖被验证的搜索算法）", strict=False)
 def test_不变量14_checker不导入自身搜索算法():
     """重写 checker 不得导入对应搜索算法（v4 §7.3 验证独立性）。"""
-    from cas.workflow import workflow as W
-    code = W.Workflow._verify_rewrite.__code__
+    from cas.workflow import checkers as C
+    code = C.RewriteChecker.check.__code__
     # 函数内 `from cas.math.rules import library_ruleset, apply_rule`
     assert "apply_rule" not in code.co_names, \
-        "_verify_rewrite 导入了 apply_rule：验证器与搜索算法未分离"
+        "RewriteChecker 导入了 apply_rule：验证器与搜索算法未分离"
 
 
-@pytest.mark.xfail(reason="v4 阶段4：unknown() → status='open'（fail-open），"
-                          "未验证候选仍可参与后续推导", strict=False)
 def test_不变量16_未验证候选不参与可信推导():
-    """checker 返回 UNKNOWN 的候选不得以「可依赖」状态入账。"""
+    """checker 未决的候选不得以「可依赖」状态入账——unverified ≠ open。"""
     from cas.frontend.parser import parse
     from cas.syntax.term import S, N
     from cas.workflow.workflow import Workflow, Claim, Solve
 
     wf = Workflow()
     wf.add(parse("sin(x) == 1/2"), Claim())
-    # 回代判官在投影外诚实未决（超越函数），验证器返回 UNKNOWN
+    before = dict(wf.store.stats())
+    # 回代判官在投影外诚实未决（超越函数），checker 返回 UnknownResult
     step = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
-    assert step.status != "open", \
-        "UNKNOWN 候选被记为 open——未验证候选进入了可信推导"
+    assert step.status == "unverified", \
+        f"未决候选状态应为 unverified，实际 {step.status}"
+    assert step.judgment is None, "未决候选不得持有可依赖结论"
+    assert dict(wf.store.stats()) == before, "未决候选不得对账本产生任何写入"
