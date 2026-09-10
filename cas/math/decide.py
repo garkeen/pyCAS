@@ -13,10 +13,10 @@ Unknown 的理由区分片段没覆盖（FRAGMENT）、被条件挡住（GUARDED
 from collections import deque
 
 from cas.syntax import term as T
-from cas.syntax.term import S, N
+from cas.syntax.term import S
 from cas.math.qarith import fold as _qfold
-from cas.kernel.verdict import (Verdict, Yes, No, Unknown, Reason,
-                          YES, NO, unknown, and3, or3, not3)
+from cas.kernel.verdict import (Verdict, Reason, YES, NO, unknown,
+                          and3, or3, not3)
 from cas.kernel.scope import Assumptions
 
 _DECLS = None

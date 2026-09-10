@@ -6,8 +6,6 @@
 战术失败抛 TacticsError——诚实拒答，不降级猜测。
 """
 
-from fractions import Fraction as Fr
-
 from cas.syntax import term as T
 from cas.syntax.term import Sym
 from cas.errors import TacticsError

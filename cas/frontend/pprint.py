@@ -2,7 +2,7 @@ from cas.runtime import dispatch as rt
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
-from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, BVal, Special, DB, S
+from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, BVal, Special, DB
 from cas.syntax.termpath import postorder
 
 _PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times": 4, "Power": 6}
