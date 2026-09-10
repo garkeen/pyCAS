@@ -110,16 +110,23 @@ class NeedsSplit(CommitResult):
 
 def commit(store, proposal, context=None, services=None,
            discharge_checker_id="kernel.decide",
-           mode=None) -> CommitResult:
+           mode=None, inherited_reads=None) -> CommitResult:
     from cas.kernel.mode import DEFAULT_MODE
     mode = mode if mode is not None else DEFAULT_MODE
     services = services if services is not None else NullServices()
 
-    # --- 1. scope 合法性 ---
+    # --- 1. scope 合法性与项的绑定合法性 ---
     try:
         store.scopes.get(proposal.scope)
     except KeyError:
         return Refused(Reason.FRAGMENT, f"scope 不存在: {proposal.scope}")
+    # 局部符号不得泄漏到作用域之外的结论（v4 §6.1 第7条 / 不变量 15）：
+    # 作用域内引入的符号（声明 / 定义左端）只在该作用域及其后代有义。
+    for prop in proposal.conclusions:
+        escaped = store.scopes.escapes(proposal.scope, prop)
+        if escaped:
+            return Refused(Reason.FRAGMENT,
+                           f"局部符号逃逸到本作用域结论: {escaped!r}")
     ctx = context if context is not None \
         else TrackedContext(store.scopes, services, proposal.scope, mode)
 
@@ -202,6 +209,10 @@ def commit(store, proposal, context=None, services=None,
         jids.append(jid)
 
     step_reads = ctx.read_set(dedupe=not mode.raw_reads())
+    if inherited_reads is not None:
+        # 继承的读依赖（如分支合并：结论依赖各支读过的事实，v4 §6.11）。
+        # 归并与去重规则同 read_set——粒度仍由模式决定。
+        step_reads = inherited_reads.merge(step_reads)
     store.put_step(Step(id=step_id, scope=proposal.scope,
                         premises=tuple(proposal.premises),
                         conclusions=tuple(jids),

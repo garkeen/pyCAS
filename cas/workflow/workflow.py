@@ -35,9 +35,11 @@ from dataclasses import dataclass
 
 from cas.syntax import term as T
 from cas.syntax.term import Expr, S
+from cas.errors import BranchError, ScopeError
 from cas.kernel.commit import GuardPolicy, StepProposal, commit
 from cas.kernel.evidence import Evidence
-from cas.kernel.model import Assumption
+from cas.kernel.model import (Assumption, ContextReadSet, Declaration,
+                              Definition)
 from cas.workflow.artifact import ArtifactStore
 from cas.workflow.branch import BranchCase, BranchStore, promote_guard
 from cas.workflow.command import Command, ValuationCheck
@@ -155,16 +157,18 @@ class Workflow:
                             target, ())
 
     def _record(self, content, command, status, note, target, guards,
-                judgment=None) -> Step:
+                judgment=None, inputs=None) -> Step:
         # 1. 计算产物（无真假，§8.2）
         artifact = self.artifacts.create(self.scope, content)
         # 2. 计算问题 + 候选（§8.3/§8.4；命令无请求头者不建任务）
         task = self._open_task(command, artifact, judgment)
         # 3. 操作历史（§8.9）：outputs 是连接操作与内核结论的唯一出口（§四）
-        pred_id = command.pred
+        if inputs is None:
+            pred_id = command.pred
+            inputs = () if pred_id is None else (pred_id,)
         ev = self.events.append(
             command=command.name,
-            inputs=() if pred_id is None else (pred_id,),
+            inputs=tuple(inputs),
             outputs=tuple(
                 Ref(kind, ident)
                 for kind, ident in (("artifact", artifact.id),
@@ -246,9 +250,9 @@ class Workflow:
     def split_on(self, condition):
         """按 `condition` 与 `¬condition` 建一对分支作用域，并尝试证覆盖。
 
-        **兄弟分支互不可见**（不变量 9），且分支上下文不能直接合并——合并前必须
-        验证 §8.8 的五条；此处只落「覆盖」这一条（排中律，句法重言式），其余
-        四条由调用方在各自分支内提交结论时自然满足（作用域可见性 + 逃逸检查）。
+        **兄弟分支互不可见**（不变量 9），且分支上下文不能直接合并——合并由
+        `merge_branches` 按 §8.8 的五条检查执行；本方法只落「覆盖」这一条
+        （排中律，句法重言式，判定在验证侧）。
         """
         parent = self.store.scopes.get(self.scope)
         cases = []
@@ -282,6 +286,89 @@ class Workflow:
         """把分支内未清偿的守卫提升到父层：`C_i ⇒ G_i`（§8.8 第 5 条）。"""
         return promote_guard(case.condition, guard)
 
+    def merge_branches(self, group, proposition, results):
+        """分支合并：按情况讨论（v4 §8.8 的五条检查）。
+
+        `results` 与 `group.cases` 同序，是各分支给出结论的步骤。合并**不是**
+        把分支上下文并起来：各支在同一命题上给出结论、各支条件覆盖父问题，于是
+        该命题在父作用域成立；各支开放守卫逐条提升为 `C_i ⇒ G_i`（第 5 条）。
+        合并步的读依赖 = 各支读集的并（§6.11：结论依赖分支读过的事实）。
+
+        五条检查：① 覆盖成立；② 各支回答同一任务（按**请求项**判——各支各自
+        开任务，任务 id 不同而请求项必须相同）；③ 各支结果各自在其 scope 中
+        成立；④ 辅助符号未逃逸；⑤ 开放条件被正确提升（checker 复算，内核判定
+        与清偿）。不满足即拒（`BranchError`）——不猜、不降级。
+
+        **为什么分支结论不作为本步前提**：不变量 8 禁止子作用域结论反向用于父
+        作用域（`commit` 第 2 步强制），故本步唯一前提是父作用域里的覆盖结论；
+        各支结论经②③从**内核记录**核出后随载荷交给 checker 复核一致性。要让
+        该环也由内核独立复核，需 commit 支持「蕴含引入」规则（设计决定，未落）。
+        """
+        if self.scope != group.parent_scope:
+            raise BranchError("合并须在分支的父作用域进行（先 enter 回去）")
+        if len(results) != len(group.cases):
+            raise BranchError("分支结果数与该分支组的支数不符")
+        if group.coverage is None:                       # ① 覆盖
+            raise BranchError("分支未证覆盖，不得合并")
+        answers = []                                     # ③ 各支在其 scope 中成立
+        for case, st in zip(group.cases, results):
+            if st.judgment is None:
+                raise BranchError(f"分支结果无可依赖结论: #{st.id}")
+            j = self.store.get_judgment(st.judgment)
+            if j.scope != case.scope:
+                raise BranchError(f"分支结果 #{st.id} 不在其分支作用域内")
+            answers.append(j.proposition)
+        requests = []                                    # ② 同一任务
+        for st in results:
+            if st.task is None:
+                raise BranchError(f"分支结果 #{st.id} 未回答请求形状的任务")
+            requests.append(self.tasks.get_task(st.task).request)
+        if any(r is not requests[0] for r in requests):
+            raise BranchError("各分支回答的不是同一个任务")
+        escaped = self.store.scopes.escapes(              # ④ 符号不逃逸
+            group.parent_scope, proposition)
+        if escaped:
+            raise BranchError(f"合并结论含逃逸的局部符号: {escaped!r}")
+        conditions = tuple(c.condition for c in group.cases)
+        guards = tuple(tuple(st.guards) for st in results)
+        for g in (g for gs in guards for g in gs):       # ④ 提升的守卫同样不得逃逸
+            esc = self.store.scopes.escapes(group.parent_scope, g)
+            if esc:
+                raise BranchError(f"提升的守卫含逃逸的局部符号: {esc!r}")
+
+        merged_reads = ContextReadSet()                  # §6.11：读依赖取并
+        for st in results:
+            producer = self.store.get_judgment(st.judgment).producer
+            merged_reads = merged_reads.merge(self.store.get_step(producer).reads)
+
+        cmd = Command(name="MergeBranches", checker_id="branch.merge",
+                      conditions=conditions, guards=guards,
+                      answers=tuple(answers))
+        proposal = StepProposal(
+            scope=group.parent_scope,
+            premises=(group.coverage,),                  # 唯一父作用域可见的前提
+            conclusions=(proposition,),
+            evidence=Evidence("branch.merge", cmd),
+            guard_policy=self.policy)
+        res = commit(self.store, proposal, services=self.services,
+                     mode=self.mode, inherited_reads=merged_reads)
+        inputs = tuple(st.id for st in results)
+        if res.is_committed():                           # ⑤ 提升后的条件由内核记账
+            j = self.store.get_judgment(res.judgments[0])
+            out = tuple(self.store.get_requirement(r).proposition
+                        for r in j.requirements)
+            return self._record(proposition, cmd, "committed", "", (), out, j.id,
+                                inputs=inputs)
+        if res.is_refused():
+            return self._record(proposition, cmd, "refused", res.detail, (), (),
+                                inputs=inputs)
+        if res.is_needs_split():
+            return self._record(proposition, cmd, "needs_split", "需分类讨论", (),
+                                tuple(res.conditions), inputs=inputs)
+        return self._record(proposition, cmd, "undecided",
+                            getattr(res, "detail", "") or "未获复核", (), (),
+                            inputs=inputs)
+
     # --- 适用性查询（v4 §6.10：内核算，工作流问）---
 
     def applicability_of(self, step):
@@ -289,6 +376,54 @@ class Workflow:
         if step.judgment is None:
             return None
         return self.store.applicability(step.judgment, self.scope)
+
+    # --- 声明 / 定义（v4 §6.2）---
+
+    def declare(self, symbol, sort):
+        """声明 `symbol : sort`（v4 §6.2 的「声明」条目）。
+
+        符号须新鲜：链上未声明、未定义。声明不是命题，不进判定通道——它记录
+        「这个符号属于哪一类」，由消费方（类型/域层）读取。返回值是新作用域
+        （作用域不可变，扩充产生新对象）。
+        """
+        self._require_fresh(symbol, "声明")
+        return self.store.scopes.extend(
+            self.store.scopes.get(self.scope),
+            declarations=(Declaration(symbol, sort),))
+
+    def define(self, symbol, body):
+        """定义 `symbol := body`（v4 §6.2 的「定义」条目）：局部别名，不是待证等式。
+
+        内核按 §6.2 只查四件事，此处前三件在定义时查，第四件在作用域边界强制：
+
+        1. 左侧符号新鲜——链上未声明、未定义；
+        2. 不形成非法递归——`body` 不得引用 `symbol` 自身；
+        3. 右侧在本作用域中良好绑定——`body` 不得引用本作用域的局部符号
+           （那些符号在定义右侧还不可见）；
+        4. 局部符号不泄漏到作用域之外的结论——由 `kernel.commit` 第 1 步
+           经 `ScopeStore.escapes` 强制（不变量 15）。
+
+        返回值是新作用域；`symbol` 之后经 `ScopeStore.lookup_definition` 可解。
+        """
+        self._require_fresh(symbol, "定义")
+        fv = T.free_vars(body)
+        if symbol in fv:
+            raise ScopeError(f"定义非法递归：{symbol!r} 出现在右侧")
+        local = set(self.store.scopes.local_symbols(self.scope))
+        bad = [f for f in fv if f in local]
+        if bad:
+            raise ScopeError(f"定义右侧引用了本作用域局部符号（尚未绑定）: {bad!r}")
+        return self.store.scopes.extend(
+            self.store.scopes.get(self.scope),
+            definitions=(Definition(symbol, body),))
+
+    def _require_fresh(self, symbol, what):
+        """符号新鲜：链上既未定义也未声明（v4 §6.2「左侧符号新鲜」）。"""
+        scopes = self.store.scopes
+        if scopes.lookup_definition(self.scope, symbol) is not None:
+            raise ScopeError(f"{what}符号已在链上定义: {symbol!r}")
+        if any(d.symbol is symbol for d in scopes.declarations(self.scope)):
+            raise ScopeError(f"{what}符号已在链上声明: {symbol!r}")
 
     # --- 撤销/重做：只移 revision 指针（§8.9）---
 

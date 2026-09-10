@@ -47,7 +47,7 @@ class BranchGroup:
 
 def promote_guard(case_condition, guard):
     """分支内的开放守卫提升到父层：`C_i ⇒ G_i`（不是全局 `G_i`）。"""
-    return T.mk(T.S("Implies"), (case_condition, guard))
+    return T.implies(case_condition, guard)
 
 
 def complementary_pair(cases):

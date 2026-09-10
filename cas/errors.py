@@ -12,6 +12,14 @@ class ParseError(Exception):
     pass
 
 
+class ScopeError(Exception):
+    """声明/定义违反 v4 §6.2 的作用域契约（符号不新鲜、非法递归、右侧未绑定）。"""
+
+
+class BranchError(Exception):
+    """分支操作违反 v4 §8.8 的合并条件（未证覆盖、各支非同题、符号逃逸…）。"""
+
+
 class SolveError(Exception):
     pass
 

@@ -145,13 +145,33 @@ class ScopeStore:
         return tuple([d.symbol for d in s.declarations]
                      + [d.symbol for d in s.definitions])
 
-    def escapes_to_parent(self, sid: ScopeId, term) -> bool:
-        """term 中是否含本作用域引入、却出现在父作用域结论里的局部符号。
+    def introducers(self, symbol) -> tuple:
+        """哪些作用域把该符号作为局部符号引入（声明或定义左端）。"""
+        out = []
+        for s in self._scopes.values():
+            if any(d.symbol is symbol for d in s.declarations) \
+                    or any(d.symbol is symbol for d in s.definitions):
+                out.append(s.id)
+        return tuple(out)
 
-        局部辅助符号不得逃逸（v4 不变量 15）。
+    def escapes(self, sid: ScopeId, term) -> tuple:
+        """term 里**逃逸**的局部符号（v4 不变量 15 / §6.2）。
+
+        判据：某自由符号被**不在 sid 祖先链上**的作用域引入，且链上无人引入它。
+        在 sid 或其祖先里引入的符号是可见的，不算逃逸（同一符号在链上被遮蔽时
+        以外层为准，故只要链上出现过即视为可见）。
+
+        为什么需要它：局部定义（`u := x²`）与被引入的辅助符号只在其作用域内有义，
+        一旦出现在父作用域结论里，父作用域的读者会引用一个无定义的符号。
         """
         from cas.syntax.termpath import free_vars
-        local = set(self.local_symbols(sid))
-        if not local:
-            return False
-        return bool(free_vars(term) & local)
+        fv = free_vars(term)
+        if not fv:
+            return ()
+        chain = {s.id for s in self.chain(sid)}
+        bad = []
+        for f in fv:
+            owners = set(self.introducers(f))
+            if owners and not (owners & chain):
+                bad.append(f)
+        return tuple(bad)

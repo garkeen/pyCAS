@@ -61,11 +61,12 @@ class TrackedContext:
         return v
 
     def read_set(self, dedupe=True):
-        """读依赖记录。dedupe=True 为 Step 粒度（每项一次），False 为 read 粒度
-        （保留每次出现）——后者即 audit 模式。"""
+        """读依赖记录。dedupe=True 为 Step 粒度（**每项**一次），False 为 read
+        粒度（保留每次出现）——后者即 audit 模式。
+
+        去重以 `(kind, key)` 整项为键：以 kind 为键会把同类的多次读取（如两条
+        假设、两次判定）压成一条，读依赖就丢了。
+        """
         if dedupe:
-            seen = {}
-            for k, val in self._reads:
-                seen[k] = val
-            return ContextReadSet(tuple(sorted(seen.items())))
+            return ContextReadSet(tuple(sorted(set(self._reads))))
         return ContextReadSet(tuple(self._reads))

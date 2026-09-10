@@ -46,17 +46,6 @@ class Constraint:
         return symbol in T.free_vars(self.relation)
 
 
-@dataclass(frozen=True, slots=True)
-class ValuationCheck:
-    """「这组赋值满足这条约束」的候选载荷（v4 §8.3 候选规格模式的约束版）。
-
-    `valuation` 是**求解器交出的证书**（不可信侧产出），本对象只是把
-    「约束 + 赋值」打包给 checker；checker 复核的是实例与判零，不重跑求解。
-    """
-    constraint: Constraint
-    valuation: object                       # dict[Symbol, Term]
-
-
 class ConstraintStore:
     """约束存储（追加式）。约束是 Artifact 级构造，不进内核账本。"""
 

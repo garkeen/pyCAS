@@ -273,6 +273,45 @@ class BranchCoverageChecker:
         return UnknownResult(Reason.FRAGMENT, "覆盖不是句法重言式，需真覆盖证明")
 
 
+class BranchMergeChecker:
+    """分支合并（v4 §8.8）：按情况讨论。
+
+    每支在同一命题 `P` 上给出结论、各支条件之析取覆盖父问题，于是 `P` 在父
+    作用域成立；各支开放守卫逐条提升为 `C_i ⇒ G_i`（第 5 条）。
+
+    **边界（必须如实知道）**：分支结论**不能**作为父作用域前提——不变量 8
+    「子作用域结论不得反向用于父作用域」由 `commit` 第 2 步强制，所以本步的
+    前提只有一条（父作用域里的覆盖结论）。因此「每支确实回答了 P」这一环由
+    工作流按**内核记录**核出（`Judgment.scope` / `Judgment.proposition`），
+    不是 checker 独立复算的：checker 在此复核的是「前提/载荷/结论三者一致」，
+    即覆盖命题等于载荷各支条件之析取（载荷因此被已提交的覆盖结论钉住）、
+    各支回答数等于支数、且每一支回答的就是结论 `P`。
+
+    要让该环也由内核独立复核，需要 commit 支持「蕴含引入」（由 Γ,C ⊢ P 得
+    Γ ⊢ C⇒P）这一作用域规则——那是内核新规则，属设计决定，尚未落。
+    """
+    id = "branch.merge"
+
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        d = proposal.evidence.payload
+        coverage = T.or_(*d.conditions)
+        if not any(p is coverage for p in proposal.premise_propositions):
+            return Rejected(Reason.FRAGMENT, "前提里没有该分支组的覆盖命题")
+        if len(d.answers) != len(d.conditions):
+            return Rejected(Reason.FRAGMENT,
+                            f"分支回答数 {len(d.answers)} 与分支数 "
+                            f"{len(d.conditions)} 不符")
+        if any(a is not content for a in d.answers):
+            return Rejected(Reason.FRAGMENT, "并非每个分支都回答同一命题")
+        promoted = tuple(T.implies(c, g)
+                         for c, gs in zip(d.conditions, d.guards) for g in gs)
+        return Accepted(direct_requirements=tuple(dom_condition(content)) + promoted,
+                        reads=context.read_set())
+
+
 class ConstraintSatisfiedChecker:
     """约束满足（v4 §8.6 + §8.3 候选规格模式）。
 
@@ -306,7 +345,8 @@ class ConstraintSatisfiedChecker:
 
 CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,
             RuleInstanceChecker, SubstChecker, SplitChecker,
-            BranchCoverageChecker, ConstraintSatisfiedChecker)
+            BranchCoverageChecker, BranchMergeChecker,
+            ConstraintSatisfiedChecker)
 
 
 def register(store) -> None:

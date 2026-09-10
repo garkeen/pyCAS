@@ -410,6 +410,11 @@ def and_(*a):
     return mk(S("And"), a)
 
 
+def implies(a, b):
+    """蕴含项的规范构造（分支守卫提升 `C ⇒ G` 等处的唯一实现）。"""
+    return mk(S("Implies"), (a, b))
+
+
 def or_(*a):
     return mk(S("Or"), a)
 

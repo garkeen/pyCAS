@@ -41,6 +41,10 @@ class Command:
     antideriv: object = None
     bounds: object = None
     registers_assumption: bool = False   # Claim：命题登记为当前作用域假设
+    # 分支合并（v4 §8.8）：各支条件、各支开放守卫、各支给出的同一命题
+    conditions: tuple = ()
+    guards: tuple = ()
+    answers: tuple = ()
 
 
 # ---------------------------------------------------------------------------

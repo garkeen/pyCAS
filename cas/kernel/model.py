@@ -99,10 +99,12 @@ class ContextReadSet:
     entries: tuple[tuple[str, str], ...] = ()
 
     def merge(self, other):
-        seen = dict(self.entries)
-        for k, v in other.entries:
-            seen[k] = v
-        return ContextReadSet(tuple(sorted(seen.items())))
+        """并集，逐项去重（读依赖是集合语义：同一项读两次即一次）。
+
+        键是 `(kind, key)` 整项——只按 kind 归并会把同类的多次读取压成一条。
+        """
+        return ContextReadSet(tuple(sorted(set(self.entries)
+                                              | set(other.entries))))
 
     def __bool__(self):
         return bool(self.entries)
