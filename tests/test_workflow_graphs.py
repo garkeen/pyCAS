@@ -110,3 +110,75 @@ def test_无结论的步骤没有适用性():
     s = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
     assert s.status == "unverified"
     assert wf.applicability_of(s) is None
+
+
+# ---------------------------------------------------------------------------
+# §8.8 Branch
+# ---------------------------------------------------------------------------
+
+def test_split建一对互补分支且覆盖成立():
+    from cas.kernel.mode import ExecutionMode
+    wf = Workflow(mode=ExecutionMode.DERIVATION)
+    cond = parse("x != 0")
+    g = wf.split_on(cond)
+    assert len(g.cases) == 2
+    assert g.cases[0].condition is cond
+    assert g.cases[1].condition is T.not_(cond)
+    assert g.cases[0].scope != g.cases[1].scope
+    # 覆盖经 checker 复核后登记（排中律 → 句法重言式 ⊤）
+    assert g.coverage is not None
+    cov = wf.store.get_judgment(g.coverage)
+    assert cov.proposition is T.TRUE
+
+
+def test_分支作用域携带条件假设():
+    wf = Workflow()
+    cond = parse("x != 0")
+    g = wf.split_on(cond)
+    pos, neg = g.cases[0].scope, g.cases[1].scope
+    props = [a.proposition for a in wf.store.scopes.assumptions(pos)]
+    assert cond in props
+    nprops = [a.proposition for a in wf.store.scopes.assumptions(neg)]
+    assert T.not_(cond) in nprops
+
+
+def test_兄弟分支互不可见():
+    from cas.kernel.mode import ExecutionMode
+    wf = Workflow(mode=ExecutionMode.DERIVATION)
+    g = wf.split_on(parse("x != 0"))
+    a, b = g.cases[0].scope, g.cases[1].scope
+    wf.enter(a)
+    sa = wf.add(parse("x^2"), Claim())
+    assert sa.judgment is not None
+    wf.enter(b)
+    # 在 b 里引用 a 的结论 → 不可见，拒绝
+    from cas.workflow.workflow import BothSides
+    sb = wf.add(parse("x^2 + 1"), BothSides(pred=sa.id, op="add", operand=N(1)))
+    assert sb.status != "open", sb.status
+
+
+def test_promote_guard提升守卫为蕴含():
+    wf = Workflow()
+    g = wf.split_on(parse("x != 0"))
+    case = g.cases[0]
+    elevated = wf.promote_guard(case, parse("y > 0"))
+    assert elevated == T.mk(T.S("Implies"), (case.condition, parse("y > 0")))
+
+
+def test_needs_split状态与开分支接线():
+    """REQUEST_SPLIT 策略下待决条件交回调用方；开分支后条件经假设被清偿。"""
+    from cas.kernel.commit import GuardPolicy
+    from cas.kernel.mode import ExecutionMode
+    wf = Workflow(policy=GuardPolicy.REQUEST_SPLIT,
+                  mode=ExecutionMode.DERIVATION)
+    s0 = wf.add(parse("x/x"), Claim())
+    assert s0.status == "needs_split", (s0.status, s0.note)
+    cond = s0.guards[0]
+    assert cond == parse("x != 0")
+    assert s0.judgment is None
+
+    g = wf.split_on(cond)
+    wf.enter(g.cases[0].scope)                 # 进入 x != 0 分支
+    s1 = wf.add(parse("x/x"), Claim())
+    assert s1.status == "open", (s1.status, s1.note)
+    assert wf.applicability_of(s1).is_applicable(), wf.applicability_of(s1)

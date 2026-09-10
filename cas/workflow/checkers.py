@@ -412,6 +412,24 @@ class IntegrateChecker:
         return Rejected(Reason.FRAGMENT, "定积分值与端点差不符")
 
 
+class BranchCoverageChecker:
+    """分支覆盖（v4 §8.8）：分支条件之析取是否覆盖父问题。
+
+    只认**句法重言式**：排中律 `c ∨ ¬c` 已被 And/Or 的 AC 折叠为 `⊤`（`BVal`），
+    故命题恰为真即覆盖成立。非互补的覆盖（如 `a≠0 ∨ a=0` 之外的划分）需要真覆盖
+    证明，此处诚实返回未决，不冒充。
+    """
+    id = "branch.coverage"
+
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        if isinstance(content, T.BVal) and content.val:
+            return Accepted()
+        return UnknownResult(Reason.FRAGMENT, "覆盖不是句法重言式，需真覆盖证明")
+
+
 # ---------------------------------------------------------------------------
 # 判定服务（工作流侧实现 v4 §6.7 KernelServices）
 # ---------------------------------------------------------------------------
@@ -438,6 +456,7 @@ def register(store) -> None:
     """把 checker 注册进账本。**显式调用**，不在 import 期改全局状态。"""
     for ck in (ClaimChecker(), BothSidesChecker(), NormalizeChecker(),
                RuleInstanceChecker(), SubstChecker(), SolveChecker(),
-               SplitChecker(), DiffChecker(), IntegrateChecker()):
+               SplitChecker(), DiffChecker(), IntegrateChecker(),
+               BranchCoverageChecker()):
         if ck.id not in store.checkers:
             store.checkers.register(ck.id, ck)

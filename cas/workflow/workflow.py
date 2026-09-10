@@ -41,6 +41,7 @@ from cas.kernel.services import register_core_checkers
 from cas.kernel.store import KernelStore
 from cas.workflow import checkers as _checkers
 from cas.workflow.artifact import ArtifactStore
+from cas.workflow.branch import BranchCase, BranchStore, promote_guard
 from cas.workflow.event import EventLog, Ref
 from cas.workflow.task import TaskStore
 
@@ -187,7 +188,7 @@ _REQUEST_HEADS = {Diff: "Differentiate", Integrate: "Integrate",
 class Workflow:
     """提交边界 + 展示记录。"""
 
-    def __init__(self, store=None, services=None, mode=None):
+    def __init__(self, store=None, services=None, mode=None, policy=None):
         from cas.kernel.mode import DEFAULT_MODE
         self.store = store if store is not None else KernelStore()
         register_core_checkers(self.store)
@@ -195,12 +196,14 @@ class Workflow:
         self.services = services if services is not None \
             else _checkers.WorkflowServices(self.store.scopes)
         self.mode = mode if mode is not None else DEFAULT_MODE
+        self.policy = policy if policy is not None else _POLICY
         self._root = self.store.scopes.create()
         self.scope = self._root.id
         # 三图分离（v4 §8.5）：产物图 / 任务图 / 操作历史图，各归其位。
         self.artifacts = ArtifactStore()
         self.tasks = TaskStore(kernel=self.store)
         self.events = EventLog()
+        self.branches = BranchStore()
         self._steps: dict = {}
         self._next_id = 0
 
@@ -229,7 +232,7 @@ class Workflow:
         proposal = StepProposal(scope=self.scope, premises=premises,
                                 conclusions=(content,),
                                 evidence=Evidence(cid, derivation),
-                                guard_policy=_POLICY)
+                                guard_policy=self.policy)
         res = commit(self.store, proposal, services=self.services,
                      mode=self.mode)
 
@@ -242,6 +245,10 @@ class Workflow:
         if res.is_refused():
             return self._record(content, derivation, "dead",
                                 res.detail or note, target, ())
+        if res.is_needs_split():
+            # 策略要求分类讨论：把待决条件交回调用方，由 split_on 开分支。
+            return self._record(content, derivation, "needs_split",
+                                "需分类讨论", target, tuple(res.conditions))
         return self._record(content, derivation, "unverified",
                             getattr(res, "detail", "") or "未获复核",
                             target, ())
@@ -287,6 +294,46 @@ class Workflow:
         task = self.tasks.open_task(self.scope, T.mk(S(head), args))
         self.tasks.propose(task.id, artifact.id, judgment)
         return task
+
+    # --- 分支（v4 §8.8）---
+
+    def split_on(self, condition):
+        """按 `condition` 与 `¬condition` 建一对分支作用域，并尝试证覆盖。
+
+        **兄弟分支互不可见**（不变量 9），且分支上下文不能直接合并——合并前必须
+        验证 §8.8 的五条；此处只落「覆盖」这一条（排中律，句法重言式），其余
+        四条由调用方在各自分支内提交结论时自然满足（作用域可见性 + 逃逸检查）。
+        """
+        parent = self.store.scopes.get(self.scope)
+        cases = []
+        for cond, label in ((condition, "+"), (T.not_(condition), "-")):
+            child = self.store.scopes.child(parent,
+                                            assumptions=(Assumption(cond),))
+            cases.append(BranchCase(condition=cond, scope=child.id, label=label))
+        group = self.branches.create(self.scope, cases)
+
+        # 覆盖：条件之析取（排中律下 AC 折叠为 ⊤），经 checker 复核后登记
+        prop = T.or_(*[c.condition for c in cases])
+        r = commit(self.store,
+                   StepProposal(scope=self.scope, conclusions=(prop,),
+                                evidence=Evidence("branch.coverage", group.id),
+                                guard_policy=GuardPolicy.REQUIRE_PROVED),
+                   services=self.services, mode=self.mode)
+        self.branches.set_coverage(group.id, r.judgments[0] if r.is_committed()
+                                   else None)
+        self.events.append(command="Split", inputs=(),
+                           outputs=(Ref("branch", group.id),))
+        return self.branches.get(group.id)
+
+    def enter(self, scope):
+        """进入分支作用域：其后提交发生在这里。"""
+        self.store.scopes.get(scope)
+        self.scope = scope
+        return scope
+
+    def promote_guard(self, case, guard):
+        """把分支内未清偿的守卫提升到父层：`C_i ⇒ G_i`（§8.8 第 5 条）。"""
+        return promote_guard(case.condition, guard)
 
     # --- 适用性查询（v4 §6.10：内核算，工作流问）---
 
