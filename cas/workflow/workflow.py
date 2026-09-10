@@ -144,6 +144,18 @@ class Diff(Derivation):
 
 
 @dataclass(frozen=True, slots=True)
+class ValuationCheck(Derivation):
+    """约束系统的一组赋值（v4 §8.6）。
+
+    载荷是求解器交出的**证书**，不是结论；checker 逐条复核实例与判零。"""
+    constraint: object
+    valuation: object
+
+    def checker_id(self):
+        return "constraint.satisfied"
+
+
+@dataclass(frozen=True, slots=True)
 class Integrate(Derivation):
     """积分——前驱被积式关于 var 求原函数，或定积分（bounds=(a,b)）。
 
@@ -307,6 +319,20 @@ class Workflow:
         self.events.append(command="AddConstraint", inputs=(),
                            outputs=(Ref("constraint", c.id),))
         return c
+
+    def verify_valuation(self, valuation):
+        """逐条复核「这组赋值满足约束系统」。
+
+        `valuation` 是**求解器交出的证书**（不可信侧，可以给错）。每条约束各
+        提交一次，由 `constraint.satisfied` checker 复核实例与判零——求解器自报
+        不算，这正是 §7.3「算法产生候选、checker 决定能声称什么」。
+        """
+        out = []
+        for c in self.constraints.all():
+            inst = T.subst(c.relation, dict(valuation))
+            out.append(self.add(inst, ValuationCheck(constraint=c,
+                                                     valuation=valuation)))
+        return tuple(out)
 
     # --- 分支（v4 §8.8）---
 

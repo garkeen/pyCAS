@@ -231,3 +231,33 @@ def test_约束不自动成为结论():
     # 约束出现在操作历史里（outputs 带 kind 标签）
     kinds = [r.kind for r in wf.events.events()[-1].outputs]
     assert kinds == ["constraint"]
+
+
+def test_约束赋值经checker复核():
+    """§9.6 形态的线性约束系统：求解器交赋值，checker 逐条复核（不重跑求解）。
+
+    用有理式而非超越式作系数——判定管线在代数片段内能闭合，超越片段会诚实
+    未决（那是完整性边界，不是缺陷）。
+    """
+    wf = Workflow()
+    u, v = S("_u"), S("_v")
+    X = S("x")
+    a = T.pw(X, N(2))                     # a = x^2
+    b = X                                 # b = x
+    wf.add_constraint(T.eq(u, T.plus(a, T.neg(v))))          # u = a - v
+    wf.add_constraint(T.eq(v, T.plus(T.plus(b, N(-1)), u)))  # v = b - 1 + u
+
+    # 解：u = (x^2 - x + 1)/2, v = (x^2 + x - 1)/2
+    good = {u: parse("(x^2 - x + 1)/2"), v: parse("(x^2 + x - 1)/2")}
+    steps = wf.verify_valuation(good)
+    assert len(steps) == 2
+    assert all(s.status == "open" for s in steps), [(s.status, s.note) for s in steps]
+    assert all(s.judgment is not None for s in steps)
+
+    # 错误赋值：约束不成立 → 否决
+    wf2 = Workflow()
+    u2, v2 = S("_u"), S("_v")
+    wf2.add_constraint(T.eq(u2, T.plus(a, T.neg(v2))))
+    bad = wf2.verify_valuation({u2: N(0), v2: N(0)})
+    assert bad[0].status == "dead", (bad[0].status, bad[0].note)
+    assert bad[0].judgment is None

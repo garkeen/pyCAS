@@ -89,9 +89,7 @@ proposition 与 requirements 逐位相同——§四.3 的机械检查）、
 - `inputs` 记前驱的**步骤 id**（工作流侧编号），`outputs` 记内核 id —— 内核对
   产生零感知，方向合规。
 
-未做（明确记录）：§8.8 Branch（含 `NeedsSplit` 自动开分支）与 §8.6 Constraint
-（循环积分构方程）。`NeedsSplit` 目前仍只映射成 `unverified` 状态并由 `note`
-说明——**接线需要 Branch 结构，属下一步**，没有假装已接。
+已补（见下两节）：§8.8 Branch（含 `NeedsSplit` 开分支接线）与 §8.6 Constraint。
 
 验收：`tests/test_workflow_graphs.py` 8 条；全量 104 passed + 1 xfailed；stress 10 passed。
 

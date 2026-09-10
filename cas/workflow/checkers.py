@@ -430,6 +430,37 @@ class BranchCoverageChecker:
         return UnknownResult(Reason.FRAGMENT, "覆盖不是句法重言式，需真覆盖证明")
 
 
+class ConstraintSatisfiedChecker:
+    """约束满足（v4 §8.6 + §8.3 候选规格模式）。
+
+    载荷是 `ValuationCheck(constraint, valuation)`。checker 复核两件事：
+
+      1. 结论**确实是**该约束在该赋值下的实例（句法身份，不信任调用方自报）；
+      2. 该实例在当前上下文下判零 —— 用独立设施（域标准形 / 恒等判定 / 定义域
+         分析），**不重跑求解器**。
+
+    找 valuation 是求解器的活（不可信侧，可以给错候选）；此处只决定「能声称
+    什么」。判零在投影外时诚实返回未决。
+    """
+    id = "constraint.satisfied"
+
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        d = proposal.evidence.payload
+        rel = d.constraint.relation
+        inst = T.subst(rel, dict(d.valuation))
+        if content is not inst:
+            return Rejected(Reason.FRAGMENT, "结论不是该约束在该赋值下的实例")
+        v = context.decide(inst)
+        if v.is_yes():
+            return _ok(proposal, context)
+        if v.is_no():
+            return Rejected(Reason.FRAGMENT, "该赋值下约束不成立")
+        return UnknownResult(v.reason, "约束实例判零未决")
+
+
 # ---------------------------------------------------------------------------
 # 判定服务（工作流侧实现 v4 §6.7 KernelServices）
 # ---------------------------------------------------------------------------
@@ -457,6 +488,6 @@ def register(store) -> None:
     for ck in (ClaimChecker(), BothSidesChecker(), NormalizeChecker(),
                RuleInstanceChecker(), SubstChecker(), SolveChecker(),
                SplitChecker(), DiffChecker(), IntegrateChecker(),
-               BranchCoverageChecker()):
+               BranchCoverageChecker(), ConstraintSatisfiedChecker()):
         if ck.id not in store.checkers:
             store.checkers.register(ck.id, ck)
