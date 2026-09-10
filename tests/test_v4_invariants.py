@@ -9,7 +9,7 @@
 
 · 1  Term 无 guard/context/proof 字段      —— 绿（阶段1b）
 · 2  Pattern 不是 Term                      —— 绿（阶段1b，模式元语言）
-· 14 checker 不导入自身搜索算法            —— 红（阶段3：拆 Derivation ADT）
+· 14 checker 不导入自身搜索算法            —— 绿（阶段3，规则实例验证）
 · 16 未验证候选不参与可信推导              —— 绿（阶段2b，接入 commit）
 · 18 自动化简不应用未证明的条件规则        —— 绿
 """
@@ -94,15 +94,48 @@ def test_不变量18_自动化简不应用未证明的条件规则():
     assert not bad, f"auto 规则携带守卫: {bad}"
 
 
-@pytest.mark.xfail(reason="v4 阶段3：wf.rewrite checker 仍导入并调用 apply_rule"
-                          "（验证器依赖被验证的搜索算法）", strict=False)
 def test_不变量14_checker不导入自身搜索算法():
-    """重写 checker 不得导入对应搜索算法（v4 §7.3 验证独立性）。"""
+    """checker 只验证给定实例，不得导入搜索器、不得遍历路径（v4 §7.3）。
+
+    规则重写的主张由提出方给出实例（rule + path + substitution），checker
+    复核该实例；「找在哪里应用哪条规则」是提出方的搜索，不进 checker。
+    """
     from cas.workflow import checkers as C
-    code = C.RewriteChecker.check.__code__
-    # 函数内 `from cas.math.rules import library_ruleset, apply_rule`
-    assert "apply_rule" not in code.co_names, \
-        "RewriteChecker 导入了 apply_rule：验证器与搜索算法未分离"
+    bad = []
+    for name in dir(C):
+        obj = getattr(C, name)
+        if inspect.isclass(obj) and name.endswith("Checker"):
+            names = obj.check.__code__.co_names
+            for forbidden in ("apply_rule", "all_paths"):
+                if forbidden in names:
+                    bad.append(f"{name}.{forbidden}")
+    assert not bad, f"checker 依赖了搜索算法: {bad}"
+
+
+def test_规则实例checker只认给定实例():
+    """替换/路径与实例不符 → 否决；相符 → 通过（不搜索其他路径或匹配）。"""
+    from cas.frontend.parser import parse
+    from cas.workflow.workflow import Workflow, Claim, Rewrite
+
+    wf = Workflow()
+    wf.add(parse("exp(x)*exp(y)"), Claim())
+    X, Y = parse("x"), parse("y")
+    good = wf.add(parse("exp(x + y)"),
+                  Rewrite(pred=0, rule="exp_add", path=(),
+                          substitution={"a": X, "b": Y}))
+    assert good.status == "open", good.note
+    assert good.judgment is not None
+    # 替换不是该位置的有效匹配（?a、?b 都被绑到 x）→ 否决
+    wrong = wf.add(parse("exp(x + y)"),
+                   Rewrite(pred=0, rule="exp_add", path=(),
+                           substitution={"a": X, "b": X}))
+    assert wrong.status == "dead", wrong.note
+    assert wrong.judgment is None
+    # 路径越界 → 否决
+    oob = wf.add(parse("exp(x + y)"),
+                 Rewrite(pred=0, rule="exp_add", path=(5,),
+                         substitution={"a": X, "b": Y}))
+    assert oob.status == "dead", oob.note
 
 
 def test_不变量16_未验证候选不参与可信推导():

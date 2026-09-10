@@ -404,7 +404,9 @@ class REPL:
             res = apply_rule(rule, pred.content, path)
             if res.ok:
                 s = self.wf.add(res.term, Rewrite(pred=self.current,
-                                                  rule=rid),
+                                                  rule=rid,
+                                                  path=tuple(path),
+                                                  substitution=res.subst),
                                 target=path)
                 if s.status == "dead":
                     print(f"  步骤 dead：{s.note or '规则产物复核失败'}")

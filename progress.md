@@ -24,13 +24,12 @@
 | 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10 |
 | 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ✅ 2026-09-10（本次，不变量 2 转绿） |
 | 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ✅ 2026-09-10（2a 模型+协议，2b 接线） |
-| 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 红） |
+| 3 拆除 Derivation ADT | 命令只生成 proposal；checker 语义 id；规则实例验证不再搜索 | ✅ 2026-09-10（不变量 14 转绿） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
 
-不变量 CI 门禁（`tests/test_v4_invariants.py`）：1/2/16/18 绿；14 挂 xfail 红灯
-（reason 写明迁移阶段），随阶段落地翻绿。
+不变量 CI 门禁（`tests/test_v4_invariants.py`）：**1/2/14/16/18 全部转绿**（无 xfail）。
 
 ### 阶段 1b：模式元语言（2026-09-10）
 
@@ -112,6 +111,38 @@ REPL 端到端冒烟（claim/diff/norm/solve/split/rules/apply/steps）正常。
 
 依赖债延续并记录：`workflow/checkers.py` 仍依赖 `cas.math.*`（v3 遗留的
 workflow→math 顶层依赖），v4 §三 的目标位置是各 `math/*/checkers.py`，阶段6 迁移。
+
+### 阶段 3：命令只生成 proposal；checker 验实例而非搜索（2026-09-10）
+
+按 v4 §十一 阶段3「先保留旧命令名称，但命令只负责生成 proposal」拆除
+「命令类型 → 验证器」的功能特化分派。
+
+- **删除 `_CHECKER_FOR` 类型分派表**。每个命令自带 `checker_id()`——它给出的是
+  **主张的种类**，不是命令的类别。同一条重写命令按是否指定规则给出两种不同主张
+  （标准形 / 规则实例），这正是「步骤无子类、分派走注册表」的落点。
+  v4 §三 的 `Step` 无子类已满足；命令类保留为**参数记录**（前端命令的形状），
+  内核不含它们，也不再被任何验证分派逻辑引用。
+- **checker id 语义化**：`assumption.entry` / `both_sides.operate` /
+  `equality.normalize` / `rule.instance` / `substitute` / `solve.back_substitute` /
+  `branch.split` / `calculus.derivative` / `calculus.antiderivative`（+ 内核自带
+  `kernel.decide`），不再是 `wf.*` 这种按命令命名的占位。
+- **规则重写改为验证实例**（不变量 14 的修法）：`Rewrite` 携带
+  `(rule, path, substitution)`——由**提出方**（REPL 的候选搜索）给出；checker
+  只做四件事：规则查表、给定替换确为该位置的一个匹配、结果确为该模板的实例化、
+  前驱其余部分原样保留。**不遍历路径、不导入 `apply_rule`**。
+  原先 `_verify_rewrite` 遍历全部路径重跑规则搜索，那是「验证器重跑求解算法」。
+- `RewriteChecker` 拆为 `NormalizeChecker`（rule=""）与 `RuleInstanceChecker`。
+
+验收：`tests/` **81 passed（0 xfailed）**；`stress/` 10 passed；REPL `apply`
+端到端正常（`exp(x)*exp(y) + apply exp_add → exp(x + y)` open，替换不符/路径
+越界 → dead）。
+
+一处**收紧**（有意为之，记录在案）：规则实例核验用指针恒等
+（`replace_at(pred, path, inst) is content`）而非域判等——「内容就是这个实例的
+结果」按句法身份判定。当前唯一提出方（REPL）正是这样生成内容的，故无行为变化；
+若将来出现「手工写入等价但不同形的结果」的需求（v4 §9.2 derivation 模式），
+再决定是否放宽为域判等。
+
 
 
 

@@ -43,7 +43,12 @@ from cas.workflow import checkers as _checkers
 
 
 # ---------------------------------------------------------------------------
-# 命令形状（阶段3 拆除：内核不得含功能特化原语）
+# 命令形状：命令只声明主张，不自带验证
+#
+# 每个命令给出 `checker_id()` —— **主张的种类**，而非「命令的类别」。内核按 id
+# 从注册表取 checker，不存在 isinstance 分派表，也没有「命令类型 → 验证器」的
+# 功能特化映射。同一条重写命令按是否指定规则给出两种不同主张（标准形 vs 规则
+# 实例），这正是「步骤无子类、分派走注册表」的落点。
 # ---------------------------------------------------------------------------
 
 class Derivation:
@@ -56,6 +61,9 @@ class Claim(Derivation):
     """断言入账——无前驱。命题登记为当前作用域假设（v4 §6.2）。"""
     pass
 
+    def checker_id(self):
+        return "assumption.entry"
+
 
 @dataclass(frozen=True, slots=True)
 class BothSides(Derivation):
@@ -65,12 +73,24 @@ class BothSides(Derivation):
     op: str
     operand: object
 
+    def checker_id(self):
+        return "both_sides.operate"
+
 
 @dataclass(frozen=True, slots=True)
 class Rewrite(Derivation):
-    """重写——域标准形（rule=""）或图书馆规则应用（rule=规则 id）。"""
+    """重写：前驱的域标准形（rule=""），或图书馆规则在 (path, substitution)
+    处的一次实例（rule=规则 id）。
+
+    实例数据（path + subst）由**提出方**（REPL 的候选搜索）给出；checker 只
+    验证这一个实例，不搜索路径、不重跑规则搜索（v4 §7.3 / 不变量 14）。"""
     pred: int
     rule: str = ""
+    path: tuple = ()
+    substitution: object = None
+
+    def checker_id(self):
+        return "rule.instance" if self.rule else "equality.normalize"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +100,9 @@ class Solve(Derivation):
     var: Sym
     solution: object
 
+    def checker_id(self):
+        return "solve.back_substitute"
+
 
 @dataclass(frozen=True, slots=True)
 class Split(Derivation):
@@ -87,6 +110,9 @@ class Split(Derivation):
     pred: int
     condition: object
     negate: bool = False
+
+    def checker_id(self):
+        return "branch.split"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +122,9 @@ class Subst(Derivation):
     var: Sym
     value: object
 
+    def checker_id(self):
+        return "substitute"
+
 
 @dataclass(frozen=True, slots=True)
 class Diff(Derivation):
@@ -104,6 +133,9 @@ class Diff(Derivation):
     等式不是合法输入：等式两边求导不保真（点解方程 x=3 会「推出」1=0）。"""
     pred: int
     var: Sym
+
+    def checker_id(self):
+        return "calculus.derivative"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +147,9 @@ class Integrate(Derivation):
     var: Sym
     antideriv: object
     bounds: tuple = None
+
+    def checker_id(self):
+        return "calculus.antiderivative"
 
 
 # ---------------------------------------------------------------------------
@@ -133,17 +168,6 @@ class Step:
     domain: str = ""                # 内容所属域（投影赋予）
     judgment: object = None         # 内核 JudgmentId；未提交则 None
 
-
-_CHECKER_FOR = {
-    Claim: "wf.claim",
-    BothSides: "wf.both",
-    Rewrite: "wf.rewrite",
-    Subst: "wf.subst",
-    Solve: "wf.solve",
-    Split: "wf.split",
-    Diff: "wf.diff",
-    Integrate: "wf.integrate",
-}
 
 # 手工/交互通道：显式应用规则允许产生条件性结论（v4 §6.9 ALLOW_CONDITIONAL）。
 # 自动化简走 REQUIRE_PROVED（未决条件不落地），那是 simplify 的事，不经本工作流。
@@ -185,11 +209,7 @@ class Workflow:
             self.store.scopes.extend(self.store.scopes.get(self.scope),
                                      assumptions=(Assumption(content),))
 
-        cid = _CHECKER_FOR.get(type(derivation))
-        if cid is None:
-            return self._record(content, derivation, "unverified",
-                                note or "无对应 checker", target, ())
-
+        cid = derivation.checker_id()
         proposal = StepProposal(scope=self.scope, premises=premises,
                                 conclusions=(content,),
                                 evidence=Evidence(cid, derivation),

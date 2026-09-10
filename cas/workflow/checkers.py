@@ -21,7 +21,9 @@
 """
 
 from cas.syntax import term as T
+from cas.syntax import pattern as P
 from cas.syntax.term import Expr, S
+from cas.syntax.match import matches
 from cas.kernel.evidence import Accepted, Rejected, UnknownResult
 from cas.kernel.verdict import Reason
 from cas.math.domains.poly import Poly, p_deriv, to_term
@@ -129,6 +131,29 @@ def _premise(proposal):
     return proposal.premise_propositions[0]
 
 
+def _same_subst(a, b):
+    """两个替换是否逐洞相同（项按指针，序列按元素指针）。"""
+    if set(a) != set(b):
+        return False
+    for k, va in a.items():
+        vb = b[k]
+        if isinstance(va, tuple) or isinstance(vb, tuple):
+            if not (isinstance(va, tuple) and isinstance(vb, tuple)):
+                return False
+            if len(va) != len(vb) or any(x is not y for x, y in zip(va, vb)):
+                return False
+        elif va is not vb:
+            return False
+    return True
+
+
+def _rule_conditions(rule, subst):
+    """规则守卫实例化为具体条件。checker 报告条件，判定与清偿归内核。"""
+    if rule.guard is None:
+        return ()
+    return (P.instantiate(rule.guard, subst),)
+
+
 # ---------------------------------------------------------------------------
 # 八个 checker
 # ---------------------------------------------------------------------------
@@ -140,7 +165,7 @@ class ClaimChecker:
     同时回报**表达式自身的定义域条件**：`x/x` 被断言时即携带 `x ≠ 0`，
     后续重写经内核继承，条件不会在化简中丢失（v4 §9.1）。
     """
-    id = "wf.claim"
+    id = "assumption.entry"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -154,7 +179,7 @@ class ClaimChecker:
 class BothSidesChecker:
     """等式两边同施加运算。mul/div 要求运算元 ≠ 0（作为直接条件回报，
     由内核判定与清偿——checker 不自己裁决，只声明条件）。"""
-    id = "wf.both"
+    id = "both_sides.operate"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -186,12 +211,35 @@ class BothSidesChecker:
         return _ok(proposal, context, extra)
 
 
-class RewriteChecker:
-    """重写：域标准形（rule=""）或图书馆规则应用（rule=规则 id）。
+class NormalizeChecker:
+    """重写为域标准形：内容 == 前驱的域标准形（不涉及规则搜索）。"""
+    id = "equality.normalize"
 
-    信任锚是图书馆准入纪律，本 checker 复核规则产物（不重跑求解算法）。
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        pred = _premise(proposal)
+        if pred is None:
+            return Rejected(Reason.FRAGMENT, "缺前驱")
+        if _eq_equal(content, _normalize_eq(pred)):
+            return _ok(proposal, context)
+        return Rejected(Reason.FRAGMENT, "内容不是前驱的域标准形")
+
+
+class RuleInstanceChecker:
+    """图书馆规则在 (path, substitution) 处的**一次实例**。
+
+    只验证给定实例，四步：
+      1. 规则查表——规则是数据，不是搜索；
+      2. 给定替换确为该位置的一个匹配（用 syntax 层的模式匹配器核验匹配
+         关系；与提出方「遍历路径与规则去找匹配」的**搜索**是两回事）；
+      3. 结果确为该模板在该替换下的实例化；
+      4. 前驱其余部分原样保留（只改 path 处）。
+
+    checker 不导入 `apply_rule` 一类搜索器，也不遍历路径（v4 §7.3 / 不变量 14）。
     """
-    id = "wf.rewrite"
+    id = "rule.instance"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -201,24 +249,29 @@ class RewriteChecker:
         if pred is None:
             return Rejected(Reason.FRAGMENT, "缺前驱")
         d = proposal.evidence.payload
-        if d.rule:
-            from cas.math.rules import library_ruleset, apply_rule
-            rule = library_ruleset().rules.get(d.rule)
-            if rule is None:
-                return Rejected(Reason.FRAGMENT, f"未知规则: {d.rule}")
-            for path in T.all_paths(pred):
-                res = apply_rule(rule, pred, path)
-                if res.ok and _eq_equal(content, res.term):
-                    return _ok(proposal, context)
-            return Rejected(Reason.FRAGMENT, "规则产物与前驱不匹配")
-        if _eq_equal(content, _normalize_eq(pred)):
-            return _ok(proposal, context)
-        return Rejected(Reason.FRAGMENT, "内容不是前驱的域标准形")
+        from cas.math.rules import library_ruleset
+        rule = library_ruleset().rules.get(d.rule)
+        if rule is None:
+            return Rejected(Reason.FRAGMENT, f"未知规则: {d.rule}")
+        if d.substitution is None:
+            return Rejected(Reason.FRAGMENT, "规则实例缺少 substitution")
+        path = tuple(d.path)
+        try:
+            sub_t = T.term_at(pred, path)
+        except IndexError:
+            return Rejected(Reason.FRAGMENT, f"路径越界: {path}")
+        if not any(_same_subst(s, d.substitution)
+                   for s in matches(rule.pattern, sub_t)):
+            return Rejected(Reason.FRAGMENT, "给定替换不是该位置的一个匹配")
+        inst = P.instantiate(rule.template, d.substitution)
+        if T.replace_at(pred, path, inst) is not content:
+            return Rejected(Reason.FRAGMENT, "内容不是该实例的结果")
+        return _ok(proposal, context, _rule_conditions(rule, d.substitution))
 
 
 class SubstChecker:
     """代换：前驱中某变量替换为值，纯句法操作。"""
-    id = "wf.subst"
+    id = "substitute"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -236,7 +289,7 @@ class SubstChecker:
 
 class SolveChecker:
     """回代判官：代入证书后域标准形判零。**不重跑求解公式**。"""
-    id = "wf.solve"
+    id = "solve.back_substitute"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -259,7 +312,7 @@ class SolveChecker:
 
 class SplitChecker:
     """条件分支切割：内容 ⟺ 前驱 ∧ (¬)条件。"""
-    id = "wf.split"
+    id = "branch.split"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -287,7 +340,7 @@ class DiffChecker:
 
     等式前驱一律否证（等式两边求导不保真）；源在域外时没有独立通道，
     诚实未决——不冒充验证通过。"""
-    id = "wf.diff"
+    id = "calculus.derivative"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -328,7 +381,7 @@ class DiffChecker:
 class IntegrateChecker:
     """独立复核：d/dx antideriv == 被积式（走微分层，另一套实现）；
     定积分再核 值 == antideriv(b) − antideriv(a)（精确求值）。"""
-    id = "wf.integrate"
+    id = "calculus.antiderivative"
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -382,9 +435,9 @@ class WorkflowServices:
 
 
 def register(store) -> None:
-    """把八个 checker 注册进账本。**显式调用**，不在 import 期改全局状态。"""
-    for ck in (ClaimChecker(), BothSidesChecker(), RewriteChecker(),
-               SubstChecker(), SolveChecker(), SplitChecker(),
-               DiffChecker(), IntegrateChecker()):
+    """把 checker 注册进账本。**显式调用**，不在 import 期改全局状态。"""
+    for ck in (ClaimChecker(), BothSidesChecker(), NormalizeChecker(),
+               RuleInstanceChecker(), SubstChecker(), SolveChecker(),
+               SplitChecker(), DiffChecker(), IntegrateChecker()):
         if ck.id not in store.checkers:
             store.checkers.register(ck.id, ck)
