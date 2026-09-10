@@ -32,7 +32,7 @@
 from dataclasses import dataclass
 
 from cas.syntax import term as T
-from cas.syntax.term import Expr, Sym
+from cas.syntax.term import Expr, S, Sym
 from cas.math.project import project
 from cas.kernel.commit import GuardPolicy, StepProposal, commit
 from cas.kernel.evidence import Evidence
@@ -40,6 +40,9 @@ from cas.kernel.model import Assumption
 from cas.kernel.services import register_core_checkers
 from cas.kernel.store import KernelStore
 from cas.workflow import checkers as _checkers
+from cas.workflow.artifact import ArtifactStore
+from cas.workflow.event import EventLog, Ref
+from cas.workflow.task import TaskStore
 
 
 # ---------------------------------------------------------------------------
@@ -162,16 +165,23 @@ class Step:
     content: object                 # Term
     derivation: Derivation
     guards: tuple = ()              # 未清偿条件（内核 Requirement 的投影）
-    status: str = "unverified"      # "open" | "dead" | "unverified"
+    status: str = "unverified"      # "open" | "dead" | "unverified" | "needs_split"
     note: str = ""
     target: tuple = ()
     domain: str = ""                # 内容所属域（投影赋予）
     judgment: object = None         # 内核 JudgmentId；未提交则 None
+    artifact: object = None         # 产物 id（ArtifactId）
+    task: object = None             # 本次计算问题的 TaskId；无请求形状者 None
 
 
 # 手工/交互通道：显式应用规则允许产生条件性结论（v4 §6.9 ALLOW_CONDITIONAL）。
 # 自动化简走 REQUIRE_PROVED（未决条件不落地），那是 simplify 的事，不经本工作流。
 _POLICY = GuardPolicy.ALLOW_CONDITIONAL
+
+# 命令 → 请求头（§8.3：请求是普通项，不是封闭 TaskKind 枚举；这张表属命令层，
+# 不是内核枚举）。无请求形状的命令（Claim/BothSides/Split）不开任务。
+_REQUEST_HEADS = {Diff: "Differentiate", Integrate: "Integrate",
+                  Solve: "Solve", Rewrite: "Simplify", Subst: "Simplify"}
 
 
 class Workflow:
@@ -187,6 +197,10 @@ class Workflow:
         self.mode = mode if mode is not None else DEFAULT_MODE
         self._root = self.store.scopes.create()
         self.scope = self._root.id
+        # 三图分离（v4 §8.5）：产物图 / 任务图 / 操作历史图，各归其位。
+        self.artifacts = ArtifactStore()
+        self.tasks = TaskStore(kernel=self.store)
+        self.events = EventLog()
         self._steps: dict = {}
         self._next_id = 0
 
@@ -234,13 +248,61 @@ class Workflow:
 
     def _record(self, content, derivation, status, note, target, guards,
                 judgment=None) -> Step:
+        # 1. 计算产物（无真假，§8.2）
+        artifact = self.artifacts.create(self.scope, content)
+        # 2. 计算问题 + 候选（§8.3/§8.4；命令无请求形状者不建任务）
+        task = self._open_task(derivation, artifact, judgment)
+        # 3. 操作历史（§8.9）：outputs 是连接操作与内核结论的唯一出口（§四）
+        pred_id = getattr(derivation, "pred", None)
+        ev = self.events.append(
+            command=type(derivation).__name__,
+            inputs=() if pred_id is None else (pred_id,),
+            outputs=tuple(
+                Ref(kind, ident)
+                for kind, ident in (("artifact", artifact.id),
+                                    ("task", task and task.id),
+                                    ("judgment", judgment))
+                if ident is not None))
+        self.artifacts.attach(artifact.id, ev.id)
+
         s = Step(id=self._next_id, content=content, derivation=derivation,
                  guards=tuple(guards), status=status, note=note,
                  target=tuple(target), domain=self._domain_of(content),
-                 judgment=judgment)
+                 judgment=judgment, artifact=artifact.id,
+                 task=None if task is None else task.id)
         self._steps[self._next_id] = s
         self._next_id += 1
         return s
+
+    def _open_task(self, derivation, artifact, judgment):
+        """按命令的请求形状开一个任务并登记候选。无请求形状的命令返回 None。"""
+        head = _REQUEST_HEADS.get(type(derivation))
+        if head is None:
+            return None
+        pred_id = getattr(derivation, "pred", None)
+        pstep = self._steps.get(pred_id) if pred_id is not None else None
+        pred = pstep.content if pstep is not None else artifact.value
+        var = getattr(derivation, "var", None)
+        args = (pred, var) if var is not None else (pred,)
+        task = self.tasks.open_task(self.scope, T.mk(S(head), args))
+        self.tasks.propose(task.id, artifact.id, judgment)
+        return task
+
+    # --- 适用性查询（v4 §6.10：内核算，工作流问）---
+
+    def applicability_of(self, step):
+        """该步结论在**当前作用域**的适用性；无结论则 None。"""
+        if step.judgment is None:
+            return None
+        return self.store.applicability(step.judgment, self.scope)
+
+    # --- 撤销/重做：只移 revision 指针（§8.9）---
+
+    def undo(self):
+        return self.events.undo()
+
+    def redo(self):
+        return self.events.redo()
 
     def _domain_of(self, content) -> str:
         t = content

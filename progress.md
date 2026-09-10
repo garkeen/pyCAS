@@ -61,6 +61,41 @@ proposition 与 requirements 逐位相同——§四.3 的机械检查）、
 未落位（属可追溯性层，不影响健全性，§四.7）：`Applicability 缓存`与
 `历史截断 N 代`——历史图在阶段4 才建。
 
+### 阶段 4（有消费者子集）：三图分离（2026-09-10）
+
+按 v4 §8.5 把「计算产物 / 任务 / 操作历史」三张图分开，只建**有消费者**的部分
+（v4 §三：「一个模块只有在出现实际代码时才拆分」），不做空壳：
+
+| 文件 | 内容 | 消费者 |
+|---|---|---|
+| `workflow/ids.py` | ArtifactId/TaskId/TaskCandidateId/EventId/RevisionId | —— 内核不认识工作流概念（§四） |
+| `workflow/artifact.py` | `Artifact{id,scope,value,produced_by}` + 追加式 store | 每个步骤的内容即一个 Artifact |
+| `workflow/task.py` | `Task{id,scope,request,parent}`、`TaskCandidate{task,artifact,validation}` + store | 有请求形状的命令开任务并登记候选 |
+| `workflow/event.py` | `Event{id,command,inputs,outputs,parent_revision}`、`Ref`、EventLog（追加式 + revision 指针 + 倒排索引） | 每步一条事件；undo/redo |
+
+要点：
+
+- **Artifact 无真假、不能作数学前提**（§8.2 / 不变量 4）。「下一步直接吃上一步结果」
+  走的是 Artifact 通道（重写吃项），不是结论通道。
+- **TaskCandidate 状态由数据推导**（§8.4）：`validation is None` → unverified；
+  有验证但适用性非 Applies → conditional；否则 validated。没有可变 `verified=True`。
+- **Event.outputs 是跨层引用唯一出口**（§四）：产出物以 `Ref(kind, id)` 标记。
+  **为什么要 kind**：`NewType` 运行期只是 `int`，`ArtifactId(1)`/`TaskId(1)`/
+  `JudgmentId(1)` 彼此相等，倒排索引会互相碰撞——这是实现时被测试抓出来的真缺陷。
+- **undo/redo 只移 revision 指针**，事件列表不删、内核账本不删（§8.9 / §四.5）。
+  测试钉住：undo 之后 `len(events)` 与步骤数都不变。
+- **applicability 查询接线**（§6.10）：`Workflow.applicability_of(step)` 由工作流
+  提问、内核按作用域计算——原先内核算了但没人问。
+- `inputs` 记前驱的**步骤 id**（工作流侧编号），`outputs` 记内核 id —— 内核对
+  产生零感知，方向合规。
+
+未做（明确记录）：§8.8 Branch（含 `NeedsSplit` 自动开分支）与 §8.6 Constraint
+（循环积分构方程）。`NeedsSplit` 目前仍只映射成 `unverified` 状态并由 `note`
+说明——**接线需要 Branch 结构，属下一步**，没有假装已接。
+
+验收：`tests/test_workflow_graphs.py` 8 条；全量 104 passed + 1 xfailed；stress 10 passed。
+
+
 
 ### 阶段 1b：模式元语言（2026-09-10）
 
