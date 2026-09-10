@@ -34,7 +34,7 @@
 from dataclasses import dataclass
 
 from cas.syntax import term as T
-from cas.syntax.term import Expr, S
+from cas.syntax.term import S
 from cas.errors import BranchError, ScopeError
 from cas.kernel.commit import GuardPolicy, StepProposal, commit
 from cas.kernel.evidence import Evidence
@@ -439,6 +439,3 @@ class Workflow:
             return ""
         return self.algorithms.domain_of(content)
 
-
-def _is_eq(t) -> bool:
-    return isinstance(t, Expr) and t.head.name == "Eq"

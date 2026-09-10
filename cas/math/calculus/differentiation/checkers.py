@@ -13,7 +13,7 @@ from cas.math.domains.ratfunc import RatFunc, rf_deriv, rf_to_term
 from cas.math.qarith import fold
 from cas.math.project import project
 from cas.math.base.checkers import (
-    _is_eq, _is_piecewise, _ok, _one_conclusion, _premise,
+    _is_piecewise, _ok, _one_conclusion, _premise,
 )
 from cas.syntax import term as T
 
@@ -64,7 +64,7 @@ class DiffChecker:
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "缺前驱")
-        if _is_eq(pred):
+        if T.is_eq(pred):
             return Rejected(Reason.FRAGMENT, "等式前驱不可求导")
         d = proposal.evidence.payload
         x = d.var

@@ -6,11 +6,12 @@
 判零在投影外时诚实未决。
 """
 
+from cas.syntax import term as T
 from cas.kernel.evidence import Rejected, UnknownResult
 from cas.kernel.verdict import Reason
 from cas.math.judge import back_substitute
 from cas.math.base.checkers import (
-    _is_eq, _ok, _one_conclusion, _premise,
+    _ok, _one_conclusion, _premise,
 )
 
 
@@ -22,10 +23,10 @@ class SolveChecker:
         if bad is not None:
             return bad
         pred = _premise(proposal)
-        if pred is None or not _is_eq(pred):
+        if pred is None or not T.is_eq(pred):
             return Rejected(Reason.FRAGMENT, "前驱不是等式")
         d = proposal.evidence.payload
-        if not (_is_eq(content) and content.args[0] is d.var
+        if not (T.is_eq(content) and content.args[0] is d.var
                 and content.args[1] is d.solution):
             return Rejected(Reason.FRAGMENT, "内容不是该变量等于该解")
         z = back_substitute(pred, d.var, d.solution).zero

@@ -12,13 +12,8 @@
 """
 
 from cas.syntax import term as T
-from cas.syntax.term import Expr
 from cas.math.project import project, zero_of, normalize as proj_normalize
 from cas.math.qarith import fold
-
-
-def is_eq(t) -> bool:
-    return isinstance(t, Expr) and t.head.name == "Eq"
 
 
 def normal_form(t):
@@ -27,7 +22,7 @@ def normal_form(t):
     等式按「两侧差值 = 0」化：`Eq(l, r) → Eq(nf(l − r), 0)`——两边同时化简到
     同一标准形与把差值化零是同一件事，取后者可少维护一套等式专用规范形。
     """
-    if is_eq(t):
+    if T.is_eq(t):
         lhs, rhs = t.args
         hit = project(T.plus(lhs, T.neg(rhs)))
         if hit is not None:
@@ -46,7 +41,7 @@ def equal(a, b) -> bool:
     即真），仍不可判则按「不等」返回——调用方若需三值语义，应先查片段覆盖
     （`verdict`/`decide`），此处不生成 UNKNOWN 以免与判定层词汇混淆。
     """
-    if not is_eq(a) or not is_eq(b):
+    if not T.is_eq(a) or not T.is_eq(b):
         return a is b
     la, ra = a.args
     lb, rb = b.args

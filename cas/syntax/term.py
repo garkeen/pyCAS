@@ -415,6 +415,13 @@ def implies(a, b):
     return mk(S("Implies"), (a, b))
 
 
+def is_eq(t) -> bool:
+    """是不是等式形状（`Eq` 头的 Call）。**纯形状判断**（v4 §2.1：项只回答
+    「长什么样」），故属语法层——此前在 equality / checkers / workflow 里有
+    三份同实现副本，前端还得借道 workflow 的私有名。"""
+    return isinstance(t, Expr) and t.head.name == "Eq"
+
+
 def or_(*a):
     return mk(S("Or"), a)
 

@@ -50,6 +50,25 @@ def _pkg_modules(*parts):
     return sorted((_ROOT / "cas").joinpath(*parts).glob("*.py"))
 
 
+def test_dependency_frontend_only_api_workflow_runtime():
+    """§四：frontend 只许依赖 `api` / `workflow` / `runtime`。
+
+    具体数学模块与 kernel 一律不得直连——计算与判定设施经 `cas/api.py` 出口
+    （此前 repl 直连了 7 个 math 模块加 `kernel.verdict`，绕过该表；而
+    `runtime/dispatch.py` 的注释自己写着「前端不得直连 math，§四」）。
+
+    syntax 与顶层 `cas.errors` 不在本门禁内：parser/pprint 是构建在语法层上的
+    前端本职，§四 表的字面读法要求把解析/打印移出 frontend，那是更大的结构
+    调整，属未决事项。
+    """
+    bad = []
+    for p in sorted((_ROOT / "cas" / "frontend").rglob("*.py")):
+        for m in _cas_imports(p):
+            if m.startswith(("cas.math", "cas.kernel")):
+                bad.append(f"{p.relative_to(_ROOT)} → {m}")
+    assert not bad, "frontend 直连 math/kernel:\n" + "\n".join(bad)
+
+
 def test_dependency_syntax_not_upward():
     """syntax 只许依赖标准库与 cas.errors（基础设施）。"""
     bad = []

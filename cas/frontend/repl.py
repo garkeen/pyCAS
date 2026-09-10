@@ -24,22 +24,17 @@
 
 from cas.runtime import get_runtime, new_workflow
 from cas.syntax import term as T
-from cas.syntax.term import S, Sym
+from cas.syntax.term import S, Sym, is_eq
+from cas.api import (CadError, DiffError, IntegrateError, NO, TacticsError, YES,
+                     apply_rule, back_substitute, declared_ruleset,
+                     definite_integrate, differentiate,
+                     differentiate_piecewise, domain_normal_form, fold,
+                     guard_report, integrate_term, is_piecewise, solve_linear,
+                     solve_piecewise)
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str, pat_to_str
-from cas.math.qarith import fold
-from cas.math.judge import back_substitute, guard_report
-from cas.errors import TacticsError
-from cas.math.tactics import solve_linear, solve_piecewise
-from cas.math.diff import differentiate, DiffError, differentiate_piecewise
-from cas.math.cad import CadError
-from cas.math.integrate import integrate_term, definite_integrate, IntegrateError
-from cas.math.piecewise import is_piecewise
-from cas.kernel.verdict import YES, NO
 from cas.workflow.command import (Claim, BothSides, Rewrite, Solve,
                                   Subst, Split, Diff, Integrate)
-from cas.workflow.workflow import _is_eq
-from cas.runtime.dispatch import domain_normal_form
 
 
 def _fmt(t):
@@ -165,7 +160,7 @@ class REPL:
         except Exception as e:
             print(f"  解析错误: {e}")
             return
-        if not _is_eq(pred.content):
+        if not is_eq(pred.content):
             print("  当前步骤不是等式")
             return
         lhs, rhs = pred.content.args
@@ -202,7 +197,7 @@ class REPL:
         if pred is None:
             return
         var = S(rest.strip())
-        if _is_eq(pred.content) and (is_piecewise(pred.content.args[0])
+        if is_eq(pred.content) and (is_piecewise(pred.content.args[0])
                                      or is_piecewise(pred.content.args[1])):
             self._solve_piecewise(pred, var)
             return
@@ -294,7 +289,7 @@ class REPL:
         pred = self._cur()
         if pred is None:
             return
-        if _is_eq(pred.content):
+        if is_eq(pred.content):
             # 等式不是 diff 的合法输入：两边求导不保真（点解方程 x=3 会
             # "推出" 1=0）。隐函数求导是带依赖声明的独立命令（未建）。
             print("  等式不可求导（两边求导不保真）；隐函数求导为独立命令（未建）")
@@ -382,7 +377,6 @@ class REPL:
         self._show_step(s)
 
     def cmd_rules(self, _):
-        from cas.math.rules import declared_ruleset
         rs = declared_ruleset()
         if not rs.rules:
             print("  运行期声明里无规则")
@@ -397,7 +391,6 @@ class REPL:
         if pred is None:
             return
         rid = rest.strip()
-        from cas.math.rules import declared_ruleset, apply_rule
         rule = declared_ruleset().rules.get(rid)
         if rule is None:
             print(f"  未知规则: {rid}（rules 查看清单）")
@@ -423,7 +416,7 @@ class REPL:
             return
         cur = self.wf.get(self.current)
         orig = self.wf.get(self.original)
-        if not _is_eq(cur.content) or not _is_eq(orig.content):
+        if not is_eq(cur.content) or not is_eq(orig.content):
             print("  当前步骤或原始方程不是等式")
             return
         cl, cr = cur.content.args

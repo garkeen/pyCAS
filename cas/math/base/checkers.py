@@ -19,7 +19,7 @@ checker 协议（v4 §6.7）：`check(proposal, context, services) -> CheckResul
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
-from cas.syntax.term import Expr, S
+from cas.syntax.term import S
 from cas.syntax.match import matches
 from cas.kernel.evidence import Accepted, Rejected, UnknownResult
 from cas.kernel.verdict import Reason
@@ -30,10 +30,6 @@ from cas.math.base.equality import equal, normal_form
 # ---------------------------------------------------------------------------
 # 共享助手
 # ---------------------------------------------------------------------------
-
-def _is_eq(t) -> bool:
-    return isinstance(t, Expr) and t.head.name == "Eq"
-
 
 def _is_piecewise(t) -> bool:
     from cas.math.piecewise import is_piecewise
@@ -114,7 +110,7 @@ class BothSidesChecker:
         if bad is not None:
             return bad
         pred = _premise(proposal)
-        if pred is None or not _is_eq(pred):
+        if pred is None or not T.is_eq(pred):
             return Rejected(Reason.FRAGMENT, "前驱不是等式")
         d = proposal.evidence.payload
         lhs, rhs = pred.args
