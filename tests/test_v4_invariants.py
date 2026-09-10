@@ -233,3 +233,33 @@ def test_不变量16_未验证候选不参与可信推导():
         f"未决候选状态应为 unverified，实际 {step.status}"
     assert step.judgment is None, "未决候选不得持有可依赖结论"
     assert dict(wf.store.stats()) == before, "未决候选不得对账本产生任何写入"
+
+
+# ---------------------------------------------------------------------------
+# 阶段5：持久化 Scope 树接管可变 Context
+# ---------------------------------------------------------------------------
+
+def test_阶段5_旧可变上下文已删除():
+    """v3 的 Context（可变 entries + marks/rollback）不得复活。"""
+    from cas.kernel import context as C
+    for name in ("Context", "Entry", "Branch"):
+        assert not hasattr(C, name), f"旧可变上下文残留: {name}"
+    assert hasattr(C, "TrackedContext"), "checker 读通道丢失"
+
+
+def test_假设集不可变且扩充产生新对象():
+    """假设集是 Scope 的只读投影：`extended` 不就地写入，故无需克隆/撤销。"""
+    from cas.kernel.scope import Assumptions, ScopeStore
+    base = Assumptions()
+    ext = base.extended(T.S("p"))
+    assert base.items == () and ext.items == (T.S("p"),)
+    assert base is not ext
+    assert len(base) == 0 and list(ext) == [T.S("p")]
+
+    # Scope 是权威来源：Assumptions.of 是它在判定层的投影
+    from cas.kernel.model import Assumption
+    st = ScopeStore()
+    root = st.create()
+    child = st.child(root, assumptions=(Assumption(T.S("q")),))
+    assert Assumptions.of(st, child.id).items == (T.S("q"),)
+    assert Assumptions.of(st, root.id).items == ()

@@ -24,6 +24,36 @@ class Scope:
     assumptions: tuple[Assumption, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class Assumptions:
+    """不可变假设集（v4 §6.2：Scope 链上假设的只读投影）。
+
+    取代 v3 的可变 `Context`：原先的 `clone` + `assume` 变成本对象的 `extended`，
+    临时扩充不产生可变状态，也不需要 marks/rollback（那些是为「可变上下文 + 位置
+    指针撤销」服务的，持久化 Scope 树不需要）。
+
+    假设的**权威来源是 Scope**（持久化、带父指针）；本对象只是判定层消费的投影，
+    不参与记账。所以「撤销」由 revision 指针而非 rollback 完成（§8.9）。
+    """
+    items: tuple = ()
+
+    @classmethod
+    def of(cls, store, scope_id):
+        return cls(tuple(a.proposition for a in store.assumptions(scope_id)))
+
+    def extended(self, *terms):
+        return Assumptions(self.items + tuple(terms))
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def __len__(self):
+        return len(self.items)
+
+    def __bool__(self):
+        return bool(self.items)
+
+
 class ScopeStore:
     """作用域存储：发放 id、维护父子树、提供可见性查询。"""
 

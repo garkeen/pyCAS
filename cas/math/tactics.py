@@ -155,7 +155,7 @@ def solve_piecewise(f, x: Sym, target):
     返回 {"points": [点解], "regions": [区域条件], "conditional": [(解,条件)]}。"""
     from cas.math.piecewise import fold_nested, branches, is_piecewise
     from cas.math.decide import decide
-    from cas.kernel.context import Context
+    from cas.kernel.scope import Assumptions
     from cas.kernel.verdict import YES, NO
     from cas.math.qarith import fold
     if not is_piecewise(f):
@@ -179,7 +179,7 @@ def solve_piecewise(f, x: Sym, target):
             continue                              # 支方程永不成零，无贡献
         if kind == "refuse":
             raise TacticsError(f"分支方程超出线性片段，完备性无法保证：{payload}")
-        verdict = decide(fold(T.subst(c, {x: payload})), Context())
+        verdict = decide(fold(T.subst(c, {x: payload})), Assumptions())
         if verdict is YES:
             points.append(payload)
         elif verdict is NO:

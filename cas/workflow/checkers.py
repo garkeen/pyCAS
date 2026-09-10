@@ -480,11 +480,8 @@ class WorkflowServices:
 
     def decide(self, proposition, scope_id):
         from cas.math.decide import decide as _decide
-        from cas.kernel.context import Context
-        ctx = Context()
-        for a in self._scopes.assumptions(scope_id):
-            ctx.assume(a.proposition)
-        return _decide(proposition, ctx)
+        from cas.kernel.scope import Assumptions
+        return _decide(proposition, Assumptions.of(self._scopes, scope_id))
 
 
 def register(store) -> None:

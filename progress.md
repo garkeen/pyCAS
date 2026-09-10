@@ -34,7 +34,7 @@
 | 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ✅ 2026-09-10（2a 模型+协议，2b 接线） |
 | 3 拆除 Derivation ADT | 命令只生成 proposal；checker 语义 id；规则实例验证不再搜索 | ✅ 2026-09-10（不变量 14 转绿） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
-| 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
+| 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ✅ 2026-09-10 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
 
 不变量 CI 门禁（`tests/test_v4_invariants.py`）：**1/2/14/16/18 全部转绿**；另有
@@ -126,6 +126,35 @@ trig_reduce` 已随函数结构层拆除而未重建）。不补它，§9.5 的�
 「未决」——这是能力缺口，不是纪律问题。
 
 验收：`tests/test_constraint_solver.py` 5 条；全量 117 passed + 1 xfailed；stress 10 passed。
+
+### 阶段 5：持久化 Scope 树接管可变 Context（2026-09-10）
+
+删除 v3 的可变 `Context`（`entries` 列表 + `marks`/`rollback` 位置指针撤销），
+职责一分为三，各归其位、互不重复：
+
+| 角色 | 位置 | 说明 |
+|---|---|---|
+| 权威 | `kernel/scope.py` `Scope` + `ScopeStore` | 不可变、父指针；谁绑定什么、哪些假设可见 |
+| 判定层投影 | `kernel/scope.py` `Assumptions` | `extended` 产生新对象；无克隆、无撤销 |
+| checker 读通道 | `kernel/context.py` `TrackedContext` | 每次读取进入 `Step.reads` |
+
+迁移要点：
+
+- `math/decide.py`：`ctx` → `assumptions`（73 处重命名）；7 处 `for e in ctx.entries:
+  f = e.fact` → `for f in assumptions:`（`kind`/`origin` 从未被读，故载体只需假设项）。
+- 三处「克隆 + 就地写入」改为 `extended`：`satisfiable`、`piecewise._agree`、
+  `decide.branch`。`check_and_assume` → `extend_checked`（返回新假设集，不改原对象）；
+  `branch` 返回 `[(条件, 该支假设集|None, 状态)]` 三元组。
+- `workflow/checkers.py` 的 `WorkflowServices` 直接 `Assumptions.of(scope_store, scope_id)`，
+  **Scope → Context 的桥接消失**。
+- `decide.py` 里 `kernel.context ↔ decide` 的延迟导入环随之拆掉（默认上下文构造
+  移出 decide）。
+
+**没有 marks/rollback 是设计而非缺失**：撤销由 revision 指针完成（§8.9），假设集
+本身不可变，所以「回退」不需要可变状态。门禁 `test_阶段5_旧可变上下文已删除`
+钉住 `Context`/`Entry`/`Branch` 不得复活。
+
+验收：全量 119 passed + 1 xfailed；stress 10 passed（41 条性质）。
 
 
 

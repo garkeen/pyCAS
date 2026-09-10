@@ -17,6 +17,14 @@ from cas.syntax.term import S, N
 from cas.math.qarith import fold as _qfold
 from cas.kernel.verdict import (Verdict, Yes, No, Unknown, Reason,
                           YES, NO, unknown, and3, or3, not3)
+from cas.kernel.scope import Assumptions
+
+
+def _A(a):
+    """None 视作空假设集（历史调用点会传 None）。"""
+    return a if a is not None else Assumptions()
+
+
 import library
 
 
@@ -85,9 +93,8 @@ def _poly_eq_check(a, b):
     return None
 
 
-def _facts_lookup(fact, ctx):
-    for e in ctx.entries:
-        f = e.fact
+def _facts_lookup(fact, assumptions):
+    for f in assumptions:
         if f is fact:
             return YES
         if f is negate(fact):
@@ -103,7 +110,7 @@ def _facts_lookup(fact, ctx):
     return None
 
 
-def _chain_query(op, a, b, ctx):
+def _chain_query(op, a, b, assumptions):
     """序链 BFS：账本不等式建边，传递闭包回答 a<b 型查询。
 
     状态为 (节点, 路径是否含严格边)，按节点记录最优严格性；
@@ -114,8 +121,7 @@ def _chain_query(op, a, b, ctx):
     want = (a, b)
     if op in ("Gt", "Ge"):
         want = (b, a)
-    for e in ctx.entries:
-        f = e.fact
+    for f in assumptions:
         if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge"):
             opf = f.head.name
             u, v = f.args
@@ -143,7 +149,7 @@ def _chain_query(op, a, b, ctx):
     return None
 
 
-def _interval(t, ctx, seen=None, depth=0):
+def _interval(t, assumptions, seen=None, depth=0):
     """数值区间传播：(lo, hi, lo_strict, hi_strict)，端点可为 None（无界）。
 
     来源：数值原子 / 常数公理界 / 账本数值界直查 / 账本等式代入（递归） /
@@ -176,8 +182,7 @@ def _interval(t, ctx, seen=None, depth=0):
         if nhi is not None and (hi is None or nhi < hi or (nhi == hi and nhis)):
             hi, his = nhi, nhis
 
-    for e in ctx.entries:
-        f = e.fact
+    for f in assumptions:
         if not isinstance(f, T.Expr):
             continue
         n = f.head.name
@@ -216,7 +221,7 @@ def _interval(t, ctx, seen=None, depth=0):
                     tighten(bv, False, bv, False)
                 else:
                     # 变量等式 x=y：x 与 y 同值，区间与严格性透明传递
-                    iv = _interval(o, ctx, seen, depth + 1)
+                    iv = _interval(o, assumptions, seen, depth + 1)
                     if iv is not None:
                         tighten(*iv)
     if is_int:
@@ -232,7 +237,7 @@ def _interval(t, ctx, seen=None, depth=0):
     if isinstance(t, T.Expr):
         n = t.head.name
         if n == "Plus":
-            ivs = [_interval(a, ctx, seen, depth + 1) for a in t.args]
+            ivs = [_interval(a, assumptions, seen, depth + 1) for a in t.args]
             if all(iv is not None for iv in ivs):
                 slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
                 shi = sum(iv[1] for iv in ivs) if all(iv[1] is not None for iv in ivs) else None
@@ -246,7 +251,7 @@ def _interval(t, ctx, seen=None, depth=0):
                 c = Fr(1)
                 for nn in nums:
                     c *= T.num_val(nn)
-                iv = _interval(rest[0], ctx, seen, depth + 1)
+                iv = _interval(rest[0], assumptions, seen, depth + 1)
                 if iv is not None:
                     if c > 0:
                         tighten(
@@ -270,13 +275,13 @@ def _interval(t, ctx, seen=None, depth=0):
     return (lo, hi, los, his)
 
 
-def _cmp_interval(op, a, b, ctx):
+def _cmp_interval(op, a, b, assumptions):
     """把 a op b 归为 d = a - b 对 0 的区间比较（d 先经 ℚ 字面折叠）。"""
     d = _qfold(T.plus(a, T.neg(b)))
     if op in ("Eq", "Ne"):
         if d is T.ZERO:
             return YES if op == "Eq" else NO
-        iv = _interval(d, ctx)
+        iv = _interval(d, assumptions)
         if iv is not None:
             lo, hi, _, _ = iv
             away = (lo is not None and lo > 0) or (hi is not None and hi < 0)
@@ -285,7 +290,7 @@ def _cmp_interval(op, a, b, ctx):
         return None
     if d is T.ZERO:
         return YES if op in ("Le", "Ge") else NO
-    iv = _interval(d, ctx)
+    iv = _interval(d, assumptions)
     if iv is None:
         return None
     lo, hi, los, his = iv
@@ -347,7 +352,7 @@ def _nonneg_zero_arg(t):
     return t.args[0]
 
 
-def _nneg(t, ctx):
+def _nneg(t, assumptions):
     """非负结构判定：True/False/None（不回调 decide，只读结构与账本）。"""
     if T.is_num(t):
         return T.sign_num(t) >= 0
@@ -362,15 +367,14 @@ def _nneg(t, ctx):
             if (
                 isinstance(e, T.Rat)
                 and e.f.denominator % 2 == 1
-                and _pos(b, ctx) is True
+                and _pos(b, assumptions) is True
             ):
                 return True
         bd = _func_bound(name)
         if bd is not None and bd[0] is not None and bd[0] >= 0:
             return True
-    if ctx is not None:
-        for e in ctx.entries:
-            f = e.fact
+    if assumptions is not None:
+        for f in assumptions:
             if isinstance(f, T.Expr) and f.head.name in ("Gt", "Ge"):
                 if f.args[0] is t and f.args[1] is T.ZERO:
                     return True
@@ -380,15 +384,14 @@ def _nneg(t, ctx):
     return None
 
 
-def _pos(t, ctx):
+def _pos(t, assumptions):
     """正性结构判定：True/False/None。"""
     if T.is_num(t):
         return T.sign_num(t) > 0
     if isinstance(t, T.Const) and library.const_positive(t) is True:
         return True
-    if ctx is not None:
-        for e in ctx.entries:
-            f = e.fact
+    if assumptions is not None:
+        for f in assumptions:
             if isinstance(f, T.Expr) and f.head.name == "Gt":
                 if f.args[0] is t and f.args[1] is T.ZERO:
                     return True
@@ -417,9 +420,9 @@ def _is_ord(f):
     return isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge")
 
 
-def _zero_cmp_of(a, ctx, q, op):
-    nneg = _nneg(a, ctx)
-    pos = _pos(a, ctx)
+def _zero_cmp_of(a, assumptions, q, op):
+    nneg = _nneg(a, assumptions)
+    pos = _pos(a, assumptions)
     if op == "Gt":
         if pos is True:
             return YES
@@ -452,7 +455,7 @@ def _zero_cmp_of(a, ctx, q, op):
 
 
 @derive("ne-from-ord", lambda f: f.head.name == "Ne")
-def _rule_ne_from_ord(f, ctx, q):
+def _rule_ne_from_ord(f, assumptions, q):
     a, b = f.args
     if q(T.mk(S("Gt"), (a, b))) is YES or q(T.mk(S("Lt"), (a, b))) is YES:
         return YES
@@ -462,11 +465,10 @@ def _rule_ne_from_ord(f, ctx, q):
 
 
 @derive("cmp-via-eq", lambda f: _is_ord(f))
-def _rule_cmp_via_eq(f, ctx, q):
+def _rule_cmp_via_eq(f, assumptions, q):
     a, b = f.args
     if T.is_num(b):
-        for e in ctx.entries:
-            g = e.fact
+        for g in assumptions:
             if (
                 isinstance(g, T.Expr)
                 and g.head.name == "Eq"
@@ -477,7 +479,7 @@ def _rule_cmp_via_eq(f, ctx, q):
     return None
 
 
-def _sign_of_term(t, ctx, q):
+def _sign_of_term(t, assumptions, q):
     if T.is_num(t):
         s = T.sign_num(t)
         if s > 0:
@@ -503,19 +505,19 @@ def _sign_of_term(t, ctx, q):
 
 
 @derive("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO)
-def _rule_sign_atom(f, ctx, q):
-    return _zero_cmp_of(f.args[0], ctx, q, f.head.name)
+def _rule_sign_atom(f, assumptions, q):
+    return _zero_cmp_of(f.args[0], assumptions, q, f.head.name)
 
 
 @derive("sign-times", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
-def _rule_sign_times(f, ctx, q):
+def _rule_sign_times(f, assumptions, q):
     op = f.head.name
     a = f.args[0]
     s_zero = False
     s_nn = False
     neg_count = 0
     for fac in a.args:
-        s = _sign_of_term(fac, ctx, q)
+        s = _sign_of_term(fac, assumptions, q)
         if s is None:
             return None
         if s == 0:
@@ -545,7 +547,7 @@ def _rule_sign_times(f, ctx, q):
 
 
 @derive("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0)
-def _rule_sign_even_power(f, ctx, q):
+def _rule_sign_even_power(f, assumptions, q):
     op = f.head.name
     b = f.args[0].args[0]
     if op in ("Ge",):
@@ -572,7 +574,7 @@ def _rule_sign_even_power(f, ctx, q):
 @derive("sign-nonneg-zero",
         lambda f: _is_ord(f) and f.args[1] is T.ZERO
         and _nonneg_zero_arg(f.args[0]) is not None)
-def _rule_sign_nonneg_zero(f, ctx, q):
+def _rule_sign_nonneg_zero(f, assumptions, q):
     """g(u) 对 0 的符号（g 声明非负且 g(u)=0⟺u=0，如绝对值/范数）：
     g≥0 恒真、g<0 恒假；g>0⟺u≠0、g≤0⟺u=0。判定据图书馆声明，不据名。"""
     op = f.head.name
@@ -599,13 +601,13 @@ def _rule_sign_nonneg_zero(f, ctx, q):
 
 
 @derive("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1)
-def _rule_sign_odd_power(f, ctx, q):
+def _rule_sign_odd_power(f, assumptions, q):
     b = f.args[0].args[0]
     return q(T.mk(S(f.head.name), (b, T.ZERO)))
 
 
 @derive("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus")
-def _rule_sign_sum(f, ctx, q):
+def _rule_sign_sum(f, assumptions, q):
     op = f.head.name
     a = f.args[0]
     if op in ("Gt", "Ge"):
@@ -662,7 +664,7 @@ def _rule_sign_sum(f, ctx, q):
 
 
 @derive("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
-def _rule_eq_times_zero(f, ctx, q):
+def _rule_eq_times_zero(f, assumptions, q):
     """积判零。前提：本系统构造的系数结构（ℚ、K[x]、K(x)、代数/超越塔）
     均为整环——ab=0 ⟺ a=0 ∨ b=0。将来若引入矩阵环等非整环结构，
     本规则必须按环境域门控。"""
@@ -678,7 +680,7 @@ def _rule_eq_times_zero(f, ctx, q):
 
 
 @derive("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]))
-def _rule_sign_num(f, ctx, q):
+def _rule_sign_num(f, assumptions, q):
     s = T.sign_num(f.args[0])
     op = f.head.name
     if op == "Gt":
@@ -691,14 +693,14 @@ def _rule_sign_num(f, ctx, q):
 
 
 @derive("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]))
-def _rule_eq_num(f, ctx, q):
+def _rule_eq_num(f, assumptions, q):
     if f.head.name == "Eq":
         return YES if T.num_val(f.args[0]) == T.num_val(f.args[1]) else NO
     return YES if T.num_val(f.args[0]) != T.num_val(f.args[1]) else NO
 
 
 @derive("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO)
-def _rule_cmp_flip(f, ctx, q):
+def _rule_cmp_flip(f, assumptions, q):
     op = f.head.name
     a, b = f.args
     if op in ("Eq", "Ne"):
@@ -707,11 +709,11 @@ def _rule_cmp_flip(f, ctx, q):
     return q(T.mk(S(flip[op]), (b, a)))
 
 
-def _derive_layer(fact, ctx, depth):
-    q = lambda f: decide(f, ctx, depth + 1)
+def _derive_layer(fact, assumptions, depth):
+    q = lambda f: decide(f, assumptions, depth + 1)
     for name, applies, fn in _RULES:
         if applies(fact):
-            r = fn(fact, ctx, q)
+            r = fn(fact, assumptions, q)
             if r is not None:
                 return r
     return None
@@ -726,7 +728,7 @@ def axiom(fn):
 
 
 @axiom
-def _axiom_constants(fact, ctx):
+def _axiom_constants(fact, assumptions):
     """常数粗界引理（来自图书馆 const_bounds 声明）。"""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
@@ -751,7 +753,7 @@ def _axiom_constants(fact, ctx):
 
 
 @axiom
-def _axiom_function_bounds(fact, ctx):
+def _axiom_function_bounds(fact, assumptions):
     """函数值域粗界引理（图书馆 FunctionDecl.bound 声明）。
 
     |f| 类界消费留给区间通道；此处只处理 f(u) op 数值 的直接比较。
@@ -791,7 +793,7 @@ def _axiom_function_bounds(fact, ctx):
     return None
 
 
-def _family_cmp(fact, ctx, depth):
+def _family_cmp(fact, assumptions, depth):
     op = fact.head.name
     a, b = fact.args
     if op in ("Eq", "Ne"):
@@ -801,14 +803,14 @@ def _family_cmp(fact, ctx, depth):
         r = _cmp_numeric(op, a, b)
         if r is not None:
             return r
-        r = _facts_lookup(fact, ctx)
+        r = _facts_lookup(fact, assumptions)
         if r is not None:
             return r
         if op == "Eq":
             r = _poly_eq_check(a, b)
             if r is not None:
                 return r
-        r = _cmp_interval(op, a, b, ctx)
+        r = _cmp_interval(op, a, b, assumptions)
         if r is not None:
             return r
     else:
@@ -818,16 +820,16 @@ def _family_cmp(fact, ctx, depth):
         r = _same(op, a, b)
         if r is not None:
             return r
-        r = _facts_lookup(fact, ctx)
+        r = _facts_lookup(fact, assumptions)
         if r is not None:
             return r
-        r = _cmp_interval(op, a, b, ctx)
+        r = _cmp_interval(op, a, b, assumptions)
         if r is not None:
             return r
-        r = _chain_query(op, a, b, ctx)
+        r = _chain_query(op, a, b, assumptions)
         if r is not None:
             return r
-    r = _derive_layer(fact, ctx, depth)
+    r = _derive_layer(fact, assumptions, depth)
     if r is not None:
         return r
     # 公理层（图书馆界数据）是**兜底**，不是死代码：
@@ -838,7 +840,7 @@ def _family_cmp(fact, ctx, depth):
     # 二者不是重复实现——区间通道覆盖广，本层是引理直读，删它会让
     # 图书馆界数据只剩单一消费路径。关系由 tests/test_decide_axioms.py 锁定。
     for ax in _AXIOM_CHECKS:
-        r = ax(fact, ctx)
+        r = ax(fact, assumptions)
         if r is not None:
             return r
     return unknown()
@@ -852,15 +854,14 @@ def _contains(t, pat):
     return False
 
 
-def _eq_subst(fact, ctx, depth):
+def _eq_subst(fact, assumptions, depth):
     """账本等式代入归一：把账本中的 Eq(u,v) 双向代入查询事实后重判。
 
     不限数值侧：符号等式（如换元定义 t = sin(x)）同样背书查询
     （decide 相对账本的含义即"在假设下判定"；_MAX_DEPTH 防连锁循环）。
     """
     a, b = fact.args
-    for e in ctx.entries:
-        f = e.fact
+    for f in assumptions:
         if isinstance(f, T.Expr) and f.head.name == "Eq" and f is not fact:
             u, v = f.args
             if not (_contains(a, u) or _contains(a, v) or _contains(b, u) or _contains(b, v)):
@@ -870,13 +871,14 @@ def _eq_subst(fact, ctx, depth):
                 nb = T.subst(b, {pat: rep})
                 if na is a and nb is b:
                     continue
-                r = decide(T.mk(S("Eq"), (na, nb)), ctx, depth + 1)
+                r = decide(T.mk(S("Eq"), (na, nb)), assumptions, depth + 1)
                 if not r.is_unknown():
                     return r
     return None
 
 
-def decide(fact, ctx, _depth=0) -> Verdict:
+def decide(fact, assumptions, _depth=0) -> Verdict:
+    assumptions = _A(assumptions)
     if _depth > _MAX_DEPTH:
         return unknown(Reason.BUDGET)
     if fact is T.TRUE:
@@ -887,52 +889,50 @@ def decide(fact, ctx, _depth=0) -> Verdict:
         name = fact.head.name
         if name in _CMP:
             if name == "Eq":
-                r = _eq_subst(fact, ctx, _depth)
+                r = _eq_subst(fact, assumptions, _depth)
                 if r is not None:
                     return r
-            return _family_cmp(fact, ctx, _depth)
+            return _family_cmp(fact, assumptions, _depth)
         if name == "And":
             r = YES
             for a in fact.args:
-                r = and3(r, decide(a, ctx, _depth))
+                r = and3(r, decide(a, assumptions, _depth))
                 if r is NO:
                     return r
             return r
         if name == "Or":
             r = NO
             for a in fact.args:
-                r = or3(r, decide(a, ctx, _depth))
+                r = or3(r, decide(a, assumptions, _depth))
                 if r is YES:
                     return r
             return r
         if name == "Not":
-            return not3(decide(fact.args[0], ctx, _depth))
+            return not3(decide(fact.args[0], assumptions, _depth))
     return unknown()
 
 
-def satisfiable(constraints, ctx) -> Verdict:
+def satisfiable(constraints, assumptions) -> Verdict:
+    assumptions = _A(assumptions)
     for i, c in enumerate(constraints):
-        tmp = ctx.clone()
-        for j, d in enumerate(constraints):
-            if j != i:
-                tmp.assume(d, origin="_sat")
+        tmp = assumptions.extended(*[d for j, d in enumerate(constraints) if j != i])
         if decide(c, tmp) is NO or decide(negate(c), tmp) is YES:
             return NO
     return YES if not constraints else unknown()
 
 
-def domain_ok(fact, ctx) -> Verdict:
+def domain_ok(fact, assumptions) -> Verdict:
     from cas.math.domcond import dom_condition
 
-    return satisfiable(dom_condition(fact), ctx)
+    return satisfiable(dom_condition(fact), assumptions)
 
 
-def contradicted(fact, ctx) -> bool:
-    return decide(fact, ctx) is NO or decide(negate(fact), ctx) is YES
+def contradicted(fact, assumptions) -> bool:
+    return decide(fact, assumptions) is NO or decide(negate(fact), assumptions) is YES
 
 
 # 判等阶段注册表：管线分派从硬编码变为声明式数据。
-# 阶段契约：run(r, a, b, ctx) -> Verdict 结论 | None（无结论则继续下阶段）。
+# 阶段契约：run(r, a, b, assumptions) -> Verdict 结论 | None（无结论则继续下阶段）。
 # 阶段内部异常 = 阶段实现有 bug，直接向上传播（失败是返回值的一部分，
 # 禁止吞掉；确需"无结论"请显式返回 None）。
 _EQ_STAGES = []
@@ -947,16 +947,11 @@ def register_eq_stage(name, run, prepend=False):
     return name
 
 
-def equivalent(a, b, ctx=None, budget=100000) -> Verdict:
+def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
     """统一判等管线：指针 -> 数值常量 -> 标准形归零 -> 注册阶段序列 -> 诚实 UNKNOWN。
 
     域标准形归零经 autosimplify + 投影判零；塔规范形重建后由注册阶段接入。"""
     from cas.math.simplify import autosimplify
-    # 延迟导入：这是 cas.math.decide ↔ cas.kernel.context 环的回边。context 顶层
-    # `from cas.math.decide import decide/contradicted/domain_ok`（去边），
-    # 本处是反向。环的成因是上下文把判定当作事实查询的实现，而判定又
-    # 需要造默认上下文；把默认上下文的构造移出 decide 即可拆环。
-    from cas.kernel.context import Context
 
     if a is b:
         return YES
@@ -977,17 +972,16 @@ def equivalent(a, b, ctx=None, budget=100000) -> Verdict:
         return YES
     if z is False:
         return NO
-    if ctx is None:
-        ctx = Context()
+    assumptions = _A(assumptions)
     for _name, run in _EQ_STAGES:
-        d = run(r, a, b, ctx)
+        d = run(r, a, b, assumptions)
         if d is not None and not d.is_unknown():
             return d
     return unknown()
 
 
-def _stage_decide(r, a, b, ctx):
-    d = decide(T.mk(S("Eq"), (r, T.ZERO)), ctx)
+def _stage_decide(r, a, b, assumptions):
+    d = decide(T.mk(S("Eq"), (r, T.ZERO)), assumptions)
     return None if d.is_unknown() else d
 
 
@@ -1005,24 +999,31 @@ register_eq_stage("ledger_decide", _stage_decide)
 # 被 §四 严格禁止。它们引用 kernel 的 Context/Branch（math → kernel，合规）。
 # ---------------------------------------------------------------------------
 
-def check_and_assume(ctx, fact, origin="user", kind="fact"):
-    """域检查 + 矛盾检查通过后把 fact 加入假设。返回 (Verdict, 原因)。"""
+def extend_checked(assumptions, fact):
+    """域检查 + 矛盾检查通过后**返回扩充后的假设集**（不可变，不改原对象）。
+
+    返回 `(Verdict, Assumptions | None)`；未通过时第二个为 None。
+    取代 v3 的 `check_and_assume`（那是就地改可变上下文）。
+    """
     from cas.kernel.verdict import NO, YES
-    if domain_ok(fact, ctx) is NO:
-        return NO, "domain"
-    if contradicted(fact, ctx):
-        return NO, "contradiction"
-    ctx.assume(fact, origin=origin, kind=kind)
-    return YES, None
+    assumptions = _A(assumptions)
+    if domain_ok(fact, assumptions) is NO:
+        return NO, None
+    if contradicted(fact, assumptions):
+        return NO, None
+    return YES, assumptions.extended(fact)
 
 
-def branch(ctx, *conds):
-    """为每个条件克隆一个分支上下文；域外条件得到空分支。"""
-    from cas.kernel.context import Branch
+def branch(assumptions, *conds):
+    """为每个条件分出一支：`[(条件, 该支假设集 | None, "open"|"empty")]`。
+
+    假设集不可变，分支就是对同一基点做若干次 `extended`——不需要克隆，也不需要
+    撤销。§8.8 的独立子作用域由 kernel 的 ScopeStore 表达，不在这里。
+    """
     from cas.kernel.verdict import NO
+    assumptions = _A(assumptions)
     out = []
     for c in conds:
-        bctx = ctx.clone()
-        st, _why = check_and_assume(bctx, c, origin="branch", kind="branch")
-        out.append(Branch(c, bctx, "empty" if st is NO else "open"))
+        st, ext = extend_checked(assumptions, c)
+        out.append((c, ext, "empty" if st is NO else "open"))
     return out

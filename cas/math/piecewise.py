@@ -92,8 +92,8 @@ def project_pw(t):
 # 条件语义：判定管线消费
 # ---------------------------------------------------------------------------
 
-def select(t, ctx):
-    """分段函数在 ctx 下取值——有序首中（if/elif/else）：第一个可证成立的条件。
+def select(t, assumptions):
+    """分段函数在 assumptions 下取值——有序首中（if/elif/else）：第一个可证成立的条件。
 
     自顶向下扫：可证假的支跳过；可证真的支，若其前无非假支（首中）则定值。
     每点至多落一支 → 取值唯一，无求值层冲突。`c=⊤` 为"否则"支。
@@ -112,7 +112,7 @@ def select(t, ctx):
                 return ("value", v)
             survivors.append((v, c))            # 其前有未决支，遮蔽待定 → 残段
             break
-        verdict = decide(c, ctx)
+        verdict = decide(c, assumptions)
         if verdict is NO:
             continue                            # 此支不成立，看下一支
         if verdict is YES:
@@ -129,7 +129,7 @@ def select(t, ctx):
                          first_unknown or Reason.FRAGMENT))
 
 
-def coverage(t, ctx):
+def coverage(t, assumptions):
     """分支条件之析取是否覆盖全空间（完全性是使用者声明，此处可判则判）。
 
     YES 完全覆盖；NO 存在可证空隙（所有条件皆假的地方无定义）；
@@ -139,7 +139,7 @@ def coverage(t, ctx):
     for c in conds:
         if c is T.TRUE:
             return YES
-        v = decide(c, ctx)
+        v = decide(c, assumptions)
         if v is YES:
             return YES
         if v is NO:
@@ -148,26 +148,26 @@ def coverage(t, ctx):
     return unknown(Reason.GUARDED) if guarded else NO
 
 
-def collapse(t, ctx):
-    """点塌缩：把项中每个 Piecewise 子项替换为其在 ctx 下的选支值。
+def collapse(t, assumptions):
+    """点塌缩：把项中每个 Piecewise 子项替换为其在 assumptions 下的选支值。
 
-    数值点回代判定的公共通道——条件在 ctx 下可判时，每个分段按有序
+    数值点回代判定的公共通道——条件在 assumptions 下可判时，每个分段按有序
     首中塌缩为单一支值，逐层外推后整项成为普通项，可走域判零/求值。
     任一分段选支未决（条件判不动）则整体 None（诚实未决，不猜测）。
 
     分段可出现在运算的任意深度（如 `pw(...) + 2`）；条件位置出现
     分段是病态结构（fold_nested 已拒），此处不会遇到。"""
     if is_piecewise(t):
-        status, load = select(t, ctx)
+        status, load = select(t, assumptions)
         if status != "value":
             return None                        # 选支未决：遮蔽关系定不了
-        return collapse(load, ctx)             # 支值仍含分段则继续塌缩
+        return collapse(load, assumptions)             # 支值仍含分段则继续塌缩
     if not isinstance(t, Expr) or not t.args:
         return t
     new_args = []
     changed = False
     for a in t.args:
-        na = collapse(a, ctx)
+        na = collapse(a, assumptions)
         if na is None:
             return None
         changed = changed or (na is not a)
@@ -175,7 +175,7 @@ def collapse(t, ctx):
     return T.mk(t.head, tuple(new_args)) if changed else t
 
 
-def conflicts(t, ctx):
+def conflicts(t, assumptions):
     """顺序无关性 lint（非求值闸）：交叠处值不等 → 该点取值依赖声明顺序。
 
     求值走 `select` 的有序首中，永不歧义。本函数是**作者体检**：若两支区域
@@ -195,22 +195,23 @@ def conflicts(t, ctx):
         vi, ci = bs[i]
         for j in range(i + 1, n):
             vj, cj = bs[j]
-            sat = satisfiable([ci, cj], ctx)      # 重叠区是否可满足
+            sat = satisfiable([ci, cj], assumptions)      # 重叠区是否可满足
             if sat is NO:
                 out.append((i, j, YES))            # 空重叠，天然顺序无关
                 continue
-            out.append((i, j, _agree(vi, vj, (ci, cj), ctx)))
+            out.append((i, j, _agree(vi, vj, (ci, cj), assumptions)))
     return out
 
 
-def _agree(vi, vj, conds, ctx):
-    """两值在重叠条件 conds 下是否相等：临时上下文注入条件后判等。"""
+def _agree(vi, vj, conds, assumptions):
+    """两值在重叠条件 conds 下是否相等：临时**扩充**假设集后判等。
+
+    假设集不可变，所以这里是 `extended`（产生新对象）而非就地写入——
+    重叠区分析不该污染调用方的假设。
+    """
     if vi is vj:
         return YES
-    tmp = ctx.clone()
-    for c in conds:
-        if c is not T.TRUE:
-            tmp.assume(c, origin="_overlap", kind="guard")
+    tmp = assumptions.extended(*[c for c in conds if c is not T.TRUE])
     from cas.math.decide import equivalent
     return equivalent(vi, vj, tmp)
 

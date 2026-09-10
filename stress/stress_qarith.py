@@ -19,7 +19,7 @@ sys.path.insert(0, ".")
 
 from cas.syntax.term import S, N, mk, plus, times, pw, neg, Expr, Int
 from cas.math.qarith import fold, eval_exact, EvalNumError
-from cas.kernel.context import Context
+from cas.kernel.scope import Assumptions
 from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
 from cas.math.simplify import expand
@@ -112,18 +112,18 @@ def prop_fold(rounds, rng):
 def prop_interval(rounds, rng):
     for _ in range(rounds):
         k = rng.randint(-5, 5)
-        ctx = Context()
-        ctx.assume(mk(S("Gt"), (X, N(k))))
+        assumptions = Assumptions().extended(mk(S("Gt"), (X, N(k))))
         for j in range(-7, 8):
-            got = decide(mk(S("Gt"), (X, N(j))), ctx)
+            got = decide(mk(S("Gt"), (X, N(j))), assumptions)
             if j <= k:
                 ok = got is YES
             else:
                 ok = isinstance(got, Unknown)
             if not ok:
                 fail(f"P3 区间 assume x>{k} 查 x>{j}: got {got}", k)
-        b = branch(ctx, mk(S("Lt"), (X, N(k + 10))))[0]
-        got = decide(mk(S("Lt"), (X, N(k + 100))), b.ctx)
+        _cond, b_assumptions, _st = branch(
+            assumptions, mk(S("Lt"), (X, N(k + 10))))[0]
+        got = decide(mk(S("Lt"), (X, N(k + 100))), b_assumptions)
         if got is not YES:
             fail(f"P3 分支帧继承", k)
 

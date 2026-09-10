@@ -66,8 +66,8 @@ def is_zero(t) -> bool | None:
     if not has_piecewise(t):
         return zero_of(t)
     from cas.math.piecewise import collapse        # 延迟：piecewise 消费判定层
-    from cas.kernel.context import Context
-    c = collapse(t, Context())
+    from cas.kernel.scope import Assumptions
+    c = collapse(t, Assumptions())
     if c is None:
         return None                           # 选支未决：条件判不动
     if has_undef(c):
@@ -127,9 +127,9 @@ def guard_report(guards, var, value, ctx=None) -> tuple[GuardCheck, ...]:
     整体都不能判定为验证通过。
     """
     from cas.math.decide import decide
-    from cas.kernel.context import Context
+    from cas.kernel.scope import Assumptions
     if ctx is None:
-        ctx = Context()
+        ctx = Assumptions()
     out = []
     for g in guards:
         gsub = fold(T.subst(g, {var: value}))

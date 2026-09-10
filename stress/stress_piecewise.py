@@ -28,7 +28,7 @@ from cas.syntax import term as T
 from cas.syntax.term import S, N, mk, plus, times, pw
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.kernel.context import Context
+from cas.kernel.scope import Assumptions
 from cas.math.project import project
 from cas.kernel.verdict import YES, NO
 from cas.math.domcond import dom_condition
@@ -66,10 +66,8 @@ def rand_pw(rng, nvals, minb=2, maxb=4):
 
 
 def at_ctx(a):
-    """x = a 的具体点上下文（比较式数值可判）。"""
-    ctx = Context()
-    ctx.assume(mk(S("Eq"), (X, N(a))), origin="_pt")
-    return ctx
+    """x = a 的具体点的假设集（比较式数值可判）。"""
+    return Assumptions().extended(mk(S("Eq"), (X, N(a))))
 
 
 def eval_at(c, a) -> bool:
@@ -141,7 +139,7 @@ def prop_select(rounds, rng):
                 fail("P22 选错支", i, f"a={a} want={to_str(want)} "
                      f"got={to_str(payload)} t={to_str(t)}")
         # 末支 TRUE 恒覆盖——空上下文下不得谎报空隙（NO）
-        if coverage(t, Context()) is NO:
+        if coverage(t, Assumptions()) is NO:
             fail("P22 覆盖误判", i, to_str(t))
 
 
@@ -202,12 +200,12 @@ def prop_guards(rounds, rng):
         # 重叠一致性：常量支、可证空重叠 → 全 YES；可证不等常量重叠 → NO
         disjoint = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                               (N(2), mk(S("Lt"), (X, N(0))))])
-        for _a, _b, verdict in conflicts(disjoint, Context()):
+        for _a, _b, verdict in conflicts(disjoint, Assumptions()):
             if verdict is not YES:
                 fail("P24 空重叠误判", i, verdict)
         clash = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                            (N(2), mk(S("Gt"), (X, N(0))))])
-        vs = [verdict for _a, _b, verdict in conflicts(clash, Context())]
+        vs = [verdict for _a, _b, verdict in conflicts(clash, Assumptions())]
         if not any(v is NO for v in vs):
             fail("P24 常量冲突未检出", i, vs)
 

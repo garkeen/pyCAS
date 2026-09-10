@@ -14,7 +14,7 @@ import pytest
 
 import cas.math.decide as D
 from cas.frontend.parser import parse
-from cas.kernel.context import Context
+from cas.kernel.scope import Assumptions
 from cas.kernel.verdict import YES, NO
 
 
@@ -25,7 +25,7 @@ def no_interval(monkeypatch):
 
 
 def _decide(src):
-    return D.decide(parse(src), Context())
+    return D.decide(parse(src), Assumptions())
 
 
 @pytest.mark.parametrize("src,want", [
