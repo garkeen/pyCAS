@@ -1333,10 +1333,17 @@ Judgment → Step → Judgment
 ```text
 Task → Subtask
 Task → Candidate
-Task → Constraint
+Candidate → Constraint
+Constraint → Candidate
 ```
 
-它可以包含循环依赖或强连通分量，例如循环积分问题。
+**环只可能出现在「候选 ↔ 约束」子图上**，例如循环积分：两条分部积分各产出一条
+构造约束，把两个候选互相定义为对方的表达式（§9.6）。
+
+`Task.parent` 是单父指针的树，**永远无环**；环由 §5.4 的子项抽象把候选冻成符号
+后，在约束系统上用代数求解消化掉——环存在于被求解的方程里，不在证明图上
+（§9.5 的证明依赖图仍然无环）。`Constraint.sources` 因此必须能引用**候选**，
+而不只是 Task（§8.6）。
 
 ### 3. 操作历史图
 
@@ -1365,9 +1372,16 @@ class Constraint:
     id: ConstraintId
     scope: ScopeId
     relation: Term
-    sources: tuple[TaskId, ...]
-    evidence: Evidence | None
+    sources: tuple[object, ...]           # TaskId | CandidateRef = (TaskId, ArtifactId)
+    proposed_evidence: Evidence | None
 ```
+
+`sources` 允许引用**候选**（`(task, artifact)`）：循环积分的构造约束是候选之间的
+关系（§9.6「candidate(T0) = e^x sin x − candidate(T1)」），只指 Task 表达不了这个环。
+
+`proposed_evidence` 是**候选凭据**，不是已验证的证据——它只是提交时准备交给
+checker 的材料。Constraint 要成为 Judgment，仍须经 `kernel.commit` 并由 checker
+接受（§6.9）；**带一个 Evidence 对象本身不构成任何验证**。
 
 它用于表示：
 
@@ -1890,9 +1904,19 @@ RuleSchema 库
 checker 实现
 精确域算术
 证书验证所依赖的判等器
+checker 所依赖的独立设施（§7.3）：
+    微分器
+    域标准形
+    恒等判定
+    定义域分析
 ```
 
 这些出现 bug 会影响系统正确性。
+
+最后一项必须显式列出，不能省：`Risch 找到 F → checker 证明 D(F)=f`（§7.3）里，
+`D(F)=f` 是候选正确性的**唯一**保证，微分器出错则整条链失守。同理，恒等判定与
+定义域分析出错会让「已验证」变成假象。它们与搜索算法**独立**（这是 §7.3 的要求），
+但独立不等于不需要正确——独立解决「不自证」，可信解决「值得信」，两件事都要。
 
 ## 10.2 不可信部分
 
@@ -1976,23 +2000,29 @@ CheckerRegistry
 将旧 Step 的“内容”拆成：
 
 ```text
-Artifact
-Judgment
-Step
+Artifact    计算产物（无真假，免费）
+Judgment    已验证结论（**可选**，只在边界产生）
+Step        推理边（只有提交才产生）
 ```
 
-求导不再记录：
-
-```text
-x² → 2x
-```
-
-而是记录：
+求导产生 **Artifact**：
 
 ```text
 Artifact: 2x
-Judgment: D(x²)=2x
 ```
+
+**Artifact 即可直接参与后续计算**——后续计算也是重写，重写吃项，不吃结论。
+Judgment 是**可选的**（§8.4 `validation: JudgmentId | None`），只在三种情况下产生：
+
+```text
+要对外断言这个结果
+结果出自不可信算法，需要边界复核
+该步产生了条件（Requirement）
+```
+
+不要为每个计算结果都配一张 Judgment。**热循环跑在 Artifact 上，可信结论只在
+边界 commit 一次**（AGENTS.md §四.1）；把每一份算出来的表达式都送进账本，等于
+把内核放回内循环——那正是把它变回定理证明器的做法。
 
 ---
 
