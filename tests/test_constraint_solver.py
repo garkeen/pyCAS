@@ -12,7 +12,7 @@ from cas.syntax import term as T
 from cas.math.constraints import solve_linear_constraints, is_linear
 from cas.math.integrate import verify_antideriv
 from cas.runtime import new_workflow
-from cas.workflow.workflow import Claim, Integrate
+from cas.workflow.command import Claim, Integrate
 
 
 # --- 线性形式分析（句法，不靠化简器）---
@@ -74,5 +74,5 @@ def test_循环积分端到端_求解成功而验证诚实未决():
     s0 = wf.add(a, Claim())
     content = T.eq(T.mk(S("Integrate"), (T.mk_bound(X, a),)), val[u])
     s1 = wf.add(content, Integrate(pred=s0.id, var=X, antideriv=val[u]))
-    assert s1.status == "unverified", (s1.status, s1.note)
+    assert s1.status == "undecided", (s1.status, s1.note)
     assert s1.judgment is None

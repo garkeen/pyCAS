@@ -35,7 +35,7 @@ from cas.errors import DiffError, CadError
 from cas.math.domains.q import Q_RING
 from cas.math.domains.poly import from_term, p_deriv, to_term
 from cas.math.piecewise import piecewise, fold_nested, branches
-from cas.workflow.workflow import Claim, Solve, Diff
+from cas.workflow.command import Claim, Solve, Diff
 
 X = S("x")
 
@@ -209,7 +209,7 @@ def prop_workflow(rounds, rng):
         for xv in want:
             s = wf.add(T.eq(X, T.N(xv)), Solve(pred=s0.id, var=X,
                                                solution=T.N(xv)))
-            if s.status == "dead":
+            if s.status == "refused":
                 fail("P38 真解被回代判官否决", i, r, target, xv, s.note)
         # 伪解：另一支的候选（条件不满足）必须被判官否决
         wrong = ref_solve([(a1, b1, r, None, True, True)], target)  # 强制右区
@@ -218,14 +218,14 @@ def prop_workflow(rounds, rng):
                 continue
             s = wf.add(T.eq(X, T.N(xv)), Solve(pred=s0.id, var=X,
                                                solution=T.N(xv)))
-            if s.status != "dead":
+            if s.status != "refused":
                 fail("P38 伪解未被否决", i, r, target, xv)
         # 分段求导步骤：逐支域层交叉验证须通过
         s1 = wf.add(piecewise([(t1, parse(f"x <= {r}")),
                                (t2, parse(f"x > {r}"))]), Claim())
         d, _b = differentiate_piecewise(s1.content, X)
         s2 = wf.add(d, Diff(pred=s1.id, var=X))
-        if s2.status == "dead":
+        if s2.status == "refused":
             fail("P38 分段 Diff 被交叉验证否决", i, to_str(s1.content),
                  to_str(d), s2.note)
 

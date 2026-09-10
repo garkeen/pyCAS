@@ -40,11 +40,16 @@ class TaskCandidate:
     def is_validated(self) -> bool:
         return self.validation is not None
 
-    def state(self, store=None) -> str:
-        """状态由数据推导；给了 store 才能区分「已验证」与「有条件」."""
+    def state(self, store) -> str:
+        """状态**由数据推导**（v4 §8.4）：未验证 / 已验证的条件候选 / 已验证候选。
+
+        `store` 必填：缺了它就无法区分「已验证」与「有条件」，任何静默降级
+        都会把未验证候选说成已验证（不变量 16）。适用性由内核按作用域算
+        （v4 §6.10），工作流只查。
+        """
         if self.validation is None:
             return "unverified"
-        if store is not None and not store.is_applicable(self.validation):
+        if not store.is_applicable(self.validation):
             return "conditional"
         return "validated"
 
@@ -52,8 +57,8 @@ class TaskCandidate:
 class TaskStore:
     """任务与候选存储（追加式）。"""
 
-    def __init__(self, kernel=None):
-        self.kernel = kernel                        # KernelStore，用于查适用性
+    def __init__(self, kernel):
+        self.kernel = kernel                        # KernelStore（必填）：适用性查询的独立设施
         self._tasks: dict[TaskId, Task] = {}
         self._cands: dict[TaskCandidateId, TaskCandidate] = {}
         self._next_t = 0
@@ -100,8 +105,6 @@ class TaskStore:
         return tuple(c for c in self._cands.values() if c.task == task)
 
     def is_applicable(self, jid: JudgmentId) -> bool:
-        if self.kernel is None:
-            return True
         scope = self.kernel.get_judgment(jid).scope
         return self.kernel.applicability(jid, scope).is_applicable()
 

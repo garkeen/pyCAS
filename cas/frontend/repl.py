@@ -36,8 +36,9 @@ from cas.math.cad import CadError
 from cas.math.integrate import integrate_term, definite_integrate, IntegrateError
 from cas.math.piecewise import is_piecewise
 from cas.kernel.verdict import YES, NO
-from cas.workflow.workflow import (Claim, BothSides, Rewrite, Solve,
-                          Subst, Split, Diff, Integrate, _is_eq)
+from cas.workflow.command import (Claim, BothSides, Rewrite, Solve,
+                                  Subst, Split, Diff, Integrate)
+from cas.workflow.workflow import _is_eq
 from cas.runtime.dispatch import domain_normal_form
 
 
@@ -97,24 +98,25 @@ class REPL:
                 self.cmd_claim(line)
 
     def _show_step(self, s):
-        d = s.derivation
-        kind = type(d).__name__
+        d = s.command
         extra = ""
-        if isinstance(d, (BothSides, Rewrite, Solve, Subst, Split, Diff, Integrate)):
+        if d.pred is not None:
             extra = f" <-#{d.pred}"
-        if isinstance(d, BothSides):
+        # 显示分派按命令**声明的名字**（数据），不按类型分派（v4 §十一 阶段3）
+        if d.name == "BothSides":
             extra += f" {d.op}({_fmt(d.operand)})"
-        if isinstance(d, Rewrite) and d.rule:
-            extra += f" rule={d.rule}"
-        if isinstance(d, Subst):
+        elif d.name == "Rewrite":
+            if d.rule:
+                extra += f" rule={d.rule}"
+        elif d.name == "Subst":
             extra += f" {_fmt(d.var)}={_fmt(d.value)}"
-        if isinstance(d, Solve):
+        elif d.name == "Solve":
             extra += f" {_fmt(d.var)}={_fmt(d.solution)}"
-        if isinstance(d, Split):
+        elif d.name == "Split":
             extra += f" {'¬' if d.negate else ''}{_fmt(d.condition)}"
-        if isinstance(d, Diff):
+        elif d.name == "Diff":
             extra += f" d/d{_fmt(d.var)}"
-        if isinstance(d, Integrate):
+        elif d.name == "Integrate":
             extra += f" ∫d{_fmt(d.var)}"
             if d.bounds is not None:
                 extra += f" [{_fmt(d.bounds[0])},{_fmt(d.bounds[1])}]"
@@ -122,7 +124,7 @@ class REPL:
         if s.guards:
             guards = "  | " + ", ".join(_fmt(g) for g in s.guards)
         dom = f"  ∈{s.domain}" if s.domain else ""
-        print(f"  #{s.id:2d} [{s.status:4s}] {kind}{extra}{dom}")
+        print(f"  #{s.id:2d} [{s.status:4s}] {d.name}{extra}{dom}")
         print(f"        {_fmt(s.content)}{guards}")
 
     def _cur(self):
@@ -179,8 +181,8 @@ class REPL:
         content = T.eq(nl, nr)
         s = self.wf.add(content, BothSides(pred=self.current, op=op,
                                            operand=operand))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '验证失败'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '验证失败'}")
         self.current = s.id
         self._show_step(s)
 
@@ -190,8 +192,8 @@ class REPL:
             return
         n = domain_normal_form(pred.content)
         s = self.wf.add(n, Rewrite(pred=self.current))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '规范化结果不匹配'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '规范化结果不匹配'}")
         self.current = s.id
         self._show_step(s)
 
@@ -212,8 +214,8 @@ class REPL:
         content = T.eq(var, sol)
         s = self.wf.add(content, Solve(pred=self.current, var=var,
                                        solution=sol))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '回代判官否决'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '回代判官否决'}")
         self.current = s.id
         self._show_step(s)
 
@@ -233,8 +235,8 @@ class REPL:
             content = T.eq(var, sol)
             s = self.wf.add(content, Solve(pred=base, var=var,
                                            solution=sol))
-            if s.status == "dead":
-                print(f"  步骤 dead：{s.note or '回代判官否决'}")
+            if s.status == "refused":
+                print(f"  步骤被否证：{s.note or '回代判官否决'}")
             self.current = s.id
             self._show_step(s)
         for c in res["regions"]:
@@ -263,8 +265,8 @@ class REPL:
         content = domain_normal_form(substituted)
         s = self.wf.add(content, Subst(pred=self.current, var=var,
                                        value=value))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '代换验证失败'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '代换验证失败'}")
         self.current = s.id
         self._show_step(s)
 
@@ -283,8 +285,8 @@ class REPL:
         content = T.mk(S("And"), (pred.content, branch_cond))
         s = self.wf.add(content, Split(pred=self.current, condition=cond,
                                        negate=negate))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '分支验证失败'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '分支验证失败'}")
         self.current = s.id
         self._show_step(s)
 
@@ -307,8 +309,8 @@ class REPL:
             print(f"  微分拒答: {e}")
             return
         s = self.wf.add(content, Diff(pred=self.current, var=var))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '域层导数交叉验证否决'}")
         self.current = s.id
         self._show_step(s)
 
@@ -321,8 +323,8 @@ class REPL:
             print(f"  分段微分拒答: {e}")
             return
         s = self.wf.add(deriv, Diff(pred=self.current, var=var))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '域层导数交叉验证否决'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '域层导数交叉验证否决'}")
         self.current = s.id
         self._show_step(s)
         if bounds:
@@ -344,8 +346,8 @@ class REPL:
         content = T.eq(T.mk(S("Integrate"), (T.mk_bound(var, f),)), G)
         s = self.wf.add(content, Integrate(pred=self.current, var=var,
                                            antideriv=G))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '原函数独立验证否决'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '原函数独立验证否决'}")
         self.current = s.id
         self._show_step(s)
 
@@ -374,8 +376,8 @@ class REPL:
         content = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(var, f), a, b)), V)
         s = self.wf.add(content, Integrate(pred=self.current, var=var,
                                            antideriv=G, bounds=(a, b)))
-        if s.status == "dead":
-            print(f"  步骤 dead：{s.note or '定积分独立验证否决'}")
+        if s.status == "refused":
+            print(f"  步骤被否证：{s.note or '定积分独立验证否决'}")
         self.current = s.id
         self._show_step(s)
 
@@ -408,8 +410,8 @@ class REPL:
                                                   path=tuple(path),
                                                   substitution=res.subst),
                                 target=path)
-                if s.status == "dead":
-                    print(f"  步骤 dead：{s.note or '规则产物复核失败'}")
+                if s.status == "refused":
+                    print(f"  步骤被否证：{s.note or '规则产物复核失败'}")
                 self.current = s.id
                 self._show_step(s)
                 return
@@ -470,7 +472,7 @@ class REPL:
             return
         last = steps[-1]
         # DAG 不可变：只回退指针，不删除步骤
-        self.current = getattr(last.derivation, "pred", None)
+        self.current = last.command.pred
         if self.current is not None:
             print(f"  撤回 #{last.id}，回到 #{self.current}")
             self._show_step(self.wf.get(self.current))

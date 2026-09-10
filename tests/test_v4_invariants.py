@@ -220,7 +220,7 @@ def test_不变量14_checker不导入自身搜索算法():
 def test_规则实例checker只认给定实例():
     """替换/路径与实例不符 → 否决；相符 → 通过（不搜索其他路径或匹配）。"""
     from cas.frontend.parser import parse
-    from cas.workflow.workflow import Claim, Rewrite
+    from cas.workflow.command import Claim, Rewrite
 
     wf = new_workflow()
     wf.add(parse("exp(x)*exp(y)"), Claim())
@@ -228,33 +228,33 @@ def test_规则实例checker只认给定实例():
     good = wf.add(parse("exp(x + y)"),
                   Rewrite(pred=0, rule="exp_add", path=(),
                           substitution={"a": X, "b": Y}))
-    assert good.status == "open", good.note
+    assert good.status == "committed", good.note
     assert good.judgment is not None
     # 替换不是该位置的有效匹配（?a、?b 都被绑到 x）→ 否决
     wrong = wf.add(parse("exp(x + y)"),
                    Rewrite(pred=0, rule="exp_add", path=(),
                            substitution={"a": X, "b": X}))
-    assert wrong.status == "dead", wrong.note
+    assert wrong.status == "refused", wrong.note
     assert wrong.judgment is None
     # 路径越界 → 否决
     oob = wf.add(parse("exp(x + y)"),
                  Rewrite(pred=0, rule="exp_add", path=(5,),
                          substitution={"a": X, "b": Y}))
-    assert oob.status == "dead", oob.note
+    assert oob.status == "refused", oob.note
 
 
 def test_不变量16_未验证候选不参与可信推导():
     """checker 未决的候选不得以「可依赖」状态入账——unverified ≠ open。"""
     from cas.frontend.parser import parse
     from cas.syntax.term import S, N
-    from cas.workflow.workflow import Claim, Solve
+    from cas.workflow.command import Claim, Solve
 
     wf = new_workflow()
     wf.add(parse("sin(x) == 1/2"), Claim())
     before = dict(wf.store.stats())
     # 回代判官在投影外诚实未决（超越函数），checker 返回 UnknownResult
     step = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
-    assert step.status == "unverified", \
+    assert step.status == "undecided", \
         f"未决候选状态应为 unverified，实际 {step.status}"
     assert step.judgment is None, "未决候选不得持有可依赖结论"
     assert dict(wf.store.stats()) == before, "未决候选不得对账本产生任何写入"

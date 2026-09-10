@@ -11,7 +11,7 @@ from cas.kernel.evidence import Evidence
 from cas.syntax import term as T
 from cas.frontend.parser import parse
 from cas.syntax.term import S, N
-from cas.workflow.workflow import Claim, Diff, Solve, BothSides
+from cas.workflow.command import Claim, Diff, Solve, BothSides
 
 
 def test_产物与结论分离_Artifact不能作为前提():
@@ -109,7 +109,7 @@ def test_无结论的步骤没有适用性():
     wf = new_workflow()
     wf.add(parse("sin(x) == 1/2"), Claim())
     s = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
-    assert s.status == "unverified"
+    assert s.status == "undecided"
     assert wf.applicability_of(s) is None
 
 
@@ -154,9 +154,9 @@ def test_兄弟分支互不可见():
     assert sa.judgment is not None
     wf.enter(b)
     # 在 b 里引用 a 的结论 → 不可见，拒绝
-    from cas.workflow.workflow import BothSides
+    from cas.workflow.command import BothSides
     sb = wf.add(parse("x^2 + 1"), BothSides(pred=sa.id, op="add", operand=N(1)))
-    assert sb.status != "open", sb.status
+    assert sb.status != "committed", sb.status
 
 
 def test_promote_guard提升守卫为蕴含():
@@ -182,7 +182,7 @@ def test_needs_split状态与开分支接线():
     g = wf.split_on(cond)
     wf.enter(g.cases[0].scope)                 # 进入 x != 0 分支
     s1 = wf.add(parse("x/x"), Claim())
-    assert s1.status == "open", (s1.status, s1.note)
+    assert s1.status == "committed", (s1.status, s1.note)
     assert wf.applicability_of(s1).is_applicable(), wf.applicability_of(s1)
 
 
@@ -253,7 +253,7 @@ def test_约束赋值经checker复核():
     good = {u: parse("(x^2 - x + 1)/2"), v: parse("(x^2 + x - 1)/2")}
     steps = wf.verify_valuation(good)
     assert len(steps) == 2
-    assert all(s.status == "open" for s in steps), [(s.status, s.note) for s in steps]
+    assert all(s.status == "committed" for s in steps), [(s.status, s.note) for s in steps]
     assert all(s.judgment is not None for s in steps)
 
     # 错误赋值：约束不成立 → 否决
@@ -261,5 +261,5 @@ def test_约束赋值经checker复核():
     u2, v2 = S("_u"), S("_v")
     wf2.add_constraint(T.eq(u2, T.plus(a, T.neg(v2))))
     bad = wf2.verify_valuation({u2: N(0), v2: N(0)})
-    assert bad[0].status == "dead", (bad[0].status, bad[0].note)
+    assert bad[0].status == "refused", (bad[0].status, bad[0].note)
     assert bad[0].judgment is None

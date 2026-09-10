@@ -31,7 +31,7 @@ from cas.math.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
 from cas.math.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
                                  ratfunc_domain)
 from cas.math.domains.q import Q_RING
-from cas.workflow.workflow import Claim, Diff
+from cas.workflow.command import Claim, Diff
 
 from cas.runtime import bootstrap
 bootstrap()
@@ -166,11 +166,11 @@ def prop_workflow(rounds, rng):
         wf = new_workflow()
         s0 = wf.add(t, Claim())
         s1 = wf.add(good, Diff(pred=s0.id, var=X))
-        if s1.status != "open":
+        if s1.status != "committed":
             fail("P13 正确导数被否决", i, to_str(t), to_str(good))
         bad = plus(good, N(1))
         s2 = wf.add(bad, Diff(pred=s0.id, var=X))
-        if s2.status != "dead":
+        if s2.status != "refused":
             fail("P13 错误导数未死", i, to_str(t), to_str(bad))
 
 
