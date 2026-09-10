@@ -397,6 +397,43 @@ checker  → 对应的搜索算法实现
 
 内核通过接口调用注册的 checker/decider，但源码不导入具体数学模块。
 
+**同一个规则也决定对象之间的引用方向：指针只许指向下方层（或同层）。** 指针
+就是源码级的名字可见性，指错了就等于引入反向 import。各对象的引用面：
+
+```text
+kernel 内：  Judgment.producer            → StepId
+             Step.premises/conclusions    → JudgmentId
+             Requirement.introduced_by    → StepId
+             Discharge.by_judgment        → JudgmentId
+             （以上都不跨层）
+workflow 内：Artifact.produced_by          → EventId
+             Task.scope / Constraint.scope → ScopeId     （workflow → kernel，合规）
+             TaskCandidate.validation      → JudgmentId   （workflow → kernel，合规）
+             BranchGroup.coverage          → JudgmentId   （workflow → kernel，合规）
+跨层出口：   Event.outputs                 → ArtifactId | TaskId | ConstraintId
+                                            | StepId | JudgmentId
+```
+
+**`Event.outputs` 是唯一连接「操作」与「内核结论」的地方**（workflow → kernel，
+合规）。内核侧（Scope / Judgment / Step / Requirement / Discharge / Applicability）
+**没有任何指向 Artifact / Task / Event 的字段**——所以「这张结论是哪个操作造出来的」
+只能由 Event 侧回答。溯源链是：
+
+```text
+Judgment → Step → Event
+```
+
+（`Judgment.producer → Step` 是回溯指针，不构成数学依赖；证明图的无环性由
+premises → conclusions 决定，见 §8.5 / 不变量 11。）
+
+反向索引（EventId → 本次产出的内核 id 列表）建在 **workflow 侧**，内核不参与。
+undo/redo 移 revision 指针时，靠它知道该重新指向哪些内核对象。
+
+**为什么 Event 与 Step 不能合并**（三条，任一即可否决）：两者是不同关系
+（Step 带推理依赖，Event 带发生顺序，§8.1 明确禁止混同）；基数不同（一条
+`interactive` 化简可产几百个 Artifact 而**零个** Step）；可撤销性不同
+（undo/redo 只移 revision 指针，内核账本追加式、结论不可删，§四.5 / §8.9）。
+
 ---
 
 # 五、`syntax/`：纯语法层
@@ -1486,6 +1523,15 @@ SelectCandidate
 AddConstraint
 CloseTask
 ```
+
+`outputs` 是本次操作产出的对象 id，**可以含内核 id**（`StepId` / `JudgmentId`）——
+这是 workflow → kernel 的引用，方向合规（§四）。`CommitJudgment` 事件的 outputs
+就是它提交出来的 Step 与 Judgment；`CreateArtifact` 的 outputs 是 Artifact。
+于是「结论 ← 推理边 ← 操作」这条链在两边都走得通：内核侧 `Judgment.producer`
+给出 Step，workflow 侧 Event.outputs 给出 Event。
+
+**内核不反向引用**：`Step` / `Judgment` 里没有 `event_id`。想「从结论找回操作」，
+查 workflow 侧的倒排索引，不要把这个字段塞进内核（那样 kernel 就认识 workflow 类型了）。
 
 undo/redo 只是移动当前 revision 指针。
 
