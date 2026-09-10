@@ -5,17 +5,18 @@
 Event.outputs 是连接操作与内核结论的唯一出口；undo/redo 只移指针不删事件。
 """
 
+from cas.runtime import new_workflow
 from cas.kernel.commit import GuardPolicy, StepProposal, commit
 from cas.kernel.evidence import Evidence
 from cas.syntax import term as T
 from cas.frontend.parser import parse
 from cas.syntax.term import S, N
-from cas.workflow.workflow import Workflow, Claim, Diff, Solve, BothSides
+from cas.workflow.workflow import Claim, Diff, Solve, BothSides
 
 
 def test_产物与结论分离_Artifact不能作为前提():
     """v4 不变量 4：Artifact 不能作为数学前提。"""
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     art = wf.artifacts.get(s0.artifact)
     assert art.value is parse("x^2")
@@ -30,7 +31,7 @@ def test_产物与结论分离_Artifact不能作为前提():
 
 
 def test_每步产出一个产物且挂到产出事件():
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     s1 = wf.add(parse("2*x"), Diff(pred=s0.id, var=S("x")))
     assert wf.artifacts.get(s1.artifact).value is parse("2*x")
@@ -41,7 +42,7 @@ def test_每步产出一个产物且挂到产出事件():
 
 
 def test_操作历史与证明分离_undo只移指针():
-    wf = Workflow()
+    wf = new_workflow()
     wf.add(parse("x^2"), Claim())
     wf.add(parse("2*x"), Diff(pred=0, var=S("x")))
     n_events = len(wf.events)
@@ -57,7 +58,7 @@ def test_操作历史与证明分离_undo只移指针():
 
 def test_溯源链_结论到事件():
     """Judgment → Step → Event：反向查询由 Event 侧倒排索引回答。"""
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     s1 = wf.add(parse("2*x"), Diff(pred=s0.id, var=S("x")))
     assert s1.judgment is not None
@@ -71,7 +72,7 @@ def test_溯源链_结论到事件():
 
 
 def test_任务与候选由数据推导状态():
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     s1 = wf.add(parse("2*x"), Diff(pred=s0.id, var=S("x")))
     task = wf.tasks.get_task(s1.task)
@@ -86,7 +87,7 @@ def test_任务与候选由数据推导状态():
 
 
 def test_无请求形状的命令不开任务():
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("x == 1"), Claim())
     assert s0.task is None, "Claim 无请求形状"
     s1 = wf.add(parse("x + 1 == 2"), BothSides(pred=s0.id, op="add", operand=N(1)))
@@ -95,7 +96,7 @@ def test_无请求形状的命令不开任务():
 
 def test_适用性可被查询():
     """v4 §6.10 的查询语义：内核算，工作流问。"""
-    wf = Workflow()
+    wf = new_workflow()
     s0 = wf.add(parse("1/(x-1)"), Claim())          # 带条件 x-1 != 0
     app = wf.applicability_of(s0)
     assert app is not None
@@ -105,7 +106,7 @@ def test_适用性可被查询():
 
 
 def test_无结论的步骤没有适用性():
-    wf = Workflow()
+    wf = new_workflow()
     wf.add(parse("sin(x) == 1/2"), Claim())
     s = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
     assert s.status == "unverified"
@@ -118,7 +119,7 @@ def test_无结论的步骤没有适用性():
 
 def test_split建一对互补分支且覆盖成立():
     from cas.kernel.mode import ExecutionMode
-    wf = Workflow(mode=ExecutionMode.DERIVATION)
+    wf = new_workflow(mode=ExecutionMode.DERIVATION)
     cond = parse("x != 0")
     g = wf.split_on(cond)
     assert len(g.cases) == 2
@@ -132,7 +133,7 @@ def test_split建一对互补分支且覆盖成立():
 
 
 def test_分支作用域携带条件假设():
-    wf = Workflow()
+    wf = new_workflow()
     cond = parse("x != 0")
     g = wf.split_on(cond)
     pos, neg = g.cases[0].scope, g.cases[1].scope
@@ -144,7 +145,7 @@ def test_分支作用域携带条件假设():
 
 def test_兄弟分支互不可见():
     from cas.kernel.mode import ExecutionMode
-    wf = Workflow(mode=ExecutionMode.DERIVATION)
+    wf = new_workflow(mode=ExecutionMode.DERIVATION)
     g = wf.split_on(parse("x != 0"))
     a, b = g.cases[0].scope, g.cases[1].scope
     wf.enter(a)
@@ -158,7 +159,7 @@ def test_兄弟分支互不可见():
 
 
 def test_promote_guard提升守卫为蕴含():
-    wf = Workflow()
+    wf = new_workflow()
     g = wf.split_on(parse("x != 0"))
     case = g.cases[0]
     elevated = wf.promote_guard(case, parse("y > 0"))
@@ -169,7 +170,7 @@ def test_needs_split状态与开分支接线():
     """REQUEST_SPLIT 策略下待决条件交回调用方；开分支后条件经假设被清偿。"""
     from cas.kernel.commit import GuardPolicy
     from cas.kernel.mode import ExecutionMode
-    wf = Workflow(policy=GuardPolicy.REQUEST_SPLIT,
+    wf = new_workflow(policy=GuardPolicy.REQUEST_SPLIT,
                   mode=ExecutionMode.DERIVATION)
     s0 = wf.add(parse("x/x"), Claim())
     assert s0.status == "needs_split", (s0.status, s0.note)
@@ -191,7 +192,7 @@ def test_needs_split状态与开分支接线():
 def test_约束可引用候选且允许成环():
     """§9.6 循环积分：两条构造约束互为对方的定义。任务树无环，候选图成环。"""
     from cas.workflow.constraint import CandidateRef
-    wf = Workflow()
+    wf = new_workflow()
     # 两个候选：T0 与 T1 各自的任务 + 产物
     s0 = wf.add(parse("i"), Claim())
     s1 = wf.add(parse("j"), Claim())
@@ -223,7 +224,7 @@ def test_约束可引用候选且允许成环():
 
 def test_约束不自动成为结论():
     """§8.6：Constraint 可能只是算法构造，不一定是可参与证明的 Judgment。"""
-    wf = Workflow()
+    wf = new_workflow()
     before = wf.store.stats()["judgments"]
     c = wf.add_constraint(parse("_u == 1"))
     assert wf.store.stats()["judgments"] == before, "登记约束不得产生结论"
@@ -239,7 +240,7 @@ def test_约束赋值经checker复核():
     用有理式而非超越式作系数——判定管线在代数片段内能闭合，超越片段会诚实
     未决（那是完整性边界，不是缺陷）。
     """
-    wf = Workflow()
+    wf = new_workflow()
     u, v = S("_u"), S("_v")
     X = S("x")
     a = T.pw(X, N(2))                     # a = x^2
@@ -255,7 +256,7 @@ def test_约束赋值经checker复核():
     assert all(s.judgment is not None for s in steps)
 
     # 错误赋值：约束不成立 → 否决
-    wf2 = Workflow()
+    wf2 = new_workflow()
     u2, v2 = S("_u"), S("_v")
     wf2.add_constraint(T.eq(u2, T.plus(a, T.neg(v2))))
     bad = wf2.verify_valuation({u2: N(0), v2: N(0)})

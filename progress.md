@@ -32,7 +32,7 @@
 | 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10 |
 | 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ✅ 2026-09-10（本次，不变量 2 转绿） |
 | 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ✅ 2026-09-10（2a 模型+协议，2b 接线） |
-| 3 拆除 Derivation ADT | 命令只生成 proposal；checker 语义 id；规则实例验证不再搜索 | ✅ 2026-09-10（不变量 14 转绿） |
+| 3 拆除 Derivation ADT | 命令只生成 proposal；checker 语义 id；规则实例验证不再搜索 | ✅ 2026-09-10（不变量 14 转绿；checker 阶段6 归位 math/*） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ✅ 2026-09-10 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ✅ 2026-09-10（`library/` 已删除） |
@@ -192,6 +192,37 @@ runtime；未注入时查询**报错**而不是返回 None——静默 None 会�
 （现只有规则行 DSL），属设计决定。
 
 验收：全量 123 passed + 1 xfailed；stress 10 passed（41 条性质）；pyflakes 干净。
+
+### 阶段 6 尾项：checker 归位 `math/*/checkers.py`，`workflow → cas.math` 债务清零（2026-09-10）
+
+checker 验证的是**数学**，住在 workflow 里会让 `workflow → cas.math` 反向依赖
+（§四 禁止）。按 v4 §三 的目标位置归位：
+
+| 模块 | checker |
+|---|---|
+| `math/base/checkers.py` | assumption.entry / both_sides.operate / equality.normalize / rule.instance / substitute / branch.split / branch.coverage / constraint.satisfied |
+| `math/base/equality.py` | `normal_form` / `equal`（域标准形即判定过程，§零.1 的实现落点） |
+| `math/calculus/differentiation/checkers.py` | calculus.derivative |
+| `math/calculus/integration/checkers.py` | calculus.antiderivative |
+| `math/solving/equations/checkers.py` | solve.back_substitute |
+
+`cas/workflow/checkers.py` 删除。workflow 侧改为**注入**三样它需要但不能自己取的东西
+（都由 `cas.runtime.new_workflow()` 装配）：
+
+    store        内核账本（含 kernel 自带 + math 各模块的 checker）
+    services     判定服务 ScopeServices（按作用域判定，条件清偿在正确分支上下文进行）
+    algorithms   算法门面 Algorithms（domain_of 投影、solve_linear_constraints 求解器）
+
+于是 workflow 源码里**没有一行 `cas.math`**（门禁 `test_依赖方向_workflow不依赖具体
+数学模块` 从 xfail 转绿）。缺注入时构造即报错，不做静默降级。
+
+前端同样不直连 math（§四：frontend → api/workflow/runtime）：REPL 的 `norm` 命令经
+`dispatch.domain_normal_form` 转发。
+
+**v4 §十二 门禁现状：1/2/14/16/18 加 §四 依赖方向/引用方向全部转绿，无 xfail。**
+
+验收：全量 **124 passed（0 xfailed）**；stress 10 passed（41 条性质）；pyflakes 干净；
+REPL 端到端正常。
 
 
 

@@ -19,6 +19,7 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
+from cas.runtime import new_workflow
 from cas.syntax.term import S, N, mk, plus, times, pw, neg
 from cas.syntax import term as T
 from cas.frontend.parser import parse
@@ -30,7 +31,7 @@ from cas.math.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
 from cas.math.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
                                  ratfunc_domain)
 from cas.math.domains.q import Q_RING
-from cas.workflow.workflow import Workflow, Claim, Diff
+from cas.workflow.workflow import Claim, Diff
 
 from cas.runtime import bootstrap
 bootstrap()
@@ -162,7 +163,7 @@ def prop_workflow(rounds, rng):
         p = rand_poly(rng)
         t = to_term(Q_RING, p)
         good = differentiate(t, X)
-        wf = Workflow()
+        wf = new_workflow()
         s0 = wf.add(t, Claim())
         s1 = wf.add(good, Diff(pred=s0.id, var=X))
         if s1.status != "open":

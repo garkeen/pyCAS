@@ -25,6 +25,7 @@
 import sys
 sys.path.insert(0, ".")
 
+from cas.runtime import new_workflow
 from cas.syntax import term as T
 from cas.syntax.term import S, Sym
 from cas.frontend.parser import parse
@@ -38,9 +39,9 @@ from cas.math.cad import CadError
 from cas.math.integrate import integrate_term, definite_integrate, IntegrateError
 from cas.math.piecewise import is_piecewise
 from cas.kernel.verdict import YES, NO
-from cas.workflow.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
+from cas.workflow.workflow import (Claim, BothSides, Rewrite, Solve,
                           Subst, Split, Diff, Integrate, _is_eq)
-from cas.workflow.checkers import _normalize_eq
+from cas.runtime.dispatch import domain_normal_form
 
 from cas.runtime import bootstrap
 bootstrap()
@@ -61,7 +62,7 @@ def _iso_str(cell):
 
 class REPL:
     def __init__(self):
-        self.wf = Workflow()
+        self.wf = new_workflow()
         self.current = None
         self.original = None
 
@@ -191,7 +192,7 @@ class REPL:
         pred = self._cur()
         if pred is None:
             return
-        n = _normalize_eq(pred.content)
+        n = domain_normal_form(pred.content)
         s = self.wf.add(n, Rewrite(pred=self.current))
         if s.status == "dead":
             print(f"  步骤 dead：{s.note or '规范化结果不匹配'}")
@@ -263,7 +264,7 @@ class REPL:
             print(f"  解析错误: {e}")
             return
         substituted = T.subst(pred.content, {var: value})
-        content = _normalize_eq(substituted)
+        content = domain_normal_form(substituted)
         s = self.wf.add(content, Subst(pred=self.current, var=var,
                                        value=value))
         if s.status == "dead":

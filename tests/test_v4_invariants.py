@@ -9,7 +9,7 @@
 
 · 1  Term 无 guard/context/proof 字段      —— 绿（阶段1b）
 · 2  Pattern 不是 Term                      —— 绿（阶段1b，模式元语言）
-· 14 checker 不导入自身搜索算法            —— 绿（阶段3，规则实例验证）
+· 14 checker 不导入自身搜索算法            —— 绿（阶段3/6，checker 住 math/*）
 · 16 未验证候选不参与可信推导              —— 绿（阶段2b，接入 commit）
 · 18 自动化简不应用未证明的条件规则        —— 绿
 """
@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from cas.runtime import new_workflow
 from cas.syntax import term as T
 from cas.syntax import pattern as P
 
@@ -83,9 +84,12 @@ def test_依赖方向_math不依赖runtime():
     assert not bad, "math 依赖了 runtime: " + ", ".join(bad)
 
 
-@pytest.mark.xfail(reason="v4 阶段6：workflow/checkers.py 仍依赖 cas.math.*"
-                          "（v3 遗留债务，目标位置 math/*/checkers.py）", strict=False)
 def test_依赖方向_workflow不依赖具体数学模块():
+    """§四：workflow 只依赖 syntax + kernel。
+
+    阶段6 起 checker 住在 `math/*/checkers.py`，workflow 不再持有验证逻辑——
+    本门禁因此转绿（原为 v3 遗留债务）。
+    """
     bad = [f"cas/workflow/{p.name} → {m}"
            for p in _pkg_modules("workflow")
            for m in _cas_imports(p) if m.startswith("cas.math")]
@@ -194,24 +198,31 @@ def test_不变量14_checker不导入自身搜索算法():
     规则重写的主张由提出方给出实例（rule + path + substitution），checker
     复核该实例；「找在哪里应用哪条规则」是提出方的搜索，不进 checker。
     """
-    from cas.workflow import checkers as C
+    import importlib
+    mods = ("cas.math.base.checkers",
+            "cas.math.calculus.differentiation.checkers",
+            "cas.math.calculus.integration.checkers",
+            "cas.math.solving.equations.checkers",
+            "cas.kernel.services")
     bad = []
-    for name in dir(C):
-        obj = getattr(C, name)
-        if inspect.isclass(obj) and name.endswith("Checker"):
-            names = obj.check.__code__.co_names
-            for forbidden in ("apply_rule", "all_paths"):
-                if forbidden in names:
-                    bad.append(f"{name}.{forbidden}")
+    for mod in mods:
+        m = importlib.import_module(mod)
+        for name in dir(m):
+            obj = getattr(m, name)
+            if inspect.isclass(obj) and name.endswith("Checker"):
+                names = obj.check.__code__.co_names
+                for forbidden in ("apply_rule", "all_paths"):
+                    if forbidden in names:
+                        bad.append(f"{mod}.{name}.{forbidden}")
     assert not bad, f"checker 依赖了搜索算法: {bad}"
 
 
 def test_规则实例checker只认给定实例():
     """替换/路径与实例不符 → 否决；相符 → 通过（不搜索其他路径或匹配）。"""
     from cas.frontend.parser import parse
-    from cas.workflow.workflow import Workflow, Claim, Rewrite
+    from cas.workflow.workflow import Claim, Rewrite
 
-    wf = Workflow()
+    wf = new_workflow()
     wf.add(parse("exp(x)*exp(y)"), Claim())
     X, Y = parse("x"), parse("y")
     good = wf.add(parse("exp(x + y)"),
@@ -236,9 +247,9 @@ def test_不变量16_未验证候选不参与可信推导():
     """checker 未决的候选不得以「可依赖」状态入账——unverified ≠ open。"""
     from cas.frontend.parser import parse
     from cas.syntax.term import S, N
-    from cas.workflow.workflow import Workflow, Claim, Solve
+    from cas.workflow.workflow import Claim, Solve
 
-    wf = Workflow()
+    wf = new_workflow()
     wf.add(parse("sin(x) == 1/2"), Claim())
     before = dict(wf.store.stats())
     # 回代判官在投影外诚实未决（超越函数），checker 返回 UnknownResult

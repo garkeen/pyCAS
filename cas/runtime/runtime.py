@@ -84,3 +84,38 @@ class Runtime:
                 "domain_conds": len(self._domain_conds),
                 "eq_stages": len(self._eq_stages),
                 "domains": len(self._domains)}
+
+
+# ---------------------------------------------------------------------------
+# 会话装配：checker 与判定服务都由本层注入（workflow 不依赖 cas.math）
+# ---------------------------------------------------------------------------
+
+def register_math_checkers(store) -> None:
+    """把各数学模块的 checker 注册进账本（v4 §7.2 的 `math/*/checkers.py`）。"""
+    from cas.math.base import checkers as base_c
+    from cas.math.calculus.differentiation import checkers as diff_c
+    from cas.math.calculus.integration import checkers as int_c
+    from cas.math.solving.equations import checkers as eq_c
+    for m in (base_c, diff_c, int_c, eq_c):
+        m.register(store)
+
+
+def new_workflow(**kw):
+    """建一个工作流会话：账本 + 内核自带 checker + 数学 checker + 判定服务。
+
+    workflow 不 import `cas.math`（v4 §四），所以 checker 与判定服务**必须由本层
+    注入**——这也让「workflow 不知道自己有哪些 checker」成为结构事实，而不是约定。
+    """
+    from cas.kernel.services import register_core_checkers
+    from cas.kernel.store import KernelStore
+    from cas.runtime.algorithms import Algorithms
+    from cas.runtime.services import ScopeServices
+    from cas.workflow.workflow import Workflow
+
+    store = kw.pop("store", None)
+    if store is None:
+        store = KernelStore()
+    register_core_checkers(store)
+    register_math_checkers(store)
+    return Workflow(store=store, services=ScopeServices(store.scopes),
+                    algorithms=Algorithms(), **kw)

@@ -11,7 +11,8 @@ from cas.syntax.term import S, N
 from cas.syntax import term as T
 from cas.math.constraints import solve_linear_constraints, is_linear
 from cas.math.integrate import verify_antideriv
-from cas.workflow.workflow import Workflow, Claim, Integrate
+from cas.runtime import new_workflow
+from cas.workflow.workflow import Claim, Integrate
 
 
 # --- 线性形式分析（句法，不靠化简器）---
@@ -58,7 +59,7 @@ def test_原函数验证的三值():
 # --- §9.6 循环积分端到端 ---
 
 def test_循环积分端到端_求解成功而验证诚实未决():
-    wf = Workflow()
+    wf = new_workflow()
     u, v, X = S("_u"), S("_v"), S("x")
     a, b = parse("exp(x)*sin(x)"), parse("exp(x)*cos(x)")
     wf.add_constraint(T.eq(u, T.plus(a, T.neg(v))))          # u = a − v

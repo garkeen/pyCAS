@@ -33,13 +33,9 @@ from dataclasses import dataclass
 
 from cas.syntax import term as T
 from cas.syntax.term import Expr, S, Sym
-from cas.math.project import project
 from cas.kernel.commit import GuardPolicy, StepProposal, commit
 from cas.kernel.evidence import Evidence
 from cas.kernel.model import Assumption
-from cas.kernel.services import register_core_checkers
-from cas.kernel.store import KernelStore
-from cas.workflow import checkers as _checkers
 from cas.workflow.artifact import ArtifactStore
 from cas.workflow.branch import BranchCase, BranchStore, promote_guard
 from cas.workflow.constraint import ConstraintStore
@@ -201,13 +197,22 @@ _REQUEST_HEADS = {Diff: "Differentiate", Integrate: "Integrate",
 class Workflow:
     """提交边界 + 展示记录。"""
 
-    def __init__(self, store=None, services=None, mode=None, policy=None):
+    def __init__(self, store, services, algorithms=None, mode=None, policy=None):
+        """账本与判定服务**由 runtime 装配后注入**（v4 §四）。
+
+        workflow 不认识 `cas.math`，所以数学 checker、判定服务、以及它偶尔要用的
+        数学算法（域投影 / 约束求解）都由 `cas.runtime.new_workflow()` 注入。这也让
+        「workflow 不知道自己有哪些 checker、算法怎么实现」成为结构事实，而不是
+        靠约定维持。
+        """
         from cas.kernel.mode import DEFAULT_MODE
-        self.store = store if store is not None else KernelStore()
-        register_core_checkers(self.store)
-        _checkers.register(self.store)
-        self.services = services if services is not None \
-            else _checkers.WorkflowServices(self.store.scopes)
+        if store is None or services is None:
+            raise RuntimeError(
+                "Workflow 需要账本与判定服务：用 cas.runtime.new_workflow() 构造"
+                "（装配归 runtime；v4 §四 禁止 workflow 依赖 cas.math）")
+        self.store = store
+        self.services = services
+        self.algorithms = algorithms
         self.mode = mode if mode is not None else DEFAULT_MODE
         self.policy = policy if policy is not None else _POLICY
         self._root = self.store.scopes.create()
@@ -325,9 +330,12 @@ class Workflow:
 
         返回 `(valuation, steps, complete)`；求解器拒答返回 `(None, (), False)`。
         """
-        from cas.math.constraints import solve_linear_constraints
+        if self.algorithms is None:
+            raise RuntimeError(
+                "未注入算法门面：用 cas.runtime.new_workflow() 构造"
+                "（v4 §四 禁止 workflow 依赖 cas.math）")
         rels = tuple(c.relation for c in self.constraints.all())
-        res = solve_linear_constraints(rels, unknowns)
+        res = self.algorithms.solve_linear_constraints(rels, unknowns)
         if res is None:
             return None, (), False
         valuation, complete = res
@@ -404,12 +412,10 @@ class Workflow:
         return self.events.redo()
 
     def _domain_of(self, content) -> str:
-        t = content
-        if _is_eq(content):
-            la, ra = content.args
-            t = T.plus(la, T.neg(ra))
-        hit = project(t)
-        return hit.name if hit is not None else ""
+        """步骤所属域（投影赋予，不做叶嗅探）——算法由注入的门面提供。"""
+        if self.algorithms is None:
+            return ""
+        return self.algorithms.domain_of(content)
 
 
 def _is_eq(t) -> bool:

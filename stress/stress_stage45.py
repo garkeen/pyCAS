@@ -20,6 +20,7 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
+from cas.runtime import new_workflow
 from cas.runtime import bootstrap
 bootstrap()
 
@@ -34,7 +35,7 @@ from cas.errors import DiffError, CadError
 from cas.math.domains.q import Q_RING
 from cas.math.domains.poly import from_term, p_deriv, to_term
 from cas.math.piecewise import piecewise, fold_nested, branches
-from cas.workflow.workflow import Workflow, Claim, Solve, Diff
+from cas.workflow.workflow import Claim, Solve, Diff
 
 X = S("x")
 
@@ -199,7 +200,7 @@ def prop_workflow(rounds, rng):
         t1, a1, b1 = rand_lin(rng)
         t2, a2, b2 = rand_lin(rng)
         target = Fr(rng.randint(-6, 6), 1)
-        wf = Workflow()
+        wf = new_workflow()
         s0 = wf.add(T.eq(piecewise([(t1, parse(f"x <= {r}")),
                                     (t2, parse(f"x > {r}"))]),
                          T.N(target)), Claim())

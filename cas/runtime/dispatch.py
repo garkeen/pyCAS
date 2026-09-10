@@ -75,3 +75,17 @@ def print_name(head_name):
 
 def lookup_domain_cond(name):
     return get_runtime().lookup_domain_cond(name)
+
+
+# --- 计算转发（前端不得直连 math，§四）---
+
+def domain_normal_form(t):
+    """域标准形。前端（REPL 的 norm 命令）经此取用，不直接 import math。"""
+    from cas.math.base.equality import normal_form
+    return normal_form(t)
+
+
+def new_workflow(**kw):
+    """建工作流会话（账本 + checker + 判定服务由 runtime 装配）。"""
+    from cas.runtime.runtime import new_workflow as _nw
+    return _nw(**kw)
