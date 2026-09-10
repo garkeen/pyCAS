@@ -1,7 +1,17 @@
+# -*- coding: utf-8 -*-
+"""模式匹配（v4 §5.2 模式元语言）。
+
+被匹配的**主体**只有两类：`Pattern`（含洞）与 `Term`（字面量，指针相等即
+匹配——驻留项 AC 规范化的红利）。模式变量不再出现在项里，故本模块是模式
+变量唯一被解释的地方之一（另一处是 pattern.instantiate）。
+
+类型洞谓词（结构检查，无需上下文；语义谓词如正负走规则 guard/decide）
+"""
+
 from cas.syntax import term as T
+from cas.syntax import pattern as P
 from cas.errors import BudgetExceeded
 
-# 类型洞谓词（结构检查，无需上下文；语义谓词如正负走规则 guard/decide）
 _PREDS = {
     "num": lambda t: T.is_num(t),
     "int": lambda t: isinstance(t, T.Int),
@@ -21,7 +31,7 @@ def _pred_ok(pat, tgt):
 
 # OneIdentity（mathics-core attributes.py 同款实据）：带单位元的 AC 头允许
 # 模式匹配裸项——?a+?b 可匹配 x（另一洞取 0），?a*?b 可匹配 x（另一洞取 1）。
-# 只有洞（PatVar/PatSeq）与字面单位元可吸收单位元；非洞子模式必须如实匹配。
+# 只有洞（PatternVar/PatternSeq）与字面单位元可吸收单位元；非洞子模式必须如实匹配。
 _ONE_ID = {}
 
 
@@ -32,8 +42,8 @@ def _one_identity():
 
 
 def _bind_identity(p, ident, sub):
-    """模式参数 p 绑定到单位元：PatVar 新绑/一致检查，PatSeq 绑空元组。"""
-    if isinstance(p, T.PatVar):
+    """模式参数 p 绑定到单位元：PatternVar 新绑/一致检查，PatternSeq 绑空元组。"""
+    if isinstance(p, P.PatternVar):
         if not _pred_ok(p, ident):
             return None
         cur = sub.get(p.name)
@@ -42,13 +52,14 @@ def _bind_identity(p, ident, sub):
             s2[p.name] = ident
             return s2
         return sub if cur is ident else None
-    if isinstance(p, T.PatSeq):
+    if isinstance(p, P.PatternSeq):
         cur = sub.get(p.name)
         if cur is None:
             s2 = dict(sub)
             s2[p.name] = ()
             return s2
         return sub if cur == () else None
+    # 字面量：必须就是该单位元
     return sub if p is ident else None
 
 
@@ -95,8 +106,13 @@ def _match(pat, tgt, sub, st, binds=()):
     st[0] -= 1
     if st[0] < 0:
         raise BudgetExceeded()
+    # 字面量（Term）：驻留项指针相等即匹配
+    if isinstance(pat, T.Term):
+        if pat is tgt:
+            yield sub
+        return
     k = pat.__class__
-    if k is T.PatVar:
+    if k is P.PatternVar:
         if not _pred_ok(pat, tgt):
             return
         tgt = _restore_db(tgt, binds)
@@ -108,7 +124,7 @@ def _match(pat, tgt, sub, st, binds=()):
         elif cur is tgt:
             yield sub
         return
-    if k is T.PatSeq:
+    if k is P.PatternSeq:
         tgt = _restore_db(tgt, binds)
         cur = sub.get(pat.name)
         if cur is None:
@@ -118,7 +134,7 @@ def _match(pat, tgt, sub, st, binds=()):
         elif cur == (tgt,):
             yield sub
         return
-    if k is T.Expr:
+    if k is P.PatternCall:
         if isinstance(tgt, T.Expr) and tgt.head is pat.head:
             if pat.head.name in T.AC:
                 yield from _match_orderless(list(pat.args), list(tgt.args), sub, st, binds)
@@ -129,12 +145,6 @@ def _match(pat, tgt, sub, st, binds=()):
         if ident is not None:
             yield from _match_one_id(list(pat.args), ident, tgt, sub, st, binds)
         return
-    if k is T.Bound:
-        if isinstance(tgt, T.Bound):
-            yield from _match(pat.body, tgt.body, sub, st, binds + (tgt.hint,))
-        return
-    if pat is tgt:
-        yield sub
     return
 
 
@@ -144,7 +154,7 @@ def _match_seq(pats, terms, sub, st, binds=()):
             yield sub
         return
     p = pats[0]
-    if isinstance(p, T.PatSeq):
+    if isinstance(p, P.PatternSeq):
         n = len(terms)
         for k in range(1, n + 1):
             seg = tuple(_restore_db(x, binds) for x in terms[:k])
@@ -172,13 +182,14 @@ def _match_orderless(pats, terms, sub, st, binds=()):
             yield sub
         return
     p = pats[0]
-    if not isinstance(p, (T.PatVar, T.PatSeq)) and not _has_holes(p):
+    # 字面量快通道：驻留项指针相等（AC 规范化使置换等价化为同一对象）
+    if isinstance(p, T.Term):
         if p in terms:
             rest = list(terms)
             rest.remove(p)
             yield from _match_orderless(pats[1:], rest, sub, st, binds)
         return
-    if isinstance(p, T.PatSeq):
+    if isinstance(p, P.PatternSeq):
         n = len(terms)
         for i in range(n):
             for ln in range(1, n - i + 1):
@@ -198,16 +209,6 @@ def _match_orderless(pats, terms, sub, st, binds=()):
             yield from _match_orderless(pats[1:], rest, s2, st, binds)
 
 
-def _has_holes(p):
-    if isinstance(p, (T.PatVar, T.PatSeq)):
-        return True
-    if isinstance(p, T.Expr):
-        return any(_has_holes(a) for a in p.args)
-    if isinstance(p, T.Bound):
-        return _has_holes(p.body)
-    return False
-
-
 def _sub_key(sub):
     items = []
     for k, v in sub.items():
@@ -219,10 +220,11 @@ def _sub_key(sub):
 
 
 def matches(pat, tgt, sub=None, budget=10000):
+    """pat（Pattern | Term）对 tgt（Term）匹配，产出绑定字典生成器。"""
     st = [budget]
     base = dict(sub) if sub else {}
     seen = set()
-    if isinstance(pat, T.PatVar):
+    if isinstance(pat, P.PatternVar):
         if not _pred_ok(pat, tgt):
             return
         cur = base.get(pat.name)

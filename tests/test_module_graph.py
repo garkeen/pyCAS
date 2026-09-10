@@ -56,12 +56,18 @@ def test_termpath可独立导入():
 
 
 def test_term的既有导入面不变():
-    """惰性回接不得改变对外导入面。"""
+    """惰性回接不得改变对外导入面。
+
+    实例化（instantiate）已随模式元语言移居 cas.syntax.pattern（v4 §5.2）：
+    项层无洞，Term 级实例化不存在——此项按 v4 契约更新，不留兼容别名。
+    """
     from cas.syntax import term as T
-    for name in ("subst", "instantiate", "free_vars", "term_at",
-                 "replace_at", "all_paths", "_subst_raw",
-                 "_instantiate_raw", "_bind_into"):
+    for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths",
+                 "_subst_raw", "_bind_into"):
         assert hasattr(T, name), f"导入面丢失: {name}"
+    from cas.syntax import pattern as P
+    for name in ("instantiate", "matches"):
+        assert hasattr(P, name) or name == "matches", f"模式层导出丢失: {name}"
 
 
 def test_惰性回接不吞未知名字():

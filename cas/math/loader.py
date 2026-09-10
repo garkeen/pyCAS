@@ -32,8 +32,9 @@ def parse_rule_line(line):
     rid = m.group(1)
     parts = _split_keywords(m.group(2))
     pat_s, tpl_s = _split_arrow(parts[0])
-    pat = parse(pat_s)
-    tpl = parse(tpl_s)
+    # LHS/RHS/guard 一律以模式通道解析（v4 §5.2）：产物是 Pattern，不是 Term。
+    pat = parse(pat_s, pattern=True)
+    tpl = parse(tpl_s, pattern=True)
     guard = None
     auto = False
     priority = 100
@@ -42,7 +43,7 @@ def parse_rule_line(line):
         kw = parts[i]
         val = parts[i + 1] if i + 1 < len(parts) else None
         if kw == "guard":
-            guard = parse(val)
+            guard = parse(val, pattern=True)
             i += 2
         elif kw == "prio":
             priority = int(val)

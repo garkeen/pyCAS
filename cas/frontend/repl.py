@@ -28,7 +28,7 @@ sys.path.insert(0, ".")
 from cas.syntax import term as T
 from cas.syntax.term import S, Sym
 from cas.frontend.parser import parse
-from cas.frontend.pprint import to_str
+from cas.frontend.pprint import to_str, pat_to_str
 from cas.math.qarith import fold
 from cas.math.judge import back_substitute, guard_report
 from cas.errors import TacticsError
@@ -386,8 +386,8 @@ class REPL:
             return
         for rid, r in rs.rules.items():
             auto = " auto" if r.auto else ""
-            guard = f" if {to_str(r.guard)}" if r.guard else ""
-            print(f"  {rid:18s} {to_str(r.pattern)} -> {to_str(r.template)}{guard}{auto}")
+            guard = f" if {pat_to_str(r.guard)}" if r.guard else ""
+            print(f"  {rid:18s} {pat_to_str(r.pattern)} -> {pat_to_str(r.template)}{guard}{auto}")
 
     def cmd_apply(self, rest):
         pred = self._cur()

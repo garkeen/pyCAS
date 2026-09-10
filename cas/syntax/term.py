@@ -104,29 +104,6 @@ class Special(Term):
         return self.name
 
 
-class PatVar(Term):
-    __slots__ = ("name", "pred")
-
-    def __init__(self, name, pred=None):
-        self.name = name
-        self.pred = pred
-        self._h = _next_h()
-
-    def __repr__(self):
-        return f"?{self.name}" + (f"::{self.pred}" if self.pred else "")
-
-
-class PatSeq(Term):
-    __slots__ = ("name",)
-
-    def __init__(self, name):
-        self.name = name
-        self._h = _next_h()
-
-    def __repr__(self):
-        return f"??{self.name}"
-
-
 class Expr(Term):
     __slots__ = ("head", "args")
 
@@ -172,8 +149,6 @@ _SYMS = {}
 _CONSTS = {}
 _NUMS = {}
 _SPECIALS = {}
-_PATVARS = {}
-_PATSEQS = {}
 _EXPRS = {}
 _BOUNDS = {}
 _DBS = {}
@@ -242,22 +217,6 @@ def SP(name):
     return t
 
 
-def PV(name, pred=None):
-    t = _PATVARS.get((name, pred))
-    if t is None:
-        t = PatVar(name, pred)
-        _PATVARS[(name, pred)] = t
-    return t
-
-
-def PS(name):
-    t = _PATSEQS.get(name)
-    if t is None:
-        t = PatSeq(name)
-        _PATSEQS[name] = t
-    return t
-
-
 def is_num(t):
     return isinstance(t, (Int, Rat))
 
@@ -289,10 +248,6 @@ def sort_key(t):
         return (2, 0 if t.val else 1)
     if k is DB:
         return (3, t.i)
-    if k is PatVar:
-        return (4, t.name, t.pred or "")
-    if k is PatSeq:
-        return (5, t.name)
     if k is Int:
         return (25, Fraction(t.v))
     if k is Rat:
@@ -540,9 +495,10 @@ def _lift(t, var, depth):
 
 
 # ---------------------------------------------------------------------------
-# 树遍历与重写工具（M6.7 拆分）：subst/instantiate/path 操作移居
-# cas/termpath.py，此处回接名字，`from cas.syntax.term import subst` 等既有
-# 导入面不变。
+# 树遍历与重写工具（M6.7 拆分）：subst/路径操作移居 cas/syntax/termpath.py，
+# 此处回接名字，`from cas.syntax.term import subst` 等既有导入面不变。
+# 实例化（instantiate）随模式元语言移居 cas/syntax/pattern.py——项层无洞，
+# Term 级实例化不存在，这正是 v4 不变量 2 的落点。
 #
 # 回接走 PEP 562 模块级 __getattr__ 惰性解析，不在 import 期执行：
 # termpath 顶部 `from cas.syntax import term as T`，若本模块末尾再直接
@@ -552,7 +508,7 @@ def _lift(t, var, depth):
 # ---------------------------------------------------------------------------
 
 _TERMPATH_REEXPORT = frozenset((
-    "_subst_raw", "subst", "_instantiate_raw", "instantiate",
+    "_subst_raw", "subst",
     "free_vars", "term_at", "_bind_into", "replace_at", "all_paths",
 ))
 

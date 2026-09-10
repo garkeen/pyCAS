@@ -5,7 +5,8 @@ from fractions import Fraction as Fr
 import library
 
 from cas.syntax import term as T
-from cas.syntax.term import S, N, mk, INFINITY, TRUE, FALSE, PV, PS
+from cas.syntax import pattern as P
+from cas.syntax.term import S, N, mk, INFINITY, TRUE, FALSE
 from cas.errors import ParseError
 
 _TOKEN = re.compile(
@@ -58,22 +59,36 @@ class Parser:
     保留反化简形——不合并同类项/同底幂、不折叠常量，'cos(x)/cos(x)^2 保留为
     Times(cos, Power(cos, -2))；域约束随之保留（dom_condition 递归 Quote 提取）。
     正常通道构造走 mk（AC 拉平排序）。两通道共用同一套文法，仅构造原语不同。
+
+    pattern 通道（v4 §5.2 模式元语言）：调用构造为 PatternCall、?x/??x 为
+    PatternVar/PatternSeq，产物是 cas.syntax.pattern 的 Pattern，**不是 Term**。
+    规则 DSL（LHS/RHS/guard）经此通道解析；模式变量因此进不了项层。
     """
 
-    def __init__(self, toks, raw=False):
+    def __init__(self, toks, raw=False, pattern=False):
         self.toks = toks
         self.i = 0
         self.raw = raw
+        self.pattern = pattern
 
-    # --- 构造原语：两通道唯一的差异点 ---
+    # --- 构造原语：各通道唯一的差异点 ---
 
     def _mk(self, head, args):
+        if self.pattern:
+            return P.pcall(head, tuple(args))
         return T._intern_expr(head, tuple(args)) if self.raw \
             else mk(head, tuple(args))
 
     def _neg(self, e):
+        if self.pattern:
+            return P.pcall(S("Times"), (T.MONE, e))
         return T._intern_expr(S("Times"), (T.MONE, e)) if self.raw \
             else T.neg(e)
+
+    def _quote(self, e):
+        if self.pattern:
+            return P.pcall(S("Quote"), (e,))
+        return T.quote(e)
 
     def _recip(self, e):
         # a/b 的倒数因子即 b^-1（两通道统一；历史上的 ×1 残余已清除）
@@ -154,7 +169,7 @@ class Parser:
             # quote 内容保 held 形：本子表达式切 raw 通道，返回后恢复原通道
             old, self.raw = self.raw, True
             try:
-                return T.quote(self.expr(1))
+                return self._quote(self.expr(1))
             finally:
                 self.raw = old
         if k == "op" and v == "(":
@@ -168,15 +183,19 @@ class Parser:
             return N(f)
         if k == "seq":
             self.next()
-            return PS(v[2:])
+            if not self.pattern:
+                raise ParseError(f"pattern hole {v!r} outside pattern context")
+            return P.PS(v[2:])
         if k == "pvar":
             self.next()
+            if not self.pattern:
+                raise ParseError(f"pattern hole {v!r} outside pattern context")
             body = v[1:]
             # 类型洞 ?x::pred（yacas _x_IsNumber 同款）：谓词在匹配时结构检查
             if "::" in body:
                 nm, pd = body.split("::", 1)
-                return PV(nm, pd)
-            return PV(body)
+                return P.PV(nm, pd)
+            return P.PV(body)
         if k == "id":
             self.next()
             if v in _SYNTAX_ATOMS:
@@ -197,6 +216,9 @@ class Parser:
                 # 绑定词大小写不敏感（integrate/Integrate 都生成绑定形式）
                 bv = v[0].upper() + v[1:] if v else v
                 if bv in _BINDERS and len(args) == 2:
+                    if self.pattern and P.has_holes(args[1]):
+                        raise ParseError(
+                            "binder pattern with a hole in variable position is not supported")
                     return self._mk(S(bv), (T.mk_bound(args[1], args[0]),))
                 if v == "sqrt" and len(args) == 1:
                     return self._mk(S("Power"), (args[0], N(Fr(1, 2))))
@@ -209,5 +231,5 @@ class Parser:
         raise ParseError(f"unexpected {v!r}")
 
 
-def parse(s):
-    return Parser(tokenize(s)).parse()
+def parse(s, pattern=False):
+    return Parser(tokenize(s), pattern=pattern).parse()

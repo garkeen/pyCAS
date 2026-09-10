@@ -1530,6 +1530,8 @@ Candidate(A1, validation=J1)
 
 ## 9.2 分别计算 `A+B` 中的 `A` 和 `B`
 
+> **本节为 `derivation` 模式示例，非默认路径。** 默认 `interactive` 模式下同一次计算不产生任何 Step/Judgment，只留下结果与未清偿条件。本节演示的是「要求留痕时留成什么样」，不是「化简平时怎么跑」。
+
 初始 artifact：
 
 ```text
@@ -1586,6 +1588,8 @@ A1 = A' + B
 ---
 
 ## 9.3 `A=B, B=C` 推出 `A=C`
+
+> **本节为 `derivation` 模式示例，非默认路径。** 默认模式下传递由 equality 模块的闭包算法一次算完，不产生逐条 StepProposal。
 
 已有：
 

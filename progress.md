@@ -21,15 +21,38 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10（本次） |
-| 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ⬜ 数据结构设计项，不变量 2 应红 |
+| 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10 |
+| 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ✅ 2026-09-10（本次，不变量 2 转绿） |
 | 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ⬜ 未开始 |
-| 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 应红） |
-| 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 应红） |
+| 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 红） |
+| 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
 
-不变量 CI 门禁（AGENTS.md 清单 5 条）：红灯/绿灯测试尚未落成，随迁移轮次挂上。
+不变量 CI 门禁（`tests/test_v4_invariants.py`）：1/2/18 绿，14/16 挂 xfail 红灯
+（reason 写明迁移阶段），随阶段落地翻绿。
+
+### 阶段 1b：模式元语言（2026-09-10）
+
+`PatVar`/`PatSeq` 移出 `Term`，新建 `cas/syntax/pattern.py`（`PatternVar`/
+`PatternSeq`/`PatternCall`）。字面量直接以 `Term` 充当模式（驻留项指针相等即
+字面匹配），故模式参数类型是 `Pattern | Term`，不引入包装类型。
+
+- **入口分道**：parser 增 `pattern=` 通道，`?x`/`??x` 与调用构造产出 `Pattern`；
+  普通通道遇 `?x` 显式 `ParseError`——模式变量因此进不了项层（不变量 2 的机制，
+  不只是类型声明）。规则 DSL（LHS/RHS/guard）经此通道解析（`loader.py`）。
+- **实例化**：`instantiate` 从 `termpath`（Term 级，项层无洞故无意义）移入
+  `pattern.py`，产出 `Term`；模板里未绑定的洞**显式报错**，不再把模式变量漏回项层。
+- **匹配**：`match.py` 在 `Pattern` 层次分派，字面量走驻留项指针相等快通道
+  （AC 规范化的红利：`p in terms` 即置换匹配）。规则索引键 `root_key` 移到模式层。
+- **渲染**：`pprint.pat_to_str` 输出可重解析的 DSL 形（`exp(?a) * exp(?b) ->
+  exp(?a + ?b)`），`repl rules` 改走此通道（原先 `to_str` 会把 Pattern 打成 `repr`）。
+- **无兼容残留**：`term.py` 删除 `PatVar`/`PatSeq`/`PV`/`PS` 与相关 `sort_key`
+  分支；`termpath` 删除 `instantiate`/`_instantiate_raw`；契约测试
+  `test_module_graph.py` 按 v4 更新（不留别名）。
+
+验收：`tests/` 62 passed + 2 xfailed；`stress/` 10 passed（41 条性质）。
+
 
 ## 已完成（v3 实现基线，稳定全绿）
 

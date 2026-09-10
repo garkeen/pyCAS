@@ -13,6 +13,7 @@
 from dataclasses import dataclass
 
 from cas.syntax import term as T
+from cas.syntax import pattern as P
 from cas.syntax.match import matches
 from cas.kernel.verdict import YES, NO, unknown
 
@@ -20,9 +21,9 @@ from cas.kernel.verdict import YES, NO, unknown
 @dataclass(frozen=True)
 class Rule:
     id: str
-    pattern: T.Term
-    template: T.Term
-    guard: object = None
+    pattern: object               # cas.syntax.pattern.Pattern（v4 不变量 2：模式非项）
+    template: object              # Pattern；实例化产出 Term
+    guard: object = None          # Pattern | None（条件也是模式，含洞）
     auto: bool = False
     priority: int = 100           # 同位多规则时的尝试顺序（小者先，yacas 同款）
 
@@ -37,11 +38,8 @@ class ApplyResult:
 
 
 def root_key(p):
-    if isinstance(p, T.Expr):
-        return p.head.name
-    if isinstance(p, (T.PatVar, T.PatSeq)):
-        return "*"
-    return p.__class__.__name__ + ":" + repr(p)
+    """规则索引键（模式层实现；洞归 '*'）。"""
+    return P.root_key(p)
 
 
 class RuleSet:
@@ -76,7 +74,7 @@ def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
         else:
             g = guard_eval(rule.guard, sub) if guard_eval else unknown()
         if g is YES:
-            inst = T.instantiate(rule.template, sub)
+            inst = P.instantiate(rule.template, sub)
             after = T.replace_at(expr, path, inst)
             return ApplyResult(True, YES, after, sub, rule.id)
         if g is NO:

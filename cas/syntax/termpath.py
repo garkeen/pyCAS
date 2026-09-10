@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-"""树遍历与重写工具（自 cas/term.py 拆出）：替换（subst）、模式实例化
-（instantiate）、路径寻址（term_at/replace_at/all_paths）、自由变量、
-子项手术绑定（_bind_into）、规模统计。
+"""树遍历与重写工具（自 cas/term.py 拆出）：替换（subst）、
+路径寻址（term_at/replace_at/all_paths）、自由变量、子项手术绑定
+（_bind_into）、规模统计。
+
+实例化（instantiate）已随模式元语言移居 cas/syntax/pattern.py：项层无洞，
+Term 级实例化不存在（v4 不变量 2）。
 
 依赖纪律：本模块对 term 只持模块引用（函数内经 T.xxx 访问）——
 term.py 末尾延迟导入本模块完成名字回接，无导入环。
@@ -81,58 +84,6 @@ def subst(t, mapping):
         else:
             val[u] = u
     return val[t]
-
-
-def _instantiate_raw(t, sub):
-    """原始结构实例化（不规范化，保 held 形）：用于 Quote 内部。
-
-    与 instantiate 同构但重建走 _intern_expr——Times/Power 不合并，
-    保持 held 项的原始结构。规则 RHS 的 Quote 内含 ?x 实例化时用此。
-    """
-    if isinstance(t, T.PatVar):
-        return sub.get(t.name, t)
-    if isinstance(t, T.PatSeq):
-        raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
-    if isinstance(t, T.Expr):
-        out = []
-        for a in t.args:
-            if isinstance(a, T.PatSeq):
-                seq = sub.get(a.name)
-                if seq is None:
-                    out.append(a)
-                else:
-                    out.extend(seq)
-            else:
-                out.append(_instantiate_raw(a, sub))
-        return T._intern_expr(t.head, tuple(out))
-    if isinstance(t, T.Bound):
-        return T._mk_bound_canon(t.hint, _instantiate_raw(t.body, sub))
-    return t
-
-
-def instantiate(t, sub):
-    if isinstance(t, T.PatVar):
-        return sub.get(t.name, t)
-    if isinstance(t, T.PatSeq):
-        raise BudgetExceeded(message=f"sequence hole ?{t.name} not in arg position")
-    if isinstance(t, T.Expr):
-        if isinstance(t.head, T.Sym) and t.head.name == "Quote":
-            # quote 内部保 held 结构：raw instantiate（_intern_expr 重建，不规范化）
-            return T._intern_expr(t.head, tuple(_instantiate_raw(a, sub) for a in t.args))
-        out = []
-        for a in t.args:
-            if isinstance(a, T.PatSeq):
-                seq = sub.get(a.name)
-                if seq is None:
-                    out.append(a)
-                else:
-                    out.extend(seq)
-            else:
-                out.append(instantiate(a, sub))
-        return T.mk(t.head, tuple(out))
-    if isinstance(t, T.Bound):
-        return T._mk_bound_canon(t.hint, instantiate(t.body, sub))
-    return t
 
 
 def free_vars(t, acc=None):

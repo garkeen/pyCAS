@@ -1,7 +1,8 @@
 import library
 
 from cas.syntax import term as T
-from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, PatVar, PatSeq, BVal, Special, DB, S
+from cas.syntax import pattern as P
+from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, BVal, Special, DB, S
 from cas.syntax.termpath import postorder
 
 _PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times": 4, "Power": 6}
@@ -33,8 +34,6 @@ def _atom_str(a, src=False):
         if a is T.EMPTY_SET:
             return "{}"
         return a.name
-    if isinstance(a, (PatVar, PatSeq)):
-        return repr(a)
     if isinstance(a, DB):
         return f"#{a.i}"
     return repr(a)
@@ -197,3 +196,36 @@ def to_str(t, prec=0, hint=None, src=False):
     if prec > p and isinstance(t, Expr) and t.head.name in _PREC:
         return "(" + s + ")"
     return s
+
+
+# ---------------------------------------------------------------------------
+# 模式渲染（v4 §5.2 模式元语言）：规则清单展示，输出可重解析的 DSL 形
+# ---------------------------------------------------------------------------
+
+def _pat_prec(a):
+    if isinstance(a, P.PatternCall) and isinstance(a.head, Sym) and a.head.name in _PREC:
+        return _PREC[a.head.name]
+    return _ATOM_P
+
+
+def pat_to_str(p, src=False):
+    """模式渲染。字面项交 to_str；洞输出 ?name / ??name / ?name::pred；
+    PatternCall 按 _PREC/_INFIX 中缀渲染，与项打印同形。"""
+    if isinstance(p, T.Term):
+        return to_str(p, src=src)
+    if isinstance(p, P.PatternVar):
+        return "?" + p.name + (("::" + p.pred) if p.pred else "")
+    if isinstance(p, P.PatternSeq):
+        return "??" + p.name
+    name = p.head.name if isinstance(p.head, Sym) else repr(p.head)
+    if name in _PREC:
+        pr = _PREC[name]
+        if name == "Power":
+            b, e = p.args
+            sb = _wrap((pat_to_str(b, src), _pat_prec(b)), pr)
+            se = _wrap((pat_to_str(e, src), _pat_prec(e)), pr + 1)
+            return f"{sb}^{se}"
+        parts = [_wrap((pat_to_str(a, src), _pat_prec(a)), pr + 1) for a in p.args]
+        return f" {T._INFIX.get(name, name)} ".join(parts)
+    args = ", ".join(pat_to_str(a, src) for a in p.args)
+    return f"{_name_of(p.head)}({args})"
