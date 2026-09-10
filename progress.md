@@ -23,7 +23,7 @@
 |---|---|---|
 | 1 拆语法（模块落位） | 语法入 syntax/，前端入 frontend/ | ✅ 2026-09-10 |
 | 1 拆语法（模式元语言） | PatVar/PatSeq 移出 Term（Pattern 独立层次） | ✅ 2026-09-10（本次，不变量 2 转绿） |
-| 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | ⬜ 未开始 |
+| 2 新内核模型 | Scope / Judgment / Evidence / StepProposal / commit / CheckerRegistry | 🔶 2a 完成（模型+提交协议）；2b 待接旧验证器 |
 | 3 拆除 Derivation ADT | Step 无子类，`_verify` isinstance 分派 → checker 注册表 | ⬜ 未开始（不变量 14 红） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
@@ -52,6 +52,36 @@
   `test_module_graph.py` 按 v4 更新（不留别名）。
 
 验收：`tests/` 62 passed + 2 xfailed；`stress/` 10 passed（41 条性质）。
+
+### 阶段 2a：内核模型与提交协议（2026-09-10）
+
+按 v4 §6 建内核数据模型与 `commit`，**尚未接旧验证器**（2b 才接线，届时
+不变量 16 具备转绿条件）。新增 `cas/kernel/`：
+
+| 文件 | 内容 |
+|---|---|
+| `ids.py` | ScopeId/RequirementId/JudgmentId/StepId（NewType，防互串） |
+| `model.py` | Declaration/Definition/Assumption、Requirement(+Reason)、Judgment、Step、ContextReadSet、Discharge、`Applicability` 封闭层次 |
+| `scope.py` | `Scope`（不可变、父指针）+ `ScopeStore`（可见性、定义可见表、局部符号逃逸检查） |
+| `evidence.py` | Evidence、`CheckResult` 封闭层次（Accepted/Rejected/UnknownResult）、Checker 协议、`CheckerRegistry` |
+| `services.py` | `KernelServices` 协议 + `NullServices`（诚实缺省：一律 Unknown）+ `DecideChecker` + 显式装配 `register_core_checkers` |
+| `store.py` | `KernelStore` 追加式账本（结论/条件/步骤/清偿/否证）+ 按作用域计算 `Applicability` |
+| `commit.py` | `StepProposal` / `GuardPolicy` / `CommitResult` 封闭层次 / 十步 `commit` |
+
+要点（均有测试钉住）：
+
+- **未验证候选不落地**：checker 返回 Unknown 时任何 GuardPolicy 都不写账
+  （不变量 16 的内核机制）。`GuardPolicy` 只管**条件清偿**的未决（§6.9 第
+  7–9 步 Proved/Refuted/Unknown），不是「结论没验过也放行」。
+- **清偿不修改原结论**（§6.10）：条件全部记在结论上，清偿只新增 `Discharge`，
+  查询时 applicability 变 `Applicable`；被否证则变 `Inapplicable`，原结论保留。
+- **作用域权威**：前提不可见（子→父、兄弟分支）拒绝提交；祖先对后代可见。
+- **不 import 具体数学模块**（v4 §四）：判定经 `KernelServices` 注入，内核
+  源码只依赖 syntax。
+- 无条件、无前驱的情形走四步特化（AGENTS.md §四.4），是十步的可证明子集。
+
+验收：`tests/test_kernel_model.py` 16 条；全量 78 passed + 2 xfailed。
+
 
 
 ## 已完成（v3 实现基线，稳定全绿）

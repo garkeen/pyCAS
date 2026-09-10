@@ -88,3 +88,52 @@ class Context:
     def contradicted(self, fact):
         from cas.math.decide import contradicted as _contradicted
         return _contradicted(fact, self)
+
+
+# ---------------------------------------------------------------------------
+# TrackedContext：checker 读取上下文的唯一通道（v4 §6.11）
+# ---------------------------------------------------------------------------
+
+class TrackedContext:
+    """checker 不直接读裸上下文，而读本对象——任何隐式使用都留下读依赖。
+
+    不这样做就会出现「某步实际依赖一条假设，但步骤记录里没有体现」。读依赖
+    按 `ContextReadSet` 累积，随 Step 落地；只有记录粒度随执行模式变化，判定
+    结果与读取内容不受模式影响（AGENTS.md §四.3）。
+    """
+
+    def __init__(self, scopes, services, scope_id):
+        self._scopes = scopes
+        self._services = services
+        self._sid = scope_id
+        self._reads = []
+
+    def _record(self, kind, key):
+        self._reads.append((kind, key))
+
+    def lookup_definition(self, symbol):
+        body = self._scopes.lookup_definition(self._sid, symbol)
+        if body is not None:
+            self._record("definition", repr(symbol))
+        return body
+
+    def assumptions(self):
+        asms = self._scopes.assumptions(self._sid)
+        for a in asms:
+            self._record("assumption", repr(a.proposition))
+        return tuple(a.proposition for a in asms)
+
+    def declarations(self):
+        return self._scopes.declarations(self._sid)
+
+    def decide(self, proposition):
+        v = self._services.decide(proposition, self._sid)
+        self._record("decide", repr(proposition))
+        return v
+
+    def read_set(self):
+        from cas.kernel.model import ContextReadSet
+        seen = {}
+        for k, val in self._reads:
+            seen[k] = val
+        return ContextReadSet(tuple(sorted(seen.items())))
