@@ -996,3 +996,33 @@ register_eq_stage("ledger_decide", _stage_decide)
 
 # 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
 # 采样从未有资格产出后者；如需概率通道须先修订宪章。
+
+
+# ---------------------------------------------------------------------------
+# 上下文上的判定操作（自 kernel/context.py 移出，v4 §四）
+#
+# 这两个操作要调用本模块的判定器，故只能住在 math 侧：`kernel → 具体数学模块`
+# 被 §四 严格禁止。它们引用 kernel 的 Context/Branch（math → kernel，合规）。
+# ---------------------------------------------------------------------------
+
+def check_and_assume(ctx, fact, origin="user", kind="fact"):
+    """域检查 + 矛盾检查通过后把 fact 加入假设。返回 (Verdict, 原因)。"""
+    from cas.kernel.verdict import NO, YES
+    if domain_ok(fact, ctx) is NO:
+        return NO, "domain"
+    if contradicted(fact, ctx):
+        return NO, "contradiction"
+    ctx.assume(fact, origin=origin, kind=kind)
+    return YES, None
+
+
+def branch(ctx, *conds):
+    """为每个条件克隆一个分支上下文；域外条件得到空分支。"""
+    from cas.kernel.context import Branch
+    from cas.kernel.verdict import NO
+    out = []
+    for c in conds:
+        bctx = ctx.clone()
+        st, _why = check_and_assume(bctx, c, origin="branch", kind="branch")
+        out.append(Branch(c, bctx, "empty" if st is NO else "open"))
+    return out

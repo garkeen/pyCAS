@@ -15,11 +15,91 @@
 """
 
 import inspect
+from pathlib import Path
 
 import pytest
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------------------
+# v4 §四：依赖方向。指针与 import 都只许指向下方层。
+# ---------------------------------------------------------------------------
+
+def _cas_imports(path):
+    """静态收集文件里出现的 cas.* / library 模块名（含函数内导入）。"""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.startswith(("cas.", "library")):
+                found.add(node.module)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.startswith(("cas.", "library")):
+                    found.add(a.name)
+    return found
+
+
+def _pkg_modules(*parts):
+    return sorted((_ROOT / "cas").joinpath(*parts).glob("*.py"))
+
+
+def test_依赖方向_syntax不依赖上层():
+    """syntax 只许依赖标准库与 cas.errors（基础设施）。"""
+    bad = []
+    for p in _pkg_modules("syntax"):
+        for m in _cas_imports(p):
+            if not m.startswith("cas.syntax") and m != "cas.errors":
+                bad.append(f"cas/syntax/{p.name} → {m}")
+    assert not bad, "syntax 依赖了上层:\n" + "\n".join(bad)
+
+
+def test_依赖方向_kernel不依赖数学与工作流():
+    """kernel 只许依赖 syntax；不得依赖 math / workflow / frontend / library。"""
+    bad = []
+    for p in _pkg_modules("kernel"):
+        for m in _cas_imports(p):
+            if m.startswith(("cas.math", "cas.workflow", "cas.frontend", "library")):
+                bad.append(f"cas/kernel/{p.name} → {m}")
+    assert not bad, "kernel 依赖了上层:\n" + "\n".join(bad)
+
+
+@pytest.mark.xfail(reason="v4 阶段6：workflow/checkers.py 仍依赖 cas.math.*"
+                          "（v3 遗留债务，目标位置 math/*/checkers.py）", strict=False)
+def test_依赖方向_workflow不依赖具体数学模块():
+    bad = [f"cas/workflow/{p.name} → {m}"
+           for p in _pkg_modules("workflow")
+           for m in _cas_imports(p) if m.startswith("cas.math")]
+    assert not bad, "workflow 依赖具体数学模块:\n" + "\n".join(bad)
+
+
+def test_引用方向_内核不认识工作流概念():
+    """§四：内核侧不得出现 Artifact/Task/Event 这类工作流概念的名字。
+
+    用 AST 收名字（不是字符串匹配），所以注释与文档里说明方向不受影响；
+    同时钉住「靠 object 字段或鸭子类型绕过」：内核连这些名字都不许有。
+    """
+    import ast
+    forbidden = {"ArtifactId", "TaskId", "EventId", "RevisionId",
+                 "Artifact", "Task", "TaskCandidate", "Constraint",
+                 "Event", "Revision", "BranchGroup", "BranchCase", "Focus"}
+    bad = []
+    for p in _pkg_modules("kernel"):
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in forbidden:
+                bad.append(f"cas/kernel/{p.name}:{node.lineno} {node.id}")
+            elif isinstance(node, ast.Attribute) and node.attr in forbidden:
+                bad.append(f"cas/kernel/{p.name}:{node.lineno} .{node.attr}")
+            elif isinstance(node, (ast.ClassDef, ast.FunctionDef)) \
+                    and node.name in forbidden:
+                bad.append(f"cas/kernel/{p.name}:{node.lineno} def {node.name}")
+    assert not bad, "内核出现工作流概念:\n" + "\n".join(bad)
 
 
 def _term_variants():

@@ -12,8 +12,6 @@ RequirementId = NewType("RequirementId", int)
 JudgmentId = NewType("JudgmentId", int)
 StepId = NewType("StepId", int)
 
-# 工作流侧（阶段4 落位；此处先给类型，避免后续反向定义）
-ArtifactId = NewType("ArtifactId", int)
-TaskId = NewType("TaskId", int)
-EventId = NewType("EventId", int)
-RevisionId = NewType("RevisionId", int)
+# ArtifactId / TaskId / EventId / RevisionId 属 workflow（v4 §8），**不在此处**：
+# 内核不认识工作流概念（§四「kernel → workflow」严格禁止）。它们随阶段4 在
+# workflow 侧定义。

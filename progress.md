@@ -15,7 +15,15 @@
 | `cas/frontend/` | parser、pprint、repl（根目录 `repl.py` 留入口壳，`python repl.py` 不变） |
 | 留根 | `cas/errors.py`（共享异常）；`library/`（阶段6 迁为 math/*，搬两次是浪费） |
 
-已知容忍的结构债：workflow→math 顶层依赖（v3 遗留，阶段3 拆 checker 注册表时解决）；syntax/termpath、match → `cas/errors`（基础设施，留根）。
+已知容忍的结构债：workflow→math 顶层依赖（v3 遗留，目标位置 math/*/checkers.py，阶段6 迁移；已挂 xfail 门禁）；syntax/termpath、match → `cas/errors`（基础设施，留根）。
+
+**已清除的债（§四 引用方向）**：kernel → 具体数学模块（`kernel/context.py` 原先在
+`check_and_assume`/`branch`/`decide`/`contradicted` 里惰性导入 `cas.math.decide`）。
+判定操作移居 `cas.math.decide.check_and_assume` / `branch`（math → kernel 引用
+`Context`/`Branch`，方向合规），`Context` 只留纯数据与记账。内核侧不再定义
+`ArtifactId`/`TaskId`/`EventId`/`RevisionId`；新增门禁
+`test_依赖方向_syntax不依赖上层`、`test_依赖方向_kernel不依赖数学与工作流`、
+`test_引用方向_内核不认识工作流概念`。
 
 ## v4 迁移路线图（v4 §十一 六阶段）
 

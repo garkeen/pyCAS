@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 from cas.syntax import term as T
-from cas.kernel.verdict import YES, NO
 
 
 @dataclass
@@ -19,11 +18,12 @@ class Branch:
 
 
 class Context:
-    """v3 可变上下文（v4 阶段5 将换持久化 Scope 树，此处为临时后端）。
+    """v3 遗留的可变上下文（阶段5 换持久化 Scope 树）。
 
-    decide 依赖按方法内惰性导入：kernel 包不得在 import 期拉进整个
-    math/decide（跨层反向边）；decide 侧亦有惰性回引（cas/math/decide.py
-    环回边注释）。两向都惰性，任何模块作入口都无半初始化风险。
+    **本类只装数据、只做纯记账**：假设列表、标记/回滚、按来源删除。判定与
+    分支构造**不在这里**——它们要调 cas.math.decide，而 v4 §四 严格禁止
+    `kernel → 具体数学模块`。相应的自由函数见 `cas.math.decide.check_and_assume`
+    与 `cas.math.decide.branch`（math → kernel 引用 Branch，方向合规）。
     """
 
     def __init__(self):
@@ -35,31 +35,10 @@ class Context:
         self.entries.append(e)
         return e
 
-    def check_and_assume(self, fact, origin="user", kind="fact"):
-        from cas.math.decide import domain_ok as _domain_ok
-        from cas.math.decide import contradicted as _contradicted
-        if _domain_ok(fact, self) is NO:
-            return NO, "domain"
-        if _contradicted(fact, self):
-            return NO, "contradiction"
-        self.assume(fact, origin=origin, kind=kind)
-        return YES, None
-
     def clone(self):
         c = self.__class__()
         c.entries = list(self.entries)
         return c
-
-    def branch(self, *conds):
-        out = []
-        for c in conds:
-            bctx = self.clone()
-            st, why = bctx.check_and_assume(c, origin="branch", kind="branch")
-            if st is NO:
-                out.append(Branch(c, bctx, "empty"))
-            else:
-                out.append(Branch(c, bctx, "open"))
-        return out
 
     def mark(self):
         self.marks.append(len(self.entries))
@@ -80,14 +59,6 @@ class Context:
 
     def facts(self):
         return [e.fact for e in self.entries]
-
-    def decide(self, fact):
-        from cas.math.decide import decide as _decide
-        return _decide(fact, self)
-
-    def contradicted(self, fact):
-        from cas.math.decide import contradicted as _contradicted
-        return _contradicted(fact, self)
 
 
 # ---------------------------------------------------------------------------

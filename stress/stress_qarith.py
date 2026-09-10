@@ -20,7 +20,7 @@ sys.path.insert(0, ".")
 from cas.syntax.term import S, N, mk, plus, times, pw, neg, Expr, Int
 from cas.math.qarith import fold, eval_exact, EvalNumError
 from cas.kernel.context import Context
-from cas.math.decide import decide
+from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
 from cas.math.simplify import expand
 
@@ -122,7 +122,7 @@ def prop_interval(rounds, rng):
                 ok = isinstance(got, Unknown)
             if not ok:
                 fail(f"P3 区间 assume x>{k} 查 x>{j}: got {got}", k)
-        b = ctx.branch(mk(S("Lt"), (X, N(k + 10))))[0]
+        b = branch(ctx, mk(S("Lt"), (X, N(k + 10))))[0]
         got = decide(mk(S("Lt"), (X, N(k + 100))), b.ctx)
         if got is not YES:
             fail(f"P3 分支帧继承", k)

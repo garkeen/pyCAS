@@ -112,7 +112,7 @@ def select(t, ctx):
                 return ("value", v)
             survivors.append((v, c))            # 其前有未决支，遮蔽待定 → 残段
             break
-        verdict = ctx.decide(c)
+        verdict = decide(c, ctx)
         if verdict is NO:
             continue                            # 此支不成立，看下一支
         if verdict is YES:
@@ -139,7 +139,7 @@ def coverage(t, ctx):
     for c in conds:
         if c is T.TRUE:
             return YES
-        v = ctx.decide(c)
+        v = decide(c, ctx)
         if v is YES:
             return YES
         if v is NO:
@@ -266,6 +266,7 @@ def _and_all(conds):
 
 from dataclasses import dataclass          # noqa: E402
 from cas.errors import PiecewiseError       # noqa: E402
+from cas.math.decide import decide          # noqa: E402
 from cas.math.cad import resolve_partition       # noqa: E402
 
 _UNDEF = T.SP("Undefined")
