@@ -20,8 +20,8 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-import library
-library.load_all()
+from cas.runtime import bootstrap
+bootstrap()
 
 import cas.syntax.term as T
 from cas.syntax.term import S

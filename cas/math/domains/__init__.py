@@ -8,7 +8,7 @@
 
 · 域包只依赖 cas.syntax.term（层位纪律，见 base.py 模块串），因此拿不到图书馆
   声明的常数原子——ℚ(i) 需要注入 library 的 i，装配必然发生在能同时看见
-  library 与 domains 的层，即投影层。
+  常数声明与 domains 的层，即 bootstrap。
 · 注册若散在各域模块（import 即注册），注册表内容就取决于谁碰巧被
   import：新增一个域模块而无人 import 它，就会静默从 lookup() 里消失。
   集中装配消除这种导入顺序敏感性。

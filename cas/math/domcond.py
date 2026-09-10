@@ -2,7 +2,7 @@
 """定义域条件提取（守卫系统的结构通道）。
 
 Power 的约束是环层句法的通用规则（负整幂底 ≠ 0、偶分母有理幂底 ≥ 0
-等），住内核；函数头的约束由图书馆声明注册（library.register_domain_cond），
+等），住内核；函数头的约束由图书馆声明注册（_R().register_domain_cond），
 内核运行时查询——语义归图书馆，结构归内核，两不混淆。
 
 定义域条件的注册**只有图书馆一个通道**：内核侧不设第二个注入点，
@@ -13,7 +13,29 @@ Power 的约束是环层句法的通用规则（负整幂底 ≠ 0、偶分母�
 
 from cas.syntax import term as T
 from cas.syntax.term import S, Int, Rat
-import library
+
+_DECLS = None
+
+
+def bind_runtime(rt):
+    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+
+    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
+    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+
+    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
+    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    """
+    global _DECLS
+    _DECLS = rt
+
+
+def _R():
+    if _DECLS is None:
+        raise RuntimeError(
+            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+    return _DECLS
+
 
 
 def _guarded(cond, guards):
@@ -56,7 +78,7 @@ def dom_condition(t, out=None):
                 out.extend(_guarded(c, body))
             return out                          # 条件是命题，不作值域守卫
         else:
-            fn = library.lookup_domain_cond(name)
+            fn = _R().lookup_domain_cond(name)
             if fn is not None:
                 out.extend(fn(t))
         for x in t.args:

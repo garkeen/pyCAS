@@ -32,6 +32,9 @@ from cas.math.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
 from cas.math.domains.q import Q_RING
 from cas.workflow.workflow import Workflow, Claim, Diff
 
+from cas.runtime import bootstrap
+bootstrap()
+
 X, Y, H = S("x"), S("y"), S("h")
 
 

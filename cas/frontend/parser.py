@@ -2,7 +2,7 @@ import re
 
 from fractions import Fraction as Fr
 
-import library
+from cas.runtime import dispatch as rt
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
@@ -200,7 +200,7 @@ class Parser:
             self.next()
             if v in _SYNTAX_ATOMS:
                 return _SYNTAX_ATOMS[v]
-            d = library.const_by_name(v)
+            d = rt.const_by_name(v)
             if d is not None:
                 return d.atom
             nk, nv = self.peek()

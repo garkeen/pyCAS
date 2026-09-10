@@ -21,8 +21,8 @@ import random
 
 sys.path.insert(0, ".")
 
-import library
-library.load_all()
+from cas.runtime import bootstrap
+bootstrap()
 
 from cas.syntax import term as T
 from cas.syntax.term import S, N, mk, plus, times, pw

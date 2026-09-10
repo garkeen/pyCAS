@@ -35,7 +35,7 @@
 | 3 拆除 Derivation ADT | 命令只生成 proposal；checker 语义 id；规则实例验证不再搜索 | ✅ 2026-09-10（不变量 14 转绿） |
 | 4 Artifact/Task/Judgment 分离 | workflow 三图分离 | ⬜ 未开始（不变量 16 红） |
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ✅ 2026-09-10 |
-| 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
+| 6 数学模块迁移 | library → math/*，install(builder) 装配 | ✅ 2026-09-10（`library/` 已删除） |
 
 不变量 CI 门禁（`tests/test_v4_invariants.py`）：**1/2/14/16/18 全部转绿**；另有
 §四 依赖方向/引用方向门禁 4 条（其中 workflow→math 债务 1 条挂 xfail，阶段6 转绿）。
@@ -155,6 +155,43 @@ trig_reduce` 已随函数结构层拆除而未重建）。不补它，§9.5 的�
 钉住 `Context`/`Entry`/`Branch` 不得复活。
 
 验收：全量 119 passed + 1 xfailed；stress 10 passed（41 条性质）。
+
+### 阶段 6：显式装配（`library/` 删除，v4 §7.1）（2026-09-10）
+
+按 v4 §7.1 建 `cas/runtime/`，删除整个 `library/` 包，**三处 import 期全局状态全部消除**：
+
+| 旧（import 期自注册） | 新 |
+|---|---|
+| `library/__init__.py` 的 `load_all()` | `math/elementary/module.py` 的 `install(builder)` |
+| `project.py` 的模块级 `_install_base_domains()` + lookup 回填 | `math/domains/module.py` 的 `install(builder)` + `project.bind_domains` |
+| `decide.py` 的模块级 `register_eq_stage("ledger_decide", ...)` | `math/base/module.py` 的 `install(builder)` + `decide.bind_eq_stages` |
+
+`cas/runtime/`：`registry.py`（`RuntimeBuilder`，**唯一写入口**，只设确有内容的五类
+注册表——空注册表就是空壳）、`runtime.py`（`Runtime` 只读查询面，取代原 library 查询面）、
+`bootstrap.py`（`bootstrap()` 显式装配，顺序即依赖：常数 → 域 → 阶段）、
+`dispatch.py`（运行期查询入口，首次调用触发装配）。
+
+**依赖方向（§四）在实现层面被遵守**：`runtime → math`（bootstrap 拉全部数学模块），
+反向禁止。所以 math 模块读声明由**装配期注入**（`bind_runtime`），不能自己 import
+runtime；未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成难查的
+错答案。frontend 允许 import runtime，故 parser/pprint 直接用 `dispatch`。
+
+**入口必须显式 bootstrap**：`repl.py` 与全部 stress 脚本都加了 `bootstrap()`，
+`tests/`、`stress/` 各加 `conftest.py`。这一步由**响亮失败**验证过——漏加 bootstrap 的
+两个 stress 脚本立刻报「未装配」，而不是静默降级。
+
+改名：`rules.library_ruleset()` → `rules.declared_ruleset()`（语义来源不再是图书馆）。
+
+门禁新增 `test_依赖方向_math不依赖runtime`、`test_import数学模块不产生注册副作用`
+（干净进程里 import 数学模块后常数表/域阶梯/判等阶段/注入面都须为空）。
+
+**未完成的既有缺口（非本次引入）**：AGENTS.md §二 要求「常数、函数、导数模板、
+定义域条件的声明必须统一进 **DSL 数据文件**，禁止 Python 代码直注册」。当前这些声明
+仍是 Python（`math/elementary/module.py` 里的 `builder.declare_function(...)`），
+旧 `library/elementary.py` 亦然——所以该条从来未兑现。要做需先定声明 DSL 的语法
+（现只有规则行 DSL），属设计决定。
+
+验收：全量 123 passed + 1 xfailed；stress 10 passed（41 条性质）；pyflakes 干净。
 
 
 

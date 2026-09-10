@@ -1,4 +1,4 @@
-import library
+from cas.runtime import dispatch as rt
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
@@ -22,7 +22,7 @@ def _atom_str(a, src=False):
     if isinstance(a, Const):
         if src:
             return a.name
-        d = library.const_by_atom(a)
+        d = rt.const_by_atom(a)
         return d.print_name if d is not None else a.name
     if isinstance(a, BVal):
         return "true" if a.val else "false"
@@ -41,7 +41,7 @@ def _atom_str(a, src=False):
 
 def _name_of(h):
     if isinstance(h, Sym):
-        pn = library.print_name(h.name)
+        pn = rt.print_name(h.name)
         return pn if pn is not None else h.name.lower()
     return repr(h)
 

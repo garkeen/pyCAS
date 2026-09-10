@@ -23,7 +23,7 @@ _DIRS = (
     ("cas/math", "cas.math"),
     ("cas/math/domains", "cas.math.domains"),
     ("cas/frontend", "cas.frontend"),
-    ("library", "library"),
+    ("cas/runtime", "cas.runtime"),
 )
 _MODULES = []
 for rel, prefix in _DIRS:

@@ -22,6 +22,9 @@ from cas.math.domains.poly import (_norm, p_mul, p_pow, p_gcd_univar, p_deriv)
 from cas.math.domains.polytools import resultant, squarefree, p_monic, p_deg
 from cas.syntax.term import S
 
+from cas.runtime import bootstrap
+bootstrap()
+
 X = S("x")
 V = (X,)
 

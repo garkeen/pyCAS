@@ -69,6 +69,20 @@ def test_依赖方向_kernel不依赖数学与工作流():
     assert not bad, "kernel 依赖了上层:\n" + "\n".join(bad)
 
 
+def test_依赖方向_math不依赖runtime():
+    """§四：依赖方向是 runtime → math（bootstrap 拉全部数学模块），反向禁止。
+
+    所以 math 模块读声明必须由装配期**注入**（bind_runtime），不能自己 import
+    runtime——否则又会绕回 import 链条。
+    """
+    bad = []
+    for p in sorted((_ROOT / "cas" / "math").rglob("*.py")):
+        for m in _cas_imports(p):
+            if m.startswith("cas.runtime"):
+                bad.append(f"{p.relative_to(_ROOT)} → {m}")
+    assert not bad, "math 依赖了 runtime: " + ", ".join(bad)
+
+
 @pytest.mark.xfail(reason="v4 阶段6：workflow/checkers.py 仍依赖 cas.math.*"
                           "（v3 遗留债务，目标位置 math/*/checkers.py）", strict=False)
 def test_依赖方向_workflow不依赖具体数学模块():
@@ -168,8 +182,8 @@ def test_不变量2_实例化产出项而非模式():
 
 def test_不变量18_自动化简不应用未证明的条件规则():
     """auto 规则只许无条件；带守卫者一律非 auto（分支破裂改写不得静默落地）。"""
-    from cas.math.rules import library_ruleset
-    rs = library_ruleset()
+    from cas.math.rules import declared_ruleset
+    rs = declared_ruleset()
     bad = [r.id for r in rs.rules.values() if r.auto and r.guard is not None]
     assert not bad, f"auto 规则携带守卫: {bad}"
 

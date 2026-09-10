@@ -42,6 +42,9 @@ from cas.workflow.workflow import (Workflow, Claim, BothSides, Rewrite, Solve,
                           Subst, Split, Diff, Integrate, _is_eq)
 from cas.workflow.checkers import _normalize_eq
 
+from cas.runtime import bootstrap
+bootstrap()
+
 
 def _fmt(t):
     """显示前 ℚ 折叠（Times(-1,2) → -2 等）。"""
@@ -380,8 +383,8 @@ class REPL:
         self._show_step(s)
 
     def cmd_rules(self, _):
-        from cas.math.rules import library_ruleset
-        rs = library_ruleset()
+        from cas.math.rules import declared_ruleset
+        rs = declared_ruleset()
         if not rs.rules:
             print("  图书馆无规则")
             return
@@ -395,8 +398,8 @@ class REPL:
         if pred is None:
             return
         rid = rest.strip()
-        from cas.math.rules import library_ruleset, apply_rule
-        rule = library_ruleset().rules.get(rid)
+        from cas.math.rules import declared_ruleset, apply_rule
+        rule = declared_ruleset().rules.get(rid)
         if rule is None:
             print(f"  未知规则: {rid}（rules 查看清单）")
             return

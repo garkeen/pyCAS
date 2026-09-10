@@ -22,7 +22,29 @@ from cas.syntax import term as T
 from cas.syntax.term import Expr, Sym, Bound
 from cas.errors import DiffError
 from cas.math.qarith import fold
-import library
+
+_DECLS = None
+
+
+def bind_runtime(rt):
+    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+
+    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
+    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+
+    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
+    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    """
+    global _DECLS
+    _DECLS = rt
+
+
+def _R():
+    if _DECLS is None:
+        raise RuntimeError(
+            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+    return _DECLS
+
 
 
 def differentiate(t, x: Sym):
@@ -76,10 +98,10 @@ def _diff(t, x):
         # 逐支给出 0）。分段求导的审慎通道未建——诚实拒答，不冒充结果。
         raise DiffError("分段函数逐支求导在分段点须校验连续性与单侧导数，未建")
     # 函数应用：查图书馆导数模板
-    tpl, note = library.function_deriv(head)
+    tpl, note = _R().function_deriv(head)
     if tpl is None:
         raise DiffError(f"{head} 无导数模板" + (f"（{note}）" if note else ""))
-    d = library.lookup_function(head)
+    d = _R().lookup_function(head)
     if d is not None and d.arity is not None and len(t.args) != d.arity:
         raise DiffError(f"{head} 声明元数 {d.arity}，实收 {len(t.args)} 参")
     if len(t.args) != 1:

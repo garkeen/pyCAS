@@ -21,8 +21,8 @@ from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-import library
-library.load_all()
+from cas.runtime import bootstrap
+bootstrap()
 
 import cas.syntax.term as T
 from cas.syntax.term import S
@@ -33,7 +33,8 @@ from cas.math.domains.qi import QI_RING, qi_of_term
 from cas.math.integrate import integrate_term, verify_antideriv
 
 X = S("x")
-I = library.IU
+from cas.runtime import get_runtime
+I = get_runtime().const_by_name("i").atom
 DOM = project(parse("i")).domain
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """规则引擎（全系统唯一重写引擎）。
 
-规则来源只有图书馆声明（准入纪律见 library/api.py）；guard 判定走
+规则来源只有运行期声明（由 bootstrap 装配，见 runtime/registry.py）；guard 判定走
 判定管线（Verdict ADT），不存在第二套规则机制、第二套守卫词汇。
 
 消费面：
@@ -16,6 +16,29 @@ from cas.syntax import term as T
 from cas.syntax import pattern as P
 from cas.syntax.match import matches
 from cas.kernel.verdict import YES, NO, unknown
+
+_DECLS = None
+
+
+def bind_runtime(rt):
+    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+
+    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
+    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+
+    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
+    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    """
+    global _DECLS
+    _DECLS = rt
+
+
+def _R():
+    if _DECLS is None:
+        raise RuntimeError(
+            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+    return _DECLS
+
 
 
 @dataclass(frozen=True)
@@ -86,22 +109,20 @@ def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
 _LIB_RULESET = None
 
 
-def library_ruleset() -> RuleSet:
-    """从图书馆声明装配规则集（幂等缓存）。
+def declared_ruleset() -> RuleSet:
+    """从运行期声明装配规则集（幂等缓存）。
 
-    图书馆只持规则行字符串（纯数据），DSL 解析在本消费点完成——
-    内核消费图书馆条目，图书馆不反向导入内核。损坏的规则行是图书馆
-    声明缺陷：解析异常向上抛出，绝不静默吞掉。"""
+    声明只持规则行字符串（纯数据），DSL 解析在本消费点完成——数学模块不反向
+    导入本模块。损坏的规则行是**声明缺陷**：解析异常向上抛出，绝不静默吞掉。"""
     global _LIB_RULESET
     if _LIB_RULESET is None:
-        import library
         # 延迟导入：这是 cas.math.rules ↔ cas.math.loader 环的回边。loader 顶层
         # `from cas.math.rules import Rule`（去边），本处若要也提到顶层，两侧
         # 都会撞上半初始化模块。环的成因是规则行 DSL 的解析产物是 Rule，
         # 而装配点在本模块——解析与装配同居一处时此环即消失。
         from cas.math.loader import parse_rule_line
         rs = RuleSet()
-        for decl in library.all_functions():
+        for decl in _R().all_functions():
             for line in decl.rule_lines:
                 rs.add(parse_rule_line(line))
         _LIB_RULESET = rs

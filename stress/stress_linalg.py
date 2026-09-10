@@ -25,6 +25,9 @@ from cas.math.domains.poly import _norm, p_mul
 from cas.math.tactics import solve_diophantine_linear, integer_roots, TacticsError
 from cas.syntax.term import S
 
+from cas.runtime import bootstrap
+bootstrap()
+
 X = S("x")
 
 

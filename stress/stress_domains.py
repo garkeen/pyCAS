@@ -27,6 +27,9 @@ from cas.math.domains.ratfunc import rf_from_term, rf_equal, RatFunc
 from cas.math.domains.q import Q_RING
 from cas.math.domains import poly_domain, ratfunc_domain
 
+from cas.runtime import bootstrap
+bootstrap()
+
 X, Y = S("x"), S("y")
 
 

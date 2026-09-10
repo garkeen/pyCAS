@@ -117,9 +117,9 @@ def autosimplify(t, budget=100000):
       带守卫的规则走交互通道（REPL apply，守卫过 decide）。
     · 每步代价必须严格下降——终止性由良基性保证，不靠轮数魔法。
     """
-    from cas.math.rules import library_ruleset, apply_rule
+    from cas.math.rules import declared_ruleset, apply_rule
 
-    rs = library_ruleset()
+    rs = declared_ruleset()
     auto_rules = [r for r in rs.rules.values() if r.auto and r.guard is None]
     cur = simplify(t, budget)
     # 终止性：每次接受规则都使 cost 严格下降（良基自然数），必达不动点，无轮数上限。

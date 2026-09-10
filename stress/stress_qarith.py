@@ -24,6 +24,9 @@ from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
 from cas.math.simplify import expand
 
+from cas.runtime import bootstrap
+bootstrap()
+
 X, Y = S("x"), S("y")
 
 

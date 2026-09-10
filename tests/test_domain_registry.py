@@ -25,9 +25,21 @@ def test_域包纯声明_零导入副作用():
     assert out.stdout.strip() == "0"
 
 
-def test_装配点是project_注册三个常驻基域():
+def test_import不装配_bootstrap才装配():
+    """v4 §7.1：禁止 import 期修改全局状态——import 数学模块后注册表须为空。"""
     code = ("from cas.math.domains.base import _DOMAINS; "
-            "import cas.math.project; print(','.join(sorted(_DOMAINS)))")
+            "import cas.math.project, cas.math.decide; "
+            "print(len(_DOMAINS))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                         text=True, cwd=".")
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "0", "import 期不得注册任何域"
+
+
+def test_bootstrap注册三个常驻基域():
+    code = ("from cas.runtime import bootstrap; bootstrap(); "
+            "from cas.math.domains.base import _DOMAINS; "
+            "print(','.join(sorted(_DOMAINS)))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                          text=True, cwd=".")
     assert out.returncode == 0, out.stderr

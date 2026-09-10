@@ -19,13 +19,35 @@ from cas.kernel.verdict import (Verdict, Yes, No, Unknown, Reason,
                           YES, NO, unknown, and3, or3, not3)
 from cas.kernel.scope import Assumptions
 
+_DECLS = None
+
+
+def bind_runtime(rt):
+    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+
+    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
+    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+
+    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
+    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    """
+    global _DECLS
+    _DECLS = rt
+
+
+def _R():
+    if _DECLS is None:
+        raise RuntimeError(
+            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+    return _DECLS
+
+
 
 def _A(a):
     """None 视作空假设集（历史调用点会传 None）。"""
     return a if a is not None else Assumptions()
 
 
-import library
 
 
 _NEG = {
@@ -161,7 +183,7 @@ def _interval(t, assumptions, seen=None, depth=0):
     if T.is_num(t):
         v = T.num_val(t)
         return (v, v, False, False)
-    lb = library.const_bounds(t)
+    lb = _R().const_bounds(t)
     if lb is not None:
         return (Fr(lb[0]), Fr(lb[1]), True, True)
     if depth > 8:
@@ -332,7 +354,7 @@ def _cmp_interval(op, a, b, assumptions):
 
 def _func_bound(name):
     """函数值域界（图书馆声明）：返回 (lo|None, hi|None) 或 None。"""
-    d = library.lookup_function(name)
+    d = _R().lookup_function(name)
     return d.bound if d is not None else None
 
 
@@ -343,7 +365,7 @@ def _nonneg_zero_arg(t):
     if not isinstance(t, T.Expr) or not isinstance(t.head, T.Sym) \
             or len(t.args) != 1:
         return None
-    d = library.lookup_function(t.head.name)
+    d = _R().lookup_function(t.head.name)
     if d is None or not d.zero_iff_arg_zero:
         return None
     bd = d.bound
@@ -356,7 +378,7 @@ def _nneg(t, assumptions):
     """非负结构判定：True/False/None（不回调 decide，只读结构与账本）。"""
     if T.is_num(t):
         return T.sign_num(t) >= 0
-    if isinstance(t, T.Const) and library.const_positive(t) is True:
+    if isinstance(t, T.Const) and _R().const_positive(t) is True:
         return True
     if isinstance(t, T.Expr):
         name = t.head.name
@@ -388,7 +410,7 @@ def _pos(t, assumptions):
     """正性结构判定：True/False/None。"""
     if T.is_num(t):
         return T.sign_num(t) > 0
-    if isinstance(t, T.Const) and library.const_positive(t) is True:
+    if isinstance(t, T.Const) and _R().const_positive(t) is True:
         return True
     if assumptions is not None:
         for f in assumptions:
@@ -487,7 +509,7 @@ def _sign_of_term(t, assumptions, q):
         if s < 0:
             return -1
         return 0
-    if isinstance(t, T.Const) and library.const_positive(t) is True:
+    if isinstance(t, T.Const) and _R().const_positive(t) is True:
         return 1
     r = q(T.mk(S("Gt"), (t, T.ZERO)))
     if r is YES:
@@ -733,7 +755,7 @@ def _axiom_constants(fact, assumptions):
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
-    bounds = library.const_bounds(a)
+    bounds = _R().const_bounds(a)
     if bounds is None or not T.is_num(b):
         return None
     lo, hi = bounds
@@ -763,7 +785,7 @@ def _axiom_function_bounds(fact, assumptions):
     a, b = fact.args
     if not (isinstance(a, T.Expr) and isinstance(a.head, T.Sym)) or not T.is_num(b):
         return None
-    d = library.lookup_function(a.head.name)
+    d = _R().lookup_function(a.head.name)
     if d is None or d.bound is None:
         return None
     lo, hi = d.bound
@@ -938,13 +960,16 @@ def contradicted(fact, assumptions) -> bool:
 _EQ_STAGES = []
 
 
-def register_eq_stage(name, run, prepend=False):
-    entry = (name, run)
-    if prepend:
-        _EQ_STAGES.insert(0, entry)
-    else:
-        _EQ_STAGES.append(entry)
-    return name
+def bind_eq_stages(stages):
+    """由 `bootstrap()` 显式装入判等阶段（v4 §7.1）。
+
+    以取代 **import 期自注册**：原先本模块在 import 时调用
+    `register_eq_stage("ledger_decide", ...)`，是 AGENTS.md §六 列的三处之一。
+    现在阶段由 `cas/math/base/module.py` 的 `install(builder)` 声明、bootstrap
+    绑定；import 本模块零副作用（阶段表为空，判定只走到「未决」）。
+    """
+    global _EQ_STAGES
+    _EQ_STAGES = list(stages)
 
 
 def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
@@ -980,13 +1005,9 @@ def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
     return unknown()
 
 
-def _stage_decide(r, a, b, assumptions):
-    d = decide(T.mk(S("Eq"), (r, T.ZERO)), assumptions)
-    return None if d.is_unknown() else d
-
-
-# TODO: 三角基归零阶段随函数结构层重建（原走 cas.trig.trig_reduce）
-register_eq_stage("ledger_decide", _stage_decide)
+# 三角基归零阶段仍未重建（原走 cas.trig.trig_reduce）：判零通道覆盖不到
+# exp/sin 组合时，判定必须**诚实未决**，不得报成否证（见 integrate._judge_zero_diff）。
+# 该阶段将来按同一协议作为新 eq_stage 挂入，不改判定器。
 
 # 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
 # 采样从未有资格产出后者；如需概率通道须先修订宪章。

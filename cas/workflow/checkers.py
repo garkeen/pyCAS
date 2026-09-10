@@ -249,8 +249,8 @@ class RuleInstanceChecker:
         if pred is None:
             return Rejected(Reason.FRAGMENT, "缺前驱")
         d = proposal.evidence.payload
-        from cas.math.rules import library_ruleset
-        rule = library_ruleset().rules.get(d.rule)
+        from cas.math.rules import declared_ruleset
+        rule = declared_ruleset().rules.get(d.rule)
         if rule is None:
             return Rejected(Reason.FRAGMENT, f"未知规则: {d.rule}")
         if d.substitution is None:

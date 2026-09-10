@@ -73,10 +73,10 @@ def test_公理层覆盖不全_诚实回未决():
         D._cmp_interval = saved
 
 
-def test_公理层消费图书馆声明_不自带数值():
-    """界数据若改，结论随之改——证明数据源在图书馆而非硬编码。"""
-    import library
-    d = library.const_by_name("gamma")
+def test_公理层消费运行期声明_不自带数值():
+    """界数据若改，结论随之改——证明数据源在运行期装配的声明而非硬编码。"""
+    from cas.runtime import dispatch
+    d = dispatch.const_by_name("gamma")
     assert d.bounds is not None
     lo, hi = d.bounds
     saved = D._cmp_interval
