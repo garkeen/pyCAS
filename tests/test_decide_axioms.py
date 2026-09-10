@@ -37,18 +37,18 @@ def _decide(src):
     ("pi > 0", YES),
     ("sin(x) > 2", NO),   # FunctionDecl.bound: sin ∈ (-1,1)
 ])
-def test_公理层作为兜底确实生效(no_interval, src, want):
+def test_axiom_layer_acts_as_fallback(no_interval, src, want):
     """屏蔽区间通道后，裁决必须由公理层给出——证明它不是死代码。"""
     assert _decide(src) is want, f"{src} 未能由公理层裁决"
 
 
-def test_常规情况下由区间通道先定案():
+def test_interval_channel_decides_normally():
     """不屏蔽时，区间通道在同一批输入上就定了案（公理层被遮蔽）。"""
     for src in ["pi > 3", "gamma < 1", "sin(x) > 2"]:
         assert _decide(src) in (YES, NO)
 
 
-def test_公理层与区间通道结论一致():
+def test_axiom_layer_agrees_with_interval_channel():
     """两者消费同源数据，结论必须一致——不一致说明其中一条错了。"""
     cases = ["pi > 3", "pi < 4", "e > 2", "e < 3", "gamma < 1", "sin(x) > 2"]
     normal = [_decide(s) for s in cases]
@@ -62,7 +62,7 @@ def test_公理层与区间通道结论一致():
     assert normal == with_axioms, "两条通道结论分叉"
 
 
-def test_公理层覆盖不全_诚实回未决():
+def test_axiom_layer_incomplete_returns_undecided():
     """公理层只认"常数/函数 op 数值"的窄形态，其余必须未决。"""
     saved = D._cmp_interval
     try:
@@ -73,7 +73,7 @@ def test_公理层覆盖不全_诚实回未决():
         D._cmp_interval = saved
 
 
-def test_公理层消费运行期声明_不自带数值():
+def test_axiom_layer_consumes_runtime_declarations():
     """界数据若改，结论随之改——证明数据源在运行期装配的声明而非硬编码。"""
     from cas.runtime import dispatch
     d = dispatch.const_by_name("gamma")

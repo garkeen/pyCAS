@@ -12,24 +12,24 @@ from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
 
 
-def test_Sym_不被重映射():
+def test_sym_not_remapped():
     assert to_str(T.S("pi")) == "pi"
     assert to_str(T.S("gamma")) == "gamma"
 
 
-def test_Const_吃图书馆声明的印名():
+def test_const_uses_declared_print_name():
     assert to_str(parse("pi")) == "π"
     assert to_str(parse("gamma")) == "γ"
 
 
-def test_展示形与源码形分离():
+def test_display_form_separate_from_source_form():
     for src, disp, code in [("pi", "π", "pi"), ("gamma", "γ", "gamma")]:
         t = parse(src)
         assert to_str(t) == disp                    # 展示：图书馆印名
         assert to_str(t, src=True) == code          # 源码：内部名
 
 
-def test_源码形可重解析往返():
+def test_source_form_round_trips():
     """src=True 的承诺：输出能被词法接受并回到同一个驻留项。"""
     for s in ["pi", "gamma", "pi + gamma", "2*pi*x", "gamma^2",
               "e^(i*pi)", "sin(x) + pi"]:
@@ -37,19 +37,19 @@ def test_源码形可重解析往返():
         assert parse(to_str(t, src=True)) is t, f"往返断裂: {s}"
 
 
-def test_句法原子不进图书馆():
+def test_syntax_atoms_not_from_declarations():
     """infinity/true/false 是语言记号，不是数学常数。"""
     assert to_str(parse("infinity")) == "Infinity"
     assert to_str(parse("true")) == "true"
     assert to_str(parse("false")) == "false"
 
 
-def test_函数头印名走同一出口():
+def test_function_head_print_name_same_exit():
     assert to_str(parse("sin(x)")) == "sin(x)"
     assert to_str(parse("cos(x) + log(x)")) == "cos(x) + log(x)"
 
 
-def test_sqrt由parser改写为幂_非图书馆声明通道():
+def test_sqrt_rewritten_to_power_by_parser():
     """已知偏离：parser.py 为 sqrt 硬编码了 u^(1/2) 改写（句法层特判），
     未走图书馆声明通道。此钉子固化现状，防止无人知晓地漂移。
     若将来把 Sqrt 收回图书馆声明，本测试须随之改写。"""

@@ -69,7 +69,7 @@ def _store(*checkers):
 
 # --- 无条件结论 ---
 
-def test_无条件结论落地():
+def test_unconditional_conclusion_commits():
     st = _store(("t.ok", AlwaysOk()))
     root = st.scopes.create()
     r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
@@ -82,7 +82,7 @@ def test_无条件结论落地():
 
 # --- 未决候选：策略是唯一处置点 ---
 
-def test_未决候选在REQUIRE_PROVED下不落地():
+def test_undecided_candidate_not_committed_under_require_proved():
     """v4 不变量 16 的内核机制：未决 → 什么都不写，不 fail-open。"""
     st = _store(("t.never", Never()))
     root = st.scopes.create()
@@ -95,7 +95,7 @@ def test_未决候选在REQUIRE_PROVED下不落地():
     assert st.stats()["requirements"] == 0
 
 
-def test_checker未决在任何策略下都不落地():
+def test_checker_unknown_never_commits():
     """不变量 16 的核心：GuardPolicy 管条件清偿，不管「结论没验过也放行」。"""
     st = _store(("t.never", Never()))
     root = st.scopes.create()
@@ -107,7 +107,7 @@ def test_checker未决在任何策略下都不落地():
     assert st.stats()["steps"] == 0
 
 
-def test_条件未决在ALLOW_CONDITIONAL下带条件落地():
+def test_unknown_condition_commits_with_condition_under_allow_conditional():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -121,7 +121,7 @@ def test_条件未决在ALLOW_CONDITIONAL下带条件落地():
     assert st.applicability(j.id, root.id).is_conditional()
 
 
-def test_条件未决在REQUIRE_PROVED下不落地():
+def test_unknown_condition_not_committed_under_require_proved():
     """自动化简默认：守卫未决不静默落地（v3 的安全行为保留）。"""
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
@@ -133,7 +133,7 @@ def test_条件未决在REQUIRE_PROVED下不落地():
     assert st.stats()["steps"] == 0
 
 
-def test_策略REQUEST_SPLIT交回待决条件():
+def test_request_split_policy_returns_pending_condition():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -148,7 +148,7 @@ def test_策略REQUEST_SPLIT交回待决条件():
 
 # --- 条件：登记、清偿、否证 ---
 
-def test_条件未决则结论带条件():
+def test_undecided_condition_carried_on_conclusion():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -165,7 +165,7 @@ def test_条件未决则结论带条件():
     assert st.applicability(j.id, root.id).is_conditional()
 
 
-def test_条件被否证则拒绝提交且不写账():
+def test_refuted_condition_refuses_and_writes_nothing():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -178,7 +178,7 @@ def test_条件被否证则拒绝提交且不写账():
     assert st.stats()["judgments"] == 0
 
 
-def test_条件已证则登记清偿且结论可应用():
+def test_proved_condition_records_discharge_and_applies():
     """清偿登记需要非 interactive 模式：interactive 推迟清偿（§四.2）。"""
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
@@ -199,7 +199,7 @@ def test_条件已证则登记清偿且结论可应用():
 
 # --- 执行模式（AGENTS.md §四.2 / §四.3）---
 
-def test_执行模式不改变结论():
+def test_execution_mode_does_not_change_conclusion():
     """§四.3：模式只许改变记账粒度，不得改变返回值。"""
     cond = mk(S("Ne"), (S("x"), N(0)))
     seen = {}
@@ -216,7 +216,7 @@ def test_执行模式不改变结论():
     assert len(set(seen.values())) == 1, seen
 
 
-def test_interactive不记读依赖也不登记清偿():
+def test_interactive_records_no_reads_or_discharge():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -232,7 +232,7 @@ def test_interactive不记读依赖也不登记清偿():
     assert st.applicability(j.id, root.id).is_conditional()
 
 
-def test_audit保留每次读取而derivation去重():
+def test_audit_keeps_every_read_derivation_dedupes():
     cond = mk(S("Ne"), (S("x"), N(0)))
     reads = {}
     for mode in (ExecutionMode.DERIVATION, ExecutionMode.AUDIT):
@@ -247,7 +247,7 @@ def test_audit保留每次读取而derivation去重():
     assert len(reads[ExecutionMode.AUDIT]) >= len(reads[ExecutionMode.DERIVATION])
 
 
-def test_条件被否证在各模式下都拒绝():
+def test_refuted_condition_refused_in_all_modes():
     """条件判定不受模式影响：被否证一律拒绝提交（健全性与模式无关）。"""
     cond = mk(S("Ne"), (S("x"), N(0)))
     for mode in ExecutionMode:
@@ -260,7 +260,7 @@ def test_条件被否证在各模式下都拒绝():
         assert st.stats()["steps"] == 0, mode
 
 
-def test_否证使原结论不适用但不删除():
+def test_refutation_makes_inapplicable_without_deleting():
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)), ("t.ok", AlwaysOk()))
     root = st.scopes.create()
@@ -282,7 +282,7 @@ def test_否证使原结论不适用但不删除():
 
 # --- 作用域：可见性与卫生 ---
 
-def test_子作用域结论不可反向用于父作用域():
+def test_child_scope_conclusion_not_usable_in_parent():
     st = _store(("t.ok", AlwaysOk()))
     root = st.scopes.create()
     child = st.scopes.child(root)
@@ -297,7 +297,7 @@ def test_子作用域结论不可反向用于父作用域():
     assert "不可见" in r2.detail
 
 
-def test_兄弟分支互不可见():
+def test_sibling_branches_invisible():
     st = _store(("t.ok", AlwaysOk()))
     root = st.scopes.create()
     a = st.scopes.child(root)
@@ -309,7 +309,7 @@ def test_兄弟分支互不可见():
     assert rb.is_refused()
 
 
-def test_祖先作用域结论对后代可见():
+def test_ancestor_conclusion_visible_to_descendant():
     st = _store(("t.ok", AlwaysOk()))
     root = st.scopes.create()
     jr = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
@@ -322,7 +322,7 @@ def test_祖先作用域结论对后代可见():
 
 # --- 边界：不 fail-open ---
 
-def test_checker未注册即未决不落地():
+def test_unregistered_checker_not_committed():
     st = KernelStore()
     root = st.scopes.create()
     r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
@@ -332,7 +332,7 @@ def test_checker未注册即未决不落地():
     assert st.stats()["steps"] == 0
 
 
-def test_scope不存在即拒绝():
+def test_missing_scope_refused():
     st = KernelStore()
     register_core_checkers(st)
     st.checkers.register("t.ok", AlwaysOk())
@@ -341,6 +341,6 @@ def test_scope不存在即拒绝():
     assert r.is_refused()
 
 
-def test_默认服务不判定任何命题():
+def test_null_services_decide_nothing():
     """NullServices 是诚实缺省：没接判定器 ≠ 判定为真。"""
     assert NullServices().decide(S("anything"), 0).is_unknown()

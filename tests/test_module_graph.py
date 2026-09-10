@@ -33,11 +33,11 @@ for rel, prefix in _DIRS:
         _MODULES.append(f"{prefix}.{p.stem}")
 
 
-def test_模块清单非空():
+def test_module_list_not_empty():
     assert len(_MODULES) >= 30, f"只发现 {len(_MODULES)} 个模块，路径可能错了"
 
 
-def test_每个模块都能独立导入():
+def test_every_module_imports_standalone():
     """逐个在干净进程里 import——任一模块作入口都必须成功。"""
     failed = []
     for m in _MODULES:
@@ -48,14 +48,14 @@ def test_每个模块都能独立导入():
     assert not failed, "以下模块无法独立导入:\n" + "\n".join(failed)
 
 
-def test_termpath可独立导入():
+def test_termpath_imports_standalone():
     """曾经的基线崩溃点，单独钉住。"""
     r = subprocess.run([sys.executable, "-c", "import cas.syntax.termpath"],
                        capture_output=True, text=True, cwd=str(_ROOT))
     assert r.returncode == 0, r.stderr
 
 
-def test_term的既有导入面不变():
+def test_term_import_surface_unchanged():
     """惰性回接不得改变对外导入面。
 
     实例化（instantiate）已随模式元语言移居 cas.syntax.pattern（v4 §5.2）：
@@ -70,7 +70,7 @@ def test_term的既有导入面不变():
         assert hasattr(P, name) or name == "matches", f"模式层导出丢失: {name}"
 
 
-def test_惰性回接不吞未知名字():
+def test_lazy_reexport_does_not_swallow_unknown():
     import cas.syntax.term as T
     try:
         T.__totally_missing__
@@ -80,7 +80,7 @@ def test_惰性回接不吞未知名字():
         raise AssertionError("__getattr__ 静默吞掉了未知属性")
 
 
-def test_树遍历只有一份实现():
+def test_tree_traversal_single_implementation():
     """_postorder 曾在 pprint 与 simplify 各存一份同构副本。"""
     import cas.frontend.pprint as P
     import cas.math.simplify as Sm

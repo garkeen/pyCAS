@@ -17,7 +17,7 @@ from cas.workflow.command import Claim, Integrate
 
 # --- 线性形式分析（句法，不靠化简器）---
 
-def test_线性形式分解对超越系数也成立():
+def test_linear_form_decomposition_holds_for_transcendental_coeffs():
     u = S("_u")
     e = T.plus(T.plus(parse("exp(x)*sin(x)"), T.neg(u)), T.times(N(3), u))
     assert is_linear(e, (u,))
@@ -26,7 +26,7 @@ def test_线性形式分解对超越系数也成立():
     assert not is_linear(parse("sin(_u)"), (u,))
 
 
-def test_系数带常数因子不丢号():
+def test_coefficient_sign_kept_with_constant_factor():
     """`-1·v` 的系数必须是 −1（这条曾因 Times 分解漏乘常数部分而出错）。"""
     u, v = S("_u"), S("_v")
     res = solve_linear_constraints([T.eq(u, T.neg(v)), T.eq(u, N(2))], (u, v))
@@ -37,7 +37,7 @@ def test_系数带常数因子不丢号():
     assert val[v] is N(-2)
 
 
-def test_求解器对非线性与不相容诚实拒答():
+def test_solver_honestly_refuses_nonlinear_and_inconsistent():
     u, X = S("_u"), S("x")
     assert solve_linear_constraints([T.eq(T.times(u, u), X)], (u,)) is None
     assert solve_linear_constraints([T.eq(u, N(1)), T.eq(u, N(2))], (u,)) is None
@@ -45,7 +45,7 @@ def test_求解器对非线性与不相容诚实拒答():
 
 # --- 原函数判零：三值 ---
 
-def test_原函数验证的三值():
+def test_antiderivative_verification_three_valued():
     X = S("x")
     # 证零：多项式
     assert verify_antideriv(parse("1/3*x^3"), parse("x^2"), X) is True
@@ -58,7 +58,7 @@ def test_原函数验证的三值():
 
 # --- §9.6 循环积分端到端 ---
 
-def test_循环积分端到端_求解成功而验证诚实未决():
+def test_loop_integral_end_to_end_solved_but_verification_undecided():
     wf = new_workflow()
     u, v, X = S("_u"), S("_v"), S("x")
     a, b = parse("exp(x)*sin(x)"), parse("exp(x)*cos(x)")

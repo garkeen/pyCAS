@@ -10,43 +10,43 @@ pprint / parser 各存一份硬编码表。补出口后内核不得再存副本�
 from cas.runtime import dispatch
 
 
-def test_const_by_name_返回声明():
+def test_const_by_name_returns_declaration():
     d = dispatch.const_by_name("gamma")
     assert d is not None
     assert d.print_name == "γ"
     assert d.real is True
 
 
-def test_const_by_name_查无返回None():
+def test_const_by_name_missing_returns_none():
     assert dispatch.const_by_name("__nope__") is None
 
 
-def test_is_const_name_区分常数与函数头():
+def test_is_const_name_distinguishes_const_and_function():
     assert dispatch.is_const_name("pi") is True
     assert dispatch.is_const_name("e") is True
     assert dispatch.is_const_name("Sin") is False      # 函数头不是常数
 
 
-def test_print_name_覆盖常数与函数两类():
+def test_print_name_covers_constants_and_functions():
     assert dispatch.print_name("gamma") == "γ"
     assert dispatch.print_name("pi") == "π"
     assert dispatch.print_name("Sin") == "sin"          # 函数走同一出口
     assert dispatch.print_name("__nope__") is None
 
 
-def test_常数字面量在运行期而非内核():
+def test_const_literals_live_in_runtime_not_kernel():
     """内核不得再存名字→常数原子的副本表。"""
     import cas.frontend.parser as P
     assert not hasattr(P, "_CONSTS")                   # 旧硬编码表已废
     assert set(P._SYNTAX_ATOMS) == {"infinity", "true", "false"}
 
 
-def test_定义域条件只有运行期一个注册通道():
+def test_domain_condition_single_registration_channel():
     import cas.math.domcond as DC
     assert not hasattr(DC, "DOM_HOOKS")                # 空壳通道已废
 
 
-def test_import数学模块不产生注册副作用():
+def test_importing_math_has_no_registration_side_effect():
     """v4 §7.1：禁止 import 期修改全局状态。
 
     在干净进程里只 import 数学模块：常数表、函数表、域阶梯、判等阶段都须为空。
@@ -65,7 +65,7 @@ def test_import数学模块不产生注册副作用():
     assert r.stdout.strip() == "0 0 True", r.stdout
 
 
-def test_bootstrap之后语义齐备():
+def test_semantics_complete_after_bootstrap():
     rt = dispatch.get_runtime()
     s = rt.stats()
     assert s["constants"] == 4 and s["functions"] == 11

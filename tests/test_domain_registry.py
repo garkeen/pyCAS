@@ -15,7 +15,7 @@ from cas.math.domains.base import _DOMAINS, lookup
 from cas.syntax.term import S
 
 
-def test_域包纯声明_零导入副作用():
+def test_domain_packages_are_declaration_only():
     """导入 cas.math.domains 不得往注册表里写任何东西。"""
     code = ("from cas.math.domains.base import _DOMAINS; "
             "import cas.math.domains; print(len(_DOMAINS))")
@@ -25,7 +25,7 @@ def test_域包纯声明_零导入副作用():
     assert out.stdout.strip() == "0"
 
 
-def test_import不装配_bootstrap才装配():
+def test_import_does_not_assemble_bootstrap_does():
     """v4 §7.1：禁止 import 期修改全局状态——import 数学模块后注册表须为空。"""
     code = ("from cas.math.domains.base import _DOMAINS; "
             "import cas.math.project, cas.math.decide; "
@@ -36,7 +36,7 @@ def test_import不装配_bootstrap才装配():
     assert out.stdout.strip() == "0", "import 期不得注册任何域"
 
 
-def test_bootstrap注册三个常驻基域():
+def test_bootstrap_registers_three_base_domains():
     code = ("from cas.runtime import bootstrap; bootstrap(); "
             "from cas.math.domains.base import _DOMAINS; "
             "print(','.join(sorted(_DOMAINS)))")
@@ -46,7 +46,7 @@ def test_bootstrap注册三个常驻基域():
     assert out.stdout.strip().split(",") == ["Q", "Q(i)", "Z"]
 
 
-def test_参数化域不进注册表():
+def test_parametric_domains_not_in_registry():
     """K[x]/K(x) 是按变元集参数化的实例，归工厂缓存，不进注册表。"""
     before = set(_DOMAINS)
     from cas.math.domains.poly import poly_domain
@@ -57,7 +57,7 @@ def test_参数化域不进注册表():
     assert set(_DOMAINS) == before, "参数化实例涌入了注册表"
 
 
-def test_注册表被投影层消费_不是只写不读():
+def test_registry_consumed_by_projection():
     import cas.math.project  # noqa: F401  触发装配
     for name, cls in [("Z", "ZDomain"), ("Q", "QDomain"), ("Q(i)", "QIDomain")]:
         d = lookup(name)
@@ -65,7 +65,7 @@ def test_注册表被投影层消费_不是只写不读():
         assert type(d).__name__ == cls
 
 
-def test_工厂缓存仍然复用同变元集实例():
+def test_factory_cache_reuses_same_var_set():
     from cas.math.domains.poly import poly_domain
     from cas.math.domains.ratfunc import ratfunc_domain
     assert poly_domain(S("x")) is poly_domain(S("x"))
@@ -73,7 +73,7 @@ def test_工厂缓存仍然复用同变元集实例():
     assert poly_domain(S("x")) is not poly_domain(S("y"))
 
 
-def test_register在项目里只有一处调用点():
+def test_register_has_single_call_site():
     """注册责任唯一：全项目仅 cas/project 一处调用 register()。
 
     只钉文件不钉行号——行号会随正常编辑漂移，钉了就是自找麻烦。
@@ -89,7 +89,7 @@ def test_register在项目里只有一处调用点():
     assert hits[0].startswith("cas/math/project.py:"), f"装配点漂移: {hits[0]}"
 
 
-def test_作用域注册机制可用_供ℚ_α_将来使用():
+def test_scoped_registration_available_for_algebraic_extension():
     """架构 §3.4 要求代数扩张必须限定在单次计算作用域内。"""
     from cas.math.domains.base import Domain, domain_scope, register
 

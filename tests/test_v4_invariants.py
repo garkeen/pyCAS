@@ -50,7 +50,7 @@ def _pkg_modules(*parts):
     return sorted((_ROOT / "cas").joinpath(*parts).glob("*.py"))
 
 
-def test_依赖方向_syntax不依赖上层():
+def test_dependency_syntax_not_upward():
     """syntax 只许依赖标准库与 cas.errors（基础设施）。"""
     bad = []
     for p in _pkg_modules("syntax"):
@@ -60,7 +60,7 @@ def test_依赖方向_syntax不依赖上层():
     assert not bad, "syntax 依赖了上层:\n" + "\n".join(bad)
 
 
-def test_依赖方向_kernel不依赖数学与工作流():
+def test_dependency_kernel_not_math_or_workflow():
     """kernel 只许依赖 syntax；不得依赖 math / workflow / frontend / library。"""
     bad = []
     for p in _pkg_modules("kernel"):
@@ -70,7 +70,7 @@ def test_依赖方向_kernel不依赖数学与工作流():
     assert not bad, "kernel 依赖了上层:\n" + "\n".join(bad)
 
 
-def test_依赖方向_math不依赖runtime():
+def test_dependency_math_not_runtime():
     """§四：依赖方向是 runtime → math（bootstrap 拉全部数学模块），反向禁止。
 
     所以 math 模块读声明必须由装配期**注入**（bind_runtime），不能自己 import
@@ -84,7 +84,7 @@ def test_依赖方向_math不依赖runtime():
     assert not bad, "math 依赖了 runtime: " + ", ".join(bad)
 
 
-def test_依赖方向_workflow不依赖具体数学模块():
+def test_dependency_workflow_not_concrete_math():
     """§四：workflow 只依赖 syntax + kernel。
 
     阶段6 起 checker 住在 `math/*/checkers.py`，workflow 不再持有验证逻辑——
@@ -96,7 +96,7 @@ def test_依赖方向_workflow不依赖具体数学模块():
     assert not bad, "workflow 依赖具体数学模块:\n" + "\n".join(bad)
 
 
-def test_引用方向_内核不认识工作流概念():
+def test_reference_direction_kernel_ignores_workflow_concepts():
     """§四：内核侧不得出现 Artifact/Task/Event 这类工作流概念的名字。
 
     用 AST 收名字（不是字符串匹配），所以注释与文档里说明方向不受影响；
@@ -128,7 +128,7 @@ def _term_variants():
     return out
 
 
-def test_不变量1_项不带守卫与证明字段():
+def test_invariant1_term_has_no_guard_or_proof_fields():
     """Term 只回答「长什么样」：不得携带 guard/context/proof/history 等字段。"""
     forbidden = {"guard", "guards", "context", "proof", "history", "domain",
                  "integration_constant", "substitution_variable", "ode_solution"}
@@ -140,7 +140,7 @@ def test_不变量1_项不带守卫与证明字段():
         assert not bad, f"{cls.__name__} 携带了非法字段: {sorted(bad)}"
 
 
-def test_不变量2_模式不是项():
+def test_invariant2_pattern_is_not_term():
     """PatternVar/PatternSeq/PatternCall 不在 Term 层次内（v4 §5.2）。"""
     for cls in (P.PatternVar, P.PatternSeq, P.PatternCall):
         assert not issubclass(cls, T.Term), f"{cls.__name__} 仍是 Term 子类"
@@ -153,7 +153,7 @@ def test_不变量2_模式不是项():
     assert not (names & {"PatVar", "PatSeq"}), f"项变体混入模式变量: {names}"
 
 
-def test_不变量2_项内不可能出现模式变量():
+def test_invariant2_no_pattern_var_inside_term():
     """模式通道产出 Pattern；普通通道拒绝 ?x，故洞进不了 Term。"""
     from cas.frontend.parser import parse
     from cas.errors import ParseError
@@ -168,7 +168,7 @@ def test_不变量2_项内不可能出现模式变量():
         parse("f(??xs)")
 
 
-def test_不变量2_实例化产出项而非模式():
+def test_invariant2_instantiation_yields_term():
     """模板实例化必须落在 Term 层，且未绑定的洞显式报错（不泄漏）。"""
     from cas.frontend.parser import parse
     from cas.syntax.match import matches
@@ -184,7 +184,7 @@ def test_不变量2_实例化产出项而非模式():
         P.instantiate(tpl, {"a": T.S("x")})   # ?b 未绑定：规则缺陷，显式报错
 
 
-def test_不变量18_自动化简不应用未证明的条件规则():
+def test_invariant18_auto_simplify_skips_unproved_conditional_rules():
     """auto 规则只许无条件；带守卫者一律非 auto（分支破裂改写不得静默落地）。"""
     from cas.math.rules import declared_ruleset
     rs = declared_ruleset()
@@ -192,7 +192,7 @@ def test_不变量18_自动化简不应用未证明的条件规则():
     assert not bad, f"auto 规则携带守卫: {bad}"
 
 
-def test_不变量14_checker不导入自身搜索算法():
+def test_invariant14_checker_does_not_import_own_search():
     """checker 只验证给定实例，不得导入搜索器、不得遍历路径（v4 §7.3）。
 
     规则重写的主张由提出方给出实例（rule + path + substitution），checker
@@ -217,7 +217,7 @@ def test_不变量14_checker不导入自身搜索算法():
     assert not bad, f"checker 依赖了搜索算法: {bad}"
 
 
-def test_规则实例checker只认给定实例():
+def test_rule_instance_checker_only_accepts_given_instance():
     """替换/路径与实例不符 → 否决；相符 → 通过（不搜索其他路径或匹配）。"""
     from cas.frontend.parser import parse
     from cas.workflow.command import Claim, Rewrite
@@ -243,7 +243,7 @@ def test_规则实例checker只认给定实例():
     assert oob.status == "refused", oob.note
 
 
-def test_不变量16_未验证候选不参与可信推导():
+def test_invariant16_unverified_candidate_not_trusted():
     """checker 未决的候选不得以「可依赖」状态入账——unverified ≠ open。"""
     from cas.frontend.parser import parse
     from cas.syntax.term import S, N
@@ -264,7 +264,7 @@ def test_不变量16_未验证候选不参与可信推导():
 # 阶段5：持久化 Scope 树接管可变 Context
 # ---------------------------------------------------------------------------
 
-def test_阶段5_旧可变上下文已删除():
+def test_phase5_old_mutable_context_removed():
     """v3 的 Context（可变 entries + marks/rollback）不得复活。"""
     from cas.kernel import context as C
     for name in ("Context", "Entry", "Branch"):
@@ -272,7 +272,7 @@ def test_阶段5_旧可变上下文已删除():
     assert hasattr(C, "TrackedContext"), "checker 读通道丢失"
 
 
-def test_假设集不可变且扩充产生新对象():
+def test_assumptions_immutable_and_extend_creates_new():
     """假设集是 Scope 的只读投影：`extended` 不就地写入，故无需克隆/撤销。"""
     from cas.kernel.scope import Assumptions, ScopeStore
     base = Assumptions()
