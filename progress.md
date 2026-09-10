@@ -37,7 +37,30 @@
 | 5 持久化 Scope 树 | 可变 Context → 父指针树；undo/redo 移 revision 指针 | ⬜ 未开始 |
 | 6 数学模块迁移 | library → math/*，install(builder) 装配 | ⬜ 未开始 |
 
-不变量 CI 门禁（`tests/test_v4_invariants.py`）：**1/2/14/16/18 全部转绿**（无 xfail）。
+不变量 CI 门禁（`tests/test_v4_invariants.py`）：**1/2/14/16/18 全部转绿**；另有
+§四 依赖方向/引用方向门禁 4 条（其中 workflow→math 债务 1 条挂 xfail，阶段6 转绿）。
+
+### 执行模式落位（AGENTS.md §四.2，2026-09-10）
+
+`cas/kernel/mode.py` 定义 `ExecutionMode`（interactive 默认 / derivation / audit），
+`commit` 与 `TrackedContext` 接受模式。落位的是**记账粒度**，不是正确性：
+
+- **interactive**：不记读依赖（`Step.reads` 为空）；**清偿登记推迟**——条件照判
+  （否则被否证的守卫会被静默放过，那是正确性问题），只是暂不把已证条件记成
+  `Discharge`，故 `applicability` 报 `Conditional`。
+- **derivation**：读依赖按 Step 粒度去重；提交时清偿。
+- **audit**：读依赖保留每次出现（read 粒度）；提交时清偿。
+- 读依赖以 `TrackedContext` 的记录为准（§6.11 的唯一通道），不再用 checker 自报的
+  `Accepted.reads` 二次合并（原先那次 merge 是冗余的，还会造成重复计数）。
+
+门禁（`tests/test_kernel_model.py`）：`test_执行模式不改变结论`（三模式下结论
+proposition 与 requirements 逐位相同——§四.3 的机械检查）、
+`test_条件被否证在各模式下都拒绝`、`test_interactive不记读依赖也不登记清偿`、
+`test_audit保留每次读取而derivation去重`。
+
+未落位（属可追溯性层，不影响健全性，§四.7）：`Applicability 缓存`与
+`历史截断 N 代`——历史图在阶段4 才建。
+
 
 ### 阶段 1b：模式元语言（2026-09-10）
 

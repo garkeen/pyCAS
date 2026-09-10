@@ -14,8 +14,9 @@ from cas.kernel.commit import (
 )
 from cas.kernel.evidence import Accepted, Evidence, UnknownResult
 from cas.kernel.model import (
-    Applicable, Conditional, Inapplicable, RequirementReason,
+    Applicable, Conditional, ContextReadSet, Inapplicable, RequirementReason,
 )
+from cas.kernel.mode import ExecutionMode
 from cas.kernel.services import NullServices, register_core_checkers
 from cas.kernel.store import KernelStore
 from cas.kernel.verdict import NO, YES, Reason, unknown
@@ -178,12 +179,14 @@ def test_条件被否证则拒绝提交且不写账():
 
 
 def test_条件已证则登记清偿且结论可应用():
+    """清偿登记需要非 interactive 模式：interactive 推迟清偿（§四.2）。"""
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
     r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
                                 evidence=Evidence("t.demands")),
-               services=StubServices(true=(cond,)))
+               services=StubServices(true=(cond,)),
+               mode=ExecutionMode.DERIVATION)
     assert r.is_committed()
     j = st.get_judgment(r.judgments[0])
     rid = j.requirements[0]
@@ -192,6 +195,69 @@ def test_条件已证则登记清偿且结论可应用():
     proof = st.get_judgment(d.by_judgment)
     assert proof.proposition is cond
     assert st.applicability(j.id, root.id).is_applicable()
+
+
+# --- 执行模式（AGENTS.md §四.2 / §四.3）---
+
+def test_执行模式不改变结论():
+    """§四.3：模式只许改变记账粒度，不得改变返回值。"""
+    cond = mk(S("Ne"), (S("x"), N(0)))
+    seen = {}
+    for mode in ExecutionMode:
+        st = _store(("t.demands", Demands(cond)))
+        root = st.scopes.create()
+        r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
+                                    evidence=Evidence("t.demands"),
+                                    guard_policy=GuardPolicy.ALLOW_CONDITIONAL),
+                   services=StubServices(), mode=mode)
+        assert r.is_committed(), mode
+        j = st.get_judgment(r.judgments[0])
+        seen[mode] = (j.proposition, j.requirements)
+    assert len(set(seen.values())) == 1, seen
+
+
+def test_interactive不记读依赖也不登记清偿():
+    cond = mk(S("Ne"), (S("x"), N(0)))
+    st = _store(("t.demands", Demands(cond)))
+    root = st.scopes.create()
+    r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
+                                evidence=Evidence("t.demands")),
+               services=StubServices(true=(cond,)),
+               mode=ExecutionMode.INTERACTIVE)
+    step = st.get_step(r.step)
+    assert step.reads == ContextReadSet(), "interactive 不得记录读依赖"
+    j = st.get_judgment(r.judgments[0])
+    # 条件照判（否则被否证的守卫会被放过），只是不登记清偿
+    assert not st.is_discharged(j.requirements[0], root.id)
+    assert st.applicability(j.id, root.id).is_conditional()
+
+
+def test_audit保留每次读取而derivation去重():
+    cond = mk(S("Ne"), (S("x"), N(0)))
+    reads = {}
+    for mode in (ExecutionMode.DERIVATION, ExecutionMode.AUDIT):
+        st = _store(("t.demands", Demands(cond)))
+        root = st.scopes.create()
+        r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
+                                    evidence=Evidence("t.demands"),
+                                    guard_policy=GuardPolicy.ALLOW_CONDITIONAL),
+                   services=StubServices(), mode=mode)
+        reads[mode] = st.get_step(r.step).reads.entries
+    assert reads[ExecutionMode.DERIVATION], "derivation 应记录读依赖"
+    assert len(reads[ExecutionMode.AUDIT]) >= len(reads[ExecutionMode.DERIVATION])
+
+
+def test_条件被否证在各模式下都拒绝():
+    """条件判定不受模式影响：被否证一律拒绝提交（健全性与模式无关）。"""
+    cond = mk(S("Ne"), (S("x"), N(0)))
+    for mode in ExecutionMode:
+        st = _store(("t.demands", Demands(cond)))
+        root = st.scopes.create()
+        r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
+                                    evidence=Evidence("t.demands")),
+                   services=StubServices(false=(cond,)), mode=mode)
+        assert r.is_refused(), mode
+        assert st.stats()["steps"] == 0, mode
 
 
 def test_否证使原结论不适用但不删除():

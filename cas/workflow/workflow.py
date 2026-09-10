@@ -177,12 +177,14 @@ _POLICY = GuardPolicy.ALLOW_CONDITIONAL
 class Workflow:
     """提交边界 + 展示记录。"""
 
-    def __init__(self, store=None, services=None):
+    def __init__(self, store=None, services=None, mode=None):
+        from cas.kernel.mode import DEFAULT_MODE
         self.store = store if store is not None else KernelStore()
         register_core_checkers(self.store)
         _checkers.register(self.store)
         self.services = services if services is not None \
             else _checkers.WorkflowServices(self.store.scopes)
+        self.mode = mode if mode is not None else DEFAULT_MODE
         self._root = self.store.scopes.create()
         self.scope = self._root.id
         self._steps: dict = {}
@@ -214,7 +216,8 @@ class Workflow:
                                 conclusions=(content,),
                                 evidence=Evidence(cid, derivation),
                                 guard_policy=_POLICY)
-        res = commit(self.store, proposal, services=self.services)
+        res = commit(self.store, proposal, services=self.services,
+                     mode=self.mode)
 
         if res.is_committed():
             j = self.store.get_judgment(res.judgments[0])

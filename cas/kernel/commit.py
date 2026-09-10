@@ -109,7 +109,10 @@ class NeedsSplit(CommitResult):
 # ---------------------------------------------------------------------------
 
 def commit(store, proposal, context=None, services=None,
-           discharge_checker_id="kernel.decide") -> CommitResult:
+           discharge_checker_id="kernel.decide",
+           mode=None) -> CommitResult:
+    from cas.kernel.mode import DEFAULT_MODE
+    mode = mode if mode is not None else DEFAULT_MODE
     services = services if services is not None else NullServices()
 
     # --- 1. scope 合法性 ---
@@ -118,7 +121,7 @@ def commit(store, proposal, context=None, services=None,
     except KeyError:
         return Refused(Reason.FRAGMENT, f"scope 不存在: {proposal.scope}")
     ctx = context if context is not None \
-        else TrackedContext(store.scopes, services, proposal.scope)
+        else TrackedContext(store.scopes, services, proposal.scope, mode)
 
     # --- 2. premise 可见性（子作用域结论不得反向使用；兄弟分支互不可见）---
     inherited = []
@@ -153,7 +156,6 @@ def commit(store, proposal, context=None, services=None,
         return Undecided(result.reason, result.detail or "结论未获复核")
 
     direct = tuple(result.direct_requirements) if result.is_accepted() else ()
-    reads = result.reads if result.is_accepted() else ContextReadSet()
 
     # --- 5/6. 条件收集与清偿尝试（Proved / Refuted / Unknown 三分）---
     proved_terms = []
@@ -199,30 +201,37 @@ def commit(store, proposal, context=None, services=None,
             requirements=carried, producer=step_id))
         jids.append(jid)
 
+    step_reads = ctx.read_set(dedupe=not mode.raw_reads())
     store.put_step(Step(id=step_id, scope=proposal.scope,
                         premises=tuple(proposal.premises),
                         conclusions=tuple(jids),
                         evidence=proposal.evidence,
-                        reads=reads.merge(ctx.read_set())))
+                        # 读依赖以 TrackedContext 的记录为准（§6.11：checker 读
+                        # 上下文的唯一通道）。粒度随模式：审计保留每次出现。
+                        reads=step_reads))
 
     # --- 7. Proved → 记录清偿依据 ---
-    for t in proved_terms:
-        dj = _commit_decided(store, proposal.scope, t, ctx, services,
-                             discharge_checker_id)
-        if dj is not None:
-            store.add_discharge(Discharge(requirement=direct_ids[t],
-                                          by_judgment=dj,
-                                          scope=proposal.scope))
+    # interactive 推迟清偿登记（AGENTS.md §四.2）：条件**照判**（上一步，否则
+    # 被否证的守卫会被放过），只是暂时不把已证条件记成 Discharge。
+    if not mode.defers_discharge():
+        for t in proved_terms:
+            dj = _commit_decided(store, proposal.scope, t, ctx, services,
+                                 discharge_checker_id, mode)
+            if dj is not None:
+                store.add_discharge(Discharge(requirement=direct_ids[t],
+                                              by_judgment=dj,
+                                              scope=proposal.scope))
 
     # 10d. 否证登记：结论恰为某待决条件的否定时，原结论标 Inapplicable（不删除）
     for jid, prop in zip(jids, proposal.conclusions):
         _record_refutations(store, proposal.scope, prop, jid)
 
     return Committed(step=step_id, judgments=tuple(jids),
-                     requirements=tuple(all_req), reads=reads)
+                     requirements=tuple(all_req), reads=step_reads)
 
 
-def _commit_decided(store, scope, proposition, ctx, services, checker_id):
+def _commit_decided(store, scope, proposition, ctx, services, checker_id,
+                    mode=None):
     """为已判定的条件补一条经同一协议落地的结论，作为清偿依据。
 
     递归安全：decide-checker 不接受任何直接条件，故不会再次触发清偿。
@@ -233,7 +242,7 @@ def _commit_decided(store, scope, proposition, ctx, services, checker_id):
                         evidence=Evidence(checker_id, proposition),
                         guard_policy=GuardPolicy.REQUIRE_PROVED)
     res = commit(store, prop, context=ctx, services=services,
-                 discharge_checker_id=checker_id)
+                 discharge_checker_id=checker_id, mode=mode)
     return res.judgments[0] if res.is_committed() else None
 
 

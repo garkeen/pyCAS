@@ -73,14 +73,18 @@ class TrackedContext:
     结果与读取内容不受模式影响（AGENTS.md §四.3）。
     """
 
-    def __init__(self, scopes, services, scope_id):
+    def __init__(self, scopes, services, scope_id,
+                 mode=None):
+        from cas.kernel.mode import DEFAULT_MODE
         self._scopes = scopes
         self._services = services
         self._sid = scope_id
+        self._mode = mode if mode is not None else DEFAULT_MODE
         self._reads = []
 
     def _record(self, kind, key):
-        self._reads.append((kind, key))
+        if self._mode.records_reads():
+            self._reads.append((kind, key))
 
     def lookup_definition(self, symbol):
         body = self._scopes.lookup_definition(self._sid, symbol)
@@ -102,9 +106,13 @@ class TrackedContext:
         self._record("decide", repr(proposition))
         return v
 
-    def read_set(self):
+    def read_set(self, dedupe=True):
+        """读依赖记录。dedupe=True 为 Step 粒度（每项一次），False 为 read 粒度
+        （保留每次出现）——后者即 audit 模式。"""
         from cas.kernel.model import ContextReadSet
-        seen = {}
-        for k, val in self._reads:
-            seen[k] = val
-        return ContextReadSet(tuple(sorted(seen.items())))
+        if dedupe:
+            seen = {}
+            for k, val in self._reads:
+                seen[k] = val
+            return ContextReadSet(tuple(sorted(seen.items())))
+        return ContextReadSet(tuple(self._reads))
