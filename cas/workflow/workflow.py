@@ -42,6 +42,7 @@ from cas.kernel.store import KernelStore
 from cas.workflow import checkers as _checkers
 from cas.workflow.artifact import ArtifactStore
 from cas.workflow.branch import BranchCase, BranchStore, promote_guard
+from cas.workflow.constraint import ConstraintStore
 from cas.workflow.event import EventLog, Ref
 from cas.workflow.task import TaskStore
 
@@ -204,6 +205,7 @@ class Workflow:
         self.tasks = TaskStore(kernel=self.store)
         self.events = EventLog()
         self.branches = BranchStore()
+        self.constraints = ConstraintStore()
         self._steps: dict = {}
         self._next_id = 0
 
@@ -294,6 +296,17 @@ class Workflow:
         task = self.tasks.open_task(self.scope, T.mk(S(head), args))
         self.tasks.propose(task.id, artifact.id, judgment)
         return task
+
+    # --- 约束（v4 §8.6：计算构造出的方程，环在候选↔约束子图）---
+
+    def add_constraint(self, relation, sources=(), proposed_evidence=None):
+        """登记一条计算构造关系。**不产生 Judgment**——约束是 Artifact 级构造，
+        要成为结论仍须经 commit 并由 checker 接受（§8.6）。"""
+        c = self.constraints.add(self.scope, relation, sources,
+                                 proposed_evidence)
+        self.events.append(command="AddConstraint", inputs=(),
+                           outputs=(Ref("constraint", c.id),))
+        return c
 
     # --- 分支（v4 §8.8）---
 

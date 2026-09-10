@@ -80,6 +80,12 @@ class KernelStore:
     def get_step(self, sid: StepId) -> Step:
         return self._steps[sid]
 
+    def all_steps(self) -> tuple:
+        return tuple(self._steps[i] for i in range(self._next_step))
+
+    def all_judgments(self) -> tuple:
+        return tuple(self._judgments[i] for i in range(self._next_jud))
+
     def requirements_of(self, jid: JudgmentId) -> tuple:
         return self._judgments[jid].requirements
 

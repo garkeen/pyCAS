@@ -182,3 +182,52 @@ def test_needs_split状态与开分支接线():
     s1 = wf.add(parse("x/x"), Claim())
     assert s1.status == "open", (s1.status, s1.note)
     assert wf.applicability_of(s1).is_applicable(), wf.applicability_of(s1)
+
+
+# ---------------------------------------------------------------------------
+# §8.6 Constraint：环在候选↔约束子图
+# ---------------------------------------------------------------------------
+
+def test_约束可引用候选且允许成环():
+    """§9.6 循环积分：两条构造约束互为对方的定义。任务树无环，候选图成环。"""
+    from cas.workflow.constraint import CandidateRef
+    wf = Workflow()
+    # 两个候选：T0 与 T1 各自的任务 + 产物
+    s0 = wf.add(parse("i"), Claim())
+    s1 = wf.add(parse("j"), Claim())
+    ref0 = CandidateRef(task=s0.task, artifact=s0.artifact)
+    ref1 = CandidateRef(task=s1.task, artifact=s1.artifact)
+
+    u, v = S("_u"), S("_v")                     # 子项抽象把候选冻成符号（§5.4）
+    a = parse("exp(x)*sin(x)")
+    b = parse("exp(x)*cos(x)")
+    c1 = wf.add_constraint(T.eq(u, T.plus(a, T.neg(v))), sources=(ref0, ref1))
+    c2 = wf.add_constraint(T.eq(v, T.plus(T.plus(b, N(-1)), u)),
+                           sources=(ref1, ref0))
+
+    # 候选图：ref0 → c1, ref0 → c2, ref1 → c1, ref1 → c2 —— 互为依赖
+    edges = wf.constraints.dependency_edges()
+    assert (ref0, c1.id) in edges and (ref1, c1.id) in edges
+    assert (ref0, c2.id) in edges and (ref1, c2.id) in edges
+    assert wf.constraints.involving(ref0) == (c1, c2)
+
+    # 任务树仍然无环：树边只能从已存在的父指向后创建的子（id 递增）
+    for parent, child in wf.tasks.task_tree_edges():
+        assert parent < child, "任务树出现回指"
+
+    # 内核证明图仍无环：每个 Step 的前提都由更早的 Step 产出
+    for step in wf.store.all_steps():
+        for p in step.premises:
+            assert wf.store.get_judgment(p).producer < step.id, "证明图出现回指"
+
+
+def test_约束不自动成为结论():
+    """§8.6：Constraint 可能只是算法构造，不一定是可参与证明的 Judgment。"""
+    wf = Workflow()
+    before = wf.store.stats()["judgments"]
+    c = wf.add_constraint(parse("_u == 1"))
+    assert wf.store.stats()["judgments"] == before, "登记约束不得产生结论"
+    assert c.proposed_evidence is None
+    # 约束出现在操作历史里（outputs 带 kind 标签）
+    kinds = [r.kind for r in wf.events.events()[-1].outputs]
+    assert kinds == ["constraint"]
