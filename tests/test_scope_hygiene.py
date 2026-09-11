@@ -102,12 +102,41 @@ def test_recursive_definition_rejected():
         wf.define(U, T.plus(U, X))
 
 
-def test_definition_body_may_not_use_scope_locals():
-    """v4 §6.2：右侧须在父作用域良好绑定——本作用域刚引入的别名还不算绑定。"""
+def test_definition_body_may_use_earlier_same_scope_alias():
+    """v4 §6.2 第 3 条是**顺序可见**：同一作用域里后来者可用先前的别名。
+
+    参考实现一致：Maxima `block([expr, W_subst], expr:…, W_subst:…, …)`
+    （tests/rtest_allnummod.mac:1796）、FriCAS 函数体
+    `delta := p2-p1; len := arrowScale * length delta`（src/input/arrows.input）、
+    Reduce vsl/alg.tst:32、yacas scripts/standard.ys:25。
+    """
     wf = _wf()
     wf.define(U, T.times(X, X))
+    v = S("v")
+    wf.define(v, T.plus(U, X))
+    assert wf.store.scopes.lookup_definition(wf.scope, v) is T.plus(U, X)
+    assert wf.store.scopes.lookup_definition(wf.scope, U) is T.times(X, X)
+
+
+def test_definition_body_may_not_use_other_scope_local():
+    """右侧不得引用**其他**作用域（兄弟分支）的局部符号——那才是未绑定。"""
+    wf = _wf()
+    root = wf.scope
+    _child(wf)
+    wf.define(U, T.times(X, X))
+    wf.enter(root)
+    _child(wf)
     with pytest.raises(ScopeError):
         wf.define(S("v"), T.plus(U, X))
+
+
+def test_mutual_alias_recursion_rejected():
+    """互递归别名（u := v 之后 v := u）也是一个展不开的环。"""
+    wf = _wf()
+    v = S("v")
+    wf.define(U, v)                     # v 此时是自由符号，允许
+    with pytest.raises(ScopeError):
+        wf.define(v, T.plus(U, X))
 
 
 # ---------------------------------------------------------------------------

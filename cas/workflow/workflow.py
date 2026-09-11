@@ -397,25 +397,55 @@ class Workflow:
         内核按 §6.2 只查四件事，此处前三件在定义时查，第四件在作用域边界强制：
 
         1. 左侧符号新鲜——链上未声明、未定义；
-        2. 不形成非法递归——`body` 不得引用 `symbol` 自身；
-        3. 右侧在本作用域中良好绑定——`body` 不得引用本作用域的局部符号
-           （那些符号在定义右侧还不可见）；
+        2. 不形成非法递归——`body` 经别名展开后不得出现 `symbol`（含互递归）；
+        3. 右侧在作用域内良好绑定——可用本作用域**先前**的条目与祖先的条目，
+           但不得引用**其他**作用域（兄弟分支等）的局部符号；
         4. 局部符号不泄漏到作用域之外的结论——由 `kernel.commit` 第 1 步
            经 `ScopeStore.escapes` 强制（不变量 15）。
+
+        第 3 条是「顺序可见」：同一作用域里后来者可以引用先前的别名。参考实现
+        一致——Maxima `block([expr, W_subst], expr:…, W_subst:…, …)`
+        （`tests/rtest_allnummod.mac:1796`）、FriCAS 函数体内
+        `delta := p2-p1; len := arrowScale * length delta`
+        （`src/input/arrows.input`）、Reduce `vsl/alg.tst:32`、yacas
+        `scripts/standard.ys:25`。各家的卫生纪律针对的是**逃逸**
+        （Maxima 的 `block` 退出还原、Mathematica 的 `Module` 改名防捕获），
+        不是同作用域引用。这里的定义是**惰性别名**（更接近 Mathematica 的
+        `SetDelayed` / `Module`），故展开后的引用关系必须无环。
 
         返回值是新作用域；`symbol` 之后经 `ScopeStore.lookup_definition` 可解。
         """
         self._require_fresh(symbol, "定义")
-        fv = T.free_vars(body)
-        if symbol in fv:
-            raise ScopeError(f"定义非法递归：{symbol!r} 出现在右侧")
-        local = set(self.store.scopes.local_symbols(self.scope))
-        bad = [f for f in fv if f in local]
+        if self._alias_cycle(symbol, body):
+            raise ScopeError(f"定义非法递归：{symbol!r} 经别名展开后出现在右侧")
+        bad = self.store.scopes.escapes(self.scope, body)
         if bad:
-            raise ScopeError(f"定义右侧引用了本作用域局部符号（尚未绑定）: {bad!r}")
+            raise ScopeError(f"定义右侧引用了外部作用域的局部符号: {bad!r}")
         return self.store.scopes.extend(
             self.store.scopes.get(self.scope),
             definitions=(Definition(symbol, body),))
+
+    def _alias_cycle(self, symbol, body, seen=None) -> bool:
+        """`body` 经**别名展开**后是否出现 `symbol`（v4 §6.2「不形成非法递归」）。
+
+        只查直接自引用不够：`u := v`（此时 v 是自由符号）之后再 `v := u` 会
+        形成一个谁都展不开的别名环，语义上是无穷展开。展开按当前作用域链上的
+        定义表做，`seen` 挡住既有的环，故必停。
+        """
+        fv = T.free_vars(body)
+        if symbol in fv:
+            return True
+        seen = set() if seen is None else seen
+        for f in fv:
+            if f in seen:
+                continue
+            inner = self.store.scopes.lookup_definition(self.scope, f)
+            if inner is None:
+                continue
+            seen.add(f)
+            if self._alias_cycle(symbol, inner, seen):
+                return True
+        return False
 
     def _require_fresh(self, symbol, what):
         """符号新鲜：链上既未定义也未声明（v4 §6.2「左侧符号新鲜」）。"""
