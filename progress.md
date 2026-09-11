@@ -342,7 +342,73 @@ workflow→math 顶层依赖），v4 §三 的目标位置是各 `math/*/checker
 
 
 
-## 已完成（v3 实现基线，稳定全绿）
+### v3 残留清剿与接轨（2026-09-11）
+
+按 AGENTS.md §六 债务零携带逐条复核 v3 遗留，并把 v4 已规定、此前无人接线的
+机制接通。
+
+**删除（v3 遗留 / 可被强实现替代）**
+
+- `syntax/term.py` 的 `NORM` / `register_norm`：v2「驻留即规范化」的遗留扩展
+  点，从未被 `mk` 读取；注释称 mk 内建 L0 环规范化也是假的（实测 `Plus(0,x)`、
+  `Times(1,x)`、`Power(x,1)` 全部原样保留）
+- `mk` 的互补对消解（`c ∨ ¬c → ⊤`）：那是对「是否恒真」的判定，属语义层；
+  改由 `branch.coverage` checker 独立判定（v4 §2.1 禁止驻留期判定语义）。账本
+  里记下的命题因此是**被验证的那个互补析取**，而非构造期坍缩出的 ⊤
+- `realroot.isolate_squarefree`（被同文件 `real_roots_intervals` 取代）、
+  `simplify.expand` / `_mul_expand`（生产路径不消费；stress_qarith 的 P4 改走
+  `poly.from_term → to_term`）
+- `workflow/constraint.py` 的重名死类 `ValuationCheck`（活的是 command.py 工厂）
+- 与既有等价 API 重复的 7 个死导入；`tests/` 的 121 个非 ASCII 标识符全改英文
+  （`cas/` 生产代码为 0）
+
+**接轨（v4 已规定、此前无人调用）**
+
+- 不变量 15 逃逸检查：`ScopeStore.escapes` + `commit` 第 1 步强制。旧的
+  `escapes_to_parent` 契约是错的（符号在本作用域出现不构成逃逸，会误报）且
+  从未被调用，已由正确实现取代
+- §6.2 声明/定义：`Workflow.declare` / `define`，四项检查齐全——符号新鲜 /
+  不形成非法递归（含互递归，新增 `_alias_cycle`）/ 右侧顺序可见且不引用外部
+  作用域的局部符号 / 结论不得逃逸
+- §8.8 分支合并：`Workflow.merge_branches` 五条检查 + `BranchMergeChecker`；
+  `commit` 增 `inherited_reads`，合并步读集 = 各支读集之并 ——
+  `ContextReadSet.merge` 因此有了消费者
+- §四 依赖方向：`is_eq` 三份副本合成 `syntax/term.py:is_eq`；新建 `cas/api.py`
+  作为前端访问计算设施的唯一出口；新增门禁
+  `test_dependency_frontend_only_api_workflow_runtime`
+
+**修掉的 bug**
+
+- `TrackedContext.read_set` 与 `ContextReadSet.merge` 的去重键只用了 kind，
+  同类的多次读取（两条假设、两次判定）被压成一条 → 读依赖丢失。改为按
+  `(kind, key)` 整项去重，merge 变真并集
+- `simplify()` 实测是恒等函数（`mk` 不做代数折叠），docstring 的「构造即规范化」
+  是假的，据实改写（函数保留：它仍承担输入规模的预算把关）
+
+**定义语义更正（参考实现取证）**
+
+v4 §6.2「右侧在父作用域中良好绑定」一度被读成「不得引用本作用域局部符号」，
+等于禁止同作用域链式定义。参考实现一致反对该读法：Maxima
+`tests/rtest_allnummod.mac:1796`（同一 block 内 `expr` / `W_subst` 顺序使用）、
+FriCAS `src/input/arrows.input:7-12`（`delta := p2-p1` → `len := … delta`）、
+Reduce `vsl/alg.tst:32`（`a(0):=1$` 后 `a(i):=i*a(i-1)`）、yacas
+`scripts/standard.ys:25`。各家的卫生纪律针对的是**逃逸**（Maxima 的 `block`
+退出还原、Mathematica 的 `Module` 靠改名防捕获），不是同作用域引用。已更正为
+「顺序可见 + 不得引用其他作用域的局部符号」。
+
+**未决（需裁定，不要自行发明）**
+
+- 分支合并的「每支确实回答了 P」这一环目前由工作流按**内核记录**核对——checker
+  无法独立复算，因为不变量 8 禁止分支结论作为父作用域前提。要让内核独立复核，
+  需 `commit` 支持「蕴含引入」规则（Γ,C ⊢ P ⟹ Γ ⊢ C⇒P）。这是内核新规则，
+  动不变量 8 的边界，未落
+- §四 表允许 `frontend → api/workflow/runtime`，但 parser/pprint 依赖 syntax 是
+  既有事实，字面执行需把解析/打印移出 frontend。门禁目前只禁 frontend→math/kernel
+
+验收：`tests/` **148 passed**、`stress/` 10 passed、REPL 端到端正常、pyflakes
+除既有 unused-import 债务外干净。
+
+
 
 ### 地基
 - **L0 驻留项层**（`cas/term.py`）：不可变 hash-consing 树，AC 拉平+排序，绑定变量（de Bruijn），纯句法无域语义；And/Or 句法折叠（真值常元吸收、排中/矛盾律坍缩）
