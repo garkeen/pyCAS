@@ -1,140 +1,113 @@
 # Progress
 
-Current implementation state and next steps. The design authority is
-`cas_v4_arch.md`; the engineering discipline is `AGENTS.md`. `cas_v3_arch.md` is
-superseded and kept for history only.
+当前实现状态与下一步。设计裁定以 `cas_v4_arch.md` 为准，工程纪律以 `AGENTS.md`
+为准；`cas_v3_arch.md` 已被取代，仅留作历史追溯。
 
-## Repository layout
+**文档语言约定：本文档与 `AGENTS.md`、`cas_v4_arch.md` 等设计文档一律用中文；
+「代码与注释统一英文」只约束源码（`.py` / `.dsl`），不约束文档。**
 
-| Path | Contents |
+## 目录结构
+
+| 路径 | 内容 |
 |---|---|
-| `cas/syntax/` | `term` (interned terms), `pattern` (pattern metalanguage), `match`, `termpath`, `abstract` |
-| `cas/kernel/` | `verdict`, `model`, `evidence`, `scope`, `context`, `commit`, `store`, `services`, `ids`, `mode` |
-| `cas/workflow/` | `workflow`, `command`, `artifact`, `task`, `event`, `constraint`, `branch`, `ids` |
-| `cas/math/domains/` | `base`, `z`, `q`, `qi`, `poly`, `ratfunc`, `polytools`, `linalg`, `module` |
-| `cas/math/` | `project`, `qarith`, `decide`, `diff`, `integrate`, `cad`, `realroot`, `tactics`, `piecewise`, `domcond`, `rules`, `simplify`, `judge`, `constraints`, `loader`, plus `base/`, `elementary/`, `calculus/`, `solving/` |
-| `cas/runtime/` | `registry` (RuntimeBuilder), `runtime` (Runtime, new_workflow), `bootstrap`, `dispatch`, `algorithms`, `services` |
-| `cas/frontend/` | `parser`, `pprint`, `repl`; the root `repl.py` is the entry shell |
-| `cas/api.py`, `cas/errors.py` | frontend computation facade; shared exceptions |
+| `cas/syntax/` | `term`（驻留项）、`pattern`（模式元语言）、`match`、`termpath`、`abstract` |
+| `cas/kernel/` | `verdict`、`model`、`evidence`、`scope`、`context`、`commit`、`store`、`services`、`ids`、`mode` |
+| `cas/workflow/` | `workflow`、`command`、`artifact`、`task`、`event`、`constraint`、`branch`、`ids` |
+| `cas/math/domains/` | `base`、`z`、`q`、`qi`、`poly`、`ratfunc`、`polytools`、`linalg`、`module` |
+| `cas/math/` | `project`、`qarith`、`decide`、`diff`、`integrate`、`cad`、`realroot`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader`，以及 `base/`、`elementary/`、`calculus/`、`solving/` |
+| `cas/runtime/` | `registry`（RuntimeBuilder）、`runtime`（Runtime、new_workflow）、`bootstrap`、`dispatch`、`algorithms`、`services` |
+| `cas/frontend/` | `parser`、`pprint`、`repl`；根目录 `repl.py` 是入口外壳 |
+| `cas/api.py`、`cas/errors.py` | 前端计算门面；共享异常 |
 
-## Dependency direction
+## 依赖方向
 
-Enforced mechanically in `tests/test_v4_invariants.py`:
+由 `tests/test_v4_invariants.py` 机械强制：
 
-- `syntax` depends only on the standard library and `cas.errors`.
-- `kernel` depends only on `syntax`; it imports no concrete math, workflow or
-  frontend module, and contains no workflow concept names.
-- `workflow` depends only on `syntax` + `kernel`; checkers, decision services and
-  algorithms are injected by the runtime, so no `cas.math` import exists in it.
-- `math/domains` depends on `syntax`; other math modules may use `syntax`,
-  `kernel`, `workflow` and `math/domains`. Math never imports `runtime`.
-- The runtime is the assembler: `bootstrap()` installs every math module and
-  binds the read-only surfaces. There is no import-time global mutation.
-- The frontend reaches computation only through `cas/api.py` and
-  `cas/runtime/dispatch.py`; it imports no `cas.math` or `cas.kernel`.
+- `syntax` 只依赖标准库与 `cas.errors`。
+- `kernel` 只依赖 `syntax`：不导入任何具体 math / workflow / frontend 模块，且
+  不含工作流概念名。
+- `workflow` 只依赖 `syntax` + `kernel`：checker、判定服务与算法由 runtime 注入，
+  故其中不存在 `cas.math` 导入。
+- `math/domains` 依赖 `syntax`；其余 math 模块可用 `syntax`、`kernel`、`workflow`
+  与 `math/domains`。math 永不导入 `runtime`。
+- runtime 是装配者：`bootstrap()` 装入全部 math 模块并绑定只读查询面，不存在
+  import 期全局状态修改。
+- 前端只经 `cas/api.py` 与 `cas/runtime/dispatch.py` 触达计算，不导入
+  `cas.math` 或 `cas.kernel`。
 
-## v4 migration status
+## v4 迁移状态
 
-| Stage | Content | Status |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| 1 | syntax split; pattern metalanguage (PatternVar/PatternSeq are not Terms) | done |
-| 2 | kernel model: Scope / Judgment / Requirement / Evidence / StepProposal / commit / CheckerRegistry | done |
-| 3 | derivation ADT removed; commands generate proposals; checkers verify instances rather than re-searching | done |
-| 4 | Artifact / Task / Event separation | partial: the three graphs and constraints exist with real consumers, but history truncation and the applicability cache are not built |
-| 5 | persistent scope tree replacing the mutable context | done |
-| 6 | math modules under `cas/math`, explicit `install(builder)` assembly | done |
+| 1 | syntax 拆分；模式元语言（PatternVar/PatternSeq 不是 Term） | 完成 |
+| 2 | 内核模型：Scope / Judgment / Requirement / Evidence / StepProposal / commit / CheckerRegistry | 完成 |
+| 3 | 废除 Derivation ADT；命令产出提案，checker 验证实例而非重跑搜索 | 完成 |
+| 4 | Artifact / Task / Event 三图分离 | 部分：三图与约束已有真实消费方，历史截断与 Applicability 缓存尚未建 |
+| 5 | 持久化 Scope 树取代可变 Context | 完成 |
+| 6 | math 模块归入 `cas/math`，显式 `install(builder)` 装配 | 完成 |
 
-Invariants 1 / 2 / 14 / 16 / 18 are green, plus four dependency/reference
-direction gates; there are no xfail entries. The red-first policy now applies
-only where a genuine cross-stage migration is pending.
+不变量 1 / 2 / 14 / 16 / 18 已绿，另有四条依赖与引用方向门禁；无 xfail 项。
+「红灯先挂」策略现在只适用于确有跨阶段迁移待做之处。
 
-## Implementation discipline
+## 实现纪律
 
-`AGENTS.md` carries six hard rules: no hardcoding, no special-casing
-(case-driven or simplified implementations), strict capability-based domain
-dispatch, automatic algorithms restricted to decidable content, single
-responsibility, and names that match semantics.
+`AGENTS.md` 载有六条硬约束：禁止硬编码、禁止特判（案例导向或简化实现）、严格按
+能力字段做域分派、自动化算法只做可判定内容、职责单一、名字对得起语义。
 
-Work landed against them:
+据此已落地：
 
-- Mathematical-semantics heads (elementary functions and constants) are declared
-  in `math/elementary/declarations.dsl` and installed through the builder. The
-  file also carries parse-level aliases (`ln -> Log`, `sqrt -> Sqrt`) and
-  algorithm roles (`logarithm -> Log`), so neither the parser nor the
-  differentiator hardcodes a function name. Admission is checked mechanically
-  against the DSL text.
-- Surface heads (Plus/Times/Power, the comparisons, And/Or/Not, Quote/Piecewise)
-  remain dispatchable in algorithms: they are the structure of the term language.
-- Concrete domain singletons were replaced by capability queries
-  (`find_domain`): CAD takes the unique ordered field, the Diophantine fragment
-  takes the unique Euclidean integral domain, and the projection base field is
-  chosen the same way. The default coefficient ring of K[x]/K(x) is injected at
-  assembly time instead of being bootstrapped inside the domain package.
-- The projection ladder is registered (`ProjectionStage`) rather than a hardcoded
-  if-chain.
-- The integration verifier lives in `math/calculus/integration/verify.py`, apart
-  from the solver; a strengthened gate rejects any checker that imports its own
-  solver module.
-- The workflow step record is named `WorkflowStep`, distinct from the kernel
-  `Step`.
-- `cas/runtime/dispatch.py` forwards attributes to the assembled runtime through
-  module `__getattr__` instead of hand-writing one forwarding function per
-  Runtime method.
+- 数学语义 head（初等函数与常数）在 `math/elementary/declarations.dsl` 声明并经
+  builder 装配。该文件还承载解析层别名（`ln -> Log`、`sqrt -> Sqrt`）与算法角色
+  （`logarithm -> Log`），故 parser 与微分器都不写死函数名。准入纪律对 DSL 文本
+  机械化检查。
+- 签名 head（Plus/Times/Power、各比较、And/Or/Not、Quote/Piecewise）在算法中仍可
+  分派：它们是项语言自身的结构。
+- 具体域单例改为能力查询（`find_domain`）：CAD 取唯一有序域，丢番图碎片取唯一
+  欧几里得整环，投影基域同法选取。K[x]/K(x) 的缺省系数环由装配期注入，不再由
+  域包自举。
+- 投影阶梯以 `ProjectionStage` 注册，而非写死 if 链。
+- 积分验证器住在 `math/calculus/integration/verify.py`，与求解器分家；门禁拒绝任何
+  checker 导入自己的求解器模块。
+- 工作流步骤记录命名为 `WorkflowStep`，与内核 `Step` 区分。
+- `cas/runtime/dispatch.py` 以模块 `__getattr__` 转发到已装配的 runtime，取代逐方法
+  手写转发。
 
-## Implemented foundation
+## 已实现地基
 
-- Interned term layer with AC canonical forms; pattern metalanguage separate from
-  the term layer; binder abstraction/instantiation on de Bruijn indices.
-- Exact rational literal arithmetic; domain system Z, Q, Q(i), K[x], K(x) with
-  capability fields and a projection ladder.
-- Decision pipeline returning the `Verdict` ADT with the four `Reason` values,
-  honest undecided outside the fragment.
-- Kernel: append-only ledger, scope tree with visibility and escape checks,
-  condition lifecycle with discharge and refutation, ten-step commit with a
-  provable four-step specialization.
-- Rule engine driven by declared rules; auto rules are guard-free and terminate
-  by strict cost decrease.
-- One-dimensional CAD (real root isolation via Sturm), piecewise container with
-  ordered first-match semantics, cautious piecewise differentiation, piecewise
-  equation solving, polynomial-fragment integration with a three-valued
-  independent verifier, linear algebra (echelon, rank, nullspace, solving,
-  Bareiss determinant), resultants and Yun squarefree decomposition, linear
-  Diophantine fragments and integer roots, constraint solving over terms,
-  branch split/merge, declarations/definitions with hygiene checks.
-- REPL covering claim/norm/solve/subst/split/diff/rules/apply/integrate/check/
-  steps/undo, routed through the frontend facade.
+- 驻留项层与 AC 规范形；模式元语言与项层分离；绑定抽象/实例化基于 de Bruijn 索引。
+- 精确有理字面算术；域系统 ℤ、ℚ、ℚ(i)、K[x]、K(x)，带能力字段与投影阶梯。
+- 判定管线返回 `Verdict` ADT 与四种 `Reason`，片段外诚实未决。
+- 内核：追加式账本、带可见性与逃逸检查的作用域树、条件生命周期（清偿与否证）、
+  十步 commit 及其可证明的四步特化。
+- 规则引擎由声明规则驱动；auto 规则无守卫，并按成本严格下降终止。
+- 一维 CAD（Sturm 实根隔离）、有序首中语义的分段容器、审慎的分段求导、分段方程
+  求解、多项式片段积分与三值独立验证器、线性代数（行阶梯、秩、核、求解、Bareiss
+  行列式）、结式与 Yun 无平方分解、线性丢番图碎片与整数根、项上约束求解、分支
+  分裂/合并、带卫生检查的声明/定义。
+- REPL 覆盖 claim/norm/solve/subst/split/diff/rules/apply/integrate/check/steps/undo，
+  一律经前端门面。
 
-Verification: `tests/` 160 passed; `stress/` 10 scripts passing (41 self-proving
-properties).
+验证：`tests/` 160 通过；`stress/` 10 个台架通过（41 条自证性质）。
 
-## Not implemented (next work)
+## 未实现（下一步）
 
-- Interactive channel: workflow serialization and replay; real undo/redo beyond
-  moving the revision pointer; versioned context folding; consuming split
-  branches in later solving.
-- Tactics: quadratic solving with discriminant branches; cyclic equation solving;
-  general Diophantine refusal wired to UNDECIDABLE; multivariable and
-  binder-internal differentiation.
-- Number fields before Risch: Q(i) coefficient absorption in poly/ratfunc;
-  Gaussian integers; generic algebraic extensions; parametric fraction fields;
-  multivariate gcd.
-- Order and root comparison: interval arithmetic layer; declared order lemmas;
-  transcendental root objects; conditional answer containers.
-- Shared algorithm machine: Zassenhaus factorization; partial fractions and
-  Hermite reduction; subresultant chains; differential towers.
-- Trigonometric/exponential expansion and like-term collection. This is the
-  capability gap that keeps the cyclic exp/sin integral at "undecided": the
-  differentiation layer can verify it, but the vanishing channel cannot yet
-  expand the difference to zero.
-- Open design decision: branch merge cannot independently re-check "each branch
-  answered P" without commit supporting implication introduction
-  (Gamma, C proves P implies Gamma proves C -> P), which is a new kernel rule not
-  yet taken.
+- 交互通道：工作流序列化与回放；超越「移动 revision 指针」的真正 undo/redo；带版本
+  的上下文折叠；后续求解消费已分裂的分支。
+- 战术层：带判别式分支的二次求解；循环方程求解；一般丢番图拒答接入 UNDECIDABLE；
+  多变量与绑定体内微分。
+- Risch 之前的数域：poly/ratfunc 的 ℚ(i) 系数吸收；高斯整数；一般代数扩张；参数化
+  分式域；多变量 gcd。
+- 序与根比较：区间算术层；声明的序引理；超越根对象；条件答案容器。
+- 公共算法机器：Zassenhaus 因式分解；部分分式与 Hermite 归约；子结式链；微分塔。
+- 三角/指数展开与同类项收集。正是这一能力缺口让循环 exp/sin 积分停在「未决」：
+  微分层能验证它，但判零通道还不能把差值展开为零。
+- 未决设计：分支合并在不引入蕴含引入规则（Γ, C ⊢ P 推出 Γ ⊢ C → P）的前提下，
+  无法独立复核「各支都回答了 P」。这是一条尚未采纳的新内核规则。
 
-## Language and reference policy
+## 语言与引用纪律
 
-Code and comments are English-only, and source never cites a design document: a
-rationale is stated plainly rather than pointing the reader at a document. Both
-rules are mechanical gates in `tests/test_v4_invariants.py`
-(`test_source_is_english_only`, `test_source_cites_no_design_document`), covering
-every `.py` and `.dsl` file under `cas/`, `tests/` and `stress/`.
+源码（`.py` / `.dsl`）一律英文，且不得引用设计文档：理由以直述方式写清，不把读者
+指向某份文档去追。两条都是 `tests/test_v4_invariants.py` 里的机械门禁
+（`test_source_is_english_only`、`test_source_cites_no_design_document`），覆盖
+`cas/`、`tests/`、`stress/` 下全部源文件。**文档不受此约束**：设计文档与本文档
+保持中文。
