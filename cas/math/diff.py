@@ -1,21 +1,28 @@
-# -*- coding: utf-8 -*-
-"""结构微分：任意数域系数 × 任意已声明函数域。
+"""Structural differentiation over any number-field coefficients and any
+declared function domain.
 
-纯规则递归——反复套用：
-· 常数/变元：ℚ 系数与命名常数导数为 0，d(x)/dx = 1
-· Plus/Times：线性 + 莱布尼茨律
-· Power：幂规则 / 指数规则 / 一般 exp·log 形式
-· 函数：图书馆导数模板实例化（DB(0) 提升为参数）× 链式因子
+Pure rule recursion, applied repeatedly:
+· constants/variables: rational coefficients and named constants differentiate
+  to 0, d(x)/dx = 1
+· Plus/Times: linearity plus the Leibniz rule
+· Power: power rule / exponential rule / general exp-log form
+· functions: instantiate the declared derivative template (DB(0) lifted to the
+  argument) and multiply by the chain factor
 
-诚实边界：
-· 模板缺失 → DiffError，附图书馆说明
-· 顶层 Piecewise → DiffError（整体逐支求导在分段点不安全，见下）；审慎
-  通道 `differentiate_piecewise` 提供逐支导数 + 分段点显式未验证标注
-· 多参数函数、绑定体（Bound）内微分 → DiffError（未建）
-结果经 fold 收拢；项层产物可由域层导数（p_deriv/rf_deriv）独立
-交叉验证（见 workflow Diff 步骤验证器与 stress/stress_diff.py）。
-分段值模板（如 Abs 的 sign 导数）经链式法则留在驻留项，源在域外时
-工作流验证器诚实返回 UNKNOWN（步骤 open），不自证。
+Honest boundaries:
+· a missing template raises DiffError with the declaration note
+· a top-level Piecewise raises DiffError (branch-wise differentiation as a whole
+  is unsafe at the breakpoints, see below); the cautious channel
+  `differentiate_piecewise` provides branch-wise derivatives with breakpoints
+  explicitly marked unverified
+· multivariate functions and differentiation inside a binder raise DiffError
+  (not implemented)
+Results are folded. Term-level output can be cross-checked independently by the
+domain-layer derivative (p_deriv / rf_deriv), which is what the workflow's Diff
+verifier and the differentiation stress suite do. A piecewise value template
+(such as the sign derivative of Abs) stays in the interned term through the chain
+rule; when the source is outside the domain the workflow verifier honestly
+returns UNKNOWN rather than certifying itself.
 """
 
 from cas.syntax import term as T
@@ -27,13 +34,17 @@ _DECLS = None
 
 
 def bind_runtime(rt):
-    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+    """Inject the declaration query surface at assembly time.
 
-    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
-    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+    The dependency direction is runtime -> math (bootstrap pulls in every
+    mathematical module) and the reverse is forbidden, so a math module must not
+    import runtime. Declarations are therefore injected during assembly instead
+    of being fetched by the module itself.
 
-    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
-    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    Querying before injection raises rather than returning None: a silent None
+    would turn "forgot to assemble" into a hard-to-find wrong answer, whereas
+    "no such name" is a different case that still returns None for the caller to
+    degrade on.
     """
     global _DECLS
     _DECLS = rt
@@ -42,13 +53,13 @@ def bind_runtime(rt):
 def _R():
     if _DECLS is None:
         raise RuntimeError(
-            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+            "not assembled: call cas.runtime.bootstrap() first")
     return _DECLS
 
 
 
 def differentiate(t, x: Sym):
-    """d(t)/dx：结构递归 + 规则套用，结果折叠。"""
+    """d(t)/dx: structural recursion plus rule application, then folding."""
     return fold(_diff(t, x))
 
 
@@ -62,16 +73,16 @@ def _diff(t, x):
     if isinstance(t, Sym):
         return T.ONE if t is x else T.ZERO
     if isinstance(t, T.Const):
-        return T.ZERO                       # 命名常数（π、e、γ……）
+        return T.ZERO                       # named constants (pi, e, gamma, ...)
     if isinstance(t, Bound):
-        raise DiffError("绑定体内微分未建（量词/积分地基未完成）")
+        raise DiffError("differentiation inside a binder is not implemented")
     if not isinstance(t, Expr):
-        raise DiffError(f"无法微分的项：{t!r}")
+        raise DiffError(f"term cannot be differentiated: {t!r}")
     head = t.head.name
     if head == "Plus":
         return T.plus(*(_diff(a, x) for a in t.args))
     if head == "Times":
-        # 莱布尼茨：Σᵢ a₁…aᵢ₋₁·daᵢ·aᵢ₊₁…aₙ
+        # Leibniz: sum over i of a_1...a_{i-1} * da_i * a_{i+1}...a_n
         parts = []
         for i, a in enumerate(t.args):
             da = _diff(a, x)
@@ -82,44 +93,63 @@ def _diff(t, x):
         b, e = t.args
         db, de = _diff(b, x), _diff(e, x)
         if not _has(e, x):
-            # 幂规则：e·b^(e-1)·db（e 常数，含分数/负数）
+            # power rule: e * b^(e-1) * db (constant exponent, fractional or negative)
             return T.times(e, T.pw(b, T.plus(e, T.MONE)), db)
+        # A variable-exponent power needs the logarithm, taken by declared role
+        # rather than by hardcoding the Log name. When the role is undeclared
+        # this refuses honestly instead of guessing a same-named function.
+        log_head = _R().role_head("logarithm")
+        if log_head is None:
+            raise DiffError("logarithm role is not declared: variable-exponent "
+                            "power cannot be differentiated")
+        lnb = T.call(log_head, b)
         if not _has(b, x):
-            # 指数规则：b^e·ln(b)·de
-            return T.times(t, T.log(b), de)
-        # 一般情形：b^e·(de·ln b + e·db/b)
-        return T.times(t, T.plus(T.times(de, T.log(b)),
+            # exponential rule: b^e * ln(b) * de
+            return T.times(t, lnb, de)
+        # general case: b^e * (de * ln b + e * db / b)
+        return T.times(t, T.plus(T.times(de, lnb),
                                  T.times(e, db, T.pw(b, T.MONE))))
     if head in ("Eq", "Ne", "Lt", "Le", "Gt", "Ge", "And", "Or", "Not"):
-        raise DiffError("谓词不可微分")
+        raise DiffError("predicates cannot be differentiated")
     if head == "Piecewise":
-        # 逐支求导在分段点不安全：闭区域边界上的导数须另校验连续性与单侧导数，
-        # 段内导数拼起来不等于整体导数（例 x²(x≤0)|x(x>0) 在 0 处左右导不等却
-        # 逐支给出 0）。分段求导的审慎通道未建——诚实拒答，不冒充结果。
-        raise DiffError("分段函数逐支求导在分段点须校验连续性与单侧导数，未建")
-    # 函数应用：查图书馆导数模板
+        # Branch-wise differentiation is unsafe at breakpoints: derivatives on
+        # the two sides need continuity and one-sided derivative checks, and
+        # piecing the branch derivatives together is not the whole derivative
+        # (for example x^2 for x <= 0 and x for x > 0 gives 0 branch-wise at 0
+        # while the two one-sided derivatives differ). The cautious channel is
+        # not built here, so this refuses honestly.
+        raise DiffError("branch-wise differentiation of a piecewise function "
+                        "needs continuity and one-sided derivative checks at "
+                        "breakpoints, not implemented")
+    # function application: look up the declared derivative template
     tpl, note = _R().function_deriv(head)
     if tpl is None:
-        raise DiffError(f"{head} 无导数模板" + (f"（{note}）" if note else ""))
+        raise DiffError(f"{head} has no derivative template"
+                        + (f" ({note})" if note else ""))
     d = _R().lookup_function(head)
     if d is not None and d.arity is not None and len(t.args) != d.arity:
-        raise DiffError(f"{head} 声明元数 {d.arity}，实收 {len(t.args)} 参")
+        raise DiffError(f"{head} declares arity {d.arity}, got {len(t.args)} arguments")
     if len(t.args) != 1:
-        raise DiffError(f"{head} 多参数微分未建（偏导地基未完成）")
+        raise DiffError(f"differentiation of the multivariate {head} is not implemented")
     arg = t.args[0]
-    inner = T._lift(tpl, arg, 0)            # DB(0) 实例化为参数
-    return T.times(inner, _diff(arg, x))    # 链式法则：模板值 × 内层导数
+    inner = T._lift(tpl, arg, 0)            # instantiate DB(0) with the argument
+    return T.times(inner, _diff(arg, x))    # chain rule: template value times inner derivative
 
 
 def differentiate_piecewise(t, x: Sym):
-    """分段求导（审慎通道）：逐支对开区间胞腔求导，分段点显式标注未验证。
+    """Cautious piecewise differentiation: differentiate each open cell and mark
+    breakpoints as explicitly unverified.
 
-    导数只在开区间胞腔（单一分支主宰的开邻域）上成立；分段点（点胞腔）
-    的可导性须连续性与单侧导数校验（极限层 §6.5，未建），故单独列出，
-    绝不把逐支导数冒充为分段点导数。
+    The derivative only holds on open cells (an open neighbourhood dominated by a
+    single branch). Differentiability at a breakpoint needs continuity and
+    one-sided derivative checks, which need a limit layer that is not built, so
+    breakpoints are listed separately and branch-wise derivatives are never passed
+    off as the derivative at a breakpoint.
 
-    返回 (导数分段, 未验证分段点胞腔列表)。条件非单变量多项式分区时
-    透传 cad.CadError。"""
+    Returns (piecewise derivative, list of unverified breakpoint cells). A
+    condition that is not a univariate polynomial partition propagates
+    cad.CadError.
+    """
     from cas.math.piecewise import branches, piecewise, fold_nested, domain_cells
     t = fold_nested(t)
     deriv = piecewise([(differentiate(v, x), c) for v, c in branches(t)])

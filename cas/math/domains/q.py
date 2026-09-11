@@ -1,8 +1,11 @@
-"""ℚ 域：字面有理算术。
+"""The field Q: literal rational arithmetic.
 
-标准形 = qarith.fold（全数字子树精确折叠，中性元吸收）。
-判等 = 折叠后数值比较，片段内完全判定。
-成员 = 纯数字树（eval_exact 空环境求值成功）。
+Normal form: qarith.fold, folding all-numeric subtrees exactly and absorbing
+identity elements.
+Equality: numeric comparison after folding, decided completely inside the
+fragment.
+Membership: an all-numeric tree, i.e. exact evaluation succeeds in an empty
+environment.
 """
 
 from fractions import Fraction as Fr
@@ -13,7 +16,7 @@ from cas.math.domains.base import Domain, FracRing
 
 
 class QRing(FracRing):
-    """ℚ 系数环：Fraction 原生运算，零包装。"""
+    """The coefficient ring Q: native Fraction arithmetic with no wrapping."""
 
     is_euclidean = True
 
@@ -40,12 +43,13 @@ Q_RING = QRing()
 
 
 class QDomain(Domain):
-    """有理数域 ℚ。"""
+    """The rational field Q."""
 
     name = "Q"
     is_field = True
     is_ordered = True
     is_euclidean = True
+    ring = Q_RING
 
     def member(self, t) -> bool:
         try:
@@ -61,10 +65,10 @@ class QDomain(Domain):
 
     def equal(self, a, b):
         if not (self.member(a) and self.member(b)):
-            return None                  # 非成员：调用方越界
+            return None                  # non-member: the caller overstepped
         return T.num_val(fold(a)) == T.num_val(fold(b))
 
 
-# 单例。注册不是本模块的事：域包只声明，装配（含注册进阶梯）归
-# 投影层 cas/project——见 cas/domains/__init__.py 的分工说明。
+# The singleton. Registration is not this module's business: the domain package
+# only declares, and registration into the ladder belongs to the projection layer.
 Q_DOMAIN = QDomain()

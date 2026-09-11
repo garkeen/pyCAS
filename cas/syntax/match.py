@@ -1,11 +1,13 @@
-# -*- coding: utf-8 -*-
-"""模式匹配（v4 §5.2 模式元语言）。
+"""Pattern matching over the pattern metalanguage.
 
-被匹配的**主体**只有两类：`Pattern`（含洞）与 `Term`（字面量，指针相等即
-匹配——驻留项 AC 规范化的红利）。模式变量不再出现在项里，故本模块是模式
-变量唯一被解释的地方之一（另一处是 pattern.instantiate）。
+Two kinds of subject can be matched: a `Pattern` (which may contain holes) and
+a `Term` used as a literal (pointer equality is literal matching, a dividend of
+interned AC canonical forms). Pattern variables no longer occur inside terms,
+so this module and `pattern.instantiate` are the only places where pattern
+variables are interpreted.
 
-类型洞谓词（结构检查，无需上下文；语义谓词如正负走规则 guard/decide）
+Type-hole predicates are purely structural and need no context; semantic
+predicates such as positivity go through rule guards and the decision pipeline.
 """
 
 from cas.syntax import term as T
@@ -29,9 +31,11 @@ def _pred_ok(pat, tgt):
     return fn is not None and fn(tgt)
 
 
-# OneIdentity（mathics-core attributes.py 同款实据）：带单位元的 AC 头允许
-# 模式匹配裸项——?a+?b 可匹配 x（另一洞取 0），?a*?b 可匹配 x（另一洞取 1）。
-# 只有洞（PatternVar/PatternSeq）与字面单位元可吸收单位元；非洞子模式必须如实匹配。
+# OneIdentity: an AC head with an identity element also matches a bare term,
+# so `?a + ?b` matches `x` with the other hole bound to 0 and `?a * ?b` matches
+# `x` with the other hole bound to 1. Only holes (PatternVar/PatternSeq) and a
+# literal identity element may absorb the identity; a non-hole subpattern must
+# match as written.
 _ONE_ID = {}
 
 
@@ -42,7 +46,8 @@ def _one_identity():
 
 
 def _bind_identity(p, ident, sub):
-    """模式参数 p 绑定到单位元：PatternVar 新绑/一致检查，PatternSeq 绑空元组。"""
+    """Bind pattern argument `p` to the identity element: a PatternVar is
+    bound or consistency-checked, a PatternSeq is bound to the empty tuple."""
     if isinstance(p, P.PatternVar):
         if not _pred_ok(p, ident):
             return None
@@ -59,12 +64,12 @@ def _bind_identity(p, ident, sub):
             s2[p.name] = ()
             return s2
         return sub if cur == () else None
-    # 字面量：必须就是该单位元
+    # A literal must be the identity element itself.
     return sub if p is ident else None
 
 
 def _all_identity(pats, ident, sub, st, binds=()):
-    """剩余模式参数全部吸收单位元。"""
+    """Make every remaining pattern argument absorb the identity element."""
     if not pats:
         yield sub
         return
@@ -74,28 +79,30 @@ def _all_identity(pats, ident, sub, st, binds=()):
 
 
 def _match_one_id(pats, ident, tgt, sub, st, binds=()):
-    """OneIdentity 通道：模式参数逐个竞争匹配 tgt，其余吸收单位元。"""
+    """OneIdentity channel: exactly one pattern argument consumes `tgt`, the
+    rest absorb the identity element."""
     st[0] -= 1
     if st[0] < 0:
         raise BudgetExceeded()
     if not pats:
         return
     p, rest = pats[0], pats[1:]
-    # p 消费 tgt，其余全部取单位元
+    # `p` consumes tgt; all the others take the identity element.
     for s2 in _match(p, tgt, sub, st, binds):
         yield from _all_identity(rest, ident, s2, st, binds)
-    # p 吸收单位元，tgt 留给后续参数
+    # `p` absorbs the identity element; tgt goes to a later argument.
     s2 = _bind_identity(p, ident, sub)
     if s2 is not None:
         yield from _match_one_id(rest, ident, tgt, s2, st, binds)
 
 
 def _restore_db(t, binds):
-    """洞在 Bound 体内匹配到的 DB(i) 还原为绑定变量符号。
+    """Turn a DB(i) matched inside a Bound body back into the bound symbol.
 
-    de Bruijn 索引只在原绑定作用域内有效；洞绑定值要离开作用域实例化
-    模板，若直接携带 DB 索引，重新抽象（mk_bound）时会被整体提升（#1 泄漏）。
-    还原为符号后由 replace_at 的 mk_bound 重新抽象成正确索引。
+    A de Bruijn index is only meaningful inside its original binding scope. A
+    hole binding leaves that scope to instantiate a template, so carrying the
+    raw index would make re-abstraction (mk_bound) shift it (a #1 leak).
+    Restoring the symbol lets replace_at's mk_bound re-abstract it correctly.
     """
     if isinstance(t, T.DB) and binds and t.i < len(binds):
         return T.S(binds[-1 - t.i])
@@ -106,7 +113,7 @@ def _match(pat, tgt, sub, st, binds=()):
     st[0] -= 1
     if st[0] < 0:
         raise BudgetExceeded()
-    # 字面量（Term）：驻留项指针相等即匹配
+    # Literal (Term): pointer equality of interned terms is the match.
     if isinstance(pat, T.Term):
         if pat is tgt:
             yield sub
@@ -182,7 +189,8 @@ def _match_orderless(pats, terms, sub, st, binds=()):
             yield sub
         return
     p = pats[0]
-    # 字面量快通道：驻留项指针相等（AC 规范化使置换等价化为同一对象）
+    # Literal fast path: interned pointer equality, because AC canonical form
+    # turns permutation equivalence into object identity.
     if isinstance(p, T.Term):
         if p in terms:
             rest = list(terms)
@@ -220,7 +228,8 @@ def _sub_key(sub):
 
 
 def matches(pat, tgt, sub=None, budget=10000):
-    """pat（Pattern | Term）对 tgt（Term）匹配，产出绑定字典生成器。"""
+    """Match `pat` (Pattern | Term) against `tgt` (Term), yielding binding
+    dictionaries."""
     st = [budget]
     base = dict(sub) if sub else {}
     seen = set()

@@ -1,25 +1,27 @@
-# -*- coding: utf-8 -*-
-"""Branch：条件分支（v4 §8.8）。
+"""Branch: conditional case splits.
 
-每个 case 用**独立子作用域**，兄弟分支互不可见（不变量 9）：
+Each case uses its own child scope, and sibling branches cannot see each other:
 
-    Γ
-    ├── Γ + [a ≠ 0]
-    └── Γ + [a = 0]
+    Gamma
+    |- Gamma + [a != 0]
+    |- Gamma + [a = 0]
 
-**分支上下文不能直接合并。** 合并必须在父作用域中验证五件事（§8.8）：
+Branch contexts cannot be merged directly. A merge must verify five things in
+the parent scope:
 
-    1. 分支覆盖父问题
-    2. 每个分支回答同一个任务
-    3. 分支结果各自在其 scope 中成立
-    4. 辅助符号没有逃逸
-    5. 分支开放条件被正确提升
+    1. the branches cover the parent problem
+    2. every branch answers the same task
+    3. each branch result holds in its own scope
+    4. no helper symbol escaped
+    5. each branch's open conditions were promoted correctly
 
-第 5 条是分支合并最容易出错的地方：分支 `C_i` 中开放的守卫 `G_i`，提升到父层是
+Point 5 is where branch merging most easily goes wrong: a guard `G_i` open in
+branch `C_i` is promoted to the parent as
 
-    C_i ⇒ G_i
+    C_i => G_i
 
-而不是全局无条件要求 `G_i`。这就是 `promote_guard`。
+not as a global, unconditional requirement `G_i`. That is what `promote_guard`
+does.
 """
 
 from dataclasses import dataclass
@@ -46,14 +48,17 @@ class BranchGroup:
 
 
 def promote_guard(case_condition, guard):
-    """分支内的开放守卫提升到父层：`C_i ⇒ G_i`（不是全局 `G_i`）。"""
+    """Promote a guard open inside a branch to the parent scope: `C_i => G_i`,
+    not a global `G_i`."""
     return T.implies(case_condition, guard)
 
 
 def complementary_pair(cases):
-    """条件列表是否含排中律互补对（c 与 ¬c 同时作为一个分支的条件）。
+    """Whether the condition list contains a complementary pair (both `c` and
+    `not c` as branch conditions).
 
-    这是**句法**判定，不猜语义；返回 (i, j) 或 None。
+    This is a syntactic test and does not guess semantics; returns (i, j) or
+    None.
     """
     for i in range(len(cases)):
         ci = cases[i].condition
@@ -70,7 +75,7 @@ def _is_neg(a, b):
 
 
 class BranchStore:
-    """分支组存储（追加式）。"""
+    """Branch group storage (append-only)."""
 
     def __init__(self):
         self._groups: dict[int, BranchGroup] = {}

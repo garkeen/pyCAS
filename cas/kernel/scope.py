@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-"""作用域树（v4 §6.2）：持久化、带父指针、不可变。
+"""Scope tree: persistent, parent-linked, immutable.
 
-作用域是**上下文**的权威，不是计算的权威——计算不经过它。它只回答：
-某个符号在此处如何绑定、有哪些假设可见、局部符号能否逃逸。
+A scope is the authority for the *context*, not for computation; computation
+does not go through it. It only answers how a symbol binds here, which
+assumptions are visible, and whether a local symbol can escape.
 
-结构自始不可变（`Scope` 为 frozen dataclass），改动用新 Scope 表达，故
-阶段5 换掉 v3 可变 `Context` 后端时不触及任何消费者。
+The structure is immutable throughout (`Scope` is a frozen dataclass) and
+changes are expressed by new Scope objects.
 """
 
 from dataclasses import dataclass, replace
@@ -16,7 +16,8 @@ from cas.kernel.model import Assumption, Declaration, Definition
 
 @dataclass(frozen=True, slots=True)
 class Scope:
-    """持久化作用域（v4 §6.2）：不可变，子作用域带父指针，改动用新 Scope 表达。"""
+    """A persistent scope: immutable, child scopes carry a parent pointer, and
+    changes are expressed by new Scope objects."""
     id: ScopeId
     parent: ScopeId | None = None
     declarations: tuple[Declaration, ...] = ()
@@ -26,14 +27,14 @@ class Scope:
 
 @dataclass(frozen=True, slots=True)
 class Assumptions:
-    """不可变假设集（v4 §6.2：Scope 链上假设的只读投影）。
+    """Immutable assumption set: a read-only projection of the assumptions
+    along a scope chain.
 
-    取代 v3 的可变 `Context`：原先的 `clone` + `assume` 变成本对象的 `extended`，
-    临时扩充不产生可变状态，也不需要 marks/rollback（那些是为「可变上下文 + 位置
-    指针撤销」服务的，持久化 Scope 树不需要）。
-
-    假设的**权威来源是 Scope**（持久化、带父指针）；本对象只是判定层消费的投影，
-    不参与记账。所以「撤销」由 revision 指针而非 rollback 完成（§8.9）。
+    `extended` produces a new object rather than writing in place, so no clone
+    and no rollback are needed. The authoritative source of assumptions is the
+    Scope (persistent, parent-linked); this object is only the projection
+    consumed by the decision layer and takes no part in bookkeeping. Undo is
+    done by moving the revision pointer.
     """
     items: tuple = ()
 
@@ -55,18 +56,19 @@ class Assumptions:
 
 
 class ScopeStore:
-    """作用域存储：发放 id、维护父子树、提供可见性查询。"""
+    """Scope storage: issues ids, maintains the parent tree and answers
+    visibility queries."""
 
     def __init__(self):
         self._scopes: dict[ScopeId, Scope] = {}
         self._next = 0
 
-    # --- 构造 ---
+    # --- construction ---
 
     def create(self, parent=None, declarations=(), definitions=(),
                assumptions=()) -> Scope:
         if parent is not None and parent not in self._scopes:
-            raise KeyError(f"父作用域不存在: {parent}")
+            raise KeyError(f"parent scope does not exist: {parent}")
         sid = ScopeId(self._next)
         self._next += 1
         s = Scope(id=sid, parent=parent,
@@ -83,7 +85,8 @@ class ScopeStore:
 
     def extend(self, scope: Scope, declarations=(), definitions=(),
                assumptions=()) -> Scope:
-        """在 scope 之上追加条目，返回**新** Scope（不可变，不就地修改）。"""
+        """Append entries on top of `scope` and return a **new** Scope; the
+        original is never modified in place."""
         s = replace(scope,
                     declarations=scope.declarations + tuple(declarations),
                     definitions=scope.definitions + tuple(definitions),
@@ -94,10 +97,10 @@ class ScopeStore:
     def get(self, sid: ScopeId) -> Scope:
         return self._scopes[sid]
 
-    # --- 可见性 ---
+    # --- visibility ---
 
     def chain(self, sid: ScopeId):
-        """自根至本作用域的作用域链。"""
+        """The scope chain from root down to this scope."""
         out = []
         cur = self._scopes[sid]
         while True:
@@ -108,11 +111,14 @@ class ScopeStore:
         return tuple(reversed(out))
 
     def is_visible(self, ancestor: ScopeId, descendant: ScopeId) -> bool:
-        """descendant 是否在 ancestor 之内（含自身）——子作用域结论不得反向
-        在父作用域使用（v4 不变量 8）；兄弟分支互不可见（不变量 9）。"""
+        """Whether `descendant` is inside `ancestor` (inclusive).
+
+        A conclusion from a child scope may not be used in a parent scope, and
+        sibling branches cannot see each other.
+        """
         return any(s.id == ancestor for s in self.chain(descendant))
 
-    # --- 条目查询 ---
+    # --- entry queries ---
 
     def declarations(self, sid: ScopeId) -> tuple[Declaration, ...]:
         out = []
@@ -127,7 +133,7 @@ class ScopeStore:
         return tuple(out)
 
     def definition_map(self, sid: ScopeId) -> dict:
-        """可见定义表：内层覆盖外层。"""
+        """Visible definition table; an inner scope shadows an outer one."""
         m = {}
         for s in self.chain(sid):
             for d in s.definitions:
@@ -137,16 +143,18 @@ class ScopeStore:
     def lookup_definition(self, sid: ScopeId, symbol):
         return self.definition_map(sid).get(symbol)
 
-    # --- 卫生检查 ---
+    # --- hygiene checks ---
 
     def local_symbols(self, sid: ScopeId) -> tuple:
-        """本作用域（不含祖先）引入的符号：声明 + 定义左端。"""
+        """Symbols introduced by this scope itself (not its ancestors):
+        declarations plus definition left-hand sides."""
         s = self._scopes[sid]
         return tuple([d.symbol for d in s.declarations]
                      + [d.symbol for d in s.definitions])
 
     def introducers(self, symbol) -> tuple:
-        """哪些作用域把该符号作为局部符号引入（声明或定义左端）。"""
+        """Which scopes introduce this symbol as a local symbol (declaration or
+        definition left-hand side)."""
         out = []
         for s in self._scopes.values():
             if any(d.symbol is symbol for d in s.declarations) \
@@ -155,14 +163,18 @@ class ScopeStore:
         return tuple(out)
 
     def escapes(self, sid: ScopeId, term) -> tuple:
-        """term 里**逃逸**的局部符号（v4 不变量 15 / §6.2）。
+        """Local symbols that escape from `term`; empty when none do.
 
-        判据：某自由符号被**不在 sid 祖先链上**的作用域引入，且链上无人引入它。
-        在 sid 或其祖先里引入的符号是可见的，不算逃逸（同一符号在链上被遮蔽时
-        以外层为准，故只要链上出现过即视为可见）。
+        Criterion: a free symbol is introduced by a scope that is *not* on the
+        ancestor chain of `sid`, and no scope on that chain introduces it. A
+        symbol introduced in `sid` or an ancestor is visible and does not
+        escape (if the same symbol is shadowed along the chain the outer
+        binding wins, so appearing anywhere on the chain counts as visible).
 
-        为什么需要它：局部定义（`u := x²`）与被引入的辅助符号只在其作用域内有义，
-        一旦出现在父作用域结论里，父作用域的读者会引用一个无定义的符号。
+        Why this matters: a local definition (`u := x^2`) and introduced helper
+        symbols are only meaningful inside their scope; if one appears in a
+        parent-scope conclusion, readers of the parent would reference an
+        undefined symbol.
         """
         from cas.syntax.termpath import free_vars
         fv = free_vars(term)

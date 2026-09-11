@@ -1,29 +1,56 @@
 # -*- coding: utf-8 -*-
-"""`Runtime`：装配完成的只读查询面。
+"""`Runtime`: the read-only query surface once assembly is complete.
 
-它是旧 `library` 查询 API 的正式归属（v4 §三 的 `runtime/dispatch.py` 底座）：
-常数/函数的印名、正性、粗界、导数模板、定义域条件、函数清单——一切数学语义
-的**只读**出口。写入口只有 `RuntimeBuilder`（装配期），运行期没有写入路径。
+It exposes print names, positivity, coarse bounds, derivative templates, domain
+conditions, and the function list -- every read-only exit for math semantics.
+The only write entry is `RuntimeBuilder` (during assembly); there is no runtime
+write path.
 
-消费者（parser / pprint / decide / project / rules / domcond / diff …）查无此名
-时一律得到 `None`，由调用方自行降级——**零语义回退**，本层不猜。
+Consumers (parser / pprint / decide / project / rules / domcond / diff ...) receive
+`None` for an unknown name and degrade on their own -- **no semantic fallback**,
+this layer never guesses.
 """
 
 from cas.syntax.term import Const
 
 
+def _domain_callable(template):
+    """Domain-condition template -> callable `fn(call) -> [condition terms]`.
+
+    The template contains the `DB(0)` placeholder (the function argument slot) and
+    is instantiated through the syntax layer's `_lift` -- the same de Bruijn
+    mechanism as derivative templates, not a second substitution scheme.
+    """
+    from cas.syntax.term import _lift
+
+    def cond(t):
+        return [_lift(template, t.args[0], 0)]
+
+    return cond
+
+
 class Runtime:
-    """只读快照。构造后不再变化（构造只发生在 bootstrap）。"""
+    """Read-only snapshot. It does not change after construction, and construction
+    happens only in bootstrap."""
 
     def __init__(self, builder):
         self._consts = dict(builder.constants)
         self._funcs = dict(builder.functions)
-        self._domain_conds = dict(builder.domain_conds)
+        self._aliases = dict(builder.aliases)
+        self._roles = dict(builder.roles)
+        self._rule_lines = tuple(builder.rule_lines)
         self._eq_stages = tuple(builder.eq_stages)
         self._domains = tuple(builder.domains)
         self._by_atom = {id(d.atom): d for d in self._consts.values()}
+        # Domain conditions come from each function declaration's domain template
+        # (DSL) and are instantiated on demand: the condition of f(u) is
+        # template[DB(0) := u], the same de Bruijn mechanism as derivative templates.
+        self._domain_conds = {
+            name: _domain_callable(d.domain)
+            for name, d in self._funcs.items() if d.domain is not None
+        }
 
-    # --- 常数 ---
+    # --- constants ---
 
     def const_by_atom(self, atom: Const):
         return self._by_atom.get(id(atom))
@@ -46,7 +73,7 @@ class Runtime:
         d = self.const_by_atom(atom)
         return d.bounds if d else None
 
-    # --- 函数 ---
+    # --- functions ---
 
     def lookup_function(self, name: str):
         return self._funcs.get(name)
@@ -59,17 +86,34 @@ class Runtime:
         return tuple(self._funcs.values())
 
     def print_name(self, head_name: str):
-        """展示名：常数按内部名、函数按头名（两个命名空间不重叠）。"""
+        """Display name: constants by internal name, functions by head name (the
+        two namespaces do not overlap)."""
         c = self._consts.get(head_name)
         if c is not None:
             return c.print_name
         d = self._funcs.get(head_name)
         return d.print_name if d else None
 
-    # --- 定义域条件 / 判定阶段 / 域 ---
+    # --- domain conditions / decision stages / domains ---
 
     def lookup_domain_cond(self, name: str):
         return self._domain_conds.get(name)
+
+    def alias_head(self, surface: str):
+        """Surface name -> canonical head (None when absent). Parser aliases are
+        declaration data."""
+        return self._aliases.get(surface)
+
+    def role_head(self, role: str):
+        """Role -> canonical head (None when absent). Algorithms fetch by role and
+        never hardcode a function name."""
+        return self._roles.get(role)
+
+    @property
+    def rules(self) -> tuple:
+        """Rule DSL line texts (parsed at the consumption point in math/rules.py).
+        Rules are data."""
+        return self._rule_lines
 
     @property
     def eq_stages(self) -> tuple:
@@ -81,17 +125,20 @@ class Runtime:
 
     def stats(self):
         return {"constants": len(self._consts), "functions": len(self._funcs),
+                "aliases": len(self._aliases),
+                "rules": len(self._rule_lines),
                 "domain_conds": len(self._domain_conds),
                 "eq_stages": len(self._eq_stages),
                 "domains": len(self._domains)}
 
 
 # ---------------------------------------------------------------------------
-# 会话装配：checker 与判定服务都由本层注入（workflow 不依赖 cas.math）
+# Session assembly: checkers and decision services are injected by this layer
+# (the workflow does not depend on cas.math)
 # ---------------------------------------------------------------------------
 
 def register_math_checkers(store) -> None:
-    """把各数学模块的 checker 注册进账本（v4 §7.2 的 `math/*/checkers.py`）。"""
+    """Register each math module's checkers into the ledger."""
     from cas.math.base import checkers as base_c
     from cas.math.calculus.differentiation import checkers as diff_c
     from cas.math.calculus.integration import checkers as int_c
@@ -101,10 +148,12 @@ def register_math_checkers(store) -> None:
 
 
 def new_workflow(**kw):
-    """建一个工作流会话：账本 + 内核自带 checker + 数学 checker + 判定服务。
+    """Build a workflow session: ledger + kernel checkers + math checkers +
+    decision services.
 
-    workflow 不 import `cas.math`（v4 §四），所以 checker 与判定服务**必须由本层
-    注入**——这也让「workflow 不知道自己有哪些 checker」成为结构事实，而不是约定。
+    The workflow never imports `cas.math`, so checkers and decision services **must
+    be injected by this layer**. That also makes "the workflow does not know which
+    checkers it has" a structural fact rather than a convention.
     """
     from cas.kernel.services import register_core_checkers
     from cas.kernel.store import KernelStore

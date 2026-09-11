@@ -4,38 +4,35 @@ class BudgetExceeded(Exception):
         super().__init__(message)
 
 
-class PolyError(Exception):
-    pass
-
-
 class ParseError(Exception):
     pass
 
 
 class ScopeError(Exception):
-    """声明/定义违反 v4 §6.2 的作用域契约（符号不新鲜、非法递归、右侧未绑定）。"""
+    """A declaration/definition violates the scope contract (symbol not fresh,
+    illegal recursion, unbound right-hand side)."""
 
 
 class BranchError(Exception):
-    """分支操作违反 v4 §8.8 的合并条件（未证覆盖、各支非同题、符号逃逸…）。"""
-
-
-class SolveError(Exception):
-    pass
+    """A branch operation violates the merge conditions (coverage unproved, the
+    branches answer different tasks, a symbol escaped, ...)."""
 
 
 class TacticsError(Exception):
-    """战术层拒答：能力边界内无法完成（诚实报错，不猜）。"""
+    """Tactics refusal: cannot be completed within the capability boundary.
+    Reported honestly rather than guessed."""
 
 
 class DiffError(Exception):
-    """微分拒答：缺导数模板或结构不支持（如绑定变量下微分）。"""
+    """Differentiation refusal: a derivative template is missing or the
+    structure is unsupported (for example differentiating under a binder)."""
 
 
 class CadError(Exception):
-    """柱面分解拒答。reason 取自 verdict.Reason：
-    FRAGMENT=片段未覆盖（如多变量/非多项式分区），
-    UNDECIDABLE=定理级不可判定（超越条件、超越根比大小，拒答表 §7）。"""
+    """Cylindrical decomposition refusal. `reason` comes from verdict.Reason:
+    FRAGMENT means the fragment does not cover the input (multivariate or
+    non-polynomial partitioning), UNDECIDABLE means undecidable in principle
+    (transcendental conditions, comparing transcendental roots)."""
 
     def __init__(self, message, reason=None):
         super().__init__(message)
@@ -43,13 +40,15 @@ class CadError(Exception):
 
 
 class PiecewiseError(Exception):
-    """分段容器拒答：病态结构（如条件位置放了分段值）或片段不支持。"""
+    """Piecewise container refusal: an ill-formed structure (for example a
+    piecewise value in a condition slot) or an unsupported fragment."""
 
 
 class IntegrateError(Exception):
-    """积分拒答。reason 取自 verdict.Reason：
-    FRAGMENT=片段未覆盖（如有理/超越被积式、需极限的反常端点），
-    UNDECIDABLE=不可判定。诚实拒答，不启发式凑原函数。"""
+    """Integration refusal. `reason` comes from verdict.Reason: FRAGMENT means
+    the fragment does not cover the input (rational or transcendental
+    integrands, improper endpoints needing a limit), UNDECIDABLE means
+    undecidable. Refused honestly rather than guessing an antiderivative."""
 
     def __init__(self, message, reason=None):
         super().__init__(message)

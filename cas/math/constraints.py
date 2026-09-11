@@ -1,20 +1,25 @@
-# -*- coding: utf-8 -*-
-"""约束求解：从等式约束提取未知量的线性系统并求解（v4 §8.6 / §9.6）。
+"""Constraint solving: extract a linear system for the unknowns from equation
+constraints and solve it.
 
-**这是不可信侧。** 它产出的是**候选赋值**（witness），不是结论；能不能声称
-「这组赋值满足约束系统」由 `constraint.satisfied` checker 逐条复核决定
-（§7.3：算法产生候选，checker 决定能声称什么）。所以这里可以启发式、可以拒答，
-但绝不能自己宣布正确。
+**This is the untrusted side.** It produces a candidate valuation (a witness),
+not a conclusion. Whether "this assignment satisfies the constraint system" may
+be claimed is decided by the `constraint.satisfied` checker, which re-checks
+each constraint. So this code may be heuristic and may refuse, but it must never
+declare itself correct.
 
-算法步骤（全部是域元素上的显式代数运算，§零.4）：
+Algorithm steps, all explicit algebraic operations on domain elements:
 
-1. 每条关系取 `E = lhs − rhs`；
-2. **线性检验**：把未知量代入 0 / 单位值提取系数，再重建 `E` 并判零差——
-   不等即非线性，诚实拒答（FRAGMENT），不硬凑；
-3. 组装系数矩阵，交 **通用高斯消元** `linalg.solve_system` 求解；
-4. 返回特解作赋值（欠定时仍是一个合法 witness；checker 会判它是否真满足）。
+1. for each relation take `E = lhs - rhs`;
+2. linearity test: substitute 0 / unit values for the unknowns to extract
+   coefficients, rebuild `E` and decide the difference vanishes; a nonzero
+   difference means nonlinear, refused honestly as FRAGMENT rather than forced;
+3. assemble the coefficient matrix and solve it with the general Gaussian
+   elimination in `linalg.solve_system`;
+4. return the particular solution as the valuation (underdetermined is still a
+   legal witness; the checker decides whether it truly satisfies).
 
-求解只依赖 `linalg`（公共算法机器）+ 域标准形判零，不导入任何求解对方的算法。
+Solving depends only on `linalg` (the shared algorithm machine) and domain normal
+form vanishing; it imports no algorithm belonging to the counterpart solver.
 """
 
 from cas.syntax import term as T
@@ -24,9 +29,12 @@ from cas.math.project import project, zero_of, normalize as proj_normalize
 
 
 def _nf(t):
-    """系数归一：投影命中取域标准形（K(x) 上有理函数规范化），落空退回字面折叠。
+    """Coefficient normalization: on a projection hit take the domain normal
+    form (canonical rational function over K(x)); otherwise fall back to literal
+    folding.
 
-    只折字面数不够——`x − x`、`x² − x² + 1` 这类要靠域标准形才收敛。
+    Folding literals alone is not enough: `x - x` and `x^2 - x^2 + 1` only
+    collapse through the domain normal form.
     """
     hit = project(t)
     if hit is not None:
@@ -35,10 +43,14 @@ def _nf(t):
 
 
 class TermField:
-    """把**项**适配成域接口，供 `linalg` 的高斯消元使用。
+    """Adapt **terms** to the domain interface so that linalg's Gaussian
+    elimination can use them.
 
-    系数是参变量上的有理函数（K(x₁..xₙ)），除法按 `b⁻¹` 表示。适配层本身不做
-    数学，只是把既有的显式代数运算（域标准形 + 判零）暴露成消元器要的那几个操作。
+    Coefficients are rational functions in the parameters, i.e. elements of
+    K(x1..xn), with division represented as `b^-1`. The adapter does no
+    mathematics itself; it only exposes the existing explicit algebraic
+    operations (domain normal form plus vanishing) as the few operations the
+    eliminator needs.
     """
 
     is_field = True
@@ -66,13 +78,16 @@ class TermField:
 
 
 def _decompose(t, unknowns):
-    """把 t 分解为 `Σ cᵢ·uᵢ + c₀`，其中 cᵢ、c₀ 与 unknowns 无关。
+    """Decompose `t` as `sum(c_i * u_i) + c_0` where the coefficients do not
+    involve the unknowns.
 
-    **句法**线性形式分析：不需要化简器、不靠语义判零，因此对超越系数
-    （`exp(x)·sin(x)` 之类）同样有效。非线性或含未知量的函数调用（`sin(u)`、
-    `u⁻¹`、`u·u`）一律返回 None —— 诚实拒答，不硬凑线性。
+    This is a *syntactic* linear-form analysis: it needs no simplifier and no
+    semantic vanishing, so it works for transcendental coefficients such as
+    `exp(x)*sin(x)` too. Nonlinear terms, or function calls with unknowns
+    (`sin(u)`, `u^-1`, `u*u`), return None: refused honestly rather than forced
+    into a linear form.
     """
-    if t in unknowns:                       # 驻留指针恒等
+    if t in unknowns:                       # interned pointer identity
         return ({t: T.ONE}, T.ZERO)
     if not (T.free_vars(t) & set(unknowns)):
         return ({}, t)
@@ -97,14 +112,16 @@ def _decompose(t, unknowns):
                 parts.append(d)
             unknown_idx = [i for i, d in enumerate(parts) if d[0]]
             if len(unknown_idx) > 1:
-                return None             # 两个含未知量的因子相乘 → 非线性
+                return None             # two unknown-bearing factors multiply: nonlinear
             if not unknown_idx:
                 acc = T.ONE
                 for _cs, c0 in parts:
                     acc = T.times(acc, c0)
                 return ({}, acc)
             i = unknown_idx[0]
-            # 系数必须乘上**其余**因子的常数部分（漏掉它会把 -1·v 的系数算成 +1）
+            # The coefficient must be multiplied by the constant part of the
+            # other factors; omitting it would turn the coefficient of -1*v
+            # into +1.
             k_others = T.ONE
             for j, (_cs, c0) in enumerate(parts):
                 if j != i:
@@ -118,14 +135,17 @@ def _decompose(t, unknowns):
 
 
 def is_linear(e, unknowns):
-    """e 是否对 unknowns 线性（含常数项）。"""
+    """Whether `e` is linear in the unknowns, constant term included."""
     return _decompose(e, unknowns) is not None
 
 
 def _constrained_relation(rel, unknowns):
-    """等式关系 → 线性形式的系数行与右端项；非线性/非等式返回 None。
+    """An equation relation to a coefficient row plus right-hand side; returns
+    None when it is nonlinear or not an equation.
 
-    两侧**分别**分解再相减，避免对 `lhs − rhs` 整体做不分配取负而破坏线性形式。
+    The two sides are decomposed *separately* and then subtracted, to avoid
+    negating `lhs - rhs` as a whole without distributing, which would destroy
+    the linear form.
     """
     if not (isinstance(rel, T.Expr) and isinstance(rel.head, T.Sym)
             and rel.head.name == "Eq"):
@@ -136,20 +156,23 @@ def _constrained_relation(rel, unknowns):
         return None
     cl, c0l = dl
     cr, c0r = dr
-    # 系数必须归一后再交消元器：分解会产出 `0 + 1` 这类未折叠形式，
-    # 直接进高斯消元会让主元判零与除法失效。
+    # Coefficients must be normalized before reaching the eliminator:
+    # decomposition can produce unfolded forms like `0 + 1`, which would defeat
+    # pivot zero-testing and division in Gaussian elimination.
     row = [_nf(T.plus(cl.get(u, T.ZERO), T.neg(cr.get(u, T.ZERO))))
            for u in unknowns]
-    return row, _nf(T.plus(c0r, T.neg(c0l)))    # Σ cᵢuᵢ = c0r − c0l
+    return row, _nf(T.plus(c0r, T.neg(c0l)))    # sum(c_i u_i) = c0r - c0l
 
 
 def solve_linear_constraints(relations, unknowns):
-    """求满足全部关系的赋值。
+    """Find an assignment satisfying all relations.
 
-    返回 `(valuation, complete)`：
-      · valuation：`{Unknown: Term}`，未知量以参变量表达；
-      · complete：解是否唯一（欠定时为 False，但特解仍是合法 witness）。
-    拒答返回 `None`——关系不是等式、非线性、或系统不相容。
+    Returns `(valuation, complete)`:
+      · valuation: `{Unknown: Term}`, unknowns expressed in parameters;
+      · complete: whether the solution is unique (False when underdetermined,
+        but the particular solution is still a legal witness).
+    Returns None on refusal: a relation is not an equation, is nonlinear, or the
+    system is inconsistent.
     """
     unknowns = tuple(unknowns)
     rows, b = [], []

@@ -1,18 +1,22 @@
-# -*- coding: utf-8 -*-
-"""数域系统基座：域协议、系数环协议。
+"""Number-field system foundations: the domain protocol and the coefficient-ring
+protocol.
 
-层位纪律：本包只依赖 cas.syntax.term，被 decide/simplify 上层消费，
-永不反向导入——域是地基，判定管线在域之上。
+Layer discipline: this package depends only on cas.syntax.term and is consumed by
+the decision and simplification layers above it; it never imports upward. Domains
+are the foundation and the decision pipeline sits on top of them.
 
-设计裁定（cas_v3_arch.md 三）：
-· 每个域自带 normalize（标准形）/ equal（完全判定判等）/ member（成员测试）；
-· 域由显式声明进入，不做叶嗅探（v2 病根）；
-· equal 仅对成员有定义，片段内完全判定——返回值是 bool，
-  非成员返回 None 表示调用方越界，域内绝不产生"不知道"。
-  （判定的三值性属于判定层 cas/verdict，域层不携带。）
-· 导子 D 属于域协议：系数环的导子默认为零（常数域），
-  扩张生长时覆写——代数扩张 D(α) = −D(m)(α)/m'(α)，
-  超越扩张由生成元定义方程指定。
+Design decisions:
+· every domain provides normalize (normal form), equal (complete equality
+  decision) and member (membership test);
+· a domain enters by explicit declaration, never by leaf sniffing;
+· `equal` is defined only for members and decides completely inside the
+  fragment. It returns a bool; a non-member returns None, meaning the caller
+  overstepped. "Unknown" is never produced inside a domain, because three-valued
+  decisions belong to the decision layer.
+· the derivation D belongs to the domain protocol: a coefficient ring's
+  derivation defaults to zero (constant domains) and is overridden as the
+  extension grows -- an algebraic extension uses D(alpha) = -D(m)(alpha)/m'(alpha),
+  and a transcendental extension is given by the generator's defining equation.
 """
 
 from abc import ABC, abstractmethod
@@ -20,14 +24,16 @@ from fractions import Fraction as Fr
 
 
 class Ring(ABC):
-    """系数环协议：多项式域对系数结构的全部要求。
+    """Coefficient-ring protocol: everything a polynomial domain requires of its
+    coefficient structure.
 
-    系数值本身是不透明对象；环负责其算术与判等。ℚ 环直接用
-    Fraction 原生运算实现（零包装开销）。
+    A coefficient value is an opaque object; the ring owns its arithmetic and
+    equality. The rational ring uses native Fraction arithmetic directly, with no
+    wrapping overhead.
 
-    能力字段（架构 3.2）：上层算法按能力分派，不按类型特判。
-    · is_field：非零元可除（精确除法可用）
-    · is_euclidean：带余除法可用（divmod/gcd 有实现）
+    Capability fields: algorithms dispatch on capability, never on type.
+    · is_field: nonzero elements are invertible, so exact division is available
+    · is_euclidean: division with remainder is available (divmod/gcd implemented)
     """
 
     is_field = False
@@ -35,11 +41,11 @@ class Ring(ABC):
 
     @abstractmethod
     def from_int(self, n: int):
-        """整数嵌入。"""
+        """Embed an integer."""
 
     @abstractmethod
     def from_frac(self, f: Fr):
-        """有理数嵌入（要求环含 ℚ；不含时抛 RingError）。"""
+        """Embed a rational; raises RingError when the ring does not contain Q."""
 
     @abstractmethod
     def add(self, a, b): ...
@@ -60,15 +66,18 @@ class Ring(ABC):
         return self.add(a, self.neg(b))
 
     def divmod_(self, a, b):
-        """带余除法 (q, r)。欧几里得环覆写；否则拒答。"""
-        raise RingError(f"{type(self).__name__} 非欧几里得环")
+        """Division with remainder, (q, r). A Euclidean ring overrides this;
+        otherwise it refuses."""
+        raise RingError(f"{type(self).__name__} is not a Euclidean ring")
 
     def deriv(self, c):
-        """系数导子：常数域上恒为零。扩张环覆写（架构三：导子属于域协议）。"""
+        """The coefficient derivation: identically zero on a constant domain. An
+        extension ring overrides it, because the derivation belongs to the domain
+        protocol."""
         return self.from_int(0)
 
     def pow_pos(self, a, n: int):
-        """a ** n，n ≥ 0，快速幂。"""
+        """a ** n for n >= 0, by fast exponentiation."""
         r = self.from_int(1)
         while n:
             if n & 1:
@@ -83,12 +92,13 @@ class RingError(Exception):
 
 
 class FracRing(Ring):
-    """含 ℚ 的域系数环的公共部分：精确除法、零一常量、相等。"""
+    """Shared part of coefficient rings containing Q: exact division, zero and
+    one constants, equality."""
 
     is_field = True
 
     def div_exact(self, a, b):
-        """域中非零元的精确除法。"""
+        """Exact division by a nonzero element of the field."""
         if self.is_zero(b):
             raise ZeroDivisionError("division by zero")
         return a / b
@@ -98,19 +108,28 @@ class FracRing(Ring):
 
 
 class Domain(ABC):
-    """数域协议：规范化 / 判等 / 成员测试的三位一体。
+    """Number-field protocol: normalization, equality and membership in one.
 
-    · normalize(t) -> Term | None：非成员返回 None；成员返回标准形
-      （驻留项，内容寻址保证同形同指针）。
-    · equal(a, b) -> bool | None：仅对成员有定义；片段内完全判定。
-      非成员返回 None（调用方越界），不产生三值。
+    · normalize(t) -> Term | None: returns None for a non-member, and the normal
+      form (an interned term, so identical forms share a pointer) for a member.
+    · equal(a, b) -> bool | None: defined only for members and decided completely
+      inside the fragment; a non-member returns None, meaning the caller
+      overstepped. No three-valued result is produced here.
 
-    能力字段：is_field（乘法非零元可逆）、is_ordered（有序，序判定可用）、
-    is_euclidean（带余除法）。算法按能力分派。
+    Capability fields: is_field (nonzero elements invertible), is_ordered (an
+    order is available), is_euclidean (division with remainder). Algorithms
+    dispatch on capability.
 
-    scoped：True 表示本域是单次计算域（代数扩张 ℚ(α)、根式参数），
-    禁止 register() 常驻注册，必须经 domain_scope() 限定在单次计算的
-    作用域内（架构 3.4 注册纪律）。
+    ring: the domain's coefficient ring (its arithmetic realization). A constant
+    domain uses its own ring (Q -> QRing, Z -> ZZRing, Q(i) -> QIRing) and a
+    polynomial/rational-function domain uses its coefficient ring. An algorithm
+    needing "the ring of some capable domain" takes it through find_domain by
+    capability rather than hardcoding a specific singleton.
+
+    scoped: True marks a single-computation domain (an algebraic extension or a
+    radical parameter). Such a domain must not be registered resident and must be
+    confined to one computation by domain_scope, because a resident registration
+    would leak into every later computation.
     """
 
     name: str = "?"
@@ -118,6 +137,7 @@ class Domain(ABC):
     is_ordered = False
     is_euclidean = False
     scoped = False
+    ring = None
 
     @abstractmethod
     def normalize(self, t): ...
@@ -131,14 +151,16 @@ _SCOPES = []
 
 
 def register(d: Domain) -> Domain:
-    """常驻注册：仅限系统基域（ℤ/ℚ/ℚ(i)/K[x]/K(x) 等）。
+    """Resident registration, for system base domains only (Z / Q / Q(i) / K[x] /
+    K(x) and the like).
 
-    scoped=True 的单次计算域（代数扩张/根式参数）必须经 domain_scope()
-    注册——常驻注册会让它泄漏进后续一切计算（架构 3.4 注册纪律）。
+    A scoped single-computation domain (an algebraic extension or a radical
+    parameter) must be registered through domain_scope: a resident registration
+    would leak it into every later computation.
     """
     if getattr(d, "scoped", False):
         raise ValueError(
-            f"scoped 域必须经 domain_scope() 注册: {d.name}")
+            f"scoped domain must be registered through domain_scope(): {d.name}")
     if d.name in _DOMAINS and _DOMAINS[d.name] is not d:
         raise ValueError(f"domain redeclared: {d.name}")
     _DOMAINS[d.name] = d
@@ -146,18 +168,18 @@ def register(d: Domain) -> Domain:
 
 
 class domain_scope:
-    """单次计算作用域的临时域注册（架构 3.4 注册纪律的落地机制）。
+    """Temporary domain registration for one computation's scope.
 
-    代数域（ℚ(α)）与根式参数只允许生存在本作用域内：退出（含异常
-    退出）无条件注销，绝不泄漏进下一次计算——v2 全局可变注册表跨
-    计算泄漏出过假 VERIFIED，本机制是那条纪律的机械保证。
+    Algebraic domains and radical parameters are only allowed to live inside this
+    scope: exit (including on an exception) unconditionally unregisters them, so
+    they never leak into a later computation. A name colliding with a resident
+    base domain or an outer scope is rejected, because shadowing an existing
+    domain is exactly the precursor of a leak.
 
-    与常驻基域或外层作用域重名即拒绝：遮蔽既有域正是泄漏的前兆。
-
-    用法：
+    Usage:
         with domain_scope(QAlphaDomain(...)):
-            ...            # 本计算内 lookup 命中临时域
-        # 出作用域即注销
+            ...            # lookup hits the temporary domain inside this block
+        # unregistered on exit
     """
 
     def __init__(self, *domains):
@@ -167,7 +189,7 @@ class domain_scope:
         frame = {}
         for d in self._domains:
             if d.name in _DOMAINS or any(d.name in f for f in _SCOPES):
-                raise ValueError(f"scoped 域与既有注册重名: {d.name}")
+                raise ValueError(f"scoped domain collides with an existing registration: {d.name}")
             frame[d.name] = d
         _SCOPES.append(frame)
         return self
@@ -178,9 +200,54 @@ class domain_scope:
 
 
 def lookup(name):
-    """按名查域：内层作用域优先，常驻基域兜底；查无返回 None。"""
+    """Look a domain up by name: inner scopes first, then resident base domains;
+    returns None when not found."""
     for frame in reversed(_SCOPES):
         hit = frame.get(name)
         if hit is not None:
             return hit
     return _DOMAINS.get(name)
+
+
+def find_domain(predicate):
+    """Look resident base domains up by **capability predicate**, never by name or
+    Python type.
+
+    Returns every match in registration order. This is the mechanical channel for
+    capability-based domain dispatch: an algorithm expresses the capability it
+    needs (for example `lambda d: d.is_field and d.is_ordered`) and the query
+    matches it, instead of hardcoding `Q_RING` in the algorithm body.
+
+    Ambiguity is not resolved here: zero or several matches are returned as they
+    are and the caller decides, usually requiring uniqueness and raising on an
+    ambiguous match. Silently taking the first would hide the ambiguity.
+    """
+    return tuple(d for d in _DOMAINS.values() if predicate(d))
+
+
+# ---------------------------------------------------------------------------
+# The default coefficient ring for parameterized domains (the K in K[x] / K(x))
+#
+# Injected at assembly time (bootstrap -> the projection layer picks a base field
+# by capability): the domain package neither hardcodes Q_RING nor bootstraps a
+# concrete domain on import or first call. An unset ring raises, because a silent
+# default domain would turn "forgot to assemble" into a hard-to-find wrong answer.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_COEFF_RING = None
+
+
+def set_default_coeff_ring(ring) -> None:
+    """Inject the default coefficient ring of K[x] / K(x) at assembly time."""
+    global _DEFAULT_COEFF_RING
+    _DEFAULT_COEFF_RING = ring
+
+
+def default_coeff_ring():
+    """Take the default coefficient ring; raises when not assembled, failing
+    loudly instead of degrading silently."""
+    if _DEFAULT_COEFF_RING is None:
+        raise RingError("default coefficient ring is not assembled: call "
+                        "bootstrap() first (the domain package never bootstraps "
+                        "a concrete domain itself)")
+    return _DEFAULT_COEFF_RING

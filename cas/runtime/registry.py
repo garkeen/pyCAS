@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
-"""装配期注册表（v4 §7.1 的 `RuntimeBuilder`）。
+"""Assembly-time registry (`RuntimeBuilder`).
 
-`RuntimeBuilder` 是**装配期的唯一写入口**：数学模块在自己的 `install(builder)`
-里把声明登记进来，装配完成后由 `Runtime` 冻结为只读快照。
+`RuntimeBuilder` is the **only write entry during assembly**: math modules register
+their declarations inside their own `install(builder)`, and once assembly finishes
+`Runtime` freezes it into a read-only snapshot.
 
-**只设确有内容的类别。** v4 §7.1 举例列了 heads / rules / checkers / deciders /
-definedness / algorithms / commands 七类，但空注册表就是空壳（AGENTS.md 记录的
-结构病）——目前实际有内容的只有：常数、函数声明、定义域条件、恒等判定阶段、
-域构建器。规则由 `math/rules.py` 从函数声明装配，checker 由 kernel 的
-CheckerRegistry 管，故不在此重复设表；确有内容时再加。
+**Only categories with actual content get a table.** A registry that is always empty
+is a husk, so the builder holds only what is really used today: constants, function
+declarations, domain conditions, identity-decision stages, and domain builders.
+Rules are assembled by `math/rules.py` from function declarations, and checkers are
+owned by the kernel's CheckerRegistry, so neither is duplicated here; a table gets
+added when it has content.
 
-**禁止 import 期修改全局状态**（v4 §7.1）：本模块只在被显式调用时写入 builder；
-数学模块 import 时不注册任何东西。装配由 `runtime/bootstrap.py` 的 `bootstrap()`
-显式触发。
+**No import-time global state mutation**: this module writes to the builder only
+when explicitly called, and math modules register nothing on import. Assembly is
+triggered explicitly by `bootstrap()`.
 """
 
 from dataclasses import dataclass
@@ -24,7 +26,8 @@ from cas.syntax.term import Const
 
 @dataclass(frozen=True, slots=True)
 class ConstantDecl:
-    """数学常数：原子对象 + 可判定性质的引理声明。"""
+    """Mathematical constant: the atom plus lemma declarations for decidable
+    properties."""
     atom: Const
     name: str
     print_name: str
@@ -35,12 +38,17 @@ class ConstantDecl:
 
 @dataclass(frozen=True, slots=True)
 class FunctionDecl:
-    """数学函数：头名 + 印名 + 性质 + 恒等式规则源 + 导数模板。
+    """Mathematical function: head name, print name, properties, derivative
+    template, and domain-condition template.
 
-    `rule_lines` 是规则行字符串（DSL）；解析由消费方（math/rules.py 装配规则集时）
-    负责，本层保持纯数据。`deriv` 是含 `DB(0)` 占位的导数模板，语义为
-    `f'(u) = 模板[DB(0) := u]`，链式法则因子由微分层乘上。分支破裂者置 None
-    并写入 `deriv_note`——导数模板的准入纪律是「只收无条件可证者」。
+    Every field comes from the declaration DSL
+    (`math/elementary/declarations.dsl`); this layer holds pure data only.
+    `deriv` is a derivative template containing the `DB(0)` placeholder, meaning
+    `f'(u) = template[DB(0) := u]`, with the chain-rule factor multiplied in by the
+    differentiation layer; a template whose branch splits is None and carries a
+    `deriv_note`, since derivative templates are only admitted when unconditionally
+    provable. `domain` is a domain-condition template using the same `DB(0)`
+    placeholder (None when absent).
     """
     name: str
     print_name: str
@@ -48,23 +56,26 @@ class FunctionDecl:
     real_on_real: bool | None = None
     bound: tuple[Fraction | None, Fraction | None] | None = None
     zero_iff_arg_zero: bool = False
-    rule_lines: tuple[str, ...] = ()
     deriv: object = None
+    domain: object = None
     deriv_note: str = ""
     note: str = ""
 
 
 class RuntimeBuilder:
-    """装配期注册表集合。重复声明即报错（准入纪律：同一声明只有一处）。"""
+    """The set of assembly-time registries. A duplicate declaration raises, since
+    one declaration has exactly one home."""
 
     def __init__(self):
         self.constants: dict[str, ConstantDecl] = {}
         self.functions: dict[str, FunctionDecl] = {}
-        self.domain_conds: dict[str, object] = {}
+        self.aliases: dict[str, str] = {}  # surface name -> canonical head (parser notation)
+        self.roles: dict[str, str] = {}    # role -> canonical head (algorithms fetch by role)
+        self.rule_lines: list[str] = []    # rule lines (DSL text; math/rules.py parses)
         self.eq_stages: list = []          # (name, run)
-        self.domains: list = []            # 常驻基域构建器（按注册序进阶梯）
+        self.domains: list = []            # resident base field builders (ladder order)
 
-    # --- 常数 ---
+    # --- constants ---
 
     def declare_constant(self, *, name, print_name, real=None, positive=None,
                          bounds=None) -> ConstantDecl:
@@ -79,16 +90,16 @@ class RuntimeBuilder:
         return decl
 
     def require_constant(self, name) -> ConstantDecl:
-        """取已声明的常数（装配顺序依赖由此显式化，查无即报错）。"""
+        """Fetch an already-declared constant; a miss raises, which makes the
+        assembly-order dependency explicit."""
         d = self.constants.get(name)
         if d is None:
-            raise KeyError(f"常数未声明: {name}（检查 install 顺序）")
+            raise KeyError(f"constant not declared: {name} (check install order)")
         return d
 
-    # --- 函数 ---
+    # --- functions ---
 
     def declare_function(self, **kw) -> FunctionDecl:
-        kw["rule_lines"] = tuple(kw.get("rule_lines", ()))
         return self.register_function(FunctionDecl(**kw))
 
     def register_function(self, decl: FunctionDecl) -> FunctionDecl:
@@ -97,12 +108,38 @@ class RuntimeBuilder:
         self.functions[decl.name] = decl
         return decl
 
-    # --- 定义域条件 / 判定阶段 / 域 ---
+    # --- aliases / rules / decision stages / domains ---
 
-    def declare_domain_cond(self, name, fn) -> None:
-        if name in self.domain_conds:
-            raise ValueError(f"domain condition redeclared: {name}")
-        self.domain_conds[name] = fn
+    def declare_alias(self, surface: str, head: str) -> None:
+        """Parser surface name -> canonical head (e.g. ln->Log, sqrt->Sqrt).
+
+        An alias is a **declaration**, not parser hardcoding: a different surface
+        name needs no parser change.
+        """
+        if surface in self.aliases:
+            raise ValueError(f"alias redeclared: {surface}")
+        self.aliases[surface] = head
+
+    def declare_role(self, role: str, head: str) -> None:
+        """Canonical function an algorithm refers to by role (e.g. `logarithm` -> Log).
+
+        The general power rule of differentiation needs "the logarithm function" but
+        must not hardcode `Log`; it fetches by **declared role**, so renaming the
+        function needs no algorithm change.
+        """
+        if role in self.roles:
+            raise ValueError(f"role redeclared: {role}")
+        self.roles[role] = head
+
+    def declare_rule(self, line: str) -> None:
+        """Register the **text** of one rule DSL line (parsing happens at the
+        consumption point in math/rules.py).
+
+        A rule is data, not a Python registration call, so the admission discipline
+        (unconditional identity, no guard on auto) can be checked mechanically
+        against the text.
+        """
+        self.rule_lines.append(line)
 
     def register_eq_stage(self, name, run, prepend=False) -> None:
         entry = (name, run)

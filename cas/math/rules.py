@@ -1,13 +1,16 @@
-# -*- coding: utf-8 -*-
-"""规则引擎（全系统唯一重写引擎）。
+"""Rule engine: the single rewriting engine of the whole system.
 
-规则来源只有运行期声明（由 bootstrap 装配，见 runtime/registry.py）；guard 判定走
-判定管线（Verdict ADT），不存在第二套规则机制、第二套守卫词汇。
+Rules come only from run-time declarations, installed by bootstrap. Guard
+decisions go through the decision pipeline (the Verdict ADT); there is no second
+rule mechanism and no second guard vocabulary.
 
-消费面：
-· simplify.autosimplify —— auto 规则定点化简（自动通道）
-· REPL apply 命令 —— 定向应用（交互通道）
-两者共用 apply_rule，验证经 workflow Rewrite 步骤。
+Consumers:
+· `simplify.autosimplify` runs the auto rules to a fixed point (automatic
+  channel);
+· the REPL `apply` command applies one rule at a chosen location (interactive
+  channel).
+Both share `apply_rule`, and verification goes through the workflow's Rewrite
+step.
 """
 
 from dataclasses import dataclass
@@ -21,13 +24,15 @@ _DECLS = None
 
 
 def bind_runtime(rt):
-    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+    """Inject the declaration query surface at assembly time.
 
-    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
-    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+    The dependency direction is runtime -> math and the reverse is forbidden, so
+    a math module must not import runtime; declarations are injected during
+    assembly instead.
 
-    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
-    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    Querying before injection raises rather than returning None: a silent None
+    would turn "forgot to assemble" into a hard-to-find wrong answer, whereas
+    "no such name" is a different case that still returns None.
     """
     global _DECLS
     _DECLS = rt
@@ -36,7 +41,7 @@ def bind_runtime(rt):
 def _R():
     if _DECLS is None:
         raise RuntimeError(
-            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+            "not assembled: call cas.runtime.bootstrap() first")
     return _DECLS
 
 
@@ -44,24 +49,24 @@ def _R():
 @dataclass(frozen=True)
 class Rule:
     id: str
-    pattern: object               # cas.syntax.pattern.Pattern（v4 不变量 2：模式非项）
-    template: object              # Pattern；实例化产出 Term
-    guard: object = None          # Pattern | None（条件也是模式，含洞）
+    pattern: object               # a Pattern; a pattern is not a term
+    template: object              # a Pattern; instantiation yields a Term
+    guard: object = None          # Pattern | None (a condition is also a pattern, with holes)
     auto: bool = False
-    priority: int = 100           # 同位多规则时的尝试顺序（小者先，yacas 同款）
+    priority: int = 100           # try order among rules at the same position (lower first)
 
 
 @dataclass
 class ApplyResult:
     ok: bool
-    guard: object                 # Verdict（YES 才可落）
+    guard: object                 # Verdict; only YES may land
     term: T.Term = None
     subst: dict = None
     rule_id: str = ""
 
 
 def root_key(p):
-    """规则索引键（模式层实现；洞归 '*'）。"""
+    """Rule index key (pattern-level; holes map to '*')."""
     return P.root_key(p)
 
 
@@ -86,10 +91,12 @@ class RuleSet:
 
 
 def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
-    """在 expr 的 path 处尝试应用规则。
+    """Try to apply a rule at `path` in `expr`.
 
-    guard_eval: (guard_term, subst) -> Verdict。缺省（无守卫）视为 YES；
-    有守卫但无评估器视为 UNKNOWN——诚实不落地。"""
+    guard_eval: (guard_term, subst) -> Verdict. The default (no guard) counts as
+    YES; a guarded rule with no evaluator counts as UNKNOWN and honestly does not
+    land.
+    """
     sub_t = T.term_at(expr, path)
     for sub in matches(rule.pattern, sub_t, budget=budget):
         if rule.guard is None:
@@ -110,20 +117,23 @@ _LIB_RULESET = None
 
 
 def declared_ruleset() -> RuleSet:
-    """从运行期声明装配规则集（幂等缓存）。
+    """Build the rule set from run-time declarations, cached by identity.
 
-    声明只持规则行字符串（纯数据），DSL 解析在本消费点完成——数学模块不反向
-    导入本模块。损坏的规则行是**声明缺陷**：解析异常向上抛出，绝不静默吞掉。"""
+    The declarations carry rule-line strings as pure data and DSL parsing happens
+    at this consumption point, so a math module never imports this module back. A
+    corrupt rule line is a declaration defect: the parse error propagates and is
+    never swallowed.
+    """
     global _LIB_RULESET
     if _LIB_RULESET is None:
-        # 延迟导入：这是 cas.math.rules ↔ cas.math.loader 环的回边。loader 顶层
-        # `from cas.math.rules import Rule`（去边），本处若要也提到顶层，两侧
-        # 都会撞上半初始化模块。环的成因是规则行 DSL 的解析产物是 Rule，
-        # 而装配点在本模块——解析与装配同居一处时此环即消失。
+        # Deferred import: this is the back edge of the
+        # cas.math.rules <-> cas.math.loader cycle. loader imports Rule at its
+        # top, so importing loader at the top here would have both sides hit a
+        # half-initialized module. The cycle exists because the parsed product of
+        # the rule-line DSL is a Rule and the assembly point is this module.
         from cas.math.loader import parse_rule_line
         rs = RuleSet()
-        for decl in _R().all_functions():
-            for line in decl.rule_lines:
-                rs.add(parse_rule_line(line))
+        for line in _R().rules:
+            rs.add(parse_rule_line(line))
         _LIB_RULESET = rs
     return _LIB_RULESET

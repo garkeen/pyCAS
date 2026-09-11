@@ -1,40 +1,51 @@
-# -*- coding: utf-8 -*-
-"""积分骨架（手通道，地基优先）：第一个诚实可判定片段 + 独立验证器。
+"""Integration skeleton: the first honestly decidable fragment plus an
+independent verifier.
 
-范围（全部精确、无启发式、无近似）：
-· 不定积分：多项式被积式（幂规则）；分段被积式逐支积分。真分式需
-  Hermite、超越需 Risch——未建，抛 IntegrateError 拒答。
-· 定积分：∫_a^b 遵架构 §6.3——先做 定义域 ∩ [a, b]，缺口不对 0 积分，
-  未定义胞腔即拒；分段按开区间胞腔逐段牛莱求和。
-· 验证独立：verify_antideriv 用微分层 d/dx 复核，与积分器两套实现。
+Scope, all exact, no heuristics and no approximation:
+· indefinite integration of polynomial integrands (power rule); piecewise
+  integrands are integrated branch by branch. Proper rational functions need
+  Hermite reduction and transcendental ones need Risch; neither is built, so
+  they raise IntegrateError.
+· definite integration of [a, b] follows the domain-first discipline: intersect
+  the domain with [a, b], never integrate across a gap as if it were 0, and
+  refuse when a cell is undefined. A piecewise integrand is summed over its open
+  cells.
 
-诚实边界：
-· 积分限须为有理数（代数限需 ℚ(α)，未建）；
-· 分界点为无理根时拒答（需 ℚ(α) 精确定位）；
-· 开区间端点/点洞处的反常性需极限层（§6.5），未建即拒。
+**This module contains the solver only.** The independent verifier (which
+re-checks D(F) = f through the differentiation layer) lives in
+`cas/math/calculus/integration/verify.py`: verification and search are kept
+apart, and a checker must not live in, or import from, the module holding the
+search algorithm it verifies.
+
+Honest boundaries:
+· proper rational functions need Hermite reduction and transcendental ones need
+  Risch, neither is built, so they refuse honestly;
+· integration limits must be rational (algebraic limits need an algebraic
+  extension, not built);
+· a breakpoint at an irrational root is refused (it needs exact location in an
+  algebraic extension);
+· improper behaviour at an open endpoint or a point hole needs a limit layer,
+  which is not built, so it is refused.
 """
-
-from fractions import Fraction as Fr
 
 from cas.syntax import term as T
 from cas.syntax.term import Sym
 from cas.errors import IntegrateError
 from cas.kernel.verdict import Reason
-from cas.math.project import project, zero_of
+from cas.math.project import project
 from cas.math.domains.poly import Poly, to_term, _norm
-from cas.math.domains.ratfunc import RatFunc, ratfunc_domain
-from cas.math.diff import differentiate
 from cas.math.qarith import fold
 
 _UNDEF = T.SP("Undefined")
 
 
 # ---------------------------------------------------------------------------
-# 不定积分：多项式片段
+# Indefinite integration: the polynomial fragment
 # ---------------------------------------------------------------------------
 
 def poly_antideriv(ring, p: Poly, var_i: int) -> Poly:
-    """∫ Σ c·xᵢᵏ = Σ (c/(k+1))·xᵢᵏ⁺¹（逐项幂规则，精确有理）。"""
+    """Integral of sum(c * x_i^k) = sum(c/(k+1) * x_i^(k+1)), term by term with
+    an exact rational power rule."""
     d = {}
     for k, c in p.monos:
         e = k[var_i]
@@ -44,134 +55,89 @@ def poly_antideriv(ring, p: Poly, var_i: int) -> Poly:
 
 
 def integrate_term(f, x: Sym):
-    """∫ f dx。多项式片段直积；分段逐支；其余诚实拒答。
+    """The integral of f with respect to x: direct integration on the polynomial
+    fragment, branch by branch for a piecewise integrand, and an honest refusal
+    otherwise.
 
-    返回一个原函数（不含积分常数——不连通定义域上各连通分量的常数
-    相互独立，见分段情形说明）。"""
+    Returns one antiderivative, with no constant of integration: on a
+    disconnected domain the constants of the connected components are
+    independent, see the piecewise case."""
     from cas.math.piecewise import is_piecewise
     if is_piecewise(f):
         return integrate_piecewise_indefinite(f, x)
     hit = project(f)
     if hit is None:
-        raise IntegrateError("被积函数不在 ℚ/多项式/有理函数域", Reason.FRAGMENT)
+        raise IntegrateError("integrand is outside the rational/polynomial/"
+                             "rational-function domains", Reason.FRAGMENT)
     if hit.element is None:
-        return T.times(f, x)                    # ∫ c dx = c·x
+        return T.times(f, x)                    # integral of a constant c is c*x
     vs = hit.domain.vars
     if x not in vs:
-        return T.times(f, x)                    # 与 x 无关
+        return T.times(f, x)                    # independent of x
     idx = vs.index(x)
     ring = hit.domain.ring
     el = hit.element
     if isinstance(el, Poly):
         return to_term(ring, poly_antideriv(ring, el, idx))
-    raise IntegrateError("真分式积分需 Hermite 约化，未建", Reason.FRAGMENT)
+    raise IntegrateError("proper rational integration needs Hermite reduction, "
+                         "not built", Reason.FRAGMENT)
 
 
 def integrate_piecewise_indefinite(f, x: Sym):
-    """分段被积式逐支积分（条件不动）。
+    """Integrate a piecewise integrand branch by branch, leaving conditions
+    unchanged.
 
-    不连通定义域上每个连通分量的积分常数相互独立——单个 +C 是错的。
-    此处返回的逐支原函数省略各分量常数，验证只查逐支 d/dx 是否还原被积式。"""
+    On a disconnected domain the constants of integration of the connected
+    components are independent, so a single +C would be wrong. The branch-wise
+    antiderivative returned here omits those constants; verification only checks
+    that differentiating each branch restores the integrand."""
     from cas.math.piecewise import fold_nested, branches, piecewise
     f = fold_nested(f)
     return piecewise([(integrate_term(v, x), c) for v, c in branches(f)])
 
 
 # ---------------------------------------------------------------------------
-# 独立验证：d/dx F == f（微分层，另一套实现）
-# ---------------------------------------------------------------------------
-
-def _judge_zero_diff(dF, f):
-    """dF − f 是否恒零。**三值**：True 证零 / False 证非零 / None 未决。
-
-    未决必须与「非零」分开：判零通道覆盖不到的函数（exp/sin 组合之类，三角基
-    归零阶段尚未重建，见 decide.py 的 TODO）属于**能力缺失**，不是反驳。把
-    None 说成 False 会伪造否证——「未找到与不存在是两个结论」。
-    """
-    diff = fold(T.plus(dF, T.neg(f)))
-    if diff is T.ZERO:
-        return True
-    z = zero_of(diff)
-    if z is True:
-        return True
-    if z is False:
-        return False
-    allv = tuple(sorted(T.free_vars(dF) | T.free_vars(f),
-                        key=lambda s: s.name))
-    if not allv:
-        return None
-    r = ratfunc_domain(*allv).equal(dF, f)
-    if r is True:
-        return True
-    if r is False:
-        return False                          # 两者都是域成员且不等：真反驳
-    return None                               # 非成员（超越式）：判零通道外，未决
-
-
-def verify_antideriv(F, f, x: Sym):
-    """独立验证 F 是 f 的原函数（与积分器无关）。
-
-    返回 `True` / `False` / `None`（未决）。**三值**：判零通道覆盖不到时诚实
-    返回 None，绝不把「判不了」报成「不是原函数」。
-    """
-    from cas.math.piecewise import is_piecewise, fold_nested, branches
-    if is_piecewise(f) or is_piecewise(F):
-        ff = fold_nested(f)
-        FF = fold_nested(F)
-        bf, bF = branches(ff), branches(FF)
-        if len(bf) != len(bF):
-            return False
-        unknown = False
-        for (vf, cf), (vF, cF) in zip(bf, bF):
-            if cf is not cF:
-                return False
-            r = _judge_zero_diff(differentiate(vF, x), vf)
-            if r is False:
-                return False
-            if r is None:
-                unknown = True
-        return None if unknown else True
-    return _judge_zero_diff(differentiate(F, x), f)
-
-
-# ---------------------------------------------------------------------------
-# 定积分：∫_a^b（遵架构 §6.3）
+# Definite integration
 # ---------------------------------------------------------------------------
 
 def _require_rational(t, tag):
     tf = fold(t)
     if not T.is_num(tf):
-        raise IntegrateError(f"积分{tag}需有理数（代数限需 ℚ(α)，未建）",
+        raise IntegrateError(f"the {tag} of integration must be rational",
                              Reason.FRAGMENT)
     return T.num_val(tf)
 
 
 def _ftc(F, x: Sym, a, b):
-    """牛莱：F(b) − F(a)（F 为多项式原函数，端点精确求值）。"""
+    """Newton-Leibniz: F(b) - F(a), with F a polynomial antiderivative evaluated
+    exactly at the endpoints."""
     Fa = fold(T.subst(F, {x: T.N(a)}))
     Fb = fold(T.subst(F, {x: T.N(b)}))
     return fold(T.plus(Fb, T.neg(Fa)))
 
 
 def _rat_iso(iso, tag):
-    """隔离区间 → 有理端点；无理根拒答（需 ℚ(α)）。None 为无界。"""
+    """An isolating interval to rational endpoints; an irrational root is
+    refused. None means unbounded."""
     if iso is None:
         return None
     a, b = iso
     if a == b:
         return a
-    raise IntegrateError(f"分界点为无理根，需 ℚ(α) 精确定位（{tag}）",
-                         Reason.FRAGMENT)
+    raise IntegrateError(f"breakpoint at an irrational root needs exact location "
+                         f"in an algebraic extension ({tag})", Reason.FRAGMENT)
 
 
 def definite_integrate(f, x: Sym, a, b):
-    """∫_a^b f dx（a、b 为有理数项）。缺口不对 0 积分，未定义即拒。"""
-    ar = _require_rational(a, "下限")
-    br = _require_rational(b, "上限")
+    """The definite integral of f with respect to x from a to b, with a and b
+    rational terms. Never integrates across a gap as if it were 0, and refuses
+    when the integrand is undefined."""
+    ar = _require_rational(a, "lower limit")
+    br = _require_rational(b, "upper limit")
     if ar > br:
-        raise IntegrateError("积分下限大于上限")
+        raise IntegrateError("lower limit is greater than upper limit")
     if ar == br:
-        return T.ZERO                          # ∫_a^a = 0（牛莱约定）
+        return T.ZERO                          # integral from a to a is 0
     from cas.math.piecewise import is_piecewise
     if is_piecewise(f):
         return _definite_piecewise(f, x, ar, br)
@@ -180,31 +146,34 @@ def definite_integrate(f, x: Sym, a, b):
 
 
 def _definite_piecewise(f, x: Sym, a, b):
-    """分段定积分：对覆盖 [a, b] 的每个开区间胞腔逐段牛莱求和。
+    """Piecewise definite integration: Newton-Leibniz on each open cell covering
+    [a, b].
 
-    任一与 [a, b] 相交的胞腔未定义（缺口/点洞）即拒——绝不悄悄缩区间，
-    也不对缺口积出 0。"""
+    Any cell intersecting [a, b] that is undefined (a gap or a point hole) causes
+    a refusal. The interval is never quietly shrunk and a gap is never integrated
+    to 0."""
     from cas.math.piecewise import domain_cells
     total = None
     for cell, val in domain_cells(f, x):
-        lo = _rat_iso(cell.lo, "下界")
-        hi = _rat_iso(cell.hi, "上界")
+        lo = _rat_iso(cell.lo, "lower bound")
+        hi = _rat_iso(cell.hi, "upper bound")
         if cell.kind == "point":
             r = lo
             if a <= r <= b and val is _UNDEF:
-                raise IntegrateError("被积函数在 [a, b] 内存在未定义点洞，"
-                                     "反常积分需极限层，未建", Reason.FRAGMENT)
-            continue                                # 点胞腔测度 0
+                raise IntegrateError(
+                    "integrand has an undefined point hole in [a, b]; improper "
+                    "integration needs a limit layer, not built", Reason.FRAGMENT)
+            continue                                # a point cell has measure 0
         L = a if lo is None else max(a, lo)
         R = b if hi is None else min(b, hi)
         if L >= R:
             continue
         if val is _UNDEF:
-            raise IntegrateError("被积函数在 [a, b] 内存在缺口，不对缺口积分",
-                                 Reason.FRAGMENT)
+            raise IntegrateError("integrand has a gap in [a, b]; refusing to "
+                                 "integrate across it", Reason.FRAGMENT)
         t = _ftc(integrate_term(val, x), x, L, R)
         total = t if total is None else fold(T.plus(total, t))
     if total is None:
-        raise IntegrateError("积分区间与定义域无交，无定义而非 0",
-                             Reason.FRAGMENT)
+        raise IntegrateError("integration interval does not meet the domain: "
+                             "undefined rather than 0", Reason.FRAGMENT)
     return total

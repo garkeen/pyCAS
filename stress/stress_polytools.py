@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""结式与无平方分解压力台架。
+"""Resultant and squarefree-decomposition stress bench.
 
-四条性质，全部自证、无需外部真值：
-  P18 求值锚点   res(f, x−r) == f(r)（Horner 精确求值对照）
-  P19 共根判据   res(f, g) = 0 ⟺ gcd(f, g) 非常数——两条独立算法交叉；
-                 符号约定：res(f, g) = (−1)^(mn) res(g, f)
-  P20 无平方往返 Π 因子ᵢ^重数ᵢ == monic(f)；各因子确无平方
-                 （gcd(h, h') 常数）；Σ 重数·次数 == deg f
+Four properties, all self-proving with no external ground truth:
+  P18 evaluation anchor  res(f, x-r) == f(r) (checked against exact Horner evaluation)
+  P19 common-root test   res(f, g) = 0 iff gcd(f, g) is nonconstant -- two independent
+                         algorithms cross-checked; sign convention:
+                         res(f, g) = (-1)^(mn) res(g, f)
+  P20 squarefree round trip  prod factor_i^multiplicity_i == monic(f); each factor is
+                         genuinely squarefree (gcd(h, h') is constant); and the sum of
+                         multiplicity times degree equals deg f
 
-用法：python stress/stress_polytools.py [轮数] [种子]
+Usage: python stress/stress_polytools.py [rounds] [seed]
 """
 
 import sys
@@ -70,7 +72,7 @@ def poly_equal(a, b) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# P18：求值锚点
+# P18: evaluation anchor
 # ---------------------------------------------------------------------------
 
 def prop_eval_anchor(rounds, rng):
@@ -81,11 +83,11 @@ def prop_eval_anchor(rounds, rng):
         got = resultant(R, lin, f)
         want = horner(f, r)
         if got != want:
-            fail("P18 求值锚点", i, f"res={got} f(r)={want}")
+            fail("P18 evaluation anchor", i, f"res={got} f(r)={want}")
 
 
 # ---------------------------------------------------------------------------
-# P19：共根判据 + 对称性
+# P19: common-root test plus symmetry
 # ---------------------------------------------------------------------------
 
 def prop_common_root(rounds, rng):
@@ -95,19 +97,19 @@ def prop_common_root(rounds, rng):
         res = resultant(R, f, g)
         gcd_deg = p_deg(p_gcd_univar(R, f, g))
         if (res == 0) != (gcd_deg >= 1):
-            fail("P19 共根判据", i, f"res={res} gcd_deg={gcd_deg}")
+            fail("P19 common-root test", i, f"res={res} gcd_deg={gcd_deg}")
         res_swap = resultant(R, g, f)
         sign = -1 if (m * n) % 2 else 1
         if res != sign * res_swap:
-            fail("P19 对称性", i, f"res={res} swap={res_swap}")
-        # 构造共因子对：必判零
+            fail("P19 symmetry", i, f"res={res} swap={res_swap}")
+        # build a pair sharing a factor: the resultant must vanish
         c = nonzero(rng, 3)
         if resultant(R, p_mul(R, f, c), p_mul(R, g, c)) != 0:
-            fail("P19 共因子未判零", i)
+            fail("P19 shared factor did not vanish", i)
 
 
 # ---------------------------------------------------------------------------
-# P20：无平方往返
+# P20: squarefree round trip
 # ---------------------------------------------------------------------------
 
 def prop_squarefree(rounds, rng):
@@ -119,26 +121,26 @@ def prop_squarefree(rounds, rng):
         total = 0
         for h, mult in parts:
             if p_deg(h) <= 0:
-                fail("P20 常数因子", i)
+                fail("P20 constant factor", i)
             if p_deg(p_gcd_univar(R, h, p_deriv(R, h, 0))) > 0:
-                fail("P20 因子含平方", i)
+                fail("P20 factor contains a square", i)
             acc = p_mul(R, acc, p_pow(R, h, mult))
             total += mult * p_deg(h)
         if not poly_equal(acc, f):
-            fail("P20 往返不一致", i, f"deg f={p_deg(f)}")
+            fail("P20 round trip mismatch", i, f"deg f={p_deg(f)}")
         if total != p_deg(f):
-            fail("P20 次数账目", i, f"Σ={total} deg={p_deg(f)}")
+            fail("P20 degree accounting", i, f"sum={total} deg={p_deg(f)}")
 
 
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== 结式/无平方压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== resultant/squarefree stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_eval_anchor(rounds, rng)
-    print(f"P18 求值锚点          {rounds} 轮通过")
+    print(f"P18 evaluation anchor     {rounds} rounds passed")
     prop_common_root(rounds, rng)
-    print(f"P19 共根判据/对称     {rounds} 轮通过")
+    print(f"P19 common root/symmetry  {rounds} rounds passed")
     prop_squarefree(rounds, rng)
-    print(f"P20 无平方往返        {rounds} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P20 squarefree round trip {rounds} rounds passed")
+    print("== all passed ==")

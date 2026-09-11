@@ -1,11 +1,19 @@
-# -*- coding: utf-8 -*-
-"""运行期查询入口（v4 §三 `runtime/dispatch.py`）。
+"""Runtime query entry point.
 
-消费者（parser / pprint / decide / project / rules / domcond / diff …）经此读数学
-语义——它取代旧的 `library` 包的查询面，语义相同、名字相同，但**语义来自显式
-装配**而非 import 副作用。
+Consumers (parser, pprint, decide, project, rules, domcond, diff, ...) read
+mathematical semantics through this module. The semantics come from explicit
+assembly rather than from an import side effect, so importing any math module
+registers nothing.
 
-首次调用触发一次 `bootstrap()`，此后只读。写入口只有 `RuntimeBuilder`。
+The first call triggers `bootstrap()` once; afterwards the runtime is read-only.
+The only write entry point is RuntimeBuilder.
+
+Attribute access is forwarded to the assembled Runtime through the module-level
+`__getattr__` (PEP 562) rather than one hand-written forwarding function per
+Runtime method. A per-method list duplicates the whole Runtime API by hand and
+has to be edited on every addition, which is exactly the kind of duplication to
+avoid. Two names are not forwarded because they are not Runtime methods:
+`domain_normal_form` and `new_workflow` forward computation to the math layer.
 """
 
 from cas.runtime.bootstrap import bootstrap
@@ -14,7 +22,7 @@ _runtime = None
 
 
 def get_runtime():
-    """取运行期（首次调用时装配）。"""
+    """Return the runtime, assembling it on the first call."""
     global _runtime
     if _runtime is None:
         _runtime = bootstrap()
@@ -22,70 +30,35 @@ def get_runtime():
 
 
 def reset_runtime():
-    """丢弃已装配的运行期（测试用；下次查询会重新装配）。"""
+    """Drop the assembled runtime, for tests; the next query reassembles."""
     global _runtime
     _runtime = None
 
 
-# --- 常数 ---
+def __getattr__(name):
+    """Forward every other attribute to the assembled Runtime.
 
-def const_by_atom(atom):
-    return get_runtime().const_by_atom(atom)
-
-
-def const_by_name(name):
-    return get_runtime().const_by_name(name)
-
-
-def is_const_name(name):
-    return get_runtime().is_const_name(name)
-
-
-def const_positive(atom):
-    return get_runtime().const_positive(atom)
+    This replaces a hand-written forwarding function per Runtime method: the query
+    surface is exactly the read-only surface of the Runtime, with no duplicated
+    method list to keep in sync. An unknown name still raises AttributeError,
+    because getattr on the Runtime raises it.
+    """
+    if name.startswith("__"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(get_runtime(), name)
 
 
-def const_real(atom):
-    return get_runtime().const_real(atom)
-
-
-def const_bounds(atom):
-    return get_runtime().const_bounds(atom)
-
-
-# --- 函数 ---
-
-def lookup_function(name):
-    return get_runtime().lookup_function(name)
-
-
-def function_deriv(name):
-    return get_runtime().function_deriv(name)
-
-
-def all_functions():
-    return get_runtime().all_functions()
-
-
-def print_name(head_name):
-    return get_runtime().print_name(head_name)
-
-
-# --- 定义域条件 ---
-
-def lookup_domain_cond(name):
-    return get_runtime().lookup_domain_cond(name)
-
-
-# --- 计算转发（前端不得直连 math，§四）---
+# --- computation forwarding (the frontend must not reach into math directly) ---
 
 def domain_normal_form(t):
-    """域标准形。前端（REPL 的 norm 命令）经此取用，不直接 import math。"""
+    """The domain normal form, used by the frontend (the REPL norm command) so it
+    need not import math."""
     from cas.math.base.equality import normal_form
     return normal_form(t)
 
 
 def new_workflow(**kw):
-    """建工作流会话（账本 + checker + 判定服务由 runtime 装配）。"""
+    """Create a workflow session, with ledger, checkers and decision services
+    assembled by the runtime."""
     from cas.runtime.runtime import new_workflow as _nw
     return _nw(**kw)

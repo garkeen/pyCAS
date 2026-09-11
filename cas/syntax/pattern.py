@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
-"""模式元语言（v4 §5.2 / 不变量 2）：模式不是项。
+"""Pattern metalanguage: a pattern is not a term.
 
-`PatternVar` / `PatternSeq` 不再是 `Term` 子类，从而**不可能**出现在用户
-表达式、域投影与数学判等中——项层只装数学对象。
+PatternVar / PatternSeq are not Term subclasses, so they can never appear in a
+user expression, a domain projection or a mathematical equality test. The term
+layer holds mathematical objects only.
 
-字面量直接以 `Term` 充当模式：驻留项的指针相等即字面匹配，无需包装类型。
-故模式参数的类型是 `Pattern | Term`；本模块记作 PatternLike。
+A literal is used directly as a pattern: pointer equality of interned terms is
+literal matching, so no wrapper type is needed and a pattern argument has type
+`Pattern | Term`, recorded here as PatternLike.
 
-规则声明（DSL）经 loader 以 pattern 模式解析，产物是本模块的 Pattern；
-模板实例化 `instantiate` 产出 Term。模式变量只在匹配与实例化两处出现。
+Rule declarations (DSL) are parsed through the pattern channel by the loader,
+producing Pattern objects; template instantiation produces Terms. Pattern
+variables therefore occur in exactly two places: matching and instantiation.
 """
 
 from cas.syntax import term as T
@@ -24,7 +26,8 @@ def _next_hp():
 
 
 class Pattern:
-    """模式封闭层次基类：驻留指针语义，与 Term 同构。"""
+    """Base of the closed pattern hierarchy: interned pointer semantics,
+    isomorphic to Term."""
 
     __slots__ = ("_h",)
 
@@ -68,7 +71,7 @@ class PatternCall(Pattern):
     __slots__ = ("head", "args")
 
     def __init__(self, head, args, h):
-        self.head = head                  # Term（符号）
+        self.head = head                  # Term (a symbol)
         self.args = args                  # tuple[PatternLike, ...]
         self._h = h
 
@@ -98,7 +101,8 @@ def PS(name):
 
 
 def _flatten_ac(head, args):
-    """AC 头的句法折叠：与项层 _flatten_ac 同构（拉平同类嵌套 + 确定性排序）。"""
+    """AC-head flattening, isomorphic to the term layer: flatten same-head
+    nesting and sort deterministically."""
     flat = []
     for a in args:
         if isinstance(a, PatternCall) and a.head is head:
@@ -109,7 +113,8 @@ def _flatten_ac(head, args):
 
 
 def pcall(head, args):
-    """PatternCall 驻留构造器：AC 头做与项层一致的拉平+排序。"""
+    """Interned PatternCall constructor; AC heads get the same flattening and
+    sorting as the term layer."""
     name = head.name if isinstance(head, T.Sym) else None
     if name in T.AC:
         args = _flatten_ac(head, list(args))
@@ -122,7 +127,8 @@ def pcall(head, args):
 
 
 def sort_key(p):
-    """模式排序键。项沿用 T.sort_key，保证字面量之间的相对序与项层一致。"""
+    """Pattern sort key. Terms reuse T.sort_key so that the relative order of
+    literals matches the term layer."""
     if isinstance(p, T.Term):
         return (10,) + T.sort_key(p)
     k = p.__class__
@@ -134,7 +140,8 @@ def sort_key(p):
 
 
 def has_holes(p):
-    """是否含模式洞。Term 恒为 False（不变量 2：项里不可能有洞）。"""
+    """Whether the pattern contains a hole. Always False for a Term, since a
+    hole cannot occur inside a term."""
     if isinstance(p, T.Term):
         return False
     if p.__class__ is PatternCall:
@@ -143,7 +150,8 @@ def has_holes(p):
 
 
 def root_key(p):
-    """规则索引键：AC 头按头名分桶，洞归 '*'（与项层 root_key 同构）。"""
+    """Rule index key: AC heads bucket by head name, holes map to '*'. Mirrors
+    the term-layer root key."""
     if isinstance(p, T.Term):
         if isinstance(p, T.Expr):
             return p.head.name
@@ -154,10 +162,10 @@ def root_key(p):
 
 
 def instantiate(pat, sub):
-    """模板实例化：Pattern -> Term。
+    """Template instantiation: Pattern -> Term.
 
-    未绑定的洞（模板变量未被模式覆盖）是规则声明缺陷——显式报错，绝不让
-    模式变量漏进项层（那正是 v4 要消除的泄漏）。
+    An unbound hole means the rule declaration is defective, so it is reported
+    explicitly rather than letting a pattern variable leak into the term layer.
     """
     if isinstance(pat, T.Term):
         return pat
@@ -170,7 +178,8 @@ def instantiate(pat, sub):
     if k is PatternSeq:
         raise BudgetExceeded(message=f"sequence hole ??{pat.name} not in arg position")
     if pat.head.name == "Quote":
-        # quote 内部保 held 结构：raw 重建（不 AC 规范化）
+        # Inside Quote the held structure is preserved: rebuild raw, no AC
+        # normalization.
         return T._intern_expr(pat.head, tuple(_inst_raw(a, sub) for a in pat.args))
     out = []
     for a in pat.args:
@@ -185,7 +194,8 @@ def instantiate(pat, sub):
 
 
 def _inst_raw(pat, sub):
-    """instantiate 的 held 通道：重建走 _intern_expr，不做 AC 规范化。"""
+    """Held channel of `instantiate`: rebuild through _intern_expr, with no AC
+    normalization."""
     if isinstance(pat, T.Term):
         return pat
     k = pat.__class__

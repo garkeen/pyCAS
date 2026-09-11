@@ -1,13 +1,14 @@
-"""域层随机压力台架（cas_v3_arch.md 九 验收方法论）。
+"""Domain-layer randomized stress bench.
 
-五条性质，全部自证：
-  P5 多项式往返    random Poly -> to_term -> from_term == 原 monos
-  P6 构造等价      同多项式不同构造顺序 -> equal YES
-  P7 不等否定      p vs p+常数 -> equal NO
-  P8 有理函数交叉  a/b vs (a*c)/(b*c) -> equal YES；a/b vs (a+1)/b -> NO
-  P9 GCD 整除      gcd(a,b) 整除 a 与 b（单变量域上精确除法验证）
+Five properties, all self-proving:
+  P5 polynomial round trip   random Poly -> to_term -> from_term equals the original monos
+  P6 construction equivalence  the same polynomial built in a different order -> equal YES
+  P7 inequality refutation   p vs p+constant -> equal NO
+  P8 rational-function cross  a/b vs (a*c)/(b*c) -> equal YES; a/b vs (a+1)/b -> NO
+  P9 GCD divisibility        gcd(a,b) divides both a and b (verified by exact division
+                             over a univariate field)
 
-用法：python stress/stress_domains.py [轮数] [种子]
+Usage: python stress/stress_domains.py [rounds] [seed]
 """
 
 import sys
@@ -47,7 +48,7 @@ def rand_coef(rng):
 
 
 def rand_poly_uni(rng, n_terms=None):
-    """随机单变量 Poly（变量 X）。"""
+    """Random univariate Poly in X."""
     if n_terms is None:
         n_terms = rng.randint(1, 5)
     d = {}
@@ -60,7 +61,7 @@ def rand_poly_uni(rng, n_terms=None):
 
 
 def rand_poly_bi(rng):
-    """随机双变量 Poly（变量 X, Y）。"""
+    """Random bivariate Poly in X, Y."""
     d = {}
     for _ in range(rng.randint(1, 6)):
         ex = rng.randint(0, 4)
@@ -72,7 +73,7 @@ def rand_poly_bi(rng):
 
 
 # ---------------------------------------------------------------------------
-# P5：Poly 往返一致性
+# P5: Poly round-trip consistency
 # ---------------------------------------------------------------------------
 
 def prop_poly_roundtrip(rounds, rng):
@@ -81,38 +82,38 @@ def prop_poly_roundtrip(rounds, rng):
         t = to_term(Q_RING, p)
         p2 = from_term(Q_RING, t, p.vars)
         if p2 is None:
-            fail("P5 from_term 返回 None", i, p)
+            fail("P5 from_term returned None", i, p)
         if p.monos != p2.monos:
-            fail("P5 往返不一致", i, f"orig={p.monos}", f"rt={p2.monos}")
+            fail("P5 round trip mismatch", i, f"orig={p.monos}", f"rt={p2.monos}")
 
 
 # ---------------------------------------------------------------------------
-# P6/P7：判等完备性
+# P6/P7: equality completeness
 # ---------------------------------------------------------------------------
 
 def prop_equal(rounds, rng):
-    """P6 因式 vs 展开判等；P7 不等否定。"""
+    """P6 factored vs expanded equality; P7 inequality refutation."""
     P = poly_domain(X)
     for i in range(rounds):
         a = rand_poly_uni(rng)
         b = rand_poly_uni(rng)
-        # t1 = a*b（未展开乘积形式），t2 = p_mul 后的展开形式
+        # t1 = a*b (unexpanded product form), t2 = the p_mul-expanded form
         t1 = times(to_term(Q_RING, a), to_term(Q_RING, b))
         t2 = to_term(Q_RING, p_mul(Q_RING, a, b))
         r = P.equal(t1, t2)
         if r is not True:
-            fail("P6 因式 vs 展开失败", i, to_str(t1), to_str(t2))
-        # 不等否定：p vs p + 常数
+            fail("P6 factored vs expanded failed", i, to_str(t1), to_str(t2))
+        # inequality refutation: p vs p + constant
         p = a if not a.is_zero() else p_const(Q_RING, (X,), Fr(1))
         q = p_add(Q_RING, p, p_const(Q_RING, p.vars, Fr(rng.randint(1, 9))))
         r = P.equal(to_term(Q_RING, p), to_term(Q_RING, q))
         if r is not False:
-            fail("P7 不等否定失败", i, to_str(to_term(Q_RING, p)),
+            fail("P7 inequality refutation failed", i, to_str(to_term(Q_RING, p)),
                  to_str(to_term(Q_RING, q)))
 
 
 # ---------------------------------------------------------------------------
-# P8：有理函数交叉相乘判等
+# P8: rational-function cross-multiplication equality
 # ---------------------------------------------------------------------------
 
 def prop_ratfunc(rounds, rng):
@@ -125,20 +126,20 @@ def prop_ratfunc(rounds, rng):
         c = rand_poly_uni(rng)
         if c.is_zero():
             continue
-        # a/b == (a*c)/(b*c) via cross-mult
+        # a/b == (a*c)/(b*c) via cross-multiplication
         ra = RatFunc(a, b)
         rb = RatFunc(p_mul(Q_RING, a, c), p_mul(Q_RING, b, c))
         if not rf_equal(Q_RING, ra, rb):
-            fail("P8 交叉等价失败", i)
+            fail("P8 cross equivalence failed", i)
         # a/b != (a+1)/b
         a2 = p_add(Q_RING, a, p_const(Q_RING, (X,), Fr(1)))
         rb2 = RatFunc(a2, b)
         if rf_equal(Q_RING, ra, rb2):
-            fail("P8 不等失败", i)
+            fail("P8 inequality failed", i)
 
 
 # ---------------------------------------------------------------------------
-# P9：GCD 整除性
+# P9: GCD divisibility
 # ---------------------------------------------------------------------------
 
 def prop_gcd(rounds, rng):
@@ -150,16 +151,16 @@ def prop_gcd(rounds, rng):
         g = p_gcd_univar(Q_RING, a, b)
         if g.is_zero():
             continue
-        # g 整除 a：a = g*q + 0
+        # g divides a: a = g*q + 0
         q, r = p_divmod_field(Q_RING, a, g, 0)
         if not r.is_zero():
-            fail("P9 gcd 不整除 a", i,
+            fail("P9 gcd does not divide a", i,
                  f"a={to_term(Q_RING,a)}",
                  f"g={to_term(Q_RING,g)}",
                  f"r={to_term(Q_RING,r)}")
         q, r = p_divmod_field(Q_RING, b, g, 0)
         if not r.is_zero():
-            fail("P9 gcd 不整除 b", i,
+            fail("P9 gcd does not divide b", i,
                  f"b={to_term(Q_RING,b)}",
                  f"g={to_term(Q_RING,g)}",
                  f"r={to_term(Q_RING,r)}")
@@ -169,14 +170,14 @@ def prop_gcd(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 42
-    print(f"== 域层压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== domain-layer stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_poly_roundtrip(rounds, rng)
-    print(f"P5 多项式往返       {rounds} 轮通过")
+    print(f"P5 polynomial round trip  {rounds} rounds passed")
     prop_equal(rounds, rng)
-    print(f"P6/P7 判等完备      {rounds} 轮通过")
+    print(f"P6/P7 equality complete   {rounds} rounds passed")
     prop_ratfunc(min(rounds, 1000), rng)
-    print(f"P8  有理函数交叉    {min(rounds,1000)} 轮通过")
+    print(f"P8  rational cross        {min(rounds,1000)} rounds passed")
     prop_gcd(min(rounds, 500), rng)
-    print(f"P9  GCD 整除        {min(rounds,500)} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P9  GCD divisibility      {min(rounds,500)} rounds passed")
+    print("== all passed ==")

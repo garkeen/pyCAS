@@ -1,19 +1,26 @@
 # -*- coding: utf-8 -*-
-"""分段容器随机压力台架。
+"""Piecewise container randomized stress bench.
 
-四条性质，全部自证、无需外部真值：
-  P21 投影独立   分支体各自投影到自己的宿主域，无共享宿主要求——
-                 逐分支 project 与独立 project 逐位一致，多项式与有理
-                 函数分支（乃至片段外分支）在同一容器内共存不报错
-  P22 选支语义   select 命中"首个真分支且其前皆假"：以账本事实
-                 （假设该支条件、否决其前条件）强制唯一命中 → 返回该支值
-  P23 运算逐支   lift(op, p, q) 笛卡尔展开：分支数 = 积、条件 = 合取；
-                 且在唯一命中的上下文里 select(lift) == op(select p, select q)
-  P24 守卫条件化 dom_condition 对分段：每支体约束条件化为 ¬cond ∨ 约束，
-                 与逐支独立提取再条件化一致；重叠一致性 conflicts 对可证
-                 空重叠给 YES、可证不等常量重叠给 NO
+Four properties, all self-proving with no external ground truth:
+  P21 independent projection  branch bodies project into their own host domains with no
+                              requirement of a shared host -- the per-branch project and
+                              an independent project agree branch for branch, and
+                              polynomial and rational-function branches (even ones
+                              outside the fragment) coexist in one container without error
+  P22 branch-selection semantics  select hits "the first true branch with all earlier
+                              ones false": force a unique hit with ledger facts (assume
+                              that branch's condition, refute the earlier ones) and it
+                              returns that branch's value
+  P23 per-branch lifting      lift(op, p, q) expands the Cartesian product: branch count
+                              is the product and conditions are conjoined; and in a
+                              uniquely-hit context select(lift) == op(select p, select q)
+  P24 guarded conditions      dom_condition on a piecewise guards each branch body as
+                              not-cond or constraint, matching per-branch extraction
+                              followed by guarding; overlap consistency gives YES for a
+                              provably empty overlap and NO for a provably unequal
+                              constant overlap
 
-用法：python stress/stress_piecewise.py [轮数] [种子]
+Usage: python stress/stress_piecewise.py [rounds] [seed]
 """
 
 import sys
@@ -46,7 +53,7 @@ def fail(msg, seed, *extra):
 
 
 def rand_cmp(rng):
-    """x 与常量的严格比较，作为分支条件。"""
+    """A strict comparison of x against a constant, used as a branch condition."""
     op = rng.choice(("Gt", "Lt", "Ge", "Le"))
     k = rng.randint(-5, 5)
     return mk(S(op), (X, N(k)))
@@ -57,16 +64,17 @@ _COND_POOL = [mk(S(op), (X, N(k)))
 
 
 def rand_pw(rng, nvals, minb=2, maxb=4):
-    """随机分段容器：分支条件互异（无重复），末尾 TRUE 兜底保证覆盖。"""
+    """Random piecewise container: distinct branch conditions (no repeats) with a final
+    TRUE fallback guaranteeing coverage."""
     nb = rng.randint(minb, maxb)
-    conds = rng.sample(_COND_POOL, nb - 1)         # 互不相同的比较
+    conds = rng.sample(_COND_POOL, nb - 1)         # pairwise distinct comparisons
     pairs = [(rng.choice(nvals), c) for c in conds]
     pairs.append((rng.choice(nvals), T.TRUE))
     return piecewise(pairs)
 
 
 def at_ctx(a):
-    """x = a 的具体点的假设集（比较式数值可判）。"""
+    """Assumption set for the concrete point x = a (a numeric comparison, so decidable)."""
     return Assumptions().extended(mk(S("Eq"), (X, N(a))))
 
 
@@ -79,7 +87,8 @@ def eval_at(c, a) -> bool:
 
 
 def ref_first(t, a):
-    """参照扫描：x=a 时首个命中分支的值（真值定义，独立于 select）。"""
+    """Reference scan: the value of the first hit branch at x = a (the definitional truth,
+    independent of select)."""
     for v, c in branches(t):
         if eval_at(c, a):
             return v
@@ -87,7 +96,7 @@ def ref_first(t, a):
 
 
 # ---------------------------------------------------------------------------
-# P21：分支投影独立
+# P21: independent branch projection
 # ---------------------------------------------------------------------------
 
 def prop_projection(rounds, rng):
@@ -95,7 +104,7 @@ def prop_projection(rounds, rng):
            parse("1/x"),                           # K(x)
            parse("(x^2+1)/(x-3)"),                 # K(x)
            X,                                      # K[x]
-           parse("sin(x)")]                        # 片段外（无塔）→ None
+           parse("sin(x)")]                        # outside the fragment (no tower) -> None
     for i in range(rounds):
         nb = rng.randint(2, 5)
         picks = [rng.choice(het) for _ in range(nb)]
@@ -103,22 +112,23 @@ def prop_projection(rounds, rng):
         t = piecewise(list(zip(picks, conds)))
         proj = project_pw(t)
         if len(proj) != len(branches(t)):
-            fail("P21 分支数不符", i)
+            fail("P21 branch count mismatch", i)
         for k, (v, c, hit) in enumerate(proj):
-            solo = project(v)                       # 独立投影
+            solo = project(v)                       # independent projection
             a = hit.name if hit else None
             b = solo.name if solo else None
             if a != b:
-                fail("P21 投影非逐支独立", i, f"branch={k} v={to_str(v)}",
+                fail("P21 projection is not per-branch independent", i, f"branch={k} v={to_str(v)}",
                      f"pw={a} solo={b}")
-        # 关键裁定：异质宿主共存（多项式支 + 有理支 + 片段外支）不要求共同宿主
+        # the key ruling: heterogeneous hosts coexist (polynomial + rational + out-of-fragment
+        # branches) with no shared host required
         names = [h.name if h else None for _v, _c, h in proj]
         if "K[x]" in names and "K(x)" in names and not is_piecewise(t):
-            fail("P21 误判非分段", i)
+            fail("P21 misjudged as non-piecewise", i)
 
 
 # ---------------------------------------------------------------------------
-# P22：选支语义（首个真支且其前皆假 → 唯一命中）
+# P22: branch-selection semantics (first true branch with all earlier false -> unique hit)
 # ---------------------------------------------------------------------------
 
 def prop_select(rounds, rng):
@@ -130,21 +140,21 @@ def prop_select(rounds, rng):
             st, payload = select(t, at_ctx(a))
             if want is None:
                 if st == "value":
-                    fail("P22 无命中的假命中", i, f"a={a}", to_str(t))
+                    fail("P22 false hit with no branch holding", i, f"a={a}", to_str(t))
                 continue
             if st != "value":
-                fail("P22 具体点未坍缩", i, f"a={a}", f"t={to_str(t)}",
+                fail("P22 concrete point did not collapse", i, f"a={a}", f"t={to_str(t)}",
                      f"payload={payload}")
             if payload is not want:
-                fail("P22 选错支", i, f"a={a} want={to_str(want)} "
+                fail("P22 wrong branch selected", i, f"a={a} want={to_str(want)} "
                      f"got={to_str(payload)} t={to_str(t)}")
-        # 末支 TRUE 恒覆盖——空上下文下不得谎报空隙（NO）
+        # the final TRUE branch always covers, so an empty context must not falsely report a gap (NO)
         if coverage(t, Assumptions()) is NO:
-            fail("P22 覆盖误判", i, to_str(t))
+            fail("P22 coverage misjudged", i, to_str(t))
 
 
 # ---------------------------------------------------------------------------
-# P23：运算逐分支提升
+# P23: per-branch operation lifting
 # ---------------------------------------------------------------------------
 
 def prop_lift(rounds, rng):
@@ -155,29 +165,29 @@ def prop_lift(rounds, rng):
         m = lift(T.plus, p, q)
         bp, bq = branches(p), branches(q)
         if len(branches(m)) != len(bp) * len(bq):
-            fail("P23 展开分支数", i,
+            fail("P23 expanded branch count", i,
                  f"{len(branches(m))} != {len(bp)}*{len(bq)}")
-        # 逐点一致：x=a 处 select(lift(plus,p,q)) == plus(select p, select q)
+        # pointwise agreement: at x = a, select(lift(plus,p,q)) == plus(select p, select q)
         for a in range(-7, 8):
             ctx = at_ctx(a)
             _, vp = select(p, ctx)
             _, vq = select(q, ctx)
             st_m, vm = select(m, ctx)
             if st_m != "value":
-                fail("P23 提升后未命中", i, f"a={a}")
+                fail("P23 lifted container did not hit", i, f"a={a}")
             if plus(vp, vq) is not vm:
-                fail("P23 逐点不一致", i, f"a={a} "
+                fail("P23 pointwise disagreement", i, f"a={a} "
                      f"plus({to_str(vp)},{to_str(vq)})={to_str(plus(vp,vq))} "
                      f"vs {to_str(vm)}")
 
 
 # ---------------------------------------------------------------------------
-# P24：守卫条件化 + 重叠一致性
+# P24: guarded conditions plus overlap consistency
 # ---------------------------------------------------------------------------
 
 def prop_guards(rounds, rng):
-    bodies = [T.sqrt(X), parse("log(x)"), pw(X, N(-1)),
-              T.sqrt(plus(pw(X, N(2)), N(1)))]
+    bodies = [T.call("Sqrt", X), parse("log(x)"), pw(X, N(-1)),
+              T.call("Sqrt", plus(pw(X, N(2)), N(1)))]
     for i in range(rounds):
         nb = rng.randint(2, 4)
         pairs = []
@@ -186,7 +196,8 @@ def prop_guards(rounds, rng):
             pairs.append((rng.choice(bodies), conds[k]))
         t = piecewise(pairs)
         got = dom_condition(t)
-        # 期望：每支体自身约束条件化为 ¬cond ∨ g（TRUE 支免条件化）
+        # expected: each branch body's own constraints guarded as not-cond or g (a TRUE
+        # branch needs no guard)
         want = []
         for v, c in branches(t):
             solo = dom_condition(v)
@@ -194,24 +205,25 @@ def prop_guards(rounds, rng):
             for g in solo:
                 want.append(mk(S("Or"), (neg, g)))
         if sorted(x._h for x in got) != sorted(x._h for x in want):
-            fail("P24 守卫条件化不符", i,
+            fail("P24 guarded conditions mismatch", i,
                  f"got={[to_str(x) for x in got]}",
                  f"want={[to_str(x) for x in want]}")
-        # 重叠一致性：常量支、可证空重叠 → 全 YES；可证不等常量重叠 → NO
+        # overlap consistency: constant branches with a provably empty overlap -> all YES;
+        # a provably unequal constant overlap -> NO
         disjoint = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                               (N(2), mk(S("Lt"), (X, N(0))))])
         for _a, _b, verdict in conflicts(disjoint, Assumptions()):
             if verdict is not YES:
-                fail("P24 空重叠误判", i, verdict)
+                fail("P24 empty overlap misjudged", i, verdict)
         clash = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                            (N(2), mk(S("Gt"), (X, N(0))))])
         vs = [verdict for _a, _b, verdict in conflicts(clash, Assumptions())]
         if not any(v is NO for v in vs):
-            fail("P24 常量冲突未检出", i, vs)
+            fail("P24 constant conflict not detected", i, vs)
 
 
 # ---------------------------------------------------------------------------
-# P29-P31：嵌套展平 + 定义域胞腔 + 连通分量（消费 CAD）
+# P29-P31: nested flattening + domain cells + connected components (consuming CAD)
 # ---------------------------------------------------------------------------
 
 from cas.math.piecewise import fold_nested, domain_cells, connected_components
@@ -219,7 +231,8 @@ from cas.math.qarith import eval_exact
 
 
 def eval_prop(c, a):
-    """命题在 x=a（有理）处的真值（参照实现，独立于 CAD）。"""
+    """Truth value of a proposition at x = a (rational), a reference implementation
+    independent of CAD."""
     if c is T.TRUE:
         return True
     if c is T.FALSE:
@@ -238,7 +251,8 @@ def eval_prop(c, a):
 
 
 def ref_eval(t, a):
-    """嵌套分段在 x=a 的首中取值（递归参照实现）。"""
+    """First-match value of a nested piecewise at x = a (recursive reference
+    implementation)."""
     if not is_piecewise(t):
         return t
     for v, c in branches(t):
@@ -264,16 +278,16 @@ def prop_fold_nested(rounds, rng):
                            (rng.choice(vals), T.TRUE)])
         fl = fold_nested(outer)
         if not is_piecewise(fl):
-            fail("P29 展平后非分段", i)
+            fail("P29 flattened form is not piecewise", i)
         if any(is_piecewise(v) for v, _c in branches(fl)):
-            fail("P29 展平不彻底", i, to_str(fl))
+            fail("P29 flattening incomplete", i, to_str(fl))
         if fold_nested(fl) is not fl:
-            fail("P29 展平不幂等", i)
-        # 逐点一致：嵌套原式与展平式在随机点取值相同
+            fail("P29 flattening is not idempotent", i)
+        # pointwise agreement: the nested original and the flattened form take the same value
         for _ in range(12):
             a = rng.randint(-6, 6)
             if not _same(ref_eval(outer, a), ref_eval(fl, a)):
-                fail("P29 展平逐点不符", i, f"a={a}",
+                fail("P29 flattening pointwise mismatch", i, f"a={a}",
                      to_str(outer), to_str(fl))
 
 
@@ -283,60 +297,61 @@ def prop_components(rounds, rng):
         t = rand_pw(rng, vals, minb=2, maxb=4)
         dom = domain_cells(t, X)
         comps = connected_components(dom)
-        # 分量内胞腔总数 == 已定义胞腔数（Undefined 不入分量）
+        # total cells inside components == number of defined cells (Undefined enters no component)
         defined = sum(1 for _c, v in dom if v is not T.SP("Undefined"))
         got = sum(len(c.cells) for c in comps)
         if got != defined:
-            fail("P30 分量胞腔数不符", i, got, defined)
-        # 有 TRUE 兜底 → 全域覆盖 → 恰一个连通分量
+            fail("P30 component cell count mismatch", i, got, defined)
+        # a TRUE fallback implies full coverage, hence exactly one connected component
         if any(c is T.TRUE for _v, c in branches(t)) and len(comps) != 1:
-            fail("P30 全覆盖应单分量", i, len(comps))
+            fail("P30 full coverage should be a single component", i, len(comps))
 
 
 def prop_gap(rounds, rng):
     for i in range(rounds):
         lo = rng.randint(-5, -1)
         hi = rng.randint(1, 5)
-        # 定义域为 x<lo 或 x>hi：中间是缺口 → 恰两个连通分量
+        # domain is x<lo or x>hi: the middle is a gap, so exactly two connected components
         t = piecewise([(N(1), mk(S("Lt"), (X, N(lo)))),
                        (N(2), mk(S("Gt"), (X, N(hi))))])
         dom = domain_cells(t, X)
         comps = connected_components(dom)
         if len(comps) != 2:
-            fail("P31 缺口应恰断为2分量", i, lo, hi, len(comps))
-        # 两分量取值应分别为 1 与 2（左右区域）
+            fail("P31 a gap should split into exactly 2 components", i, lo, hi, len(comps))
+        # the two components should take the values 1 and 2 (left and right regions)
         vals = set()
         for c in comps:
             v = c.cells[0][1]
             if not T.is_num(v):
-                fail("P31 分量值非数", i, to_str(v))
+                fail("P31 component value is not numeric", i, to_str(v))
             vals.add(T.num_val(v))
         if vals != {T.num_val(N(1)), T.num_val(N(2))}:
-            fail("P31 分量取值不符", i, vals)
-        # 缺口内开胞腔（上下界根俱全）必须未定义——不对缺口积分出 0
+            fail("P31 component values mismatch", i, vals)
+        # an open cell inside the gap (both bounds present) must stay undefined: never
+        # integrate the gap to 0
         for cell, v in dom:
             if cell.kind == "open" and cell.lo is not None \
                     and cell.hi is not None and v is not T.SP("Undefined"):
-                fail("P31 缺口胞腔被定义", i, lo, hi)
+                fail("P31 a gap cell was defined", i, lo, hi)
 
 
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== 分段容器压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== piecewise container stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_projection(rounds, rng)
-    print(f"P21 投影独立          {rounds} 轮通过")
+    print(f"P21 independent projection        {rounds} rounds passed")
     prop_select(rounds, rng)
-    print(f"P22 选支语义          {rounds} 轮通过")
+    print(f"P22 branch-selection semantics    {rounds} rounds passed")
     prop_lift(min(rounds, 200), rng)
-    print(f"P23 运算逐支          {min(rounds,200)} 轮通过")
+    print(f"P23 per-branch lifting            {min(rounds,200)} rounds passed")
     prop_guards(rounds, rng)
-    print(f"P24 守卫条件化+重叠   {rounds} 轮通过")
+    print(f"P24 guarded conditions + overlap  {rounds} rounds passed")
     prop_fold_nested(rounds, rng)
-    print(f"P29 嵌套展平逐点一致  {rounds} 轮通过")
+    print(f"P29 nested flattening pointwise   {rounds} rounds passed")
     prop_components(rounds, rng)
-    print(f"P30 连通分量划分      {rounds} 轮通过")
+    print(f"P30 connected-component split     {rounds} rounds passed")
     prop_gap(rounds, rng)
-    print(f"P31 缺口断开          {rounds} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P31 gap disconnection             {rounds} rounds passed")
+    print("== all passed ==")

@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
-"""线性代数与丢番图碎片压力台架。
+"""Linear algebra and Diophantine-fragment stress bench.
 
-四条性质，全部自证、无需外部真值：
-  P14 秩-零化度   rank(A) + dim ker(A) = 列数，且基向量逐个 A·v = 0
-  P15 解重构     预埋解构造相容方程组 -> 特解必满足；
-                 预埋矛盾行构造不相容组 -> 必须返回 None
-  P16 Bareiss    det(AB) = det(A)det(B)（整数矩阵乘法性，无外部真值）
-  P17 丢番图碎片 扩展欧几里得证书 s·a+t·b=g；线性丢番图解验证 +
-                 周期在核内且本原；整数根 = 预埋根全集（无遗漏无误报）
+Four properties, all self-proving with no external ground truth:
+  P14 rank-nullity  rank(A) + dim ker(A) = number of columns, and every basis vector
+                    satisfies A*v = 0
+  P15 solution reconstruction  a consistent system built from a planted solution must
+                    be satisfied by the particular solution; an inconsistent system
+                    built by planting a contradictory row must return None
+  P16 Bareiss       det(AB) = det(A)det(B) (multiplicativity over integer matrices, no
+                    external ground truth)
+  P17 Diophantine fragment  the extended-Euclid certificate s*a+t*b=g; a linear
+                    Diophantine solution is verified with a period inside the kernel
+                    and primitive; integer roots equal the planted root set exactly
+                    (nothing missed, nothing spurious)
 
-用法：python stress/stress_linalg.py [轮数] [种子]
+Usage: python stress/stress_linalg.py [rounds] [seed]
 """
 
 import sys
@@ -53,7 +58,7 @@ def rand_mat(rng, m, n):
 
 
 # ---------------------------------------------------------------------------
-# P14：秩-零化度 + 核成员资格
+# P14: rank-nullity plus kernel membership
 # ---------------------------------------------------------------------------
 
 def prop_rank_nullity(rounds, rng):
@@ -63,14 +68,14 @@ def prop_rank_nullity(rounds, rng):
         r = rank(R, A)
         basis = nullspace(R, A)
         if r + len(basis) != n:
-            fail("P14 秩-零化度", i, f"rank={r} dimker={len(basis)} n={n}")
+            fail("P14 rank-nullity", i, f"rank={r} dimker={len(basis)} n={n}")
         for v in basis:
             if any(x != 0 for x in matvec(A, v)):
-                fail("P14 核成员资格", i, f"v={v}")
+                fail("P14 kernel membership", i, f"v={v}")
 
 
 # ---------------------------------------------------------------------------
-# P15：相容/不相容判定
+# P15: consistency / inconsistency
 # ---------------------------------------------------------------------------
 
 def prop_solve(rounds, rng):
@@ -81,20 +86,20 @@ def prop_solve(rounds, rng):
         b = matvec(A, xs)
         res = solve_system(R, A, b)
         if res is None:
-            fail("P15 相容误判无解", i)
+            fail("P15 consistent system misjudged unsolvable", i)
         x0, basis = res
         if list(matvec(A, x0)) != list(b):
-            fail("P15 特解不满足", i, f"x0={x0}")
-        # 不相容：复制首行并篡改右端（前提：该行非零行）
+            fail("P15 particular solution does not satisfy", i, f"x0={x0}")
+        # inconsistency: copy the first row and alter the right-hand side (assuming the row is nonzero)
         if any(A[0][j] != 0 for j in range(n)):
             A2 = A + [list(A[0])]
             b2 = b + [b[0] + 1]
             if solve_system(R, A2, b2) is not None:
-                fail("P15 矛盾未检出", i)
+                fail("P15 contradiction not detected", i)
 
 
 # ---------------------------------------------------------------------------
-# P16：Bareiss 行列式乘法性
+# P16: Bareiss determinant multiplicativity
 # ---------------------------------------------------------------------------
 
 def prop_bareiss(rounds, rng):
@@ -105,14 +110,14 @@ def prop_bareiss(rounds, rng):
         da, db = det_bareiss(A), det_bareiss(B)
         dab = det_bareiss(matmul(A, B))
         if dab != da * db:
-            fail("P16 乘法性", i, f"det(AB)={dab} detA·detB={da*db}")
+            fail("P16 multiplicativity", i, f"det(AB)={dab} detA*detB={da*db}")
         ident = [[1 if r == c else 0 for c in range(n)] for r in range(n)]
         if det_bareiss(ident) != 1:
-            fail("P16 单位阵", i)
+            fail("P16 identity matrix", i)
 
 
 # ---------------------------------------------------------------------------
-# P17：丢番图碎片
+# P17: Diophantine fragment
 # ---------------------------------------------------------------------------
 
 def prop_diophantine(rounds, rng):
@@ -120,32 +125,33 @@ def prop_diophantine(rounds, rng):
         a, b = rng.randint(-12, 12), rng.randint(-12, 12)
         g, s, t = Z_RING.xgcd(a, b)
         if s * a + t * b != g:
-            fail("P17 裴蜀证书", i, f"a={a} b={b} g={g} s={s} t={t}")
+            fail("P17 Bezout certificate", i, f"a={a} b={b} g={g} s={s} t={t}")
         if g != __import__("math").gcd(a, b):
-            fail("P17 gcd 不符", i)
+            fail("P17 gcd mismatch", i)
         c = rng.randint(-20, 20)
         if g == 0 or c % g != 0:
             try:
                 solve_diophantine_linear(a, b, c)
                 if not (g == 0 and c == 0):
-                    fail("P17 无解未拒答", i, f"a={a} b={b} c={c} g={g}")
+                    fail("P17 unsolvable case not refused", i, f"a={a} b={b} c={c} g={g}")
             except TacticsError:
                 pass
         else:
             (x0, y0), (dx, dy) = solve_diophantine_linear(a, b, c)
             if a * x0 + b * y0 != c:
-                fail("P17 特解验证", i)
+                fail("P17 particular solution verification", i)
             if a * dx + b * dy != 0:
-                fail("P17 周期不在核", i)
+                fail("P17 period is not in the kernel", i)
             if __import__("math").gcd(dx, dy) != 1:
-                fail("P17 周期非本原", i)
+                fail("P17 period is not primitive", i)
 
 
 def prop_integer_roots(rounds, rng):
-    """预埋整数根 × 无整数根因子（x²+1）：结果必须恰为预埋集。"""
+    """Planted integer roots times a factor with no integer root (x^2+1): the result
+    must be exactly the planted set."""
     for i in range(rounds):
         roots = [rng.randint(-5, 5) for _ in range(rng.randint(1, 3))]
-        p = _norm(R, (X,), {(2,): Fr(1), (0,): Fr(1)})    # x²+1 无整数根
+        p = _norm(R, (X,), {(2,): Fr(1), (0,): Fr(1)})    # x^2+1 has no integer root
         lc = rng.choice((1, 1, 2, 3))
         p = _norm(R, (X,), {k: c * lc for k, c in p.monos})
         for r in roots:
@@ -153,22 +159,22 @@ def prop_integer_roots(rounds, rng):
         got = integer_roots(p, X)
         want = sorted(set(roots))
         if got != want:
-            fail("P17 整数根全集", i, f"got={got} want={want}")
+            fail("P17 integer root set", i, f"got={got} want={want}")
 
 
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== 线性代数/丢番图压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== linear algebra / Diophantine stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_rank_nullity(rounds, rng)
-    print(f"P14 秩-零化度         {rounds} 轮通过")
+    print(f"P14 rank-nullity                  {rounds} rounds passed")
     prop_solve(rounds, rng)
-    print(f"P15 相容/不相容       {rounds} 轮通过")
+    print(f"P15 consistent/inconsistent       {rounds} rounds passed")
     prop_bareiss(min(rounds, 500), rng)
-    print(f"P16 Bareiss 乘法性    {min(rounds,500)} 轮通过")
+    print(f"P16 Bareiss multiplicativity      {min(rounds,500)} rounds passed")
     prop_diophantine(rounds, rng)
-    print(f"P17 丢番图证书        {rounds} 轮通过")
+    print(f"P17 Diophantine certificates      {rounds} rounds passed")
     prop_integer_roots(min(rounds, 500), rng)
-    print(f"P17 整数根全集        {min(rounds,500)} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P17 integer root set              {min(rounds,500)} rounds passed")
+    print("== all passed ==")

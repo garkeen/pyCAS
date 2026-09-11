@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""运行期查询出口（职责：数学语义的唯一居所，且**必须显式装配**）。
+"""Runtime query exits: mathematical semantics have a single home and **must be
+explicitly assembled**.
 
-钉子：常数此前在声明里带了 print_name 却没有查询出口，内核只能在
-pprint / parser 各存一份硬编码表。补出口后内核不得再存副本。
+Nail: constants once carried a print_name in their declaration but had no query exit,
+so the kernel had to keep a hardcoded table in both pprint and parser. After the exit
+was added, the kernel must hold no copy.
 
-阶段6 之后多了一条：语义来源必须是**显式 bootstrap**，不再是 import 副作用。
+Since stage 6 there is one more rule: the semantics must come from an **explicit
+bootstrap**, not from an import side effect.
 """
 
 from cas.runtime import dispatch
@@ -24,32 +27,33 @@ def test_const_by_name_missing_returns_none():
 def test_is_const_name_distinguishes_const_and_function():
     assert dispatch.is_const_name("pi") is True
     assert dispatch.is_const_name("e") is True
-    assert dispatch.is_const_name("Sin") is False      # 函数头不是常数
+    assert dispatch.is_const_name("Sin") is False      # a function head is not a constant
 
 
 def test_print_name_covers_constants_and_functions():
     assert dispatch.print_name("gamma") == "γ"
     assert dispatch.print_name("pi") == "π"
-    assert dispatch.print_name("Sin") == "sin"          # 函数走同一出口
+    assert dispatch.print_name("Sin") == "sin"          # functions use the same exit
     assert dispatch.print_name("__nope__") is None
 
 
 def test_const_literals_live_in_runtime_not_kernel():
-    """内核不得再存名字→常数原子的副本表。"""
+    """The kernel must hold no name-to-constant-atom copy table."""
     import cas.frontend.parser as P
-    assert not hasattr(P, "_CONSTS")                   # 旧硬编码表已废
+    assert not hasattr(P, "_CONSTS")                   # the old hardcoded table is gone
     assert set(P._SYNTAX_ATOMS) == {"infinity", "true", "false"}
 
 
 def test_domain_condition_single_registration_channel():
     import cas.math.domcond as DC
-    assert not hasattr(DC, "DOM_HOOKS")                # 空壳通道已废
+    assert not hasattr(DC, "DOM_HOOKS")                # the empty-shell channel is gone
 
 
 def test_importing_math_has_no_registration_side_effect():
-    """v4 §7.1：禁止 import 期修改全局状态。
+    """No import-time mutation of global state.
 
-    在干净进程里只 import 数学模块：常数表、函数表、域阶梯、判等阶段都须为空。
+    In a clean process, import only the math modules: the constant table, function
+    table, domain ladder, and identity stages must all be empty.
     """
     import subprocess
     import sys

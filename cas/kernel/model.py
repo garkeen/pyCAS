@@ -1,19 +1,21 @@
-# -*- coding: utf-8 -*-
-"""内核数据模型（v4 §6.2–§6.6、§6.10、§6.11）。
+"""Kernel data model.
 
-内核的基本对象不是「变换后的表达式」，而是**条件性、作用域化的命题**：
+The kernel's basic object is not a transformed expression but a conditional,
+scope-qualified proposition:
 
-    Γ ⊢ P [Δ]
+    Gamma |- P [Delta]
 
-· Γ = Scope（声明 / 定义 / 假设）
-· P = Judgment.proposition
-· Δ = Judgment.requirements（未清偿条件）
+· Gamma = Scope (declarations / definitions / assumptions)
+· P     = Judgment.proposition
+· Delta = Judgment.requirements (open conditions)
 
-结论与判定结果用**封闭变体层次**（`Applicability`）表达，让非法状态不可表示；
-值对象一律 `frozen=True, slots=True`。`Step` 不分子类——步骤做了什么由结论
-命题与证据说明（v4 §6.6 / AGENTS.md §三）。
+Conclusions and decision results are expressed as a closed variant hierarchy
+(`Applicability`) so illegal states cannot be represented; value objects are
+frozen with slots. `Step` has no subclasses: what a step did is described by
+its conclusion propositions and its evidence.
 
-内核不认识数学 head：本模块只依赖 syntax，不导入任何具体数学模块。
+The kernel knows no mathematical head: this module depends on syntax only and
+imports no concrete mathematical module.
 """
 
 from dataclasses import dataclass, field
@@ -24,38 +26,43 @@ from cas.kernel.ids import JudgmentId, RequirementId, ScopeId, StepId
 
 
 # ---------------------------------------------------------------------------
-# 作用域条目（v4 §6.2）
+# Scope entries
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Declaration:
-    """声明：`x : Real`、`n : Integer`、`c : Parameter independent of x`、`y : Function(Real, Real)`。"""
+    """A declaration: `x : Real`, `n : Integer`, `c : Parameter independent of
+    x`, `y : Function(Real, Real)`."""
     symbol: T.Term
     sort: T.Term
 
 
 @dataclass(frozen=True, slots=True)
 class Definition:
-    """定义：`u := x²`。局部别名，不是用户需要证明的数学等式。"""
+    """A definition: `u := x^2`. A local alias, not an equation the user must
+    prove."""
     symbol: T.Term
     body: T.Term
 
 
 @dataclass(frozen=True, slots=True)
 class Assumption:
-    """假设：`x > 0`、`a ≠ 0`、`continuous(f, I)`。用户或分支明确接受的条件。
+    """An assumption: `x > 0`, `a != 0`, `continuous(f, I)`. A condition the
+    user or a branch explicitly accepts.
 
-    开放守卫不得自动写入 assumptions（v4 不变量 5）——那是 Requirement 的事。
+    An open guard must never be written into assumptions automatically; that is
+    what Requirement is for.
     """
     proposition: T.Term
 
 
 # ---------------------------------------------------------------------------
-# Requirement：开放条件（v4 §6.3）
+# Requirement: an open condition
 # ---------------------------------------------------------------------------
 
 class RequirementReason(Enum):
-    """条件为何被引入。与判定失败理由（verdict.Reason）是两回事。"""
+    """Why the condition was introduced. Distinct from verdict.Reason, which
+    says why a decision failed."""
     DEFINEDNESS = "definedness"
     RULE_GUARD = "rule_guard"
     ALGORITHM_PRECONDITION = "algorithm_precondition"
@@ -73,15 +80,16 @@ class Requirement:
 
 
 # ---------------------------------------------------------------------------
-# Judgment / Step（v4 §6.4、§6.6）
+# Judgment / Step
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Judgment:
-    """可依赖的数学结论：Γ ⊢ proposition [requirements]。
+    """A dependable mathematical conclusion: Gamma |- proposition
+    [requirements].
 
-    `producer` 是产生它的 Step。Judgment 只能由 `kernel.commit` 创建
-    （v4 不变量 3）。
+    `producer` is the Step that produced it. A Judgment can only be created by
+    `kernel.commit`.
     """
     id: JudgmentId
     scope: ScopeId
@@ -92,16 +100,19 @@ class Judgment:
 
 @dataclass(frozen=True, slots=True)
 class ContextReadSet:
-    """本步读取过的上下文事实（v4 §6.11）。
+    """Context facts read by a step.
 
-    任何隐式使用都必须留下读依赖——否则「依赖某条假设却没记录」会静默发生。
+    Every implicit use must leave a read dependency, otherwise "this step
+    depends on an assumption not recorded in the step" happens silently.
     """
     entries: tuple[tuple[str, str], ...] = ()
 
     def merge(self, other):
-        """并集，逐项去重（读依赖是集合语义：同一项读两次即一次）。
+        """Union with per-item deduplication: a read dependency is a set, so
+        reading the same item twice counts once.
 
-        键是 `(kind, key)` 整项——只按 kind 归并会把同类的多次读取压成一条。
+        The key is the whole `(kind, key)` pair; merging on kind alone would
+        collapse multiple reads of the same kind into one.
         """
         return ContextReadSet(tuple(sorted(set(self.entries)
                                               | set(other.entries))))
@@ -112,10 +123,11 @@ class ContextReadSet:
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    """数学依赖边（v4 §6.6）：无子类，分派走 checker 注册表。
+    """A mathematical dependency edge. No subclasses; dispatch goes through the
+    checker registry.
 
-    `premises` / `conclusions` 是 Judgment id——Artifact 不能作为前提
-    （v4 不变量 4）。
+    `premises` / `conclusions` are Judgment ids. An Artifact can never be a
+    premise.
     """
     id: StepId
     scope: ScopeId
@@ -126,14 +138,16 @@ class Step:
 
 
 # ---------------------------------------------------------------------------
-# 条件清偿与适用性（v4 §6.10）
+# Discharge and applicability
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Discharge:
-    """条件清偿：requirement 由 by_judgment 在当前 scope 证明。
+    """A discharge: `requirement` is proved by `by_judgment` in `scope`.
 
-    清偿不修改原 Judgment——原条件结论仍然成立，只是查询时变为可直接应用。
+    Discharge never modifies the original Judgment. The conditional conclusion
+    still holds; a query in this scope simply reports it as directly
+    applicable.
     """
     requirement: RequirementId
     by_judgment: JudgmentId
@@ -141,10 +155,11 @@ class Discharge:
 
 
 class Applicability:
-    """适用性封闭层次（v4 §6.10）。
+    """Closed hierarchy of applicability.
 
-    条件被否证时不销毁原结论，只标 `Inapplicable`——原结论作为条件命题仍然
-    正确，且不沿依赖边级联销毁（v3 的反向修正）。
+    When a condition is refuted the original conclusion is not destroyed, it is
+    marked Inapplicable: as a conditional proposition it remains correct, and
+    it is not cascade-deleted along dependency edges.
     """
     __slots__ = ()
 
@@ -160,16 +175,17 @@ class Applicability:
 
 @dataclass(frozen=True, slots=True)
 class Applicable(Applicability):
-    """可直接应用：所有条件已清偿。"""
+    """Directly applicable: every condition has been discharged."""
 
 
 @dataclass(frozen=True, slots=True)
 class Conditional(Applicability):
-    """条件候选：仍有未清偿 requirement。"""
+    """Conditional: some requirement is still undischarged."""
     requirements: tuple[RequirementId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class Inapplicable(Applicability):
-    """在当前作用域不适用：有条件被否证。原结论不删除。"""
+    """Not applicable in this scope: a condition was refuted. The original
+    conclusion is not deleted."""
     refutations: tuple[JudgmentId, ...] = ()

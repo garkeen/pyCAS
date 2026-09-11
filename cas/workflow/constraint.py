@@ -1,22 +1,25 @@
-# -*- coding: utf-8 -*-
-"""Constraint：计算构造出的方程（v4 §8.6）。
+"""Constraint: an equation constructed by computation.
 
-Constraint 是**算法构造**，不一定是可参与数学证明的 Judgment：
+A Constraint is an algorithmic construction and not necessarily a Judgment that
+can take part in a mathematical proof. It may be a mere algorithmic construct;
+only after it passes a checker and becomes an exact mathematical proposition
+can it become a Judgment.
 
-    Constraint 可能只是算法构造；如果它经过 checker 并形成确切数学命题，
-    才可以转成 Judgment。
+The cycle lives here. The task/subcomputation graph may contain cyclic
+dependencies, but `Task.parent` is a single-parent tree and is always acyclic;
+the real cycle lives in the candidate <-> constraint subgraph, for example in
+cyclic integration:
 
-**环在这里。** §8.5 说任务/子计算图可以含循环依赖——但 `Task.parent` 是单父
-指针树，永远无环；真正的环长在**候选 ↔ 约束**子图上，例如循环积分（§9.6）：
-
-    candidate(T0) = e^x sin x − candidate(T1)
+    candidate(T0) = e^x sin x - candidate(T1)
     candidate(T1) = e^x cos x + candidate(T0)
 
-两条构造约束互为对方的定义，`sources` 各指对方的候选 —— 所以 `sources` 必须能
-引用**候选**（`(TaskId, ArtifactId)`），只指 Task 表达不了这个环。
+The two construction constraints define each other and their `sources` point at
+each other's candidate, so `sources` must be able to reference a *candidate*
+(`(TaskId, ArtifactId)`); referencing tasks alone cannot express the cycle.
 
-环不会被藏起来：它由 §5.4 的子项抽象把候选冻成符号后在约束系统上代数求解消化，
-证明依赖图仍然无环（§9.5）。
+The cycle is not hidden: subterm abstraction freezes the candidates into
+symbols and algebraic elimination over the constraint system consumes it, while
+the proof dependency graph stays acyclic.
 """
 
 from dataclasses import dataclass
@@ -28,7 +31,8 @@ from cas.kernel.evidence import Evidence
 
 @dataclass(frozen=True, slots=True)
 class CandidateRef:
-    """候选引用：`(TaskId, ArtifactId)`。约束可以指候选，不只指任务。"""
+    """A candidate reference: `(TaskId, ArtifactId)`. A constraint may point at
+    a candidate, not only at a task."""
     task: object
     artifact: object
 
@@ -39,15 +43,17 @@ class Constraint:
     scope: ScopeId
     relation: T.Term
     sources: tuple = ()                      # tuple[TaskId | CandidateRef, ...]
-    proposed_evidence: Evidence | None = None    # 候选凭据，**不是**已验证的证据
+    proposed_evidence: Evidence | None = None    # candidate credentials, NOT verified evidence
 
     def binds(self, symbol):
-        """该约束是否出现此符号（用于从约束系统里取未知量）。"""
+        """Whether this constraint mentions the symbol, used to collect the
+        unknowns of a constraint system."""
         return symbol in T.free_vars(self.relation)
 
 
 class ConstraintStore:
-    """约束存储（追加式）。约束是 Artifact 级构造，不进内核账本。"""
+    """Constraint storage (append-only). A constraint is an Artifact-level
+    construction and never enters the kernel ledger."""
 
     def __init__(self):
         self._items: dict[int, Constraint] = {}
@@ -69,14 +75,16 @@ class ConstraintStore:
         return tuple(self._items[i] for i in range(self._next))
 
     def involving(self, obj):
-        """哪些约束引用了该候选/任务（候选图的入边）。"""
+        """Which constraints reference this candidate/task (incoming edges of
+        the candidate graph)."""
         return tuple(c for c in self.all() if obj in c.sources)
 
     def dependency_edges(self):
-        """候选/任务之间的依赖边 `source → constraint`。
+        """Dependency edges `source -> constraint` between candidates/tasks.
 
-        **允许成环**：这正是 §8.5 说的「任务图可含强连通分量」。它与内核的
-        证明 DAG（premises → conclusions，必须无环）是两张不同的图。
+        Cycles are allowed here: this is the "task graph may contain strongly
+        connected components" graph. It is a different graph from the kernel's
+        proof DAG (premises -> conclusions), which must be acyclic.
         """
         return tuple((src, c.id) for c in self.all() for src in c.sources)
 

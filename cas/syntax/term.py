@@ -1,3 +1,5 @@
+from functools import partial
+
 from fractions import Fraction
 
 
@@ -99,9 +101,6 @@ class Special(Term):
         self.name = name
         self._h = _next_h()
 
-    def __repr__(self):
-        return self.name
-
 
 class Expr(Term):
     __slots__ = ("head", "args")
@@ -165,7 +164,7 @@ TRUE = BVal(True)
 FALSE = BVal(False)
 UND = _SPECIALS.setdefault("Undefined", Special("Undefined"))
 INFINITY = _SPECIALS.setdefault("Infinity", Special("Infinity"))
-EMPTY_SET = _SPECIALS.setdefault("EmptySet", Special("EmptySet"))   # 解集一等结构用
+EMPTY_SET = _SPECIALS.setdefault("EmptySet", Special("EmptySet"))   # solution sets
 
 AC = {"Plus", "Times", "And", "Or"}
 BOOL_HEADS = {"And", "Or", "Not"}
@@ -187,8 +186,9 @@ def C(name):
     return t
 
 
-# 数学常数不在此处：一切具体常数由 math/elementary 声明、bootstrap 装配。
-# 本层只有 Const 这一 ADT 变体，没有 π 也没有 i。
+# No mathematical constants live here: every concrete constant is declared by
+# math/elementary and installed by bootstrap. This layer only has the Const ADT
+# variant; there is no pi and no i here.
 
 
 def N(v):
@@ -262,9 +262,10 @@ def sort_key(t):
 
 
 def _flatten_ac(head, args):
-    """AC 头的句法折叠：同类嵌套拉平一层 + 确定性排序。
+    """Flatten one level of same-head nesting, then sort deterministically.
 
-    纯表示规范，无数值折叠、无代数合并——标准形归函数结构提供。
+    Representation only: no numeric folding, no algebraic merging. The
+    canonical form is supplied by the function-structure layer.
     """
     flat = []
     for a in args:
@@ -276,13 +277,17 @@ def _flatten_ac(head, args):
 
 
 def _fold_bool_ac(head, args):
-    """And/Or 的 AC 表示规范形：拉平 + 指针去重 + 单位元/零元吸收。
+    """Canonical representation for And/Or: flatten, dedupe by pointer,
+    absorb identity and annihilator elements.
 
-    **只做表示规范化，不做判定**（v4 §2.1「项只回答这个表达式长什么样」）：
-    结合/交换/幂等下的规范形（空合取=⊤、空析取=⊥、吸收单位元、零元吸收）
-    是驻留判等（指针比较）的前提，属句法层。互补对消解（`c ∨ ¬c → ⊤`）
-    **不在这里做**——那是对「是否恒真」的判定，归分支覆盖 checker
-    （v4 §7.3：验证独立于构造，不靠构造期塌缩）。
+    This is representation normalization only, not a decision procedure:
+    the canonical form under associativity/commutativity/idempotence
+    (empty conjunction = true, empty disjunction = false, identity
+    absorption, annihilator absorption) is what makes interned equality a
+    pointer comparison, so it belongs to the syntax layer. Complementary-pair
+    collapse (`c or not c -> true`) is deliberately NOT done here: that
+    decides whether a proposition is a tautology and belongs to the branch
+    coverage checker, which keeps verification independent of construction.
     """
     name = head.name
     flat = []
@@ -295,8 +300,8 @@ def _fold_bool_ac(head, args):
     for a in flat:
         if isinstance(a, BVal):
             if (name == "And" and not a.val) or (name == "Or" and a.val):
-                return a                       # 零元：And 中 False / Or 中 True
-            continue                           # 单位元吸收
+                return a                       # annihilator: False in And, True in Or
+            continue                           # identity element is absorbed
         if a._h in seen:
             continue
         seen.add(a._h)
@@ -322,18 +327,23 @@ _CMP_HEADS = {"Eq", "Ne", "Lt", "Le", "Gt", "Ge"}
 
 
 def mk(head, args):
-    """驻留构造器，唯一入口。
+    """The single interned constructor.
 
-    只做**表示**规范化：AC 头（Plus/Times/And/Or）拉平同类嵌套、确定性排序、
-    幂等去重、单位元/零元吸收；其余头直接驻留。判等退化为指针比较。
+    Representation normalization only: AC heads (Plus/Times/And/Or) get
+    same-head flattening, deterministic sorting, idempotent dedupe and
+    identity/annihilator absorption; every other head is interned as given.
+    Equality then reduces to a pointer comparison.
 
-    本层**不判定任何语义**（v4 §2.1「项是纯语法」）：恒真/恒假的判定（如
-    `c ∨ ¬c`）不在这里坍缩，归对应 checker。
+    No semantics are decided here: tautology/contradiction (such as
+    `c or not c`) is not collapsed at construction time, it is decided by the
+    corresponding checker.
 
-    标准形职责已移交函数结构层（cas_v3_arch.md 第五节），本层不再做：
-    数值常量折叠、同类项合并、同底幂合并、i 的整数幂、e^a 到 Exp(a) 的
-    改写、根式归一与落域坍缩、函数头特殊点折叠。以上分别属于 ℚ 算术、
-    多项式机器、高斯域、声明命名约定与闸门链。
+    Canonical-form duties live in the function-structure layer, not here:
+    numeric constant folding, like-term collection, same-base power merging,
+    integer powers of i, rewriting e^a to Exp(a), radical normalization and
+    domain collapse, special-point folding of function heads. Those belong to
+    rational arithmetic, the polynomial machine, the Gaussian domain, the
+    declaration naming convention and the gate chain respectively.
     """
     name = head.name if isinstance(head, Sym) else None
     if name in AC:
@@ -346,28 +356,22 @@ def mk(head, args):
     return _intern_expr(head, tuple(args))
 
 
-def fn(name):
-    h = S(name)
+def call(name, *args):
+    """Generic constructor for a call of any head; it knows no head by name.
 
-    def build(*args):
-        return mk(h, args)
+    Elementary functions (Sin/Exp/Log/...) are constructed by the declaration
+    layer, the only place that knows those heads exist. The syntax layer knows
+    structural heads only: Plus/Times/Power are the ring signature and And/Or
+    are boolean structure, so only their constructors are exposed here, built
+    on this one generic entry point.
+    """
+    return mk(S(name), args)
 
-    return build
 
-
-plus = fn("Plus")
-times = fn("Times")
-pw = fn("Power")
-sin = fn("Sin")
-cos = fn("Cos")
-tan = fn("Tan")
-atan = fn("Atan")
-sinh = fn("Sinh")
-cosh = fn("Cosh")
-tanh = fn("Tanh")
-exp = fn("Exp")
-log = fn("Log")
-abs_ = fn("Abs")
+# Structural-head constructors: ring signature and boolean structure.
+plus = partial(call, "Plus")
+times = partial(call, "Times")
+pw = partial(call, "Power")
 
 
 def neg(a):
@@ -376,10 +380,6 @@ def neg(a):
 
 def div(a, b):
     return times(a, pw(b, MONE))
-
-
-def sqrt(a):
-    return pw(a, N(Fraction(1, 2)))
 
 
 def eq(a, b):
@@ -411,14 +411,14 @@ def and_(*a):
 
 
 def implies(a, b):
-    """蕴含项的规范构造（分支守卫提升 `C ⇒ G` 等处的唯一实现）。"""
+    """The canonical implication term, used wherever a guarded promotion
+    `C => G` is built."""
     return mk(S("Implies"), (a, b))
 
 
 def is_eq(t) -> bool:
-    """是不是等式形状（`Eq` 头的 Call）。**纯形状判断**（v4 §2.1：项只回答
-    「长什么样」），故属语法层——此前在 equality / checkers / workflow 里有
-    三份同实现副本，前端还得借道 workflow 的私有名。"""
+    """True if `t` is an equation-shaped call (head `Eq`). A pure shape test,
+    hence it belongs to the syntax layer."""
     return isinstance(t, Expr) and t.head.name == "Eq"
 
 
@@ -478,8 +478,8 @@ def mk_bound(var_hint, body, var=None):
 
 
 def open_bound(b):
-    """Bound -> (hint 符号, 体)：DB(0) 还原为 hint 符号（mk_bound 的逆，
-    供惰性积分的体参与环运算/打印）。嵌套绑定按深度位移。"""
+    """Bound -> (hint symbol, body): restore DB(0) to the hint symbol, the
+    inverse of mk_bound. Nested binders are shifted by depth."""
     var = S(b.hint)
     return var, _lift(b.body, var, 0)
 
@@ -499,16 +499,15 @@ def _lift(t, var, depth):
 
 
 # ---------------------------------------------------------------------------
-# 树遍历与重写工具（M6.7 拆分）：subst/路径操作移居 cas/syntax/termpath.py，
-# 此处回接名字，`from cas.syntax.term import subst` 等既有导入面不变。
-# 实例化（instantiate）随模式元语言移居 cas/syntax/pattern.py——项层无洞，
-# Term 级实例化不存在，这正是 v4 不变量 2 的落点。
+# Tree traversal and rewriting live in cas/syntax/termpath.py. Names are
+# re-exported lazily here so `from cas.syntax.term import subst` keeps working.
+# Term-level instantiation does not exist (the term layer has no holes);
+# instantiation lives with the pattern language in cas/syntax/pattern.py.
 #
-# 回接走 PEP 562 模块级 __getattr__ 惰性解析，不在 import 期执行：
-# termpath 顶部 `from cas.syntax import term as T`，若本模块末尾再直接
-# `from cas.syntax.termpath import ...`，则 `import cas.syntax.termpath` 作为入口时
-# 必然撞上 term 的半初始化状态而 ImportError（基线即崩，旧注释却称
-# "无导入环"）。惰性解析后两个方向都能独立导入。
+# The re-export uses a PEP 562 module __getattr__ instead of an import at the
+# bottom: termpath imports `cas.syntax.term` at its top, so importing termpath
+# back here would hit a half-initialized term module and raise ImportError.
+# Lazy resolution keeps both import directions independent.
 # ---------------------------------------------------------------------------
 
 _TERMPATH_REEXPORT = frozenset((
@@ -518,10 +517,11 @@ _TERMPATH_REEXPORT = frozenset((
 
 
 def __getattr__(name):
-    """惰性回接 cas/termpath 的名字（PEP 562）。
+    """Lazily re-export names from cas/syntax/termpath (PEP 562).
 
-    仅在常规属性查找失败时被调用，故 term 自身的定义优先；查不到的
-    名字仍抛 AttributeError，不静默吞错。
+    Called only when normal attribute lookup fails, so term's own definitions
+    take precedence; unknown names still raise AttributeError instead of being
+    swallowed.
     """
     if name in _TERMPATH_REEXPORT:
         from cas.syntax import termpath

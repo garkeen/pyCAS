@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
-"""域模块的装配（v4 §7.2）。
+"""Assembly of the domain modules.
 
-常驻基域（ℤ / ℚ / ℚ(i)）在此登记进阶梯。原先这发生在 `cas/math/project.py`
-的 **import 期**（模块级调用 `_install_base_domains()` 再 lookup 回填单例），
-是 AGENTS.md §六 列的三处之一；现在改为 `install(builder)`。
+The resident base fields (Z / Q / Q(i)) are registered into the projection ladder
+here. This used to happen at **import time** inside `cas/math/project.py` (a
+module-level `_install_base_domains()` call, then lookup to backfill singletons);
+it is now an `install(builder)` step.
 
-**ℚ(i) 的 i 身份经 builder 注入**：域包只依赖 `cas.syntax.term`，拿不到常数
-声明，所以由 builder 提供已声明的 `i`。这既保证「域由显式声明进入、不做名字
-嗅探」，也让装配顺序（先常数、后域）成为显式依赖而非隐式 import 顺序。
+**Q(i) receives the identity of `i` through the builder**: the domain package
+depends only on `cas.syntax.term` and cannot see constant declarations, so the
+builder supplies the declared `i`. That keeps "domains enter by explicit
+declaration, never by name sniffing" true, and makes the assembly order (constants
+before domains) an explicit dependency rather than a hidden import order.
 """
 
 

@@ -1,1 +1,1 @@
-# pyCAS —— 子包按 v4 目标树：syntax / kernel / workflow / math / frontend
+# pyCAS -- subpackages follow the target tree: syntax / kernel / workflow / math / frontend

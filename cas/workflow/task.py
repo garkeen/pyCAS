@@ -1,18 +1,19 @@
-# -*- coding: utf-8 -*-
-"""Task / TaskCandidate：计算问题与候选（v4 §8.3、§8.4）。
+"""Task / TaskCandidate: a computation problem and a candidate.
 
-请求是**普通项**（`Simplify(expr)`、`Differentiate(expr,x)`、`Integrate(expr,x)`、
-`Solve(equation,x)`…），**没有封闭的 TaskKind 枚举**——内核与工作流都不认识这些
-head，它们只是被搬运的项。
+A request is an ordinary term (`Simplify(expr)`, `Differentiate(expr, x)`,
+`Integrate(expr, x)`, `Solve(equation, x)`, ...). There is no closed TaskKind
+enum: neither the kernel nor the workflow knows these heads, they are just
+terms being carried.
 
-状态**由数据推导**，不需要可变的 `verified=True`（§8.4）：
+State is derived from data, so no mutable `verified=True` is needed:
 
-    validation is None                  未验证候选
-    validation 有开放 requirement        已验证的条件候选
-    validation 可直接应用                已验证候选
+    validation is None                        unverified candidate
+    validation has an open requirement        verified but conditional
+    validation is directly applicable         verified candidate
 
-`parent` 是单父指针 —— **任务树无环**。循环积分那种环不在树上：它在
-「候选 ↔ 约束」子图里（v4 §8.5，需 §8.6 Constraint，本阶段未建）。
+`parent` is a single parent pointer, so the task tree is acyclic. The cycle in
+cyclic integration is not in this tree: it lives in the candidate <-> constraint
+subgraph (see constraint.py).
 """
 
 from dataclasses import dataclass
@@ -41,11 +42,13 @@ class TaskCandidate:
         return self.validation is not None
 
     def state(self, store) -> str:
-        """状态**由数据推导**（v4 §8.4）：未验证 / 已验证的条件候选 / 已验证候选。
+        """Derive the state from data: unverified, verified but conditional, or
+        verified.
 
-        `store` 必填：缺了它就无法区分「已验证」与「有条件」，任何静默降级
-        都会把未验证候选说成已验证（不变量 16）。适用性由内核按作用域算
-        （v4 §6.10），工作流只查。
+        `store` is required: without it "verified" cannot be distinguished from
+        "conditional", and any silent downgrade would call an unverified
+        candidate verified. Applicability is computed by the kernel per scope;
+        the workflow only queries it.
         """
         if self.validation is None:
             return "unverified"
@@ -55,20 +58,20 @@ class TaskCandidate:
 
 
 class TaskStore:
-    """任务与候选存储（追加式）。"""
+    """Task and candidate storage (append-only)."""
 
     def __init__(self, kernel):
-        self.kernel = kernel                        # KernelStore（必填）：适用性查询的独立设施
+        self.kernel = kernel                        # KernelStore; the independent facility for applicability queries
         self._tasks: dict[TaskId, Task] = {}
         self._cands: dict[TaskCandidateId, TaskCandidate] = {}
         self._next_t = 0
         self._next_c = 0
 
-    # --- 任务 ---
+    # --- tasks ---
 
     def open_task(self, scope, request, parent=None) -> Task:
         if parent is not None and parent not in self._tasks:
-            raise KeyError(f"父任务不存在: {parent}")
+            raise KeyError(f"parent task does not exist: {parent}")
         tid = TaskId(self._next_t)
         self._next_t += 1
         t = Task(id=tid, scope=scope, request=request, parent=parent)
@@ -82,12 +85,13 @@ class TaskStore:
         return tuple(t for t in self._tasks.values() if t.parent == tid)
 
     def task_tree_edges(self):
-        """树边（parent → child）。任务树按构造即无环：新任务只能挂在已存在
-        的父任务下（id 递增），不存在回指。"""
+        """Tree edges (parent -> child). The task tree is acyclic by
+        construction: a new task can only be attached to an existing parent
+        (ids increase), so there is no back-reference."""
         return tuple((t.parent, t.id) for t in self._tasks.values()
                      if t.parent is not None)
 
-    # --- 候选 ---
+    # --- candidates ---
 
     def propose(self, task: TaskId, artifact: ArtifactId,
                 validation: JudgmentId | None = None) -> TaskCandidate:

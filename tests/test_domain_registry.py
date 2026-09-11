@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
-"""域注册表：装配集中、职责单一。
+"""Domain registry: centralized assembly, single responsibility.
 
-钉子（收敛前的事实）：
-· 注册散在 4 处（q.py / z.py 自注册、poly.py 运行时按变元集懒注册、
-  project.py 代注册 ℚ(i)），注册表内容取决于谁碰巧被 import。
-· `lookup()` / `domain_scope()` 全项目零调用——注册表只写不读。
-· K(x) 从不注册，与 K[x] 不对称；poly 的懒注册让表无界增长。
+Nails (the state before convergence):
+* registration was scattered across four places (q.py / z.py self-registering,
+  poly.py lazily registering by variable set at runtime, project.py registering Q(i)
+  on behalf of them), so the registry content depended on which module happened to be
+  imported;
+* `lookup()` / `domain_scope()` had zero call sites in the whole project: the registry
+  was written but never read;
+* K(x) was never registered, unlike K[x], and poly's lazy registration let the table
+  grow without bound.
 """
 
 import subprocess
@@ -16,7 +20,7 @@ from cas.syntax.term import S
 
 
 def test_domain_packages_are_declaration_only():
-    """导入 cas.math.domains 不得往注册表里写任何东西。"""
+    """Importing cas.math.domains must write nothing into the registry."""
     code = ("from cas.math.domains.base import _DOMAINS; "
             "import cas.math.domains; print(len(_DOMAINS))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
@@ -26,14 +30,15 @@ def test_domain_packages_are_declaration_only():
 
 
 def test_import_does_not_assemble_bootstrap_does():
-    """v4 §7.1：禁止 import 期修改全局状态——import 数学模块后注册表须为空。"""
+    """No import-time mutation of global state: the registry is empty after importing
+    the math modules."""
     code = ("from cas.math.domains.base import _DOMAINS; "
             "import cas.math.project, cas.math.decide; "
             "print(len(_DOMAINS))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                          text=True, cwd=".")
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "0", "import 期不得注册任何域"
+    assert out.stdout.strip() == "0", "import time must register no domain"
 
 
 def test_bootstrap_registers_three_base_domains():
@@ -47,21 +52,22 @@ def test_bootstrap_registers_three_base_domains():
 
 
 def test_parametric_domains_not_in_registry():
-    """K[x]/K(x) 是按变元集参数化的实例，归工厂缓存，不进注册表。"""
+    """K[x]/K(x) are instances parameterized by variable set: they belong to the factory
+    caches and never enter the registry."""
     before = set(_DOMAINS)
     from cas.math.domains.poly import poly_domain
     from cas.math.domains.ratfunc import ratfunc_domain
     for v in ("x", "y", "zzz_unique"):
         poly_domain(S(v))
         ratfunc_domain(S(v))
-    assert set(_DOMAINS) == before, "参数化实例涌入了注册表"
+    assert set(_DOMAINS) == before, "parameterized instances flooded the registry"
 
 
 def test_registry_consumed_by_projection():
-    import cas.math.project  # noqa: F401  触发装配
+    import cas.math.project  # noqa: F401  trigger assembly
     for name, cls in [("Z", "ZDomain"), ("Q", "QDomain"), ("Q(i)", "QIDomain")]:
         d = lookup(name)
-        assert d is not None, f"{name} 未注册"
+        assert d is not None, f"{name} is not registered"
         assert type(d).__name__ == cls
 
 
@@ -74,9 +80,11 @@ def test_factory_cache_reuses_same_var_set():
 
 
 def test_register_has_single_call_site():
-    """注册责任唯一：全项目仅 cas/project 一处调用 register()。
+    """Registration has one responsibility: the whole project calls register() in
+    exactly one place, cas/math/project.py.
 
-    只钉文件不钉行号——行号会随正常编辑漂移，钉了就是自找麻烦。
+    Pin the file but not the line number -- line numbers drift with ordinary edits, so
+    pinning them only invites churn.
     """
     import pathlib
     hits = []
@@ -85,12 +93,12 @@ def test_register_has_single_call_site():
             s = line.strip()
             if s.startswith("register(") and "def register(" not in s:
                 hits.append(f"{p.as_posix()}:{i}")
-    assert len(hits) == 1, f"注册点不唯一: {hits}"
-    assert hits[0].startswith("cas/math/project.py:"), f"装配点漂移: {hits[0]}"
+    assert len(hits) == 1, f"registration is not single-sited: {hits}"
+    assert hits[0].startswith("cas/math/project.py:"), f"assembly point moved: {hits[0]}"
 
 
 def test_scoped_registration_available_for_algebraic_extension():
-    """架构 §3.4 要求代数扩张必须限定在单次计算作用域内。"""
+    """An algebraic extension must be confined to the scope of a single computation."""
     from cas.math.domains.base import Domain, domain_scope, register
 
     class _Tmp(Domain):
@@ -106,11 +114,11 @@ def test_scoped_registration_available_for_algebraic_extension():
     d = _Tmp()
     with domain_scope(d):
         assert lookup("Tmp-scope-test") is d
-    assert lookup("Tmp-scope-test") is None      # 退出即注销
+    assert lookup("Tmp-scope-test") is None      # unregistered on exit
 
     try:
-        register(d)                              # scoped 域禁止常驻注册
+        register(d)                              # a scoped domain may not be registered resident
     except ValueError:
         pass
     else:
-        raise AssertionError("scoped 域竟被允许常驻注册")
+        raise AssertionError("a scoped domain was allowed resident registration")

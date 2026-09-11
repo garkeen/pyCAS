@@ -14,13 +14,16 @@ _TOKEN = re.compile(
     r"(?P<num>\d+\.\d+|\d+)"
     r"|(?P<seq>\?\?[_A-Za-z]\w*)"
     r"|(?P<pvar>\?[_A-Za-z]\w*(?:::[_A-Za-z]\w*)?)"
+    r"|(?P<db>@\d+)"
     r"|(?P<id>[A-Za-z_]\w*)"
     r"|(?P<op>&&|\|\||==|!=|<=|>=|->|[-+*/^()<>,='])"
     r")"
 )
 
-# 句法层原子：属于语言的记号（Special/BVal），不是数学常数，不进图书馆。
-# 数学常数一律经 library 按名查询，内核不存名字→原子的副本。
+# Syntactic atoms: notation belonging to the language (Special/BVal), not
+# mathematical constants, so they do not enter declarations. Mathematical constants
+# are always looked up by name from the declaration layer; the kernel keeps no copy
+# of a name-to-atom mapping.
 _SYNTAX_ATOMS = {"infinity": INFINITY, "true": TRUE, "false": FALSE}
 
 _BINDERS = {"Integrate", "Sum", "Product", "Limit"}
@@ -53,25 +56,64 @@ def tokenize(s):
 
 
 class Parser:
-    """表达式解析器。
+    """Expression parser.
 
-    raw 通道（quote 内容，'...' 内部自动切换）：构造走 _intern_expr 纯驻留，
-    保留反化简形——不合并同类项/同底幂、不折叠常量，'cos(x)/cos(x)^2 保留为
-    Times(cos, Power(cos, -2))；域约束随之保留（dom_condition 递归 Quote 提取）。
-    正常通道构造走 mk（AC 拉平排序）。两通道共用同一套文法，仅构造原语不同。
+    The raw channel (quote contents, entered automatically inside '...') builds
+    through _intern_expr, which interns without simplifying, preserving the
+    anti-normalized shape: like terms and like-base powers are not merged and
+    constants are not folded, so 'cos(x)/cos(x)^2 stays as
+    Times(cos, Power(cos, -2)) and the domain constraint is preserved with it
+    (dom_condition extracts it by recursing through Quote). The normal channel builds
+    through mk (AC flattening and ordering). Both channels share one grammar; only
+    the construction primitives differ.
 
-    pattern 通道（v4 §5.2 模式元语言）：调用构造为 PatternCall、?x/??x 为
-    PatternVar/PatternSeq，产物是 cas.syntax.pattern 的 Pattern，**不是 Term**。
-    规则 DSL（LHS/RHS/guard）经此通道解析；模式变量因此进不了项层。
+    The pattern channel builds calls as PatternCall and ?x/??x as
+    PatternVar/PatternSeq, producing a Pattern from cas.syntax.pattern, **not a
+    Term**. The rule DSL (LHS/RHS/guard) is parsed through this channel, which is why
+    pattern variables cannot reach the term layer.
     """
 
-    def __init__(self, toks, raw=False, pattern=False):
+    def __init__(self, toks, raw=False, pattern=False, constants=None):
         self.toks = toks
         self.i = 0
         self.raw = raw
         self.pattern = pattern
+        # Constant atom table: None means query the runtime (normal channel); a dict
+        # means use the injected table (declaration DSL channel, where the runtime is
+        # not ready while templates are parsed at bootstrap and a query would trigger
+        # lazy assembly through dispatch and recurse).
+        self.constants = constants
 
-    # --- 构造原语：各通道唯一的差异点 ---
+    # --- construction primitives: the only point where the channels differ ---
+
+    def _alias(self, name):
+        """Surface name -> canonical head (a declared alias such as ln->Log,
+        sqrt->Sqrt).
+
+        The declaration DSL channel does not consult aliases (templates are written
+        with canonical heads); ordinary expressions consult runtime declarations. An
+        alias is declaration data, which is what makes "a new surface name would
+        require a parser change" false.
+        """
+        if self.constants is not None:
+            return name
+        h = rt.alias_head(name)
+        return h if h is not None else name
+
+    def _const_atom(self, name):
+        """Identifier -> mathematical constant atom (None when absent, so the caller
+        degrades to a symbol).
+
+        Two channels: ordinary expressions query the runtime (constants are
+        installed by declarations), while the declaration DSL channel uses the
+        constant table injected by the caller, because the runtime is not ready while
+        templates are parsed at bootstrap and calling back into dispatch would
+        trigger lazy assembly and recurse.
+        """
+        if self.constants is not None:
+            return self.constants.get(name)
+        d = rt.const_by_name(name)
+        return d.atom if d is not None else None
 
     def _mk(self, head, args):
         if self.pattern:
@@ -91,10 +133,10 @@ class Parser:
         return T.quote(e)
 
     def _recip(self, e):
-        # a/b 的倒数因子即 b^-1（两通道统一；历史上的 ×1 残余已清除）
+        # the reciprocal factor of a/b is b^-1 (both channels agree)
         return self._mk(S("Power"), (e, T.MONE))
 
-    # --- 文法 ---
+    # --- grammar ---
 
     def peek(self):
         return self.toks[self.i]
@@ -143,7 +185,8 @@ class Parser:
             self.next()
             if v == "=":
                 v = "=="
-            # ^ 右结合（2^3^2 = 2^(3^2)）；其余算子左结合
+            # ^ is right associative (2^3^2 = 2^(3^2)); every other operator is left
+            # associative
             right = self.expr(p if v == "^" else p + 1)
             hname = _HEADMAP[v]
             if v == "-":
@@ -158,7 +201,7 @@ class Parser:
         if k == "op" and v == "-":
             self.next()
             e = self.unary()
-            # 前缀 - 绑定松于 ^：-x^2 = -(x^2)；^ 链右结合
+            # prefix - binds looser than ^: -x^2 = -(x^2); ^ chains right
             if self.peek() == ("op", "^"):
                 self.next()
                 rhs = self.expr(_PREC["^"])
@@ -166,7 +209,8 @@ class Parser:
             return self._neg(e)
         if k == "op" and v == "'":
             self.next()
-            # quote 内容保 held 形：本子表达式切 raw 通道，返回后恢复原通道
+            # quote contents stay held: this subexpression switches to the raw
+            # channel and restores the previous channel on return
             old, self.raw = self.raw, True
             try:
                 return self._quote(self.expr(1))
@@ -177,6 +221,12 @@ class Parser:
             e = self.expr(0)
             self.expect(")")
             return e
+        if k == "db":
+            self.next()
+            # the de Bruijn placeholder `@0` marks the argument slot of a bound body
+            # (derivative templates, domain-condition templates); the syntax layer
+            # owns binding abstraction and instantiation (mk_bound / _lift)
+            return T.DB_(int(v[1:]))
         if k == "num":
             self.next()
             f = Fr(v)
@@ -191,7 +241,7 @@ class Parser:
             if not self.pattern:
                 raise ParseError(f"pattern hole {v!r} outside pattern context")
             body = v[1:]
-            # 类型洞 ?x::pred（yacas _x_IsNumber 同款）：谓词在匹配时结构检查
+            # typed hole ?x::pred: the predicate is a structural check at match time
             if "::" in body:
                 nm, pd = body.split("::", 1)
                 return P.PV(nm, pd)
@@ -200,9 +250,10 @@ class Parser:
             self.next()
             if v in _SYNTAX_ATOMS:
                 return _SYNTAX_ATOMS[v]
-            d = rt.const_by_name(v)
-            if d is not None:
-                return d.atom
+            atom = self._const_atom(v)
+            if atom is not None:
+                return atom
+            v = self._alias(v)
             nk, nv = self.peek()
             if nk == "op" and nv == "(":
                 self.next()
@@ -213,17 +264,14 @@ class Parser:
                         self.next()
                         args.append(self.expr(0))
                 self.expect(")")
-                # 绑定词大小写不敏感（integrate/Integrate 都生成绑定形式）
+                # binder words are case insensitive (integrate/Integrate both produce
+                # the bound form)
                 bv = v[0].upper() + v[1:] if v else v
                 if bv in _BINDERS and len(args) == 2:
                     if self.pattern and P.has_holes(args[1]):
                         raise ParseError(
                             "binder pattern with a hole in variable position is not supported")
                     return self._mk(S(bv), (T.mk_bound(args[1], args[0]),))
-                if v == "sqrt" and len(args) == 1:
-                    return self._mk(S("Power"), (args[0], N(Fr(1, 2))))
-                if v == "ln":
-                    v = "Log"
                 if v[0].islower() and len(v) > 1 and v not in ("and", "or", "not"):
                     v = v[0].upper() + v[1:]
                 return self._mk(S(v), tuple(args))
@@ -231,5 +279,12 @@ class Parser:
         raise ParseError(f"unexpected {v!r}")
 
 
-def parse(s, pattern=False):
-    return Parser(tokenize(s), pattern=pattern).parse()
+def parse(s, pattern=False, constants=None):
+    """Parse an expression.
+
+    `constants` is an optional name-to-constant-atom table. The declaration DSL
+    parses templates at bootstrap, when the runtime is not ready, so it must inject
+    the constant table instead of calling back into dispatch (which would recurse
+    into assembly).
+    """
+    return Parser(tokenize(s), pattern=pattern, constants=constants).parse()

@@ -1,9 +1,11 @@
-# -*- coding: utf-8 -*-
-"""战术层：求解/化简的具体招法（与验证器完全独立）。
+"""Tactics layer: concrete solving/simplification moves, fully independent of
+the verifiers.
 
-架构总纲：验证器不重跑求解算法。战术层交出"证书"（解、标准形），
-工作流验证器只按推导类型做独立判定（回代判官、域判等）。
-战术失败抛 TacticsError——诚实拒答，不降级猜测。
+The verifier never re-runs the solver. The tactics layer hands over a
+certificate (a solution, a normal form) and the workflow verifier only performs
+an independent check for the derivation kind (back-substitution, domain
+equality). A tactic failure raises TacticsError: refused honestly, never
+degraded into a guess.
 """
 
 from cas.syntax import term as T
@@ -15,94 +17,127 @@ from cas.math.domains.ratfunc import RatFunc, rf_reduce
 
 
 def _lin_core(diff, var: Sym):
-    """方程差值的线性分类：在投影标准形上裁决——语义判据，非形状判据。
+    """Classify the difference of an equation on its projection normal form: a
+    semantic criterion, not a shape criterion.
 
-    谁含 var 不是看原始项的形状（x+1 与 x 的差值形状上含 x、语义上是
-    常数），而是看投影后的域元素。返回：
-    ("zero", None)     差值恒为零（零多项式/零有理式/ℚ 零）——恒等式
-    ("nonzero", None)  差值与 var 无关且可证非零——永不成零
-    ("linear", 项)     关于 var 恰一次——唯一候选解（证书项）
-    ("refuse", 理由)   其余：非线性/含其他变元/域外——完备性无法保证
+    Whether something involves `var` is not read off the shape of the original
+    term (the difference of x+1 and x contains x syntactically but is constant
+    semantically); it is read off the projected domain element. Returns:
+
+    ("zero", None)     the difference vanishes identically (zero polynomial /
+                       zero rational function / rational zero): an identity
+    ("nonzero", None)  the difference is independent of var and provably
+                       nonzero: it can never vanish
+    ("linear", term)   exactly degree one in var: a unique candidate solution
+    ("refuse", reason) anything else: nonlinear / involves other variables /
+                       outside the domain, so completeness cannot be guaranteed
     """
     hit = project(diff)
     if hit is None:
-        return ("refuse", "差值不在 ℚ/多项式/有理函数域内")
+        return ("refuse", "difference is outside Q/polynomial/rational-function domains")
     if hit.element is None:
-        # ℚ 常数格：恒等或矛盾，与 var 无关
+        # rational constant cell: identity or contradiction, independent of var
         return ("zero", None) if is_zero(hit) else ("nonzero", None)
     ring = hit.domain.ring
     el = hit.element
     if isinstance(el, RatFunc):
         red = rf_reduce(ring, el)
         if red.num.is_zero():
-            return ("zero", None)            # num ≡ 0 ⟺ 分式 ≡ 0（den≠0 归守卫）
+            return ("zero", None)            # num == 0 iff the fraction == 0 (den != 0 is a guard)
         el = red.num
     if not isinstance(el, Poly):
-        return ("refuse", "投影元素非多项式")
+        return ("refuse", "projected element is not a polynomial")
     if el.is_zero():
         return ("zero", None)
     if any(v is not var for v in el.vars):
-        return ("refuse", "含其他变元：当前仅支持单变量线性")
+        return ("refuse", "involves other variables: only single-variable linear is supported")
     if var not in el.vars:
-        return ("nonzero", None)             # 与 var 无关的非零常数多项式
+        return ("nonzero", None)             # nonzero constant polynomial in var
     i = el.vars.index(var)
     coefs = {k[i]: c for k, c in el.monos}
     deg = max(coefs)
     if deg == 0:
-        return ("nonzero", None)             # var 次数为 0：非零常数
+        return ("nonzero", None)
     if deg != 1:
-        return ("refuse", f"{deg} 次方程，当前战术仅支持线性")
+        return ("refuse", f"degree {deg} equation: only linear is supported")
     a = coefs[1]
     b = coefs.get(0, ring.from_int(0))
     return ("linear", T.N(-b / a))
 
 
 def solve_linear(content, var: Sym):
-    """线性求解战术：等式 -> 解项（证书）。
+    """Linear solving tactic: an equation to a solution term (the certificate).
 
-    差值经 `_lin_core` 在投影标准形上分类——恰一次方程给出 -b/a 证书；
-    恒等（解集全域）/矛盾（无解）/非线性按语义拒答。验证由工作流
-    回代判官独立完成，本函数不重复。"""
+    The difference is classified by `_lin_core` on its projection normal form: a
+    degree-one equation yields the -b/a certificate; an identity (solution set is
+    everything), a contradiction (no solution) and nonlinear cases are refused
+    semantically. Verification is performed independently by the workflow's
+    back-substitution judge; this function does not repeat it.
+    """
     if not (isinstance(content, T.Expr) and content.head.name == "Eq"):
-        raise TacticsError("solve 需要等式")
+        raise TacticsError("solve needs an equation")
     lhs, rhs = content.args
     kind, payload = _lin_core(T.plus(lhs, T.neg(rhs)), var)
     if kind == "linear":
         return payload
     if kind == "zero":
-        raise TacticsError("恒等式：解集为全域，无唯一解")
+        raise TacticsError("identity: the solution set is everything, no unique solution")
     if kind == "nonzero":
-        raise TacticsError("矛盾等式：与该变元无关且永不成零，无解")
+        raise TacticsError("contradictory equation: independent of the variable and "
+                           "never zero, no solution")
     raise TacticsError(payload)
 
 
 # ---------------------------------------------------------------------------
-# 丢番图碎片（ℤ 是可判定碎片的宿主；一般情形是定理级拒答，架构 7.3）
+# Diophantine fragment: Z is the host of the decidable fragment; the general
+# case is a theorem-level refusal.
 # ---------------------------------------------------------------------------
 
-def solve_diophantine_linear(a: int, b: int, c: int):
-    """ax + by = c 的整数解（扩展欧几里得）。
+def _integer_ring():
+    """The host ring of the Diophantine fragment: a **Euclidean integral domain**
+    (Z).
 
-    返回 ((x0, y0), (dx, dy))：特解与周期——全部解为
-    (x0 + dx·t, y0 + dy·t), t ∈ ℤ。gcd(a,b) ∤ c 时无解，抛拒答。
+    Taken by capability rather than by hardcoding `Z_RING`: the algorithm
+    declares that it needs a Euclidean non-field structure and the query matches
+    it. If another structure with the same capabilities (such as the Gaussian
+    integers) is added, this query fails loudly on an ambiguous match, forcing an
+    explicit decision about which integral domain hosts the Diophantine
+    fragment instead of letting import order or dict order choose.
     """
-    from cas.math.domains.z import Z_RING
-    g, s, t = Z_RING.xgcd(a, b)
+    from cas.math.domains.base import find_domain
+    hits = find_domain(lambda d: d.is_euclidean and not d.is_field
+                       and d.ring is not None)
+    if len(hits) != 1:
+        raise TacticsError(
+            f"need a unique Euclidean integral domain, matched {[d.name for d in hits]}")
+    return hits[0].ring
+
+
+def solve_diophantine_linear(a: int, b: int, c: int):
+    """Integer solutions of ax + by = c, by the extended Euclidean algorithm.
+
+    Returns ((x0, y0), (dx, dy)): a particular solution and the period, so all
+    solutions are (x0 + dx*t, y0 + dy*t) with t an integer. When gcd(a, b) does
+    not divide c there is no solution and the call refuses.
+    """
+    g, s, t = _integer_ring().xgcd(a, b)
     if g == 0:
         if c != 0:
-            raise TacticsError("0 = c ≠ 0：无解")
-        return ((0, 0), (1, 0))            # 0 = 0：全平面，给平凡参数化
+            raise TacticsError("0 = c != 0: no solution")
+        return ((0, 0), (1, 0))            # 0 = 0: the whole plane, a trivial parametrization
     if c % g != 0:
-        raise TacticsError(f"无整数解：gcd({a},{b})={g} 不整除 {c}")
+        raise TacticsError(f"no integer solution: gcd({a},{b})={g} does not divide {c}")
     m = c // g
     return ((s * m, t * m), (b // g, -a // g))
 
 
 def integer_roots(p, var):
-    """整系数单变量多项式的全部整数根（有理根定理）。
+    """All integer roots of a univariate polynomial with integer coefficients,
+    by the rational root theorem.
 
-    整数根必整除常数项——完备有限候选集，逐个 Horner 精确验证。
-    返回升序列表。系数含非整数抛拒答（片段外）。
+    An integer root must divide the constant term, giving a complete finite
+    candidate set verified exactly with Horner. Returns an ascending list.
+    Non-integer coefficients are refused as outside the fragment.
     """
     if var not in p.vars:
         return []
@@ -111,14 +146,14 @@ def integer_roots(p, var):
     coefs = {}
     for k, c in p.monos:
         if any(k[j] for j in others):
-            raise TacticsError("含其他变元：当前仅支持单变量")
+            raise TacticsError("involves other variables: only single-variable is supported")
         if getattr(c, "denominator", 1) != 1:
-            raise TacticsError("系数非整数：整数根定理片段外")
+            raise TacticsError("non-integer coefficients: outside the integer-root fragment")
         coefs[k[i]] = int(c)
     if not coefs:
         return []
     roots = []
-    while coefs.get(0, 0) == 0:            # x | p：0 是根，逐个降阶
+    while coefs.get(0, 0) == 0:            # x divides p: 0 is a root, reduce the degree
         roots.append(0)
         coefs = {e - 1: c for e, c in coefs.items() if e > 0}
         if not coefs:
@@ -127,7 +162,7 @@ def integer_roots(p, var):
     a0 = coefs[0]
     from cas.math.realroot import divisors
     cands = set()
-    for d in divisors(a0):                 # 整数根 ⟹ d | a₀，O(√|a₀|) 枚举
+    for d in divisors(a0):                 # integer root implies d | a0, O(sqrt|a0|)
         cands.update((d, -d))
     for r in sorted(cands):
         acc = coefs[deg]
@@ -139,25 +174,35 @@ def integer_roots(p, var):
 
 
 def solve_piecewise(f, x: Sym, target):
-    """解分段方程 pw(...)=target：逐支求解 + 分支条件成员判定。
+    """Solve the piecewise equation pw(...) = target: solve branch by branch and
+    check membership in the branch condition.
 
-    每支取支方程差值 d = v − target（折叠）后两步分类：
-    · d 不含自由变元 x（闭式）：判零通道裁决——恒零 → 整支区域为解，
-      可证非零 → 无贡献，判不动 → 记条件解；
-    · d 含 x：交 `_lin_core` 在投影标准形上分类（x+1≡x+1 的差值形状
-      含 x、投影后恒零，照样给区域解；x+1 与 x 的差值投影后是常数，
-      照样无贡献）——线性得候选，代入分支条件经判定管线裁决（成立收、
-      不成立弃、未决记条件）。
-    任一支超出线性片段即拒——漏掉它可能丢解，完备性无法保证，诚实拒答。
+    Each branch takes the branch-equation difference d = v - target (folded) and
+    classifies it in two steps:
+    · d contains no free variable x (closed form): decided by the vanishing
+      channel -- identically zero means the whole branch region is a solution,
+      provably nonzero means no contribution, undecided is recorded as a
+      conditional solution;
+    · d contains x: classified by `_lin_core` on the projection normal form (the
+      difference of x+1 and x+1 contains x syntactically but projects to zero and
+      still yields a region solution; the difference of x+1 and x projects to a
+      constant and still contributes nothing) -- a linear case yields a
+      candidate which is substituted into the branch condition and decided by the
+      pipeline: accepted when it holds, discarded when it fails, recorded as
+      conditional when undecided.
 
-    返回 {"points": [点解], "regions": [区域条件], "conditional": [(解,条件)]}。"""
+    Any branch outside the linear fragment causes a refusal: missing it could
+    lose solutions, so completeness cannot be guaranteed.
+
+    Returns {"points": [...], "regions": [...], "conditional": [(sol, cond)]}.
+    """
     from cas.math.piecewise import fold_nested, branches, is_piecewise
     from cas.math.decide import decide
     from cas.kernel.scope import Assumptions
     from cas.kernel.verdict import YES, NO
     from cas.math.qarith import fold
     if not is_piecewise(f):
-        raise TacticsError("solve_piecewise 需分段函数")
+        raise TacticsError("solve_piecewise needs a piecewise function")
     f = fold_nested(f)
     points, regions, conditional = [], [], []
     for v, c in branches(f):
@@ -165,18 +210,20 @@ def solve_piecewise(f, x: Sym, target):
         if x not in T.free_vars(d):
             z = zero_of(d)
             if z is True:
-                regions.append(c)                 # 支方程恒成立 → 整支区域为解
+                regions.append(c)                 # branch equation holds identically
             elif z is None:
-                conditional.append((None, c))     # 是否恒等未决
+                conditional.append((None, c))     # identity undecided
             continue
         kind, payload = _lin_core(d, x)
         if kind == "zero":
-            regions.append(c)                     # 投影后恒零（如 v ≡ target）
+            regions.append(c)                     # projects to zero (v == target)
             continue
         if kind == "nonzero":
-            continue                              # 支方程永不成零，无贡献
+            continue                              # branch equation never vanishes
         if kind == "refuse":
-            raise TacticsError(f"分支方程超出线性片段，完备性无法保证：{payload}")
+            raise TacticsError(
+                f"branch equation is outside the linear fragment, completeness "
+                f"cannot be guaranteed: {payload}")
         verdict = decide(fold(T.subst(c, {x: payload})), Assumptions())
         if verdict is YES:
             points.append(payload)

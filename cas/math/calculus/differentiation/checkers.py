@@ -1,9 +1,11 @@
-# -*- coding: utf-8 -*-
-"""微分的 checker（v4 §三 目标位置）。
+"""Differentiation checkers.
 
-独立交叉验证：**域层导数**（另一实现）复核项层微分结果。等式前驱一律否证——
-等式两边求导不保真（点解方程 x=3 会「推出」1=0）。源在投影域外时没有独立通道，
-诚实未决，不冒充验证通过。
+Independent cross-check: the **domain-layer derivative** (a different
+implementation) re-checks the term-layer differentiation result. An equation
+predecessor is always refuted, because differentiating both sides preserves no
+truth (from the point solution x = 3 one would "derive" 1 = 0). When the source is
+outside the projection domain there is no independent channel, so the result is
+honestly undecided rather than passing itself off as verified.
 """
 
 from cas.kernel.evidence import Rejected, UnknownResult
@@ -19,15 +21,20 @@ from cas.syntax import term as T
 
 
 def _cross_diff(src, got, x):
-    """单项交叉验证：域层导数（另一实现）重建期望值与项层结果比对。
+    """Cross-check one term: rebuild the expected value from the domain-layer
+    derivative (a different implementation) and compare it with the term-layer
+    result.
 
-    None 表示源在投影域外（无独立通道，交上层未决）；True 域层重建与项层结果
-    在有理函数域判等；False 不等；其余为诚实未决。"""
+    None means the source is outside the projection domain (no independent
+    channel, the caller treats it as undecided); True means the domain-layer
+    rebuild equals the term-layer result in the rational-function field; False
+    means they differ; anything else is honestly undecided.
+    """
     hit = project(src)
     if hit is None:
         return None
     if hit.element is None:
-        expected = T.ZERO                      # 常数格（ℤ/ℚ）导数为 0
+        expected = T.ZERO                      # a constant cell (Z/Q) differentiates to 0
     else:
         vs = hit.domain.vars
         if x not in vs:
@@ -63,33 +70,33 @@ class DiffChecker:
             return bad
         pred = _premise(proposal)
         if pred is None:
-            return Rejected(Reason.FRAGMENT, "缺前驱")
+            return Rejected(Reason.FRAGMENT, "missing predecessor")
         if T.is_eq(pred):
-            return Rejected(Reason.FRAGMENT, "等式前驱不可求导")
+            return Rejected(Reason.FRAGMENT, "an equation predecessor cannot be differentiated")
         d = proposal.evidence.payload
         x = d.var
         if _is_piecewise(pred):
             from cas.math.piecewise import fold_nested, branches
             if not _is_piecewise(content):
-                return UnknownResult(Reason.FRAGMENT, "分段源与非分段结果，无独立通道")
+                return UnknownResult(Reason.FRAGMENT, "piecewise source with a non-piecewise result: no independent channel")
             sbs = branches(fold_nested(pred))
             gbs = branches(fold_nested(content))
             if len(sbs) != len(gbs):
-                return UnknownResult(Reason.FRAGMENT, "分支数不同，不冒充否决")
+                return UnknownResult(Reason.FRAGMENT, "different branch counts; not pretending to refute")
             for (sv, sc), (gv, gc) in zip(sbs, gbs):
                 if sc is not gc:
-                    return UnknownResult(Reason.FRAGMENT, "分支条件不同")
+                    return UnknownResult(Reason.FRAGMENT, "branch conditions differ")
                 r = _cross_diff(sv, gv, x)
                 if r is None:
-                    return UnknownResult(Reason.FRAGMENT, "该支在投影域外")
+                    return UnknownResult(Reason.FRAGMENT, "this branch is outside the projection domain")
                 if r is not True:
-                    return Rejected(Reason.FRAGMENT, "域层导数与该支不符")
+                    return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees on this branch")
             return _ok(proposal, context)
         r = _cross_diff(pred, content, x)
         if r is None:
-            return UnknownResult(Reason.FRAGMENT, "源在投影域外，无独立通道")
+            return UnknownResult(Reason.FRAGMENT, "source is outside the projection domain: no independent channel")
         if r is not True:
-            return Rejected(Reason.FRAGMENT, "域层导数与项层结果不符")
+            return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees with the term-layer result")
         return _ok(proposal, context)
 
 

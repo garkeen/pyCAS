@@ -1,14 +1,15 @@
-# -*- coding: utf-8 -*-
-"""等式与域标准形（v4 §三 目标位置：`math/base/equality.py`）。
+"""Equality and domain normal form.
 
-**域标准形即判定过程**——这不是「化简器碰运气」，而是：
+**The domain normal form is the decision procedure.** This is not a simplifier
+guessing: equality is decided by reducing to a canonical form and comparing.
 
-    判等 = 化简为规范形后判定
+`normal_form` reduces a term (or an equation) to the normal form of its domain;
+`equal` decides on normal forms. A projection hit decides completely; when the
+projection misses, it falls back to literal folding, and if that also misses,
+the caller handles it as undecided. Nothing is guessed.
 
-`normal_form` 把项（或等式）化到所属域的标准形；`equal` 在标准形上判定，命中
-即完全判定，投影落空则退回字面折叠、再落空交由调用方按「未决」处理（**不猜**）。
-
-这也是 v4 §零.1「判等第一优先」的实现落点：任何新结构要进系统，先打通这条通道。
+This is also where "equality comes first" is implemented: before any new
+structure enters the system, this channel must work.
 """
 
 from cas.syntax import term as T
@@ -17,10 +18,13 @@ from cas.math.qarith import fold
 
 
 def normal_form(t):
-    """项或等式的域标准形：投影命中则取域标准形，落空原样返回。
+    """The domain normal form of a term or equation: on a projection hit, the
+    domain normal form; otherwise the input unchanged.
 
-    等式按「两侧差值 = 0」化：`Eq(l, r) → Eq(nf(l − r), 0)`——两边同时化简到
-    同一标准形与把差值化零是同一件事，取后者可少维护一套等式专用规范形。
+    An equation is normalized as "the difference of the two sides is zero":
+    `Eq(l, r) -> Eq(nf(l - r), 0)`. Reducing both sides to one canonical form
+    and reducing their difference to zero are the same thing, and the latter
+    avoids maintaining a separate equation-specific canonical form.
     """
     if T.is_eq(t):
         lhs, rhs = t.args
@@ -35,11 +39,15 @@ def normal_form(t):
 
 
 def equal(a, b) -> bool:
-    """等式判等：两侧差值经投影判零（K(x) ⊇ K[x] ⊇ ℚ）。
+    """Equality of equations: the difference of the two sides is decided to
+    vanish through projection (K(x) contains K[x] contains Q).
 
-    仅在投影覆盖到的片段内**完全判定**；覆盖不到时退回字面折叠比较（句法等价
-    即真），仍不可判则按「不等」返回——调用方若需三值语义，应先查片段覆盖
-    （`verdict`/`decide`），此处不生成 UNKNOWN 以免与判定层词汇混淆。
+    This decides completely only within the covered fragment. When the
+    projection misses, it falls back to a literal-fold comparison (syntactic
+    equivalence counts as true); if that is also inconclusive it returns "not
+    equal". A caller needing three-valued semantics should check fragment
+    coverage first (verdict/decide); UNKNOWN is not produced here to avoid
+    mixing the decision-layer vocabulary.
     """
     if not T.is_eq(a) or not T.is_eq(b):
         return a is b

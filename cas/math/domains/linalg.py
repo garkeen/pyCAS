@@ -1,12 +1,15 @@
-# -*- coding: utf-8 -*-
-"""线性代数机器（架构 4.3）：域上行消元、秩、零空间、方程组求解。
+"""Linear algebra machine: row elimination over a field, rank, nullspace and
+linear-system solving.
 
-Risch 的线性相关性判定、待定系数法、参数化对数导数判定全靠这一层，
-是地基门控的硬条目。矩阵 = 系数表的表（行列表），系数经泛环协议操作；
-零空间基与特解全部精确，无浮点。
+Linear dependence tests, the method of undetermined coefficients and the
+parametric logarithmic-derivative test all rest on this layer, so it is a hard
+item of the foundation gate. A matrix is a table of coefficient tables (a list of
+rows); coefficients are manipulated through the generic ring protocol. Nullspace
+bases and particular solutions are exact, with no floating point.
 
-行列式用 Bareiss 纯整数版（det_bareiss）：整数矩阵上免分式膨胀，
-也是 ℚ 矩阵通分后的通道。
+Determinants use the purely integer Bareiss algorithm (det_bareiss), which avoids
+fraction growth on integer matrices and also serves matrices over Q after
+clearing denominators.
 """
 
 
@@ -15,14 +18,16 @@ def _copy(rows):
 
 
 def echelon(ring, rows, ncols=None):
-    """行阶梯化（域上高斯消元）。
+    """Row echelon form (Gaussian elimination over a field).
 
-    返回 (阶梯矩阵, 主元列号列表)。输入不被修改。
-    ncols：主元搜索的列上界（增广系统只消元系数列，不碰增广列）。
+    Returns (echelon matrix, list of pivot column indices). The input is not
+    modified. `ncols` bounds the columns searched for pivots, so an augmented
+    system eliminates only the coefficient columns and leaves the augmented
+    column alone.
     """
     if not ring.is_field:
         from cas.math.domains.base import RingError
-        raise RingError("行消元要求域系数")
+        raise RingError("row elimination requires field coefficients")
     m = _copy(rows)
     nrows = len(m)
     width = len(m[0]) if m else 0
@@ -59,7 +64,8 @@ def rank(ring, rows) -> int:
 
 
 def nullspace(ring, rows):
-    """零空间基：{x | Ax = 0} 的基向量列表（每个是长度 = 列数的元组）。"""
+    """A nullspace basis: basis vectors of {x | Ax = 0}, each a tuple of length
+    equal to the number of columns."""
     m, pivots = echelon(ring, rows)
     ncols = len(m[0]) if m else 0
     free = [c for c in range(ncols) if c not in pivots]
@@ -68,15 +74,18 @@ def nullspace(ring, rows):
         x = [ring.from_int(0)] * ncols
         x[f] = ring.from_int(1)
         for ri, pc in enumerate(pivots):
-            x[pc] = ring.neg(m[ri][f])      # 主元行：x_pc + Σ m·x_free = 0
+            x[pc] = ring.neg(m[ri][f])      # pivot row: x_pc + sum m*x_free = 0
         basis.append(tuple(x))
     return basis
 
 
 def solve_system(ring, rows, b):
-    """Ax = b。返回 (特解, 齐次基)；无解返回 None。
+    """Solve Ax = b. Returns (particular solution, homogeneous basis), or None
+    when there is no solution.
 
-    b 是长度 = 行数的序列。增广列消元：若某行主元全零而增广非零则无解。
+    `b` is a sequence of length equal to the number of rows. The augmented column
+    is eliminated; if some row has all-zero coefficients but a nonzero augmented
+    entry, there is no solution.
     """
     aug = [list(r) + [bi] for r, bi in zip(rows, b)]
     ncols = len(rows[0]) if rows else 0
@@ -84,7 +93,7 @@ def solve_system(ring, rows, b):
     for ri, row in enumerate(m):
         if ri >= len(pivots) and all(ring.is_zero(x) for x in row[:ncols]):
             if not ring.is_zero(row[ncols]):
-                return None                  # 0 = 非零：无解
+                return None                  # 0 = nonzero: no solution
     x0 = [ring.from_int(0)] * ncols
     for ri, pc in enumerate(pivots):
         x0[pc] = m[ri][ncols]
@@ -93,21 +102,23 @@ def solve_system(ring, rows, b):
 
 
 def det_bareiss(mat):
-    """整数矩阵行列式：Bareiss 免分式算法，全程精确整除。
+    """Determinant of an integer matrix by the fraction-free Bareiss algorithm,
+    exact throughout.
 
-    任一步除不尽说明实现有误（Bareiss 定理保证整除），抛异常。
-    空矩阵行列式为 1；非方阵拒答。
+    A step that does not divide evenly means the implementation is wrong, because
+    Bareiss's theorem guarantees divisibility, so this raises. The empty matrix
+    has determinant 1; a non-square matrix is refused.
     """
     n = len(mat)
     if any(len(r) != n for r in mat):
-        raise ValueError("非方阵")
+        raise ValueError("not a square matrix")
     if n == 0:
         return 1
     m = [list(r) for r in mat]
     sign = 1
     prev = 1
     for k in range(n - 1):
-        if m[k][k] == 0:                     # 找非零主元换行
+        if m[k][k] == 0:                     # find a nonzero pivot and swap rows
             sw = next((i for i in range(k + 1, n) if m[i][k] != 0), None)
             if sw is None:
                 return 0
@@ -117,7 +128,7 @@ def det_bareiss(mat):
             for j in range(k + 1, n):
                 num = m[k][k] * m[i][j] - m[i][k] * m[k][j]
                 if num % prev != 0:
-                    raise ArithmeticError("Bareiss 整除性破坏")
+                    raise ArithmeticError("Bareiss divisibility violated")
                 m[i][j] = num // prev
         prev = m[k][k]
     return sign * m[n - 1][n - 1]

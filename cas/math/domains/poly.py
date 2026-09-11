@@ -1,13 +1,17 @@
-"""K[x₁..xₙ] 多项式域：稀疏系数字典 + 泛系数环协议。
+"""K[x1..xn] polynomial domain: sparse coefficient dictionary plus a generic
+coefficient ring protocol.
 
-标准形：展开收集的系数-单项式规范序（指数元组升序，零系数剔除，
-构造即冻结）。同域判等 = 标准形结构比较，完全判定。
+Normal form: a canonically ordered (exponent tuple ascending, zero coefficients
+dropped) coefficient/monomial collection, frozen at construction. Equality in the
+same domain is structural comparison of normal forms and is fully decided.
 
-表示复杂度：加法 O(|p|+|q|)，乘法 O(|p|·|q|)（字典合并），
-无递归、无树分配——热路径全部是 dict/tuple 操作。
+Representation cost: addition O(|p|+|q|), multiplication O(|p|*|q|) by dictionary
+merge, with no recursion and no tree allocation -- the hot path is pure dict/tuple
+work.
 
-泛型性：系数经 Ring 协议 opaque 处理；ℚ 之外的高斯域、ℚ(α) 商环
-实现同一协议即可挂载，多项式层零改动。
+Genericity: coefficients are handled opaquely through the Ring protocol, so any
+Gaussian or quotient ring that implements the same protocol mounts with zero change
+to the polynomial layer.
 """
 
 from dataclasses import dataclass
@@ -19,12 +23,13 @@ from cas.math.domains.base import Domain, Ring, RingError
 
 
 # ---------------------------------------------------------------------------
-# Poly：不可变稀疏多项式
+# Poly: immutable sparse polynomial
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Poly:
-    """vars: 变量序（固定）；monos: ((exp...), coef) 按指数升序的规范元组。"""
+    """vars: the variable order (fixed); monos: ((exp...), coef) tuples in ascending
+    exponent order."""
     vars: tuple
     monos: tuple
 
@@ -36,7 +41,8 @@ class Poly:
 
 
 def _norm(ring: Ring, vars_, monos_dict: dict) -> Poly:
-    """dict -> 冻结规范形：剔零 + 指数升序。唯一构造出口。"""
+    """dict -> frozen normal form: drop zeros, sort exponents ascending. The single
+    construction exit."""
     ks = sorted(k for k, c in monos_dict.items() if not ring.is_zero(c))
     return Poly(vars_, tuple((k, monos_dict[k]) for k in ks))
 
@@ -79,7 +85,7 @@ def p_mul(ring: Ring, p: Poly, q: Poly) -> Poly:
 
 
 def p_pow(ring: Ring, p: Poly, n: int) -> Poly:
-    """快速幂，n ≥ 0。"""
+    """Fast exponentiation, n >= 0."""
     if n < 0:
         raise ValueError("negative exponent")
     r = p_const(ring, p.vars, ring.from_int(1))
@@ -99,9 +105,11 @@ def p_scale(ring: Ring, p: Poly, c) -> Poly:
 
 
 def p_divmod_field(ring: Ring, p: Poly, q: Poly, var_i: int):
-    """域系数环上的全除法（按变量 var_i 的字典序主幂）。
+    """Full division over a field coefficient ring, with the leading power taken in
+    the monomial order of variable var_i.
 
-    要求 ring 提供精确除法 div_exact（ℚ 天然满足）。返回 (quot, rem)。
+    Requires exact division from the ring (Q satisfies this naturally). Returns
+    (quot, rem).
     """
     if q.is_zero():
         raise ZeroDivisionError("poly division by zero")
@@ -118,11 +126,11 @@ def p_divmod_field(ring: Ring, p: Poly, q: Poly, var_i: int):
         e = k[var_i] - dq_top
         if e < 0:
             break
-        # 商单项式指数：k - q_lead 指数（逐分量）
+        # quotient monomial exponents: k - q_lead exponents, componentwise
         mono = tuple(a - b for a, b in zip(k, q_lead[0]))
         lc = ex_div(c, q_lead[1])
         quot = {mono: lc} if not quot else {**quot, mono: quot.get(mono, ring.from_int(0)) + lc}
-        # 减去 lc * mono * q
+        # subtract lc * mono * q
         sub = {}
         for kq, cq in q.monos:
             kk = tuple(a + b for a, b in zip(mono, kq))
@@ -137,10 +145,12 @@ def p_divmod_field(ring: Ring, p: Poly, q: Poly, var_i: int):
 
 
 def p_gcd_univar(ring: Ring, p: Poly, q: Poly) -> Poly:
-    """单变量（len(vars)==1）域上欧几里得 GCD，monic 规范。
+    """Euclidean GCD over a field for the univariate case (len(vars) == 1), in monic
+    normal form.
 
-    这是通用算法（欧几里得），非特判；多变量 GCD 待通用算法就位后
-    作为其快路径接入，当前不提供。"""
+    This is the general Euclidean algorithm, not a special case. Multivariate GCD
+    will attach as a fast path on top once the general algorithm is in place, and is
+    not offered today."""
     if len(p.vars) != 1:
         raise ValueError("univariate only")
     a, b = p, q
@@ -155,10 +165,12 @@ def p_gcd_univar(ring: Ring, p: Poly, q: Poly) -> Poly:
 
 
 def p_deriv(ring: Ring, p: Poly, var_i: int) -> Poly:
-    """对第 var_i 个变元求形式导数（域内导子，留在 K[x] 内）。
+    """Formal derivative with respect to the var_i-th variable (the derivation stays
+    inside K[x]).
 
-    D(Σ c·x^k) = Σ (D(c)·x^k + c·k_i·x^(k-e_i))：系数导子经
-    ring.deriv 委托——常数域为零，含参/代数扩张覆写即生效。"""
+    D(sum c*x^k) = sum (D(c)*x^k + c*k_i*x^(k-e_i)), with the coefficient derivation
+    delegated to ring.deriv: zero over a constant field, and overridden for
+    parameterized or algebraic extensions."""
     d = {}
     for k, c in p.monos:
         dc = ring.deriv(c)
@@ -173,12 +185,13 @@ def p_deriv(ring: Ring, p: Poly, var_i: int) -> Poly:
 
 
 # ---------------------------------------------------------------------------
-# 项 <-> 多项式
+# Terms <-> polynomials
 # ---------------------------------------------------------------------------
 
 def from_term(ring: Ring, t, vars_: tuple) -> Poly | None:
-    """驻留项 -> Poly；越出 K[x] 片段（未知符号、非整指数、其他头）
-    返回 None。成员测试与转换一体完成。"""
+    """Interned term -> Poly; None when the term leaves the K[x] fragment (unknown
+    symbol, non-integer exponent, other head). Membership test and conversion happen
+    in one pass."""
     idx = {v: i for i, v in enumerate(vars_)}
     zero = (0,) * len(vars_)
 
@@ -258,7 +271,8 @@ def from_term(ring: Ring, t, vars_: tuple) -> Poly | None:
 
 
 def to_term(ring: Ring, p: Poly):
-    """Poly -> 标准形驻留项：Σ coef·Π x^e，mk 排序驻留。"""
+    """Poly -> canonical interned term: sum coef * prod x^e, interned in sorted
+    order."""
     terms = []
     for k, c in p.monos:
         var_factors = [v for v, e in zip(p.vars, k) if e == 1]
@@ -278,7 +292,8 @@ def to_term(ring: Ring, p: Poly):
 
 
 def _coef_term(ring: Ring, c):
-    """非 ℚ 系数的项化钩子：环自带渲染时使用；ℚ 环不会走到这里。"""
+    """Hook for rendering a non-Q coefficient as a term: used when the ring carries
+    its own renderer; the Q ring never reaches here."""
     render = getattr(ring, "to_term", None)
     if render is None:
         raise TypeError(f"ring {ring!r} cannot render coefficient {c!r}")
@@ -286,17 +301,17 @@ def _coef_term(ring: Ring, c):
 
 
 # ---------------------------------------------------------------------------
-# 域对象
+# The domain object
 # ---------------------------------------------------------------------------
 
 class PolyDomain(Domain):
-    """K[x₁..xₙ]，K 为含 ℚ 的域系数环。"""
+    """K[x1..xn] with K a field coefficient ring containing Q."""
 
     def __init__(self, vars_, ring: Ring, name: str | None = None):
         self.vars = tuple(vars_)
         self.ring = ring
         self.name = name or "K[" + ",".join(v.name for v in self.vars) + "]"
-        # 能力（架构 3.2）：K[x] 单变量且系数为域时才是欧几里得整环
+        # capability: K[x] is a Euclidean domain only when univariate over a field
         self.is_euclidean = bool(ring.is_field and len(self.vars) == 1)
 
     def member(self, t) -> bool:
@@ -312,35 +327,35 @@ class PolyDomain(Domain):
         pa = from_term(self.ring, a, self.vars)
         pb = from_term(self.ring, b, self.vars)
         if pa is None or pb is None:
-            return None                  # 非成员：调用方越界
+            return None                  # not a member: caller out of bounds
         return pa.monos == pb.monos
 
 
-_ring_cache = {}
+_domain_cache = {}
 
 
-def poly_domain(*vars_) -> PolyDomain:
-    """按变量集取域对象（同变集共享实例）。
+def poly_domain(*vars_, ring=None) -> PolyDomain:
+    """Fetch the domain object for a (variable set, coefficient ring) pair, sharing
+    instances at the same level.
 
-    只走工厂缓存，**不进域注册表**：注册表管常驻基域（ℤ/ℚ/ℚ(i)），
-    K[x] 是按变元集参数化的实例，变元集无界 —— 每遇一个新变元集就往
-    注册表灌一条等于让它无界增长，且把"常驻基域"与"参数化实例"两种
-    职责混在一个表里。参数化域一律由工厂缓存持有（K(x) 同理）。
+    Only the factory cache is used; **the domain registry is not touched**. The
+    registry holds the resident base fields (Z/Q/Q(i)), while K[x] is parameterized
+    by the variable set, which is unbounded -- pushing a new entry per variable set
+    would grow the registry without bound and mix two responsibilities, "resident
+    base field" and "parameterized instance", into one table. Parameterized domains
+    are held by their factory caches (K(x) likewise).
+
+    The coefficient ring defaults to the **assembly-injected** base field
+    (`base.default_coeff_ring`); this module neither hardcodes `Q_RING` nor
+    bootstraps a concrete domain itself. An explicit `ring` is for the projection
+    layer choosing a coefficient domain by capability; the cache key contains the
+    ring, so a different ring is a different domain.
     """
-    key = tuple(vars_)
-    d = _ring_cache.get(key)
+    from cas.math.domains.base import default_coeff_ring
+    r = default_coeff_ring() if ring is None else ring
+    key = (tuple(vars_), r)
+    d = _domain_cache.get(key)
     if d is None:
-        d = PolyDomain(key, _default_ring())
-        _ring_cache[key] = d
+        d = PolyDomain(tuple(vars_), r)
+        _domain_cache[key] = d
     return d
-
-
-_DEFAULT_RING = None
-
-
-def _default_ring():
-    global _DEFAULT_RING
-    if _DEFAULT_RING is None:
-        from cas.math.domains.q import Q_RING
-        _DEFAULT_RING = Q_RING
-    return _DEFAULT_RING

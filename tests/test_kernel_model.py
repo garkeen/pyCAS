@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""内核模型与提交协议验收（v4 §6.2–§6.10）。
+"""Kernel model and commit-protocol acceptance.
 
-这些测试把「提交是边界操作、条件与作用域是内核唯一实质职责」钉成钉子：
-未决候选不落地、条件被否证即拒绝、清偿只登记不动原结论、作用域不可越权。
+These tests nail down that committing is a boundary operation and that conditions and
+scopes are the kernel's only substantive responsibility: an undecided candidate does
+not land, a refuted condition refuses, discharge only records and never touches the
+original conclusion, and a scope cannot overreach.
 """
 
 import pytest
@@ -22,7 +24,7 @@ from cas.kernel.store import KernelStore
 from cas.kernel.verdict import NO, YES, Reason, unknown
 
 
-# --- 测试用 checker / services ---
+# --- test checkers / services ---
 
 class AlwaysOk:
     def check(self, proposal, context, services):
@@ -30,7 +32,7 @@ class AlwaysOk:
 
 
 class Demands:
-    """通过，并声明一条直接条件（模拟需要的守卫）。"""
+    """Accepts and declares one direct requirement (simulating a needed guard)."""
     def __init__(self, cond):
         self.cond = cond
 
@@ -39,13 +41,14 @@ class Demands:
 
 
 class Never:
-    """未决（模拟片段外 / 预算耗尽）。"""
+    """Undecided (simulating outside the fragment / budget exhausted)."""
     def check(self, proposal, context, services):
-        return UnknownResult(Reason.BUDGET, "测试用未决")
+        return UnknownResult(Reason.BUDGET, "test-only undecided")
 
 
 class StubServices:
-    """按给定真值表判定的判定器（内核不知道它，只经接口调用）。"""
+    """Decides from a given truth table (the kernel does not know it, calling only
+    through the interface)."""
 
     def __init__(self, true=(), false=()):
         self.true = set(true)
@@ -67,7 +70,7 @@ def _store(*checkers):
     return st
 
 
-# --- 无条件结论 ---
+# --- unconditional conclusions ---
 
 def test_unconditional_conclusion_commits():
     st = _store(("t.ok", AlwaysOk()))
@@ -80,10 +83,11 @@ def test_unconditional_conclusion_commits():
     assert st.applicability(j.id, root.id).is_applicable()
 
 
-# --- 未决候选：策略是唯一处置点 ---
+# --- undecided candidates: policy is the only handling point ---
 
 def test_undecided_candidate_not_committed_under_require_proved():
-    """v4 不变量 16 的内核机制：未决 → 什么都不写，不 fail-open。"""
+    """The kernel mechanism behind "an unverified candidate cannot take part in a
+    trusted derivation": undecided writes nothing, no fail-open."""
     st = _store(("t.never", Never()))
     root = st.scopes.create()
     r = commit(st, StepProposal(scope=root.id, conclusions=(S("p"),),
@@ -96,7 +100,8 @@ def test_undecided_candidate_not_committed_under_require_proved():
 
 
 def test_checker_unknown_never_commits():
-    """不变量 16 的核心：GuardPolicy 管条件清偿，不管「结论没验过也放行」。"""
+    """The core of the invariant: GuardPolicy governs condition discharge, not "let an
+    unverified conclusion through"."""
     st = _store(("t.never", Never()))
     root = st.scopes.create()
     for policy in GuardPolicy:
@@ -122,7 +127,8 @@ def test_unknown_condition_commits_with_condition_under_allow_conditional():
 
 
 def test_unknown_condition_not_committed_under_require_proved():
-    """自动化简默认：守卫未决不静默落地（v3 的安全行为保留）。"""
+    """The automatic-simplification default: an undecided guard does not land
+    silently."""
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -146,7 +152,7 @@ def test_request_split_policy_returns_pending_condition():
     assert st.stats()["steps"] == 0
 
 
-# --- 条件：登记、清偿、否证 ---
+# --- conditions: recording, discharge, refutation ---
 
 def test_undecided_condition_carried_on_conclusion():
     cond = mk(S("Ne"), (S("x"), N(0)))
@@ -179,7 +185,8 @@ def test_refuted_condition_refuses_and_writes_nothing():
 
 
 def test_proved_condition_records_discharge_and_applies():
-    """清偿登记需要非 interactive 模式：interactive 推迟清偿（§四.2）。"""
+    """Recording a discharge needs a non-interactive mode: interactive defers
+    discharge."""
     cond = mk(S("Ne"), (S("x"), N(0)))
     st = _store(("t.demands", Demands(cond)))
     root = st.scopes.create()
@@ -197,10 +204,10 @@ def test_proved_condition_records_discharge_and_applies():
     assert st.applicability(j.id, root.id).is_applicable()
 
 
-# --- 执行模式（AGENTS.md §四.2 / §四.3）---
+# --- execution modes ---
 
 def test_execution_mode_does_not_change_conclusion():
-    """§四.3：模式只许改变记账粒度，不得改变返回值。"""
+    """A mode may only change bookkeeping granularity, never the return value."""
     cond = mk(S("Ne"), (S("x"), N(0)))
     seen = {}
     for mode in ExecutionMode:
@@ -225,9 +232,10 @@ def test_interactive_records_no_reads_or_discharge():
                services=StubServices(true=(cond,)),
                mode=ExecutionMode.INTERACTIVE)
     step = st.get_step(r.step)
-    assert step.reads == ContextReadSet(), "interactive 不得记录读依赖"
+    assert step.reads == ContextReadSet(), "interactive must not record read dependencies"
     j = st.get_judgment(r.judgments[0])
-    # 条件照判（否则被否证的守卫会被放过），只是不登记清偿
+    # conditions are still decided (otherwise a refuted guard would slip through), only
+    # the discharge is not recorded
     assert not st.is_discharged(j.requirements[0], root.id)
     assert st.applicability(j.id, root.id).is_conditional()
 
@@ -243,12 +251,13 @@ def test_audit_keeps_every_read_derivation_dedupes():
                                     guard_policy=GuardPolicy.ALLOW_CONDITIONAL),
                    services=StubServices(), mode=mode)
         reads[mode] = st.get_step(r.step).reads.entries
-    assert reads[ExecutionMode.DERIVATION], "derivation 应记录读依赖"
+    assert reads[ExecutionMode.DERIVATION], "derivation should record read dependencies"
     assert len(reads[ExecutionMode.AUDIT]) >= len(reads[ExecutionMode.DERIVATION])
 
 
 def test_refuted_condition_refused_in_all_modes():
-    """条件判定不受模式影响：被否证一律拒绝提交（健全性与模式无关）。"""
+    """Condition decision is mode independent: a refutation always refuses the commit,
+    since soundness does not depend on the mode."""
     cond = mk(S("Ne"), (S("x"), N(0)))
     for mode in ExecutionMode:
         st = _store(("t.demands", Demands(cond)))
@@ -276,11 +285,11 @@ def test_refutation_makes_inapplicable_without_deleting():
     assert r2.is_committed()
     app = st.applicability(jid, root.id)
     assert app.is_inapplicable(), app
-    # 原结论仍在账本里（不物理删除、不级联销毁）
+    # the original conclusion is still in the ledger: no physical deletion, no cascade
     assert st.get_judgment(jid).proposition is S("p")
 
 
-# --- 作用域：可见性与卫生 ---
+# --- scopes: visibility and hygiene ---
 
 def test_child_scope_conclusion_not_usable_in_parent():
     st = _store(("t.ok", AlwaysOk()))
@@ -289,12 +298,12 @@ def test_child_scope_conclusion_not_usable_in_parent():
     r1 = commit(st, StepProposal(scope=child.id, conclusions=(S("p"),),
                                  evidence=Evidence("t.ok")))
     assert r1.is_committed()
-    # 回到父作用域引用子作用域结论 → 拒绝
+    # back in the parent scope, referencing a child-scope conclusion is refused
     r2 = commit(st, StepProposal(scope=root.id, premises=(r1.judgments[0],),
                                  conclusions=(S("q"),),
                                  evidence=Evidence("t.ok")))
     assert r2.is_refused()
-    assert "不可见" in r2.detail
+    assert "not visible" in r2.detail
 
 
 def test_sibling_branches_invisible():
@@ -320,7 +329,7 @@ def test_ancestor_conclusion_visible_to_descendant():
     assert r.is_committed()
 
 
-# --- 边界：不 fail-open ---
+# --- boundary: no fail-open ---
 
 def test_unregistered_checker_not_committed():
     st = KernelStore()
@@ -342,5 +351,6 @@ def test_missing_scope_refused():
 
 
 def test_null_services_decide_nothing():
-    """NullServices 是诚实缺省：没接判定器 ≠ 判定为真。"""
+    """NullServices is an honest default: no decider attached is not the same as
+    decided true."""
     assert NullServices().decide(S("anything"), 0).is_unknown()

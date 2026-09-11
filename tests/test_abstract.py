@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""子项抽象验收（v4 §5.4）。
+"""Subterm abstraction acceptance.
 
-把 sin(x) 当代数未知量是循环积分/多项式化的前提：**相同子项必须落到同一符号**，
-否则 `sin(x)^2 + sin(x)` 会变成 `_u0^2 + _u1`，多项式化失去意义。
+Treating sin(x) as an algebraic unknown is the premise of cyclic integration and
+polynomialization: **equal subterms must fall on the same symbol**, otherwise
+`sin(x)^2 + sin(x)` becomes `_u0^2 + _u1` and polynomialization loses its point.
 """
 
 from cas.syntax import term as T
@@ -23,7 +24,7 @@ def test_same_subterm_shares_symbol():
     a = abstract_subterms(parse("sin(x)^2 + sin(x)"), _is_sin)
     assert len(a.replacements) == 1, [s.name for s, _ in a.replacements]
     sym = a.replacements[0][0]
-    # 两处出现都是同一个符号：多项式化才成立
+    # both occurrences use the same symbol, which is what makes polynomialization work
     assert to_str(a.term).count(sym.name) == 2
 
 
@@ -54,7 +55,8 @@ def test_identity_when_no_match():
 
 
 def test_no_abstraction_inside_binder():
-    """de Bruijn 索引只在原绑定作用域内有效，把体内子项冻出绑定层会让 #i 逃逸。"""
+    """A de Bruijn index is valid only inside its original binding scope, so freezing
+    a subterm out of the body would let #i escape."""
     t = parse("integrate(sin(x), x)")
     a = abstract_subterms(t, _is_sin)
     assert a.term is t
@@ -62,12 +64,13 @@ def test_no_abstraction_inside_binder():
 
 
 def test_abstraction_result_participates_in_arithmetic():
-    """抽象只是语法：产物是普通项，交给后续代数操作（如代入具体值）。"""
+    """Abstraction is purely syntactic: the product is an ordinary term handed to
+    later algebraic operations (such as substituting a concrete value)."""
     a = abstract_subterms(parse("sin(x)^2 + sin(x)"), _is_sin)
     u = a.replacements[0][0]
     val = T.subst(a.term, {u: T.N(2)})
     assert isinstance(val, T.Term)
-    assert not (T.free_vars(val) & {u}), "抽象符号未被代入替换"
+    assert not (T.free_vars(val) & {u}), "the abstraction symbol was not substituted"
     assert to_str(val) == to_str(parse("2^2 + 2"))
 
 

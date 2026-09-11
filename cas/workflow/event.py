@@ -1,17 +1,21 @@
-# -*- coding: utf-8 -*-
-"""Event：操作历史（v4 §8.9）。
+"""Event: operation history.
 
-历史图与证明图是**两张不同的图**（§8.5）：Event 带的是发生顺序
-（`parent_revision`），Step 带的是推理依赖（premises → conclusions）。§8.1 明确
-禁止把时间顺序当作数学依赖，所以两者不能合并（基数也不同：一条 interactive
-化简可产几百个 Artifact 而零个 Step）。
+The history graph and the proof graph are two different graphs: an Event
+carries occurrence order (`parent_revision`) while a Step carries reasoning
+dependencies (premises -> conclusions). Treating temporal order as a
+mathematical dependency is forbidden, which is why the two cannot be merged
+(their cardinality also differs: one interactive simplification can produce
+hundreds of Artifacts and zero Steps).
 
-**`outputs` 是跨层引用的唯一出口**（v4 §四）：它列出本次操作产出的对象 id，
-可以含内核 id（`StepId` / `JudgmentId`）。内核侧没有 `event_id` 字段——方向只能
-workflow → kernel。于是溯源链是 `Judgment → Step → Event`，反向查询（「这张结论
-是哪个操作造的」）由本模块的倒排索引回答。
+`outputs` is the only cross-layer exit: it lists the object ids produced by the
+operation and may contain kernel ids (`StepId` / `JudgmentId`). The kernel side
+has no `event_id` field, so the reference direction can only be
+workflow -> kernel. The provenance chain is therefore
+`Judgment -> Step -> Event`, and the reverse query ("which operation produced
+this conclusion") is answered by the inverted index in this module.
 
-undo/redo 只移 revision 指针；事件列表追加式，不物理删除（§8.9 / §四.5）。
+undo/redo only moves the revision pointer; the event list is append-only and
+never physically deletes.
 """
 
 from dataclasses import dataclass
@@ -21,10 +25,11 @@ from cas.workflow.ids import EventId, RevisionId
 
 @dataclass(frozen=True, slots=True)
 class Ref:
-    """产出引用：`kind` 标签 + id。
+    """An output reference: a `kind` tag plus an id.
 
-    **为什么需要标签**：`NewType` 在运行期只是 `int`，`ArtifactId(1)`、`TaskId(1)`、
-    `JudgmentId(1)` 彼此相等，倒排索引会互相碰撞。标签把「哪个 id 空间」显式带上。
+    Why a tag is needed: a NewType is only an `int` at runtime, so
+    `ArtifactId(1)`, `TaskId(1)` and `JudgmentId(1)` compare equal and the
+    inverted index would collide. The tag makes the id space explicit.
     """
     kind: str
     id: int
@@ -40,12 +45,13 @@ class Event:
 
 
 class EventLog:
-    """追加式操作历史 + revision 指针 + 产物倒排索引。"""
+    """Append-only operation history with a revision pointer and an artifact
+    inverted index."""
 
     def __init__(self):
         self._events: list[Event] = []
         self._next = 0
-        self._revision = RevisionId(0)      # 当前 revision = 已纳入视图的事件数
+        self._revision = RevisionId(0)      # current revision = number of events in view
         self._producers: dict[object, list] = {}
 
     def append(self, command, inputs=(), outputs=()) -> Event:
@@ -59,23 +65,25 @@ class EventLog:
         self._revision = RevisionId(len(self._events))
         return ev
 
-    # --- 查询 ---
+    # --- queries ---
 
     def events(self):
         return tuple(self._events)
 
     def visible(self):
-        """当前 revision 下可见的事件（undo 之后其后的事件仍在列表里，只是不可见）。"""
+        """Events visible at the current revision; after an undo, later events
+        remain in the list but are not visible."""
         return tuple(self._events[: self._revision])
 
     def current_revision(self) -> RevisionId:
         return self._revision
 
     def producers_of(self, kind, ident) -> tuple:
-        """倒排索引：哪个（些）事件产出了 `kind` 空间的这个 id。内核不参与。"""
+        """Inverted index: which event(s) produced this id in the `kind` id
+        space. The kernel takes no part."""
         return tuple(self._producers.get(Ref(kind, ident), ()))
 
-    # --- undo / redo（只移指针，不删事件）---
+    # --- undo / redo (pointer only, no event deletion) ---
 
     def undo(self) -> RevisionId:
         if self._revision > 0:

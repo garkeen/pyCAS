@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""显式装配（v4 §7.1）。
+"""Explicit assembly.
 
-`bootstrap()` 是**唯一**把数学语义装进运行期的入口：按依赖序调用各数学模块的
-`install(builder)`，再把装配结果绑给需要预计算状态的消费方（project 的基域
-阶梯、decide 的恒等判定阶段）。
+`bootstrap()` is the **only** entry that installs math semantics into the runtime:
+it calls each math module's `install(builder)` in dependency order, then binds the
+assembly result to the consumers that need precomputed state (the projection base
+field ladder, the identity-decision stages).
 
-这取代了三处 import 期全局状态修改：
+This replaces the former import-time mutation of global state: declarations used to
+register themselves on import, base fields entered the ladder on import, and the
+decision stage appended itself on import. Importing any `cas.math.*` now produces no
+registration side effect; without assembly the semantics are simply unavailable
+(an unknown name resolves to None), and assembly must be started explicitly by the
+application.
 
-    library/__init__.py 的 load_all()            声明在 import 时自动注册
-    project.py 的 _install_base_domains()        基域在 import 时自动进阶梯
-    decide.py 的 register_eq_stage(...)          判定阶段在 import 时自动追加
-
-现在 import 任何 `cas.math.*` 都不产生注册副作用；不装配就用不到语义
-（查无此名 → None），装配必须由应用显式发起。
-
-装配顺序即依赖序：elementary 先声明常数（域层要用 `i` 的身份），domains 再建
-基域，base 最后装判定阶段。
+Assembly order is dependency order: elementary declares the constants first (the
+domain layer needs the identity of `i`), domains then build the base fields, and
+base installs the decision stages last.
 """
 
 from cas.runtime.registry import RuntimeBuilder
@@ -23,10 +23,11 @@ from cas.runtime.runtime import Runtime
 
 
 def bootstrap() -> Runtime:
-    """装配全部数学模块，返回只读运行期。幂等由调用方（dispatch 的缓存）保证。"""
+    """Assemble every math module and return the read-only runtime. Idempotence is
+    the caller's job (dispatch caches the result)."""
     builder = RuntimeBuilder()
 
-    # 顺序即依赖：常数声明 → 基域（注入 i 的身份）→ 判定阶段
+    # order is dependency: constant declarations -> base fields (i identity) -> decision stages
     from cas.math.elementary import module as elementary
     elementary.install(builder)
 
@@ -38,14 +39,14 @@ def bootstrap() -> Runtime:
 
     rt = Runtime(builder)
 
-    # 把装配结果显式交给需要预计算状态的消费方（不再由它们 import 期自注册）
+    # hand the assembly result to consumers that need precomputed state explicitly
     from cas.math import project
     project.bind_domains(rt.domains)
 
     from cas.math import decide
     decide.bind_eq_stages(rt.eq_stages)
 
-    # 声明查询面注入 math 模块（math 不 import runtime，§四）
+    # inject the declaration query surface into math modules (math never imports runtime)
     from cas.math import diff, domcond, rules
     for m in (decide, diff, domcond, rules):
         m.bind_runtime(rt)

@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-"""内核服务接口（v4 §6.7 `KernelServices`、§四 依赖方向）。
+"""Kernel service interface.
 
-内核**不导入**具体数学模块（v4 §四「严格禁止：kernel → concrete math
-module」）。判定与上下文查询经此接口注入，由 runtime/bootstrap 提供实现。
+The kernel does not import concrete mathematical modules. Decision and context
+queries are injected through this interface, implemented by the runtime layer.
 
-`NullServices` 是诚实的缺省：一切判定返回 Unknown。它让内核可在没有数学
-模块时独立构造与测试，也保证「没接判定器」不会被误当成「判定为真」。
+`NullServices` is the honest default: every decision returns Unknown. It lets
+the kernel be constructed and tested without any mathematical module, and it
+guarantees that "no decider is wired up" is never mistaken for "decided true".
 """
 
 from typing import Protocol
@@ -15,15 +15,16 @@ from cas.kernel.verdict import Reason, Verdict, unknown
 
 
 class KernelServices(Protocol):
-    """checker / commit 可见的能力面。"""
+    """The capability surface visible to a checker and to commit."""
 
     def decide(self, proposition, scope_id) -> Verdict:
-        """在当前 scope 下判定命题。返回 Verdict，不返回裸布尔。"""
+        """Decide a proposition in the given scope. Returns a Verdict, never a
+        bare boolean."""
         ...
 
 
 class NullServices:
-    """缺省服务：不判定任何命题（Unknown / FRAGMENT）。"""
+    """Default services: decide nothing (Unknown / FRAGMENT)."""
 
     def decide(self, proposition, scope_id) -> Verdict:
         return unknown()
@@ -36,24 +37,27 @@ class NullServices:
 
 
 class DecideChecker:
-    """把注入的判定器包成 checker——内核自带核对器，不判定任何数学，只转发。
+    """Wrap the injected decider as a checker: a kernel-provided verifier that
+    decides no mathematics itself, it only forwards.
 
-    有了它，「条件清偿」（v4 §6.9 第 6/7 步）就能在没有具体数学模块时按同一套
-    提交协议运行：判定为 Yes 才接受，且不接受任何直接条件（递归安全）。
+    With it, condition discharge can run on the same commit protocol even
+    without concrete mathematical modules: only a Yes is accepted, and it
+    accepts no direct conditions, which keeps it recursion-safe.
     """
 
     def check(self, proposal, context, services):
         if len(proposal.conclusions) != 1:
-            return Rejected(Reason.FRAGMENT, "decide checker 只处理单结论")
+            return Rejected(Reason.FRAGMENT, "decide checker handles one conclusion only")
         v = services.decide(proposal.conclusions[0], proposal.scope)
         if v.is_yes():
             return Accepted(reads=context.read_set())
         if v.is_no():
-            return Rejected(Reason.GUARDED, "判定为否")
-        return UnknownResult(v.reason, "判定未决")
+            return Rejected(Reason.GUARDED, "decided false")
+        return UnknownResult(v.reason, "decision undecided")
 
 
 def register_core_checkers(store) -> None:
-    """装配内核自带 checker。**显式调用**，不在 import 期改全局状态（v4 §7.1）。"""
+    """Install the kernel-provided checkers. Called explicitly; import never
+    mutates global state."""
     if "kernel.decide" not in store.checkers:
         store.checkers.register("kernel.decide", DecideChecker())

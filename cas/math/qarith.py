@@ -1,17 +1,20 @@
-"""ℚ 字面算术层（数域系统第一块地基，cas_v3_arch.md 三）。
+"""Rational literal arithmetic: the first foundation of the number-field system.
 
-职责边界：只对**全字面有理数子树**做精确算术，不合并同类项、不碰
-符号幂、不做任何分支破裂的改写。x+x 与 x*x 的收集属于多项式机器
-（第四层公共算法机器），本层永远不碰。
+Scope: exact arithmetic on *all-literal rational subtrees* only. It does not
+collect like terms, does not touch symbolic powers and performs no
+branch-breaking rewrite. Collecting x+x or x*x belongs to the polynomial
+machine, which this layer never touches.
 
-这是显式调用层，不是构造期魔法：L0 驻留保持纯句法（手术裁定），
-消费方（判定管线、验证回代、战术步）在需要算术语义时主动调 fold。
+This is an explicit-call layer, not construction-time magic: interning keeps the
+syntax layer purely syntactic, and consumers (the decision pipeline, verification
+back-substitution, tactics) call `fold` when they need arithmetic meaning.
 
-- fold：自底向上折叠字面子树。Plus/Times 提取数字因子并吸收中性元
-  （+0、×1、×0），整数幂精确计算；除零与 0^0/0^负 保持驻留——
-  未定义性由域闸门裁决，本层不猜。
-- eval_exact：环层精确求值（env 绑定），回代验证与压力测试判官的
-  唯一算术通道。
+- fold: bottom-up folding of literal subtrees. Plus/Times extract numeric
+  factors and absorb identity elements (+0, *1, *0); integer powers are computed
+  exactly. Division by zero and 0^0 / 0^negative stay interned: undefinedness is
+  decided by the domain gate, not guessed here.
+- eval_exact: exact evaluation at the ring level, with an environment. It is the
+  only arithmetic channel for back-substitution checks and the stress judge.
 """
 
 from fractions import Fraction as Fr
@@ -24,12 +27,13 @@ class EvalNumError(Exception):
     pass
 
 
-_MAX_EXP = 4096          # 字面幂安全上限：防 2^(10^9) 级爆炸
+_MAX_EXP = 4096          # literal power safety bound, against 2^(10^9)-scale blowup
 
 
 def _flat(head, args):
-    """同头递归拉平（先于数字收集）：子项折叠中的单因子解包会让
-    嵌套字面量经 mk 句法拉平浮到本层，收集必须发生在拉平之后。"""
+    """Flatten same-head nesting before collecting numbers: unwrapping a single
+    factor during child folding lets nested literals float up through the
+    syntactic constructor, so collection must happen after flattening."""
     out = []
     for a in args:
         if isinstance(a, Expr) and a.head.name == head:
@@ -40,15 +44,21 @@ def _flat(head, args):
 
 
 def fold(t):
-    """ℚ 字面折叠。返回树中每个全数字子树被其精确值替换后的驻留形式。
+    """Rational literal folding. Returns the interned form in which every
+    all-numeric subtree has been replaced by its exact value.
 
-    规则（全部是 ℚ 半环恒等式，无分支破裂）：
-      · Plus：数字项求和归一；和为 0 且存在非数字项时整体吸收；
-      · Times：任一数字因子为 0 -> 全体归 0；数字因子连乘，
-        积为 1 且存在非数字因子时吸收；
-      · Power：底为字面数且指数为整数字面量 -> 精确幂
-        （底 0 仅正偶……仅正指数可行；负指数要求底非零）。
-    除法不存在于句法层（a/b 即 Power(a,-1) 或 Rat），无需特判。
+    Rules (all rational semiring identities, none branch-breaking):
+      · Plus: numeric terms are summed into one; when the sum is 0 and
+        non-numeric terms remain, the constant is absorbed;
+      · Times: if any numeric factor is 0 the whole product is 0; numeric
+        factors are multiplied together, and a product of 1 is absorbed when
+        non-numeric factors remain;
+      · Power: a literal base with an integer literal exponent is computed
+        exactly (a zero base only allows a positive exponent; a negative
+        exponent requires a nonzero base).
+
+    Division does not exist syntactically (a/b is Power(a, -1) or a Rat), so no
+    special case is needed.
     """
     if not isinstance(t, Expr):
         return t
@@ -91,26 +101,27 @@ def fold(t):
         b, e = args
         if isinstance(e, Int) and abs(e.v) <= _MAX_EXP:
             if e.v == 1:
-                return b                      # b^1 = b：幺半群恒等，普适
+                return b                      # b^1 = b is a monoid identity, universal
             if e.v == 0:
-                return T.mk(t.head, (b, e))   # u^0：0^0 争议，驻留给域层（子项仍折叠）
+                return T.mk(t.head, (b, e))   # u^0: 0^0 is contentious, left to the domain layer
             if T.is_num(b):
                 bv = T.num_val(b)
                 if bv != 0:
                     return N(bv ** e.v if e.v > 0 else Fr(1) / (bv ** -e.v))
                 if e.v > 0:
                     return N(0)
-                return T.mk(t.head, (b, e))   # 0^负：未定义，驻留（子项仍折叠）
+                return T.mk(t.head, (b, e))   # 0^negative is undefined, stays interned
         return T.mk(t.head, (b, e))
 
     return T.mk(t.head, tuple(args))
 
 
 def eval_exact(t, env):
-    """环层精确有理求值（v2 evalnum 捞回，剥离采样通道）。
+    """Exact rational evaluation at the ring level.
 
-    env: {Sym: Fraction}。超出环层（超越头、常数、非整数幂）抛
-    EvalNumError——调用方据此判定片段不覆盖，绝不静默近似。
+    env: {Sym: Fraction}. Anything beyond the ring layer (transcendental heads,
+    constants, non-integer powers) raises EvalNumError, so the caller concludes
+    the fragment is not covered instead of silently approximating.
     """
     if T.is_num(t):
         return T.num_val(t)

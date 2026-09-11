@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""方程求解的 checker（v4 §三 目标位置）。
+"""Checkers for equation solving.
 
-**回代判官**：求解器交出解（证书），checker 只做代入 + 域标准形判零，
-**不重跑求解公式**——这是 §7.3「验证器与求解器独立」最直接的落点。
-判零在投影外时诚实未决。
+**Back-substitution judge**: the solver hands over a solution (the certificate)
+and the checker only substitutes it and decides zero via the domain normal form.
+It never reruns the solving formula -- the most direct instance of the rule that a
+verifier must be independent of its solver. Zero decision outside the projection
+is honestly left undecided.
 """
 
 from cas.syntax import term as T
@@ -24,17 +26,20 @@ class SolveChecker:
             return bad
         pred = _premise(proposal)
         if pred is None or not T.is_eq(pred):
-            return Rejected(Reason.FRAGMENT, "前驱不是等式")
+            return Rejected(Reason.FRAGMENT, "premise is not an equality")
         d = proposal.evidence.payload
         if not (T.is_eq(content) and content.args[0] is d.var
                 and content.args[1] is d.solution):
-            return Rejected(Reason.FRAGMENT, "内容不是该变量等于该解")
+            return Rejected(Reason.FRAGMENT,
+                            "conclusion is not that variable equal to that solution")
         z = back_substitute(pred, d.var, d.solution).zero
         if z is True:
             return _ok(proposal, context)
         if z is False:
-            return Rejected(Reason.FRAGMENT, "回代不判零：非解")
-        return UnknownResult(Reason.FRAGMENT, "回代判零在投影外，未决")
+            return Rejected(Reason.FRAGMENT,
+                            "back-substitution does not vanish: not a solution")
+        return UnknownResult(Reason.FRAGMENT,
+                             "back-substitution zero test outside the projection")
 
 
 CHECKERS = (SolveChecker,)

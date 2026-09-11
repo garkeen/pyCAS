@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
-"""多项式公共零件（架构 4.1）：结式与无平方分解。
+"""Shared polynomial parts: resultants and squarefree decomposition.
 
-结式是残数法（Rothstein-Trager）与 CAD 投影的公共工具；
-无平方分解（Yun）是因式分解与 Hermite 约化的前置。
-二者都只在域系数、单变量上实现——子结式链与多元推广
-在多元 GCD 就位后按同一接口升级。
+A resultant is the shared tool of the residue method and CAD projection;
+squarefree decomposition (Yun) precedes factorization and Hermite reduction.
+Both are implemented only for field coefficients in one variable; the
+subresultant chain and the multivariate generalization upgrade through the same
+interface once a multivariate gcd is in place.
 """
 
-from cas.math.domains.poly import (Poly, p_zero, p_const, p_scale, p_sub,
-                              p_divmod_field, p_gcd_univar, p_deriv,
-                              _norm)
+from cas.math.domains.poly import (Poly, p_scale, p_sub,
+                              p_divmod_field, p_gcd_univar, p_deriv)
 
 
 def p_deg(p: Poly, var_i: int = 0) -> int:
@@ -17,7 +16,8 @@ def p_deg(p: Poly, var_i: int = 0) -> int:
 
 
 def p_lc(p: Poly, var_i: int = 0):
-    """关于 var_i 的首项系数。零多项式无首项，调用方自保。"""
+    """The leading coefficient with respect to var_i. A zero polynomial has no
+    leading term, so the caller must guard against it."""
     top = max(p.monos, key=lambda kc: kc[0][var_i])
     return top[1]
 
@@ -29,18 +29,21 @@ def p_monic(ring, p: Poly, var_i: int = 0) -> Poly:
 
 
 def p_div_exact(ring, a: Poly, b: Poly, var_i: int = 0) -> Poly:
-    """精确除法：余式必须为零，否则调用方违约。"""
+    """Exact division: the remainder must be zero, otherwise the caller broke
+    the contract."""
     q, r = p_divmod_field(ring, a, b, var_i)
     if not r.is_zero():
-        raise ValueError("非精确除法")
+        raise ValueError("inexact division")
     return q
 
 
 def resultant(ring, a: Poly, b: Poly, var_i: int = 0):
-    """结式 res(a, b)（域系数，余式序列递归）。
+    """The resultant res(a, b) with field coefficients, by the remainder
+    sequence recursion.
 
-    性质：res = 0 ⟺ a, b 有公共根（非常数公因子）；
-    res(x−r, f) = f(r)（符号约定锚点）。返回环元素。
+    Properties: res = 0 iff a and b share a root (a non-constant common factor);
+    res(x - r, f) = f(r), which anchors the sign convention. Returns a ring
+    element.
     """
     if a.is_zero() or b.is_zero():
         return ring.from_int(0)
@@ -58,7 +61,7 @@ def resultant(ring, a: Poly, b: Poly, var_i: int = 0):
             return ring.mul(s, ring.pow_pos(c, m))
         _, r = p_divmod_field(ring, a, b, var_i)
         if r.is_zero():
-            return ring.from_int(0)        # 有公因子
+            return ring.from_int(0)        # a common factor
         if (m * n) % 2:
             s = ring.neg(s)
         lc = p_lc(b, var_i)
@@ -67,9 +70,11 @@ def resultant(ring, a: Poly, b: Poly, var_i: int = 0):
 
 
 def squarefree(ring, f: Poly):
-    """Yun 无平方分解（特征零域）：返回 [(因子, 重数), ...]，因子 monic。
+    """Yun squarefree decomposition over a characteristic-zero field: returns
+    [(factor, multiplicity), ...] with monic factors.
 
-    Π 因子ᵢ^重数ᵢ == monic(f)。常数/零多项式返回空表。
+    The product of factor_i^multiplicity_i equals monic(f). A constant or zero
+    polynomial returns an empty list.
     """
     if f.is_zero() or p_deg(f) == 0:
         return []

@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
-"""微分层随机压力台架。
+"""Differentiation-layer randomized stress bench.
 
-四条性质，全部自证、无需外部真值：
-  P10 项域交叉   随机多项式/有理函数：项层 differentiate 与域层
-                 p_deriv/rf_deriv（独立实现）在有理函数域判等
-  P11 线性/莱布尼茨  d(a+b)=da+db，d(ab)=a·db+b·da（项层恒等式）
-  P12 泰勒 h¹    f(x+h) 视为 h 的多项式，h¹ 系数 == f'(x)——
-                 经系数提取的独立通道复核
-  P13 验证器独立 工作流 Diff 步骤：正确导数过域交叉验证（open），
-                 故意错误的导数被验证器否决（dead）
+Four properties, all self-proving with no external ground truth:
+  P10 term/domain cross-check  for random polynomials and rational functions, the
+                               term-layer differentiate and the domain-layer
+                               p_deriv/rf_deriv (independent implementations) are
+                               compared for equality in the rational function field
+  P11 linearity/Leibniz        d(a+b)=da+db, d(ab)=a*db+b*da (term-layer identities)
+  P12 Taylor h^1               f(x+h) viewed as a polynomial in h: the h^1 coefficient
+                               equals f'(x), re-checked through an independent
+                               coefficient-extraction channel
+  P13 verifier independence   a workflow Diff step: a correct derivative passes the
+                               domain cross-check, a deliberately wrong derivative is
+                               refused by the verifier
 
-用法：python stress/stress_diff.py [轮数] [种子]
+Usage: python stress/stress_diff.py [rounds] [seed]
 """
 
 import sys
@@ -53,7 +57,7 @@ def rand_coef(rng):
 
 
 def rand_poly(rng):
-    """随机双变量稀疏多项式。"""
+    """Random bivariate sparse polynomial."""
     d = {}
     for _ in range(rng.randint(1, 6)):
         k = (rng.randint(0, 4), rng.randint(0, 4))
@@ -71,13 +75,14 @@ def rand_nonzero_poly(rng):
 
 
 def rf_equal_terms(a, b):
-    """两项在 ℚ(x, y) 判等（交叉相乘，独立于项层折叠）。"""
+    """Compare two terms in Q(x, y) (cross-multiplication, independent of term-layer
+    folding)."""
     rfd = ratfunc_domain(X, Y)
     return rfd.equal(a, b) is True
 
 
 # ---------------------------------------------------------------------------
-# P10：项层微分 × 域层导数 交叉验证
+# P10: term-layer differentiation cross-checked against domain-layer derivatives
 # ---------------------------------------------------------------------------
 
 def prop_cross(rounds, rng):
@@ -89,7 +94,7 @@ def prop_cross(rounds, rng):
                 got = differentiate(t, var)
                 want = to_term(Q_RING, p_deriv(Q_RING, p, idx))
                 if not rf_equal_terms(got, want):
-                    fail("P10 多项式交叉", i, f"t={to_str(t)} d/d{var.name}",
+                    fail("P10 polynomial cross-check", i, f"t={to_str(t)} d/d{var.name}",
                          f"got={to_str(got)}", f"want={to_str(want)}")
         else:
             a, b = rand_poly(rng), rand_nonzero_poly(rng)
@@ -102,13 +107,13 @@ def prop_cross(rounds, rng):
                 want = times(to_term(Q_RING, d.num),
                              pw(to_term(Q_RING, d.den), N(-1)))
                 if not rf_equal_terms(got, want):
-                    fail("P10 有理函数交叉", i,
+                    fail("P10 rational-function cross-check", i,
                          f"t={to_str(t)} d/d{var.name}",
                          f"got={to_str(got)}", f"want={to_str(want)}")
 
 
 # ---------------------------------------------------------------------------
-# P11：线性 + 莱布尼茨（项层恒等式）
+# P11: linearity + Leibniz (term-layer identities)
 # ---------------------------------------------------------------------------
 
 def prop_leibniz(rounds, rng):
@@ -118,21 +123,21 @@ def prop_leibniz(rounds, rng):
         da, db = differentiate(a, X), differentiate(b, X)
         # d(a+b) = da + db
         if not rf_equal_terms(differentiate(plus(a, b), X), plus(da, db)):
-            fail("P11 线性", i, to_str(a), to_str(b))
-        # d(ab) = a·db + b·da
+            fail("P11 linearity", i, to_str(a), to_str(b))
+        # d(ab) = a*db + b*da
         want = plus(times(a, db), times(b, da))
         if not rf_equal_terms(differentiate(times(a, b), X), want):
-            fail("P11 莱布尼茨", i, to_str(a), to_str(b))
-        # d(a/b) = (da·b − a·db)/b²
+            fail("P11 Leibniz", i, to_str(a), to_str(b))
+        # d(a/b) = (da*b - a*db)/b^2
         q = times(a, pw(b, N(-1)))
         want_q = times(plus(times(da, b), neg(times(a, db))),
                        pw(b, N(-2)))
         if not rf_equal_terms(differentiate(q, X), want_q):
-            fail("P11 商规则", i, to_str(q))
+            fail("P11 quotient rule", i, to_str(q))
 
 
 # ---------------------------------------------------------------------------
-# P12：泰勒 h¹ 系数 == 导数（独立通道：系数提取）
+# P12: Taylor h^1 coefficient equals the derivative (independent coefficient extraction)
 # ---------------------------------------------------------------------------
 
 def prop_taylor(rounds, rng):
@@ -142,7 +147,7 @@ def prop_taylor(rounds, rng):
         th = T.subst(t, {X: plus(X, H)})      # f(x+h, y)
         ph = from_term(Q_RING, th, (H, X, Y))
         if ph is None:
-            fail("P12 展开落域失败", i, to_str(th))
+            fail("P12 expansion left the domain", i, to_str(th))
         coefs = {}
         for k, c in ph.monos:
             coefs.setdefault(k[0], {})[(k[1], k[2])] = c
@@ -150,12 +155,12 @@ def prop_taylor(rounds, rng):
         got = differentiate(t, X)
         want = to_term(Q_RING, lin)
         if not rf_equal_terms(got, want):
-            fail("P12 泰勒 h¹", i, f"t={to_str(t)}",
+            fail("P12 Taylor h^1", i, f"t={to_str(t)}",
                  f"got={to_str(got)}", f"want={to_str(want)}")
 
 
 # ---------------------------------------------------------------------------
-# P13：工作流验证器独立性（正确过、错误死）
+# P13: workflow verifier independence (correct passes, wrong is refused)
 # ---------------------------------------------------------------------------
 
 def prop_workflow(rounds, rng):
@@ -167,24 +172,24 @@ def prop_workflow(rounds, rng):
         s0 = wf.add(t, Claim())
         s1 = wf.add(good, Diff(pred=s0.id, var=X))
         if s1.status != "committed":
-            fail("P13 正确导数被否决", i, to_str(t), to_str(good))
+            fail("P13 correct derivative was refused", i, to_str(t), to_str(good))
         bad = plus(good, N(1))
         s2 = wf.add(bad, Diff(pred=s0.id, var=X))
         if s2.status != "refused":
-            fail("P13 错误导数未死", i, to_str(t), to_str(bad))
+            fail("P13 wrong derivative was not refused", i, to_str(t), to_str(bad))
 
 
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== 微分压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== differentiation stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_cross(rounds, rng)
-    print(f"P10 项域交叉          {rounds} 轮通过")
+    print(f"P10 term/domain cross-check   {rounds} rounds passed")
     prop_leibniz(rounds, rng)
-    print(f"P11 线性/莱布尼茨/商  {rounds} 轮通过")
+    print(f"P11 linear/Leibniz/quotient   {rounds} rounds passed")
     prop_taylor(min(rounds, 500), rng)
-    print(f"P12 泰勒 h¹           {min(rounds,500)} 轮通过")
+    print(f"P12 Taylor h^1                {min(rounds,500)} rounds passed")
     prop_workflow(min(rounds, 300), rng)
-    print(f"P13 验证器独立        {min(rounds,300)} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P13 verifier independence     {min(rounds,300)} rounds passed")
+    print("== all passed ==")

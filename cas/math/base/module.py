@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""基础模块的装配（v4 §7.2）。
+"""Assembly of the base module.
 
-目前只有一项：`ledger_decide` —— 恒等判定的最后一个阶段，把「差值判零」交给
-判定管线。原先它在 `cas/math/decide.py` 里由 **import 期自注册**
-（`register_eq_stage(...)`），是 AGENTS.md §六 列的三处 import 期全局状态之一；
-现在改为 `install(builder)`，只在 `bootstrap()` 时登记。
+Currently one item: `ledger_decide` -- the last stage of identity decision, which
+hands "difference equals zero" to the decision pipeline. It used to **self-register
+at import time** inside `cas/math/decide.py` (`register_eq_stage(...)`); it is now
+an `install(builder)` step, registered only during `bootstrap()`.
 
-阶段是**扩展点**：域标准形/投影判零先答，答不了才落到这里；将来超越塔的规范形
-归零按同一协议作为新阶段挂入，不需要改判定器。
+A stage is an **extension point**: the domain normal form / projection zero test
+answers first, and only a failure to answer falls through to here. A future normal
+form for the transcendental tower registers through the same protocol as a new
+stage, without touching the decider.
 """
 
 from cas.syntax import term as T
@@ -15,7 +17,8 @@ from cas.syntax.term import S
 
 
 def _ledger_decide(r, a, b, assumptions):
-    """把 `Eq(r, 0)` 交给判定管线；未决则返回 None（让后续阶段接手）。"""
+    """Hand `Eq(r, 0)` to the decision pipeline; return None if undecided so a
+    later stage can take over."""
     from cas.math.decide import decide
     d = decide(T.mk(S("Eq"), (r, T.ZERO)), assumptions)
     return None if d.is_unknown() else d

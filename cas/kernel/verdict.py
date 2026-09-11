@@ -1,22 +1,25 @@
-# -*- coding: utf-8 -*-
-"""判定结果 ADT（cas_v3_arch.md 总纲的语言契约）。
+"""Verdict ADT: the language contract of the decision layer.
 
-判定结果是代数数据类型，不是字符串，不是裸枚举：
+A verdict is an algebraic data type, not a string and not a bare enum:
 
-· Yes 携带证据（判定出处，供证据链与回放消费）
-· No  是反驳
-· Unknown 携带理由，理由决定后续动作
+· Yes carries evidence recording where the decision came from;
+· No is a refutation;
+· Unknown carries a reason, and the reason determines what happens next.
 
-Unknown 理由种类。架构总纲列出三种，此处补一种内部操作理由：
+Reasons for Unknown:
 
-· FRAGMENT    片段没覆盖——表达式含未实现的结构，扩库/扩算法可解
-· GUARDED     被未确认条件挡住——条件清偿后答案自动翻转
-· UNDECIDABLE 根本不可判定——Richardson/Skolem 类边界，见拒答协议表
-· BUDGET      搜索预算耗尽——内部资源限制，与不可判定是两种结论，
-              加大预算可能翻转（未找到 ≠ 不存在）
+· FRAGMENT    the fragment does not cover the input; extending the declarations
+              or the algorithm can decide it;
+· GUARDED     blocked by an unconfirmed condition; discharging the condition
+              can flip the answer;
+· UNDECIDABLE undecidable in principle, along the Richardson/Skolem boundary;
+· BUDGET      the search budget ran out, an internal resource limit. This is a
+              different conclusion from undecidability: a larger budget may
+              flip it (not found is not the same as does not exist).
 
-YES/NO 是单例，支持 `is` 比较；Unknown 按理由单例化（unknown() 工厂）。
-封闭变体：消费方必须穷尽 Yes/No/Unknown 三分支，禁止字符串比较。
+YES/NO are singletons and support `is` comparison; Unknown is interned per
+reason via the `unknown()` factory. The hierarchy is closed: consumers must
+exhaust the Yes/No/Unknown branches rather than compare strings.
 """
 
 from enum import Enum
@@ -30,7 +33,7 @@ class Reason(Enum):
 
 
 class Verdict:
-    """判定三值的封闭层次。"""
+    """Closed hierarchy of the three-valued verdict."""
     __slots__ = ()
 
     def is_yes(self):
@@ -84,7 +87,7 @@ def unknown(reason=Reason.FRAGMENT):
 
 
 # ---------------------------------------------------------------------------
-# 命题复合（架构总纲：逻辑层只需三值命题运算）
+# Propositional composition: the logic layer only needs three-valued connectives
 # ---------------------------------------------------------------------------
 
 def _first_unknown(*vs):

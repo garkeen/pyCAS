@@ -1,25 +1,36 @@
 # -*- coding: utf-8 -*-
-"""分段函数容器：Piecewise 是语法容器，不是新数值域（架构五·边界裁定）。
+"""Piecewise container: Piecewise is a syntax container, not a new numeric domain.
 
-结构：`Piecewise(v1, c1, v2, c2, ...)`——值 / 条件成对，驻留项。
+Structure: `Piecewise(v1, c1, v2, c2, ...)` -- value/condition pairs, interned.
 
-求值语义（唯一，全模块一致）：**有序首中**（if / elif / else，标准 Piecewise）。
-某点的值 = 声明序中第一个条件成立的分支之值；`c=⊤` 即"否则"支（仅在此前
-各支都不成立处生效）。因每点至多落在一支上，取值**天然唯一**——不存在、
-也绝不允许求值层面的语义冲突。三条落地裁定：
+Evaluation semantics (single, consistent across the module): **ordered
+first-match** (if / elif / else, the standard Piecewise). The value at a point is
+the value of the first branch whose condition holds in declaration order; a
+condition of TRUE is the "else" branch and applies only where no earlier branch
+holds. Because every point falls on at most one branch, evaluation is intrinsically
+unique -- no semantic conflict at the evaluation level exists or is permitted. Three
+consequences:
 
-· 分支体不要求同一宿主结构——每个分支独立投影（`project_pw`），
-  域是分支局部的，找不到共同宿主不是失败。
-· 条件可以是任意命题——交判定管线，判得动给真值，判不动以 GUARDED
-  未决传播（`select` 取值、`coverage` 覆盖）。
-· `conflicts` 是**顺序无关性 lint**（非求值闸）：若两支区域交叠处值不相等，
-  则该处取值取决于声明顺序——提示作者收紧为互斥守卫。判定不动即 Unknown，
-  绝不谎报良定义。覆盖完全性是使用者声明，可判则判，不擅自补全。
+* A branch body need not share a host structure: each branch projects
+  independently (`project_pw`), the domain is branch-local, and failing to find a
+  common host is not an error.
+* A condition may be any proposition: it goes to the decision pipeline, which yields
+  a truth value when it can and propagates GUARDED otherwise (`select` for values,
+  `coverage` for coverage).
+* `conflicts` is an **order-independence lint** (not an evaluation gate): if two
+  branches overlap and their values differ there, the value at that point depends on
+  declaration order, so the author is told to tighten the guards into a mutually
+  exclusive form. An undecided question stays Unknown and is never reported as
+  well-defined. Coverage completeness is the user's declaration, decided when
+  decidable and never filled in unasked.
 
-运算提升（`lift`）：分段参与运算按点定义 `(f⊕g)(x)=f(x)⊕g(x)`，逐支笛卡尔
-展开，条件取合取。注意：分段函数的**求导与积分在分段点须另行校验连续性
-与单侧极限**，非逐支可交——审慎通道见 cas/diff.py 的 `differentiate_piecewise`
-（分段点显式未验证）与 cas/integrate.py 的分段定积分（缺口/点洞拒答）。
+Operation lifting (`lift`): a piecewise function participates in an operation
+pointwise, `(f+g)(x) = f(x)+g(x)`, by Cartesian expansion per branch with the
+conditions conjoined. Note that **differentiation and integration of a piecewise
+function must separately check continuity and one-sided limits at the breakpoints**
+and are not per-branch composable: the cautious channel is
+`differentiate_piecewise` in the differentiation module (breakpoints explicitly
+unverified), and piecewise definite integration refuses gaps and point holes.
 """
 
 from cas.syntax import term as T
@@ -29,7 +40,7 @@ from cas.kernel.verdict import YES, NO, unknown, Reason
 
 
 # ---------------------------------------------------------------------------
-# 构造与拆解
+# Construction and decomposition
 # ---------------------------------------------------------------------------
 
 _HEAD = "Piecewise"
@@ -41,10 +52,12 @@ def is_piecewise(t) -> bool:
 
 
 def piecewise(pairs) -> object:
-    """(值, 条件) 序列 → 驻留 Piecewise。
+    """(value, condition) sequence -> interned Piecewise.
 
-    句法规范化（无数义判定）：丢条件为 FALSE 的分支、条件为 TRUE 者截断
-    其后（首中即定，后不可达）、空容器坍缩为 Undefined、单真分支坍缩为值。
+    Syntactic normalization (no semantic decision): drop branches whose condition is
+    FALSE, truncate after a condition of TRUE (first-match decides, later branches
+    are unreachable), collapse an empty container to Undefined, and collapse a single
+    true branch to its value.
     """
     kept = []
     for v, c in pairs:
@@ -52,7 +65,7 @@ def piecewise(pairs) -> object:
             continue
         kept.append((v, c))
         if c is T.TRUE:
-            break                        # TRUE 之后的分支永不达
+            break                        # branches after TRUE are never reached
     if not kept:
         return T.SP("Undefined")
     if len(kept) == 1 and kept[0][1] is T.TRUE:
@@ -65,7 +78,8 @@ def piecewise(pairs) -> object:
 
 
 def branches(t):
-    """驻留 Piecewise → [(值, 条件)]。非分段项 → [(t, TRUE)]（平凡覆盖）。"""
+    """Interned Piecewise -> [(value, condition)]. A non-piecewise term maps to
+    [(t, TRUE)], the trivial cover."""
     if not is_piecewise(t):
         return [(t, T.TRUE)]
     a = t.args
@@ -77,63 +91,71 @@ def conditions(t):
 
 
 # ---------------------------------------------------------------------------
-# 分支独立投影（架构核心裁定：无共享宿主）
+# Independent per-branch projection (no shared host)
 # ---------------------------------------------------------------------------
 
 def project_pw(t):
-    """每分支投影到自己的宿主域——互不牵制。
+    """Project each branch into its own host domain, independently.
 
-    返回 [(值, 条件, Projected|None)]。Projected 为 None 表示该分支落在
-    当前投影阶梯之外（ℚ / K[x] / K(x) 皆非成员），上层据此诚实处理。"""
+    Returns [(value, condition, Projected|None)]. A Projected of None means the
+    branch lies outside the current projection ladder (not a member of Q / K[x] /
+    K(x)), which the caller handles honestly."""
     return [(v, c, project(v)) for v, c in branches(t)]
 
 
 # ---------------------------------------------------------------------------
-# 条件语义：判定管线消费
+# Condition semantics: consumed by the decision pipeline
 # ---------------------------------------------------------------------------
 
 def select(t, assumptions):
-    """分段函数在 assumptions 下取值——有序首中（if/elif/else）：第一个可证成立的条件。
+    """Evaluate a piecewise function under `assumptions` by ordered first-match
+    (if/elif/else): the first condition provably true.
 
-    自顶向下扫：可证假的支跳过；可证真的支，若其前无非假支（首中）则定值。
-    每点至多落一支 → 取值唯一，无求值层冲突。`c=⊤` 为"否则"支。
+    Scan top down: a branch provably false is skipped; a branch provably true
+    determines the value if no earlier branch survives that could shadow it. At most
+    one branch per point, so the value is unique and there is no evaluation-level
+    conflict. A condition of TRUE is the "else" branch.
 
-    返回 (状态, 载荷)：
-    · ("value", v)          唯一命中；或所有支可证不成立 → v = Undefined
-    · ("residual", (pw, r)) 有更早的支条件未决，遮蔽关系待定；pw 为残段，
-                            r 为该次判定的未决理由
+    Returns (status, payload):
+    * ("value", v)           unique hit; or v = Undefined when every branch is
+                             provably false
+    * ("residual", (pw, r))  an earlier branch condition is undecided, so the
+                             shadowing relation is open; pw is the residual suffix and
+                             r the reason for that undecidedness
     """
     bs = branches(t)
-    survivors = []              # 首中未定前需保留的更靠后候选
+    survivors = []              # later candidates to keep until the first match is decided
     first_unknown = None
     for v, c in bs:
         if c is T.TRUE:
-            if not survivors:                   # 否则支，且其前皆已判假 → 命中
+            if not survivors:                   # else branch with all earlier ones false: hit
                 return ("value", v)
-            survivors.append((v, c))            # 其前有未决支，遮蔽待定 → 残段
+            survivors.append((v, c))            # an earlier branch is undecided, so shadowing is open
             break
         verdict = decide(c, assumptions)
         if verdict is NO:
-            continue                            # 此支不成立，看下一支
+            continue                            # branch does not hold, try the next
         if verdict is YES:
-            if not survivors:                   # 首个真支且其前皆假 → 命中
+            if not survivors:                   # first true branch with all earlier false: hit
                 return ("value", v)
             survivors.append((v, c))
             continue
-        if first_unknown is None:               # 未决支：可能成立，遮蔽后续
+        if first_unknown is None:               # undecided branch: it may hold and shadow the rest
             first_unknown = verdict.reason
         survivors.append((v, c))
     if not survivors:
-        return ("value", T.SP("Undefined"))     # 全支可证不成立：此点无定义
+        return ("value", T.SP("Undefined"))     # every branch provably false: undefined here
     return ("residual", (piecewise(survivors),
                          first_unknown or Reason.FRAGMENT))
 
 
 def coverage(t, assumptions):
-    """分支条件之析取是否覆盖全空间（完全性是使用者声明，此处可判则判）。
+    """Whether the disjunction of branch conditions covers the whole space (completeness
+    is the user's declaration, decided here when decidable).
 
-    YES 完全覆盖；NO 存在可证空隙（所有条件皆假的地方无定义）；
-    Unknown(GUARDED) 有条件未决，覆盖随之未决。"""
+    YES means full coverage; NO means there is a provable gap (undefined where every
+    condition is false); Unknown(GUARDED) means some condition is undecided and
+    coverage is undecided with it."""
     conds = conditions(t)
     guarded = False
     for c in conds:
@@ -149,19 +171,24 @@ def coverage(t, assumptions):
 
 
 def collapse(t, assumptions):
-    """点塌缩：把项中每个 Piecewise 子项替换为其在 assumptions 下的选支值。
+    """Point collapse: replace every Piecewise subterm by its selected value under
+    `assumptions`.
 
-    数值点回代判定的公共通道——条件在 assumptions 下可判时，每个分段按有序
-    首中塌缩为单一支值，逐层外推后整项成为普通项，可走域判零/求值。
-    任一分段选支未决（条件判不动）则整体 None（诚实未决，不猜测）。
+    The common channel for numeric-point back-substitution: when the conditions are
+    decidable under `assumptions`, each piecewise collapses to a single branch value
+    by ordered first-match, and after outward propagation the whole term is an
+    ordinary term that can go through domain zeroing or evaluation. If any branch
+    selection is undecided (a condition resists decision), the whole result is None
+    (honestly undecided, never guessed).
 
-    分段可出现在运算的任意深度（如 `pw(...) + 2`）；条件位置出现
-    分段是病态结构（fold_nested 已拒），此处不会遇到。"""
+    A piecewise may occur at any depth of an operation (such as `pw(...) + 2`); a
+    piecewise in condition position is a malformed structure that fold_nested already
+    refuses, so it is never seen here."""
     if is_piecewise(t):
         status, load = select(t, assumptions)
         if status != "value":
-            return None                        # 选支未决：遮蔽关系定不了
-        return collapse(load, assumptions)             # 支值仍含分段则继续塌缩
+            return None                        # branch selection undecided: shadowing cannot be settled
+        return collapse(load, assumptions)             # keep collapsing if the branch value is still piecewise
     if not isinstance(t, Expr) or not t.args:
         return t
     new_args = []
@@ -176,17 +203,21 @@ def collapse(t, assumptions):
 
 
 def conflicts(t, assumptions):
-    """顺序无关性 lint（非求值闸）：交叠处值不等 → 该点取值依赖声明顺序。
+    """Order-independence lint (not an evaluation gate): values differing on an
+    overlap mean the value there depends on declaration order.
 
-    求值走 `select` 的有序首中，永不歧义。本函数是**作者体检**：若两支区域
-    可同时成立（`ci ∧ cj` 可满足）而值不等，则调换声明顺序会改变该处结果——
-    提示作者把守卫写成互斥。返回 [(i, j, Verdict)]，Verdict 是"此重叠良定义
-    （顺序无关）"的判定：
-    · YES 空重叠，或重叠处值恒等
-    · NO  重叠可满足且两值不等——顺序敏感，作者应收紧守卫
-    · Unknown 判定力所不及（GUARDED/FRAGMENT/UNDECIDABLE/BUDGET）
+    Evaluation uses `select` with ordered first-match and is never ambiguous. This
+    function is an **authoring check**: if two branch regions can hold simultaneously
+    (`ci and cj` satisfiable) while their values differ, swapping the declaration order
+    changes the result there, so the author is told to write mutually exclusive guards.
+    Returns [(i, j, Verdict)], where the Verdict states whether the overlap is
+    well-defined (order independent):
+    * YES  empty overlap, or identical values on the overlap
+    * NO   the overlap is satisfiable and the two values differ: order sensitive, the
+           author should tighten the guards
+    * Unknown  beyond the pipeline's decision power (GUARDED/FRAGMENT/UNDECIDABLE/BUDGET)
 
-    判不动绝不伪装成一致。"""
+    An undecided case is never disguised as agreement."""
     from cas.math.decide import satisfiable
     bs = branches(t)
     out = []
@@ -195,19 +226,21 @@ def conflicts(t, assumptions):
         vi, ci = bs[i]
         for j in range(i + 1, n):
             vj, cj = bs[j]
-            sat = satisfiable([ci, cj], assumptions)      # 重叠区是否可满足
+            sat = satisfiable([ci, cj], assumptions)      # is the overlap satisfiable
             if sat is NO:
-                out.append((i, j, YES))            # 空重叠，天然顺序无关
+                out.append((i, j, YES))            # empty overlap: order independent by construction
                 continue
             out.append((i, j, _agree(vi, vj, (ci, cj), assumptions)))
     return out
 
 
 def _agree(vi, vj, conds, assumptions):
-    """两值在重叠条件 conds 下是否相等：临时**扩充**假设集后判等。
+    """Whether two values are equal under the overlap conditions: decide after
+    **extending** the assumption set.
 
-    假设集不可变，所以这里是 `extended`（产生新对象）而非就地写入——
-    重叠区分析不该污染调用方的假设。
+    The assumption set is immutable, so this uses `extended` (producing a new object)
+    rather than writing in place: overlap analysis must not pollute the caller's
+    assumptions.
     """
     if vi is vj:
         return YES
@@ -217,17 +250,21 @@ def _agree(vi, vj, conds, assumptions):
 
 
 # ---------------------------------------------------------------------------
-# 逐分支运算提升
+# Per-branch operation lifting
 # ---------------------------------------------------------------------------
 
 def lift(op, *terms):
-    """把 n 元运算 op 逐分支提升到 Piecewise 参数上（笛卡尔展开）。
+    """Lift an n-ary operation op over Piecewise arguments per branch (Cartesian
+    expansion).
 
-    语义依据：分段函数参与运算按点定义——`(f⊕g)(x) = f(x)⊕g(x)`。故每个
-    (p-支, q-支…) 组合产出一新支，值取 op(各支值)，条件取各支条件的合取；
-    合取可证恒假的组合（两支不能同时成立）天然空重叠，直接丢弃。
-    op 接收驻留项返回驻留项（如 T.plus / T.times）。非 Piecewise 参数视作
-    恒真单分支。结果按 `piecewise` 规范化。"""
+    Semantics: a piecewise function participates in an operation pointwise,
+    `(f+g)(x) = f(x)+g(x)`. Each combination of (p-branch, q-branch, ...) produces a
+    new branch whose value is op of the branch values and whose condition is the
+    conjunction of the branch conditions; a combination whose conjunction is provably
+    false (the two branches cannot hold together) has an empty overlap and is dropped.
+    op takes interned terms and returns an interned term (such as T.plus / T.times). A
+    non-Piecewise argument counts as a single always-true branch. The result is
+    normalized by `piecewise`."""
     if not any(is_piecewise(x) for x in terms):
         return op(*terms)
     exps = [branches(x) for x in terms]
@@ -239,7 +276,7 @@ def lift(op, *terms):
         vals = [v for v, _c in combo]
         conds = [c for _v, c in combo]
         conj = _and_all(conds)
-        if conj is T.FALSE:                 # 空组合：条件不能同时成立
+        if conj is T.FALSE:                 # empty combination: conditions cannot hold together
             continue
         pairs.append((op(*vals), conj))
     return piecewise(pairs)
@@ -262,7 +299,8 @@ def _and_all(conds):
 
 
 # ---------------------------------------------------------------------------
-# 嵌套展平 + 域提取（消费 cas/cad 胞腔，分段求导/积分/解方程的前置）
+# Nested flattening + domain extraction (consumes the CAD cells; prerequisite for
+# piecewise differentiation, integration, and equation solving)
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass          # noqa: E402
@@ -284,16 +322,18 @@ def _conj(a, b):
 
 
 def fold_nested(t):
-    """嵌套分段展平为单层：值是分段的，用合取分配进外层条件。
+    """Flatten nested piecewise into a single layer: a piecewise value distributes
+    into the outer condition by conjunction.
 
-    `pw(pw(a,ca,b,cb), c) → pw(a, ca∧c, b, cb∧c)`。结构重写，非特判；
-    展平后一切算法只面对单层分区。条件位置出现分段是病态结构，拒答。"""
+    `pw(pw(a,ca,b,cb), c) -> pw(a, ca and c, b, cb and c)`. A structural rewrite, not
+    a special case; after flattening every algorithm faces a single-layer partition. A
+    piecewise in condition position is malformed and is refused."""
     if not is_piecewise(t):
         return t
     pairs = []
     for v, c in branches(t):
         if is_piecewise(c):
-            raise PiecewiseError("条件位置不允许分段值")
+            raise PiecewiseError("a piecewise value is not allowed in condition position")
         fv = fold_nested(v)
         if is_piecewise(fv):
             for iv, ic in branches(fv):
@@ -304,11 +344,12 @@ def fold_nested(t):
 
 
 def domain_cells(t, x):
-    """分段函数关于 x 的定义域胞腔分解。
+    """Decompose the domain of a piecewise function in x into cells.
 
-    返回 [(Cell, 值|Undefined)]：每个胞腔上按有序首中取第一个条件成立的
-    分支值；无条件成立则为 Undefined（该胞腔不在定义域内）。条件含超越/
-    多变量分区时透传 cad.CadError（UNDECIDABLE / FRAGMENT）。"""
+    Returns [(Cell, value|Undefined)]: on each cell the value is that of the first
+    branch holding by ordered first-match, and Undefined when no condition holds (the
+    cell is outside the domain). A condition containing transcendentals or a
+    multivariate partition passes through cad.CadError (UNDECIDABLE / FRAGMENT)."""
     t = fold_nested(t)
     bs = branches(t)
     conds = [c for _v, c in bs]
@@ -325,11 +366,12 @@ def domain_cells(t, x):
 
 @dataclass(frozen=True, slots=True)
 class Component:
-    """定义域的一个连通分量。
+    """One connected component of the domain.
 
-    cells：分量内的 (Cell, 值) 序列；
-    lo / hi：下/上界根的隔离区间，None 为无界；
-    lo_closed / hi_closed：对应端点是否包含（开区间端点不含，点胞腔含）。"""
+    cells: the (Cell, value) sequence inside the component;
+    lo / hi: isolating intervals of the lower/upper bound roots, None when unbounded;
+    lo_closed / hi_closed: whether the corresponding endpoint is included (an open
+    interval excludes its endpoints, a point cell includes them)."""
     cells: tuple
     lo: object
     lo_closed: bool
@@ -343,19 +385,20 @@ def _mk_component(run):
     if first_cell.kind == "point":
         lo, lo_closed = first_cell.iso, True
     else:
-        lo, lo_closed = first_cell.lo, False      # 开胞腔左端不含；None 为 −∞
+        lo, lo_closed = first_cell.lo, False      # an open cell excludes its left end; None is -inf
     if last_cell.kind == "point":
         hi, hi_closed = last_cell.iso, True
     else:
-        hi, hi_closed = last_cell.hi, False       # 开胞腔右端不含；None 为 +∞
+        hi, hi_closed = last_cell.hi, False       # an open cell excludes its right end; None is +inf
     return Component(tuple(run), lo, lo_closed, hi, hi_closed)
 
 
 def connected_components(domain):
-    """把 `domain_cells` 的已定义胞腔并成极大连通分量。
+    """Merge the defined cells of `domain_cells` into maximal connected components.
 
-    未定义胞腔（Undefined）切断连通性——不定积分独立常数、定积分分段
-    求和都以连通分量为单位，绝不把缺口两侧的分支当作一体。"""
+    An undefined cell breaks connectivity: independent constants of indefinite
+    integration and the piecewise sum of definite integrals are both per connected
+    component, and the two sides of a gap are never treated as one."""
     comps = []
     run = []
     for cell, val in domain:
@@ -368,4 +411,3 @@ def connected_components(domain):
     if run:
         comps.append(_mk_component(run))
     return comps
-

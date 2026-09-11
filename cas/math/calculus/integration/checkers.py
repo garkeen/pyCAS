@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
-"""积分的 checker（v4 §三 目标位置）。
+"""Integration checkers.
 
-独立复核：`d/dx antideriv == 被积式`（走微分层，另一套实现）；定积分再核
-`值 == antideriv(b) − antideriv(a)`（精确求值）。积分器与积分 checker 分家：
-checker 不重跑积分，只复核证书。
+Independent re-check: `d/dx antiderivative == integrand`, going through the
+differentiation layer (a different implementation). A definite integral also
+checks `value == antiderivative(b) - antiderivative(a)` by exact evaluation. The
+integrator and the integration checker are separate: the checker never re-runs
+integration, it only re-checks the certificate.
 """
 
 from cas.kernel.evidence import Rejected, UnknownResult
@@ -26,31 +27,33 @@ class IntegrateChecker:
             return bad
         pred = _premise(proposal)
         if pred is None:
-            return Rejected(Reason.FRAGMENT, "缺前驱")
+            return Rejected(Reason.FRAGMENT, "missing predecessor")
         d = proposal.evidence.payload
         f, x, G = pred, d.var, d.antideriv
-        from cas.math.integrate import verify_antideriv
+        from cas.math.calculus.integration.verify import verify_antideriv
         ok = verify_antideriv(G, f, x)
         if ok is False:
-            return Rejected(Reason.FRAGMENT, "微分层复核不通过")
+            return Rejected(Reason.FRAGMENT, "the differentiation-layer re-check failed")
         if ok is None:
-            # 判零通道覆盖不到（如 exp/sin 组合）——能力缺失，诚实未决，不是反驳
-            return UnknownResult(Reason.FRAGMENT, "微分层无法判定（缺展开归零通道）")
+            # The vanishing channel does not cover this (an exp/sin combination,
+            # for example): a capability gap, honestly undecided rather than a
+            # refutation.
+            return UnknownResult(Reason.FRAGMENT, "the differentiation layer cannot decide (no expansion-to-zero channel)")
         if d.bounds is None:
             want = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, f),)), G)
             if equal(content, want):
                 return _ok(proposal, context)
-            return Rejected(Reason.FRAGMENT, "内容与原函数等式不符")
+            return Rejected(Reason.FRAGMENT, "content does not match the antiderivative equation")
         a_t, b_t = d.bounds
         if _is_piecewise(f) or not (T.is_num(a_t) and T.is_num(b_t)):
-            return UnknownResult(Reason.FRAGMENT, "分段/代数限定积分独立复核未接")
+            return UnknownResult(Reason.FRAGMENT, "piecewise/algebraic definite integration is not hooked up for independent checking")
         Fa = fold(T.subst(G, {x: a_t}))
         Fb = fold(T.subst(G, {x: b_t}))
         val = fold(T.plus(Fb, T.neg(Fa)))
         want = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(x, f), a_t, b_t)), val)
         if equal(content, want):
             return _ok(proposal, context)
-        return Rejected(Reason.FRAGMENT, "定积分值与端点差不符")
+        return Rejected(Reason.FRAGMENT, "definite integral value does not match the endpoint difference")
 
 
 CHECKERS = (IntegrateChecker,)

@@ -1,11 +1,13 @@
-# -*- coding: utf-8 -*-
-"""内核账本（v4 §6.9 写入、§6.10 清偿、§四.5 分层）。
+"""Kernel ledger: writes of committed facts, discharge, and layered history.
 
-追加式，不物理删除：Judgment store 只增；原结论永不因条件被否证而消失
-（v3 的 dead 级联销毁是反向修正对象）。
+Append-only, never physically deleting: the Judgment store only grows, and an
+original conclusion never disappears because a condition was refuted. A
+conclusion whose guard is refuted becomes `Inapplicable`; it is not destroyed
+and nothing cascades along dependency edges.
 
-store 只持有**已提交**的事实。计算中间产物是 Artifact，不进此处（v4 §8.2 /
-AGENTS.md §四.1）——所以账本大小与重写次数无关，只与提交次数有关。
+The store holds **committed** facts only. Intermediate computation products are
+Artifacts and never enter here, so the ledger size depends on the number of
+commits, not on the number of rewrites.
 """
 
 from cas.kernel.evidence import CheckerRegistry
@@ -17,7 +19,7 @@ from cas.kernel.scope import ScopeStore
 
 
 class KernelStore:
-    """追加式账本：作用域、条件、结论、步骤、清偿。"""
+    """Append-only ledger: scopes, requirements, judgments, steps, discharges."""
 
     def __init__(self, scopes=None, checkers=None):
         self.scopes = scopes if scopes is not None else ScopeStore()
@@ -31,7 +33,7 @@ class KernelStore:
         self._next_jud = 0
         self._next_step = 0
 
-    # --- id 发放 ---
+    # --- id issuing ---
 
     def new_requirement_id(self) -> RequirementId:
         rid = RequirementId(self._next_req)
@@ -48,7 +50,7 @@ class KernelStore:
         self._next_step += 1
         return sid
 
-    # --- 写入（只有 commit 调用）---
+    # --- writes (only commit calls these) ---
 
     def put_requirement(self, req: Requirement) -> Requirement:
         self._requirements[req.id] = req
@@ -66,10 +68,11 @@ class KernelStore:
         self._discharges.setdefault(d.requirement, []).append(d)
 
     def add_refutation(self, requirement: RequirementId, by: JudgmentId) -> None:
-        """记录条件被否证：原结论保留，适用性变为 Inapplicable（v4 §6.10）。"""
+        """Record that a condition was refuted: the original conclusion is kept
+        and its applicability becomes Inapplicable."""
         self._refutations.setdefault(requirement, []).append(by)
 
-    # --- 查询 ---
+    # --- queries ---
 
     def get_requirement(self, rid: RequirementId) -> Requirement:
         return self._requirements[rid]
@@ -99,7 +102,8 @@ class KernelStore:
         return tuple(self._refutations.get(rid, ()))
 
     def is_discharged(self, rid: RequirementId, scope) -> bool:
-        """在 scope 中是否已清偿：清偿发生在 scope 或其任一祖先中即可见。"""
+        """Whether the requirement is discharged in `scope`: a discharge
+        performed in the scope or any ancestor is visible."""
         for d in self._discharges.get(rid, ()):
             if self.scopes.is_visible(d.scope, scope):
                 return True
@@ -112,13 +116,15 @@ class KernelStore:
                 return True
         return False
 
-    # --- 适用性（v4 §6.10）---
+    # --- applicability ---
 
     def applicability(self, jid: JudgmentId, scope):
-        """结论在 scope 中的适用性。
+        """Applicability of a conclusion in `scope`.
 
-        否证优先于清偿：有任一条条件在 scope 可见范围内被否证即 Inapplicable
-        （即便另一条已清偿）。原结论不删除、不级联。
+        Refutation takes precedence over discharge: if any condition is refuted
+        within the visible range of `scope`, the result is Inapplicable even if
+        another condition was discharged. The original conclusion is neither
+        deleted nor cascaded.
         """
         reqs = self.requirements_of(jid)
         refuted = tuple(r for r in reqs if self.is_refuted(r, scope))
@@ -129,7 +135,7 @@ class KernelStore:
             return Conditional(requirements=pending)
         return Applicable()
 
-    # --- 规模（性能纪律：账本大小只与提交次数有关）---
+    # --- size (ledger size tracks commits, not rewrites) ---
 
     def stats(self):
         return {

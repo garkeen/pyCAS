@@ -1,34 +1,40 @@
-# -*- coding: utf-8 -*-
-"""工作流引擎：提交边界 + 展示记录。
+"""Workflow engine: submission boundary plus presentation records.
 
-**工作流不是真理内核。** 它不自己验证任何东西：`add` 组装 `StepProposal` 交
-`kernel.commit`，由注册的 checker 复核、内核记账。工作流负责的是「用户在解决
-什么问题、当前焦点在哪、操作历史」，以及把内核结论映射成前端可读的步骤记录。
+**The workflow is not a truth kernel.** It verifies nothing itself: `add`
+assembles a StepProposal and hands it to `kernel.commit`, where a registered
+checker re-checks it and the kernel records it. What the workflow owns is what
+problem the user is solving, where the focus is, and the operation history,
+together with mapping kernel conclusions into frontend-readable step records.
 
-四个状态**取自内核提交结论 ADT 的名字**（v4 §6.9），不新造词汇：
+Four states, named after the kernel commit result ADT rather than invented
+vocabulary:
 
-    committed    已提交（可能带未清偿条件）
-    refused      被否证（Refused）
-    undecided    未获复核（Undecided）——**不得参与后续可信推导**
-    needs_split  策略要求分类讨论（NeedsSplit）
+    committed    submitted (possibly with undischarged conditions)
+    refused      refuted (Refused)
+    undecided    not re-checked (Undecided); must not enter later trusted
+                 reasoning
+    needs_split  the policy requests a case split (NeedsSplit)
 
-「未验证候选不能参与可信推导」（v4 不变量 16）就落在 undecided 这个状态上：
-旧实现把所有非 NO 的结果记成 open（fail-open），那是 v3 遗留。
+"An unverified candidate cannot enter trusted reasoning" lands on the
+`undecided` state: the old implementation recorded every non-NO result as open,
+which was fail-open.
 
-步骤不再有子类，也不再有逐类型的 isinstance 分派：checker 由注册表按 id 取用
-（v4 §6.6 / §十一）。命令是 `cas/workflow/command.py` 里的**纯数据记录**
-（`Command`），主张种类由 `checker_id` 声明——封闭的 `Derivation` ADT 与
-「命令类别 → 验证器」的映射表已拆除。
+A step has no subclasses and there is no per-type isinstance dispatch: checkers
+are looked up by id in the registry. A command is a pure data record and the
+kind of claim is declared by its `checker_id`; the closed Derivation ADT and the
+"command class -> verifier" mapping table are gone.
 
-守卫不再由工作流提取后挂在步骤上：checker 回报直接条件，内核建 Requirement、
-尝试清偿、并负责从前驱继承（v4 §6.7）。这里的 `Step.guards` 只是内核未清偿
-条件在前端的投影。
+Guards are not extracted by the workflow and attached to steps: the checker
+reports direct conditions, the kernel builds Requirements, attempts discharge
+and inherits from premises. `WorkflowStep.guards` here is only the frontend
+projection of the kernel's undischarged requirements.
 
-已删除（v4 反向修正）：前驱 dead 沿依赖边级联销毁。原结论保留，适用性由内核
-按作用域计算（v4 §6.10）。
+Removed: cascade destruction of descendants when a predecessor is dead. The
+original conclusion is kept and applicability is computed by the kernel per
+scope.
 
-域归属：步骤创建时经投影层（cas/project）成员测试记录所属域——域由投影赋予，
-不做叶嗅探。
+Domain membership: a step's domain is recorded through the projection layer's
+membership test, never by leaf sniffing.
 """
 
 from dataclasses import dataclass
@@ -49,51 +55,62 @@ from cas.workflow.task import TaskStore
 
 
 # ---------------------------------------------------------------------------
-# 命令形状见 cas/workflow/command.py：命令是**纯数据记录**（主张种类由
-# `checker_id` 声明），不含功能子类，也没有按类型的分派表（v4 §十一 阶段3）。
+# Command shapes live in cas/workflow/command.py: a command is a pure data
+# record whose claim kind is declared by `checker_id`, with no functional
+# subclasses and no dispatch table.
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# 步骤：不可变展示记录（可信结论在内核账本）
+# Step: an immutable presentation record (trusted conclusions live in the kernel
+# ledger)
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
-class Step:
+class WorkflowStep:
+    """A workflow step record (the presentation layer, not the kernel
+    model.Step).
+
+    The kernel Step is a mathematical dependency edge; this class records what
+    the user did and carries presentation data (domain, target, command). The
+    two used to share a name, hence the explicit naming here.
+    """
     id: int
     content: object                 # Term
-    command: Command                # 命令（纯数据记录；主张种类在其 checker_id）
-    guards: tuple = ()              # 未清偿条件（内核 Requirement 的投影）
+    command: Command                # command; the claim kind is in its checker_id
+    guards: tuple = ()              # undischarged conditions (projection of kernel Requirements)
     status: str = "undecided"       # "committed"|"refused"|"undecided"|"needs_split"
     note: str = ""
     target: tuple = ()
-    domain: str = ""                # 内容所属域（投影赋予）
-    judgment: object = None         # 内核 JudgmentId；未提交则 None
-    artifact: object = None         # 产物 id（ArtifactId）
-    task: object = None             # 本次计算问题的 TaskId；无请求形状者 None
+    domain: str = ""                # domain of the content, assigned by projection
+    judgment: object = None         # kernel JudgmentId; None when not committed
+    artifact: object = None         # artifact id
+    task: object = None             # TaskId of the computation problem, if any
 
 
-# 手工/交互通道：显式应用规则允许产生条件性结论（v4 §6.9 ALLOW_CONDITIONAL）。
-# 自动化简走 REQUIRE_PROVED（未决条件不落地），那是 simplify 的事，不经本工作流。
+# The manual/interactive channel: explicit rule application may produce
+# conditional conclusions. Automatic simplification uses REQUIRE_PROVED and does
+# not go through this workflow.
 _POLICY = GuardPolicy.ALLOW_CONDITIONAL
 
 
 class Workflow:
-    """提交边界 + 展示记录。"""
+    """Submission boundary plus presentation records."""
 
     def __init__(self, store, services, algorithms=None, mode=None, policy=None):
-        """账本与判定服务**由 runtime 装配后注入**（v4 §四）。
+        """The ledger and the decision services are injected by the runtime.
 
-        workflow 不认识 `cas.math`，所以数学 checker、判定服务、以及它偶尔要用的
-        数学算法（域投影 / 约束求解）都由 `cas.runtime.new_workflow()` 注入。这也让
-        「workflow 不知道自己有哪些 checker、算法怎么实现」成为结构事实，而不是
-        靠约定维持。
+        The workflow does not know `cas.math`, so the mathematical checkers, the
+        decision services and the few algorithms it occasionally needs are all
+        injected by `cas.runtime.new_workflow()`. That makes "the workflow does
+        not know which checkers exist or how algorithms are implemented" a
+        structural fact rather than a convention.
         """
         from cas.kernel.mode import DEFAULT_MODE
         if store is None or services is None:
             raise RuntimeError(
-                "Workflow 需要账本与判定服务：用 cas.runtime.new_workflow() 构造"
-                "（装配归 runtime；v4 §四 禁止 workflow 依赖 cas.math）")
+                "Workflow needs a ledger and decision services: construct it "
+                "with cas.runtime.new_workflow()")
         self.store = store
         self.services = services
         self.algorithms = algorithms
@@ -101,7 +118,7 @@ class Workflow:
         self.policy = policy if policy is not None else _POLICY
         self._root = self.store.scopes.create()
         self.scope = self._root.id
-        # 三图分离（v4 §8.5）：产物图 / 任务图 / 操作历史图，各归其位。
+        # Three separated graphs: artifacts, tasks, operation history.
         self.artifacts = ArtifactStore()
         self.tasks = TaskStore(kernel=self.store)
         self.events = EventLog()
@@ -110,24 +127,26 @@ class Workflow:
         self._steps: dict = {}
         self._next_id = 0
 
-    def get(self, sid) -> Step:
+    def get(self, sid) -> WorkflowStep:
         return self._steps[sid]
 
     def all_steps(self):
         return [self._steps[i] for i in range(self._next_id)]
 
-    def add(self, content, command, note="", target=()) -> Step:
+    def add(self, content, command, note="", target=()) -> WorkflowStep:
         pred_id = command.pred
         premises = ()
         if pred_id is not None:
             pstep = self._steps.get(pred_id)
             if pstep is None or pstep.judgment is None:
                 return self._record(content, command, "undecided",
-                                    note or "前驱无可依赖结论", target, ())
+                                    note or "predecessor has no dependable conclusion",
+                                    target, ())
             premises = (pstep.judgment,)
 
-        # Claim：命题先登记为作用域假设（假设是上下文条目，不是可信结论）。
-        # 登记是工作流的动作——命令用 `registers_assumption` 声明，checker 只验证。
+        # Claim: register the proposition as an assumption of the scope first.
+        # Registration is a workflow action declared by the command; the checker
+        # only verifies.
         if command.registers_assumption:
             self.store.scopes.extend(self.store.scopes.get(self.scope),
                                      assumptions=(Assumption(content),))
@@ -149,20 +168,24 @@ class Workflow:
             return self._record(content, command, "refused",
                                 res.detail or note, target, ())
         if res.is_needs_split():
-            # 策略要求分类讨论：把待决条件交回调用方，由 split_on 开分支。
+            # The policy requests a case split: hand the pending condition back
+            # to the caller, which opens branches via split_on.
             return self._record(content, command, "needs_split",
-                                "需分类讨论", target, tuple(res.conditions))
+                                "case split required", target,
+                                tuple(res.conditions))
         return self._record(content, command, "undecided",
-                            getattr(res, "detail", "") or "未获复核",
+                            getattr(res, "detail", "") or "not re-checked",
                             target, ())
 
     def _record(self, content, command, status, note, target, guards,
-                judgment=None, inputs=None) -> Step:
-        # 1. 计算产物（无真假，§8.2）
+                judgment=None, inputs=None) -> WorkflowStep:
+        # 1. computation product (no truth value)
         artifact = self.artifacts.create(self.scope, content)
-        # 2. 计算问题 + 候选（§8.3/§8.4；命令无请求头者不建任务）
+        # 2. computation problem plus candidate (commands with no request head
+        #    open no task)
         task = self._open_task(command, artifact, judgment)
-        # 3. 操作历史（§8.9）：outputs 是连接操作与内核结论的唯一出口（§四）
+        # 3. operation history: outputs is the only exit connecting an operation
+        #    to kernel conclusions
         if inputs is None:
             pred_id = command.pred
             inputs = () if pred_id is None else (pred_id,)
@@ -177,20 +200,22 @@ class Workflow:
                 if ident is not None))
         self.artifacts.attach(artifact.id, ev.id)
 
-        s = Step(id=self._next_id, content=content, command=command,
-                 guards=tuple(guards), status=status, note=note,
-                 target=tuple(target), domain=self._domain_of(content),
-                 judgment=judgment, artifact=artifact.id,
-                 task=None if task is None else task.id)
+        s = WorkflowStep(id=self._next_id, content=content, command=command,
+                         guards=tuple(guards), status=status, note=note,
+                         target=tuple(target), domain=self._domain_of(content),
+                         judgment=judgment, artifact=artifact.id,
+                         task=None if task is None else task.id)
         self._steps[self._next_id] = s
         self._next_id += 1
         return s
 
     def _open_task(self, command, artifact, judgment):
-        """按命令声明的请求头开一个任务并登记候选。无请求头者返回 None。
+        """Open a task by the request head the command declares and register the
+        candidate. Returns None for commands with no request head.
 
-        请求是**普通项**（§8.3），不是封闭 TaskKind 枚举——头部字符串由命令
-        自带（`Command.request`），工作流不认识这些 head 的数学含义。
+        A request is an ordinary term, not a closed TaskKind enum; the head
+        string comes from the command and the workflow does not know its
+        mathematical meaning.
         """
         head = command.request
         if not head:
@@ -204,11 +229,13 @@ class Workflow:
         self.tasks.propose(task.id, artifact.id, judgment)
         return task
 
-    # --- 约束（v4 §8.6：计算构造出的方程，环在候选↔约束子图）---
+    # --- constraints (equations constructed by computation; the cycle lives in
+    #     the candidate <-> constraint subgraph) ---
 
     def add_constraint(self, relation, sources=(), proposed_evidence=None):
-        """登记一条计算构造关系。**不产生 Judgment**——约束是 Artifact 级构造，
-        要成为结论仍须经 commit 并由 checker 接受（§8.6）。"""
+        """Register a construction relation. This produces no Judgment: a
+        constraint is an artifact-level construction, and becoming a conclusion
+        still requires commit and an accepting checker."""
         c = self.constraints.add(self.scope, relation, sources,
                                  proposed_evidence)
         self.events.append(command="AddConstraint", inputs=(),
@@ -216,14 +243,17 @@ class Workflow:
         return c
 
     def solve_constraints(self, unknowns):
-        """求解约束系统并复核。求解器**不可信**（可以给错候选），复核归 checker。
+        """Solve the constraint system and re-check it. The solver is
+        untrusted and may hand over a wrong candidate; re-checking belongs to a
+        checker.
 
-        返回 `(valuation, steps, complete)`；求解器拒答返回 `(None, (), False)`。
+        Returns `(valuation, steps, complete)`; a solver refusal returns
+        `(None, (), False)`.
         """
         if self.algorithms is None:
             raise RuntimeError(
-                "未注入算法门面：用 cas.runtime.new_workflow() 构造"
-                "（v4 §四 禁止 workflow 依赖 cas.math）")
+                "no algorithm facade injected: construct with "
+                "cas.runtime.new_workflow()")
         rels = tuple(c.relation for c in self.constraints.all())
         res = self.algorithms.solve_linear_constraints(rels, unknowns)
         if res is None:
@@ -232,11 +262,13 @@ class Workflow:
         return valuation, self.verify_valuation(valuation), complete
 
     def verify_valuation(self, valuation):
-        """逐条复核「这组赋值满足约束系统」。
+        """Re-check "this assignment satisfies the constraint system" item by
+        item.
 
-        `valuation` 是**求解器交出的证书**（不可信侧，可以给错）。每条约束各
-        提交一次，由 `constraint.satisfied` checker 复核实例与判零——求解器自报
-        不算，这正是 §7.3「算法产生候选、checker 决定能声称什么」。
+        `valuation` is a certificate handed over by the solver, which is
+        untrusted and may be wrong. Each constraint is submitted separately and
+        re-checked by the `constraint.satisfied` checker for its instance and
+        vanishing; the solver's own report does not count.
         """
         out = []
         for c in self.constraints.all():
@@ -245,14 +277,16 @@ class Workflow:
                                                      valuation=valuation)))
         return tuple(out)
 
-    # --- 分支（v4 §8.8）---
+    # --- branching ---
 
     def split_on(self, condition):
-        """按 `condition` 与 `¬condition` 建一对分支作用域，并尝试证覆盖。
+        """Build a pair of branch scopes for `condition` and `not condition` and
+        try to prove coverage.
 
-        **兄弟分支互不可见**（不变量 9），且分支上下文不能直接合并——合并由
-        `merge_branches` 按 §8.8 的五条检查执行；本方法只落「覆盖」这一条
-        （排中律，句法重言式，判定在验证侧）。
+        Sibling branches cannot see each other, and branch contexts cannot be
+        merged directly; merging is performed by `merge_branches` under its five
+        checks. This method only lands the coverage part (the law of excluded
+        middle, a syntactic tautology decided on the verification side).
         """
         parent = self.store.scopes.get(self.scope)
         cases = []
@@ -262,8 +296,9 @@ class Workflow:
             cases.append(BranchCase(condition=cond, scope=child.id, label=label))
         group = self.branches.create(self.scope, cases)
 
-        # 覆盖：条件之析取，交 checker 独立复核（互补对 ⇒ 句法重言式；
-        # 判定在验证侧，不靠构造期坍缩，v4 §2.1）
+        # Coverage: the disjunction of the conditions, independently re-checked
+        # by a checker. The decision is made on the verification side rather
+        # than by construction-time collapse.
         prop = T.or_(*[c.condition for c in cases])
         r = commit(self.store,
                    StepProposal(scope=self.scope, conclusions=(prop,),
@@ -277,66 +312,76 @@ class Workflow:
         return self.branches.get(group.id)
 
     def enter(self, scope):
-        """进入分支作用域：其后提交发生在这里。"""
+        """Enter a branch scope: later submissions happen there."""
         self.store.scopes.get(scope)
         self.scope = scope
         return scope
 
     def promote_guard(self, case, guard):
-        """把分支内未清偿的守卫提升到父层：`C_i ⇒ G_i`（§8.8 第 5 条）。"""
+        """Promote an undischarged guard from inside a branch to the parent as
+        `C_i => G_i`."""
         return promote_guard(case.condition, guard)
 
     def merge_branches(self, group, proposition, results):
-        """分支合并：按情况讨论（v4 §8.8 的五条检查）。
+        """Merge branches: reason by cases.
 
-        `results` 与 `group.cases` 同序，是各分支给出结论的步骤。合并**不是**
-        把分支上下文并起来：各支在同一命题上给出结论、各支条件覆盖父问题，于是
-        该命题在父作用域成立；各支开放守卫逐条提升为 `C_i ⇒ G_i`（第 5 条）。
-        合并步的读依赖 = 各支读集的并（§6.11：结论依赖分支读过的事实）。
+        `results` is ordered like `group.cases` and holds the step that answers
+        in each branch. A merge does not union the branch contexts. Rather, each
+        branch concludes the same proposition and the branch conditions cover
+        the parent problem, so the proposition holds in the parent scope; each
+        branch's open guards are promoted to `C_i => G_i`. The read dependencies
+        of the merge step are the union of the branches' read sets.
 
-        五条检查：① 覆盖成立；② 各支回答同一任务（按**请求项**判——各支各自
-        开任务，任务 id 不同而请求项必须相同）；③ 各支结果各自在其 scope 中
-        成立；④ 辅助符号未逃逸；⑤ 开放条件被正确提升（checker 复算，内核判定
-        与清偿）。不满足即拒（`BranchError`）——不猜、不降级。
+        Five checks: (1) coverage holds; (2) every branch answers the same task
+        (compared by request term: each branch opens its own task, so ids differ
+        but the request must match); (3) each branch result holds in its own
+        scope; (4) no helper symbol escaped; (5) open conditions were promoted
+        correctly (the checker recomputes, the kernel decides and discharges).
+        Failure raises BranchError rather than guessing or degrading.
 
-        **为什么分支结论不作为本步前提**：不变量 8 禁止子作用域结论反向用于父
-        作用域（`commit` 第 2 步强制），故本步唯一前提是父作用域里的覆盖结论；
-        各支结论经②③从**内核记录**核出后随载荷交给 checker 复核一致性。要让
-        该环也由内核独立复核，需 commit 支持「蕴含引入」规则（设计决定，未落）。
+        Branch conclusions are not premises of this step because a child-scope
+        conclusion must not be used in a parent scope, so the only premise is
+        the coverage conclusion in the parent. The branch conclusions are read
+        from the kernel record for checks (2) and (3) and handed to the checker
+        in the payload for consistency checking. Making that loop independently
+        re-checked by the kernel would require commit to support implication
+        introduction, which is a design decision not yet taken.
         """
         if self.scope != group.parent_scope:
-            raise BranchError("合并须在分支的父作用域进行（先 enter 回去）")
+            raise BranchError("merge must happen in the branch's parent scope "
+                              "(call enter first)")
         if len(results) != len(group.cases):
-            raise BranchError("分支结果数与该分支组的支数不符")
-        if group.coverage is None:                       # ① 覆盖
-            raise BranchError("分支未证覆盖，不得合并")
-        answers = []                                     # ③ 各支在其 scope 中成立
+            raise BranchError("number of branch results does not match the "
+                              "number of cases")
+        if group.coverage is None:                       # (1) coverage
+            raise BranchError("branch coverage was not proved; cannot merge")
+        answers = []                                     # (3) each holds in its scope
         for case, st in zip(group.cases, results):
             if st.judgment is None:
-                raise BranchError(f"分支结果无可依赖结论: #{st.id}")
+                raise BranchError(f"branch result has no dependable conclusion: #{st.id}")
             j = self.store.get_judgment(st.judgment)
             if j.scope != case.scope:
-                raise BranchError(f"分支结果 #{st.id} 不在其分支作用域内")
+                raise BranchError(f"branch result #{st.id} is not in its branch scope")
             answers.append(j.proposition)
-        requests = []                                    # ② 同一任务
+        requests = []                                    # (2) the same task
         for st in results:
             if st.task is None:
-                raise BranchError(f"分支结果 #{st.id} 未回答请求形状的任务")
+                raise BranchError(f"branch result #{st.id} answered no request-shaped task")
             requests.append(self.tasks.get_task(st.task).request)
         if any(r is not requests[0] for r in requests):
-            raise BranchError("各分支回答的不是同一个任务")
-        escaped = self.store.scopes.escapes(              # ④ 符号不逃逸
+            raise BranchError("the branches did not answer the same task")
+        escaped = self.store.scopes.escapes(              # (4) no symbol escapes
             group.parent_scope, proposition)
         if escaped:
-            raise BranchError(f"合并结论含逃逸的局部符号: {escaped!r}")
+            raise BranchError(f"merge conclusion contains an escaped local symbol: {escaped!r}")
         conditions = tuple(c.condition for c in group.cases)
         guards = tuple(tuple(st.guards) for st in results)
-        for g in (g for gs in guards for g in gs):       # ④ 提升的守卫同样不得逃逸
+        for g in (g for gs in guards for g in gs):       # (4) promoted guards must not escape either
             esc = self.store.scopes.escapes(group.parent_scope, g)
             if esc:
-                raise BranchError(f"提升的守卫含逃逸的局部符号: {esc!r}")
+                raise BranchError(f"promoted guard contains an escaped local symbol: {esc!r}")
 
-        merged_reads = ContextReadSet()                  # §6.11：读依赖取并
+        merged_reads = ContextReadSet()                  # read deps: union over branches
         for st in results:
             producer = self.store.get_judgment(st.judgment).producer
             merged_reads = merged_reads.merge(self.store.get_step(producer).reads)
@@ -346,14 +391,14 @@ class Workflow:
                       answers=tuple(answers))
         proposal = StepProposal(
             scope=group.parent_scope,
-            premises=(group.coverage,),                  # 唯一父作用域可见的前提
+            premises=(group.coverage,),                  # the only parent-visible premise
             conclusions=(proposition,),
             evidence=Evidence("branch.merge", cmd),
             guard_policy=self.policy)
         res = commit(self.store, proposal, services=self.services,
                      mode=self.mode, inherited_reads=merged_reads)
         inputs = tuple(st.id for st in results)
-        if res.is_committed():                           # ⑤ 提升后的条件由内核记账
+        if res.is_committed():                           # (5) promoted conditions recorded by the kernel
             j = self.store.get_judgment(res.judgments[0])
             out = tuple(self.store.get_requirement(r).proposition
                         for r in j.requirements)
@@ -363,74 +408,87 @@ class Workflow:
             return self._record(proposition, cmd, "refused", res.detail, (), (),
                                 inputs=inputs)
         if res.is_needs_split():
-            return self._record(proposition, cmd, "needs_split", "需分类讨论", (),
+            return self._record(proposition, cmd, "needs_split",
+                                "case split required", (),
                                 tuple(res.conditions), inputs=inputs)
         return self._record(proposition, cmd, "undecided",
-                            getattr(res, "detail", "") or "未获复核", (), (),
+                            getattr(res, "detail", "") or "not re-checked", (), (),
                             inputs=inputs)
 
-    # --- 适用性查询（v4 §6.10：内核算，工作流问）---
+    # --- applicability query (the kernel computes, the workflow asks) ---
 
     def applicability_of(self, step):
-        """该步结论在**当前作用域**的适用性；无结论则 None。"""
+        """Applicability of this step's conclusion in the current scope, or None
+        when it has no conclusion."""
         if step.judgment is None:
             return None
         return self.store.applicability(step.judgment, self.scope)
 
-    # --- 声明 / 定义（v4 §6.2）---
+    # --- declare / define ---
 
     def declare(self, symbol, sort):
-        """声明 `symbol : sort`（v4 §6.2 的「声明」条目）。
+        """Declare `symbol : sort`.
 
-        符号须新鲜：链上未声明、未定义。声明不是命题，不进判定通道——它记录
-        「这个符号属于哪一类」，由消费方（类型/域层）读取。返回值是新作用域
-        （作用域不可变，扩充产生新对象）。
+        The symbol must be fresh: neither declared nor defined along the chain.
+        A declaration is not a proposition and does not enter the decision
+        channel; it records which class the symbol belongs to, for consumers
+        such as the type/domain layer. Returns the new scope, since scopes are
+        immutable and an extension produces a new object.
         """
-        self._require_fresh(symbol, "声明")
+        self._require_fresh(symbol, "declaration")
         return self.store.scopes.extend(
             self.store.scopes.get(self.scope),
             declarations=(Declaration(symbol, sort),))
 
     def define(self, symbol, body):
-        """定义 `symbol := body`（v4 §6.2 的「定义」条目）：局部别名，不是待证等式。
+        """Define `symbol := body`: a local alias, not an equation to prove.
 
-        内核按 §6.2 只查四件事，此处前三件在定义时查，第四件在作用域边界强制：
+        The kernel checks four things; the first three are checked here at
+        definition time and the fourth is enforced at the scope boundary:
 
-        1. 左侧符号新鲜——链上未声明、未定义；
-        2. 不形成非法递归——`body` 经别名展开后不得出现 `symbol`（含互递归）；
-        3. 右侧在作用域内良好绑定——可用本作用域**先前**的条目与祖先的条目，
-           但不得引用**其他**作用域（兄弟分支等）的局部符号；
-        4. 局部符号不泄漏到作用域之外的结论——由 `kernel.commit` 第 1 步
-           经 `ScopeStore.escapes` 强制（不变量 15）。
+        1. the left-hand symbol is fresh: neither declared nor defined along
+           the chain;
+        2. no illegal recursion: after alias expansion `body` must not contain
+           `symbol` (mutual recursion included);
+        3. the right-hand side is well bound in scope: it may use earlier
+           entries of this scope and entries of ancestors, but must not
+           reference a local symbol of another scope (a sibling branch, say);
+        4. a local symbol must not leak into a conclusion outside the scope,
+           enforced by commit's first step via ScopeStore.escapes.
 
-        第 3 条是「顺序可见」：同一作用域里后来者可以引用先前的别名。参考实现
-        一致——Maxima `block([expr, W_subst], expr:…, W_subst:…, …)`
-        （`tests/rtest_allnummod.mac:1796`）、FriCAS 函数体内
-        `delta := p2-p1; len := arrowScale * length delta`
-        （`src/input/arrows.input`）、Reduce `vsl/alg.tst:32`、yacas
-        `scripts/standard.ys:25`。各家的卫生纪律针对的是**逃逸**
-        （Maxima 的 `block` 退出还原、Mathematica 的 `Module` 改名防捕获），
-        不是同作用域引用。这里的定义是**惰性别名**（更接近 Mathematica 的
-        `SetDelayed` / `Module`），故展开后的引用关系必须无环。
+        Point 3 is "sequentially visible": a later definition in the same scope
+        may reference an earlier alias. Reference implementations agree -- for
+        example Maxima's `block([expr, W_subst], expr: ..., W_subst: ..., ...)`,
+        FriCAS function bodies `delta := p2-p1; len := arrowScale * length
+        delta`, Reduce and yacas. Their hygiene discipline targets escaping
+        (Maxima restores on block exit, Mathematica renames in Module), not
+        same-scope references. Definitions here are lazy aliases, closer to
+        Mathematica's SetDelayed/Module, so the expanded reference graph must be
+        acyclic.
 
-        返回值是新作用域；`symbol` 之后经 `ScopeStore.lookup_definition` 可解。
+        Returns the new scope; the symbol can afterwards be resolved through
+        ScopeStore.lookup_definition.
         """
-        self._require_fresh(symbol, "定义")
+        self._require_fresh(symbol, "definition")
         if self._alias_cycle(symbol, body):
-            raise ScopeError(f"定义非法递归：{symbol!r} 经别名展开后出现在右侧")
+            raise ScopeError(f"illegal recursive definition: {symbol!r} appears "
+                             "in its own right-hand side after alias expansion")
         bad = self.store.scopes.escapes(self.scope, body)
         if bad:
-            raise ScopeError(f"定义右侧引用了外部作用域的局部符号: {bad!r}")
+            raise ScopeError(f"definition right-hand side references a local "
+                             f"symbol of another scope: {bad!r}")
         return self.store.scopes.extend(
             self.store.scopes.get(self.scope),
             definitions=(Definition(symbol, body),))
 
     def _alias_cycle(self, symbol, body, seen=None) -> bool:
-        """`body` 经**别名展开**后是否出现 `symbol`（v4 §6.2「不形成非法递归」）。
+        """Whether `symbol` appears in `body` after alias expansion.
 
-        只查直接自引用不够：`u := v`（此时 v 是自由符号）之后再 `v := u` 会
-        形成一个谁都展不开的别名环，语义上是无穷展开。展开按当前作用域链上的
-        定义表做，`seen` 挡住既有的环，故必停。
+        Checking direct self-reference is not enough: `u := v` (where v is free
+        at that point) followed by `v := u` creates an alias cycle that no one
+        can expand, which is infinite expansion semantically. Expansion uses the
+        definition table along the current scope chain, and `seen` stops
+        existing cycles, so termination is guaranteed.
         """
         fv = T.free_vars(body)
         if symbol in fv:
@@ -448,14 +506,15 @@ class Workflow:
         return False
 
     def _require_fresh(self, symbol, what):
-        """符号新鲜：链上既未定义也未声明（v4 §6.2「左侧符号新鲜」）。"""
+        """The symbol must be fresh: neither defined nor declared along the
+        chain."""
         scopes = self.store.scopes
         if scopes.lookup_definition(self.scope, symbol) is not None:
-            raise ScopeError(f"{what}符号已在链上定义: {symbol!r}")
+            raise ScopeError(f"{what} symbol already defined along the chain: {symbol!r}")
         if any(d.symbol is symbol for d in scopes.declarations(self.scope)):
-            raise ScopeError(f"{what}符号已在链上声明: {symbol!r}")
+            raise ScopeError(f"{what} symbol already declared along the chain: {symbol!r}")
 
-    # --- 撤销/重做：只移 revision 指针（§8.9）---
+    # --- undo / redo: move the revision pointer only ---
 
     def undo(self):
         return self.events.undo()
@@ -464,8 +523,8 @@ class Workflow:
         return self.events.redo()
 
     def _domain_of(self, content) -> str:
-        """步骤所属域（投影赋予，不做叶嗅探）——算法由注入的门面提供。"""
+        """The domain of a step, assigned by the projection layer through the
+        injected facade, never by leaf sniffing."""
         if self.algorithms is None:
             return ""
         return self.algorithms.domain_of(content)
-

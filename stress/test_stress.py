@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""stress 台架的 pytest 收集层。
+"""The pytest collection layer for the stress benches.
 
-台架本体是独立脚本（全部自证、无外部真值；失败 sys.exit 非零）。
-本层把每个 stress_*.py 包成一条 pytest 用例，使 `pytest` 直接可用、
-CI 可守门；台架脚本本身保持零改动、可独立运行。
+The benches themselves are standalone scripts (fully self-proving, no external ground
+truth; they exit non-zero on failure). This layer wraps each stress_*.py as one pytest
+case so `pytest` works directly and CI can gate on it, while the bench scripts stay
+unchanged and independently runnable.
 """
 
 import subprocess
@@ -24,4 +25,4 @@ def test_stress(script):
         [sys.executable, str(script)], cwd=_ROOT,
         capture_output=True, text=True, timeout=280)
     assert r.returncode == 0, (
-        f"{script.name} 失败（退出码 {r.returncode}）:\n{r.stdout}\n{r.stderr}")
+        f"{script.name} failed (exit code {r.returncode}):\n{r.stdout}\n{r.stderr}")

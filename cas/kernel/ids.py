@@ -1,8 +1,12 @@
-# -*- coding: utf-8 -*-
-"""内核标识类型（v4 §6）。
+"""Kernel identifier types.
 
-各 id 是不同的 NewType，防止 ScopeId 与 JudgmentId 互串。运行期都是 int，
-存储层用递增计数器发放；id 一经发放永不复用（store 追加式，不物理删除）。
+Each id is a distinct NewType so a ScopeId can never be passed where a
+JudgmentId is expected. At runtime they are ints issued by an incrementing
+counter in the store; an issued id is never reused because the store is
+append-only and never physically deletes.
+
+ArtifactId / TaskId / EventId / RevisionId belong to the workflow layer and are
+deliberately not defined here: the kernel does not know workflow concepts.
 """
 
 from typing import NewType
@@ -11,7 +15,3 @@ ScopeId = NewType("ScopeId", int)
 RequirementId = NewType("RequirementId", int)
 JudgmentId = NewType("JudgmentId", int)
 StepId = NewType("StepId", int)
-
-# ArtifactId / TaskId / EventId / RevisionId 属 workflow（v4 §8），**不在此处**：
-# 内核不认识工作流概念（§四「kernel → workflow」严格禁止）。它们随阶段4 在
-# workflow 侧定义。

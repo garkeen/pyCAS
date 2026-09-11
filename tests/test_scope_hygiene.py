@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""作用域契约（v4 §6.2 声明/定义 + 不变量 15 局部符号不得逃逸）。
+"""Scope contract: declaration/definition, and the invariant that a local symbol must
+not escape.
 
-接线前：`Scope` 的 `declarations`/`definitions` 字段、`ScopeStore.declarations`/
-`definition_map`/`lookup_definition`、局部符号检查**全无生产者与消费者**——
-定义的局部符号机制是半成品，`commit` 第 1 步只查「scope 存在」，逃逸检查没有
-执行点（而 `commit` 的 docstring 却写着「检查 scope 与项的绑定合法性」）。
-本文件钉住接通后的行为。
+Before the wiring: `Scope`'s `declarations`/`definitions` fields,
+`ScopeStore.declarations`/`definition_map`/`lookup_definition`, and the local-symbol
+check had no producer and no consumer, so the locally defined symbol mechanism was
+half-built, step 1 of `commit` only checked "the scope exists", and the escape check
+had no execution point. This file pins the behaviour once it is wired up.
 """
 
 import pytest
@@ -26,7 +27,7 @@ def _wf():
 
 
 def _child(wf):
-    """建一个子作用域并进入。"""
+    """Create a child scope and enter it."""
     parent = wf.store.scopes.get(wf.scope)
     c = wf.store.scopes.child(parent)
     wf.enter(c.id)
@@ -34,7 +35,7 @@ def _child(wf):
 
 
 # ---------------------------------------------------------------------------
-# 声明 / 定义：生产者
+# Declaration / definition: the producers
 # ---------------------------------------------------------------------------
 
 def test_definition_visible_on_scope_chain():
@@ -55,7 +56,7 @@ def test_declaration_enters_scope_entries():
 
 
 def test_defined_symbol_not_flagged_as_escape():
-    """定义的局部符号在其作用域内使用是合法的（不是逃逸）。"""
+    """Using a defined local symbol inside its own scope is legal, not an escape."""
     wf = _wf()
     wf.define(U, T.times(X, X))
     s = wf.add(T.eq(U, T.times(X, X)), _claim())
@@ -63,7 +64,8 @@ def test_defined_symbol_not_flagged_as_escape():
 
 
 def test_descendant_sees_ancestor_definition():
-    """符号被祖先引入，故对后代可见——链上有即不算逃逸。"""
+    """The symbol was introduced by an ancestor, so descendants can see it: present on
+    the chain is not an escape."""
     wf = _wf()
     wf.define(U, T.times(X, X))
     _child(wf)
@@ -72,7 +74,7 @@ def test_descendant_sees_ancestor_definition():
 
 
 # ---------------------------------------------------------------------------
-# §6.2 的四项检查
+# The four checks
 # ---------------------------------------------------------------------------
 
 def test_stale_symbol_rejected_redefinition():
@@ -103,13 +105,8 @@ def test_recursive_definition_rejected():
 
 
 def test_definition_body_may_use_earlier_same_scope_alias():
-    """v4 §6.2 第 3 条是**顺序可见**：同一作用域里后来者可用先前的别名。
-
-    参考实现一致：Maxima `block([expr, W_subst], expr:…, W_subst:…, …)`
-    （tests/rtest_allnummod.mac:1796）、FriCAS 函数体
-    `delta := p2-p1; len := arrowScale * length delta`（src/input/arrows.input）、
-    Reduce vsl/alg.tst:32、yacas scripts/standard.ys:25。
-    """
+    """Ordering is **visible-in-order**: within one scope a later definition may use an
+    earlier alias."""
     wf = _wf()
     wf.define(U, T.times(X, X))
     v = S("v")
@@ -119,7 +116,8 @@ def test_definition_body_may_use_earlier_same_scope_alias():
 
 
 def test_definition_body_may_not_use_other_scope_local():
-    """右侧不得引用**其他**作用域（兄弟分支）的局部符号——那才是未绑定。"""
+    """The right-hand side may not reference a local symbol of **another** scope (a
+    sibling branch); that one really is unbound."""
     wf = _wf()
     root = wf.scope
     _child(wf)
@@ -131,16 +129,17 @@ def test_definition_body_may_not_use_other_scope_local():
 
 
 def test_mutual_alias_recursion_rejected():
-    """互递归别名（u := v 之后 v := u）也是一个展不开的环。"""
+    """A mutually recursive alias pair (u := v then v := u) is also an unexpandable
+    cycle."""
     wf = _wf()
     v = S("v")
-    wf.define(U, v)                     # v 此时是自由符号，允许
+    wf.define(U, v)                     # v is a free symbol here, so this is allowed
     with pytest.raises(ScopeError):
         wf.define(v, T.plus(U, X))
 
 
 # ---------------------------------------------------------------------------
-# 不变量 15：局部符号不得逃逸到作用域之外的结论
+# The invariant: a local symbol must not escape into a conclusion outside its scope
 # ---------------------------------------------------------------------------
 
 def test_local_symbol_must_not_escape_to_parent():
@@ -148,26 +147,27 @@ def test_local_symbol_must_not_escape_to_parent():
     root = wf.scope
     _child(wf)
     wf.define(U, T.times(X, X))
-    # 本作用域内合法
+    # legal inside this scope
     assert wf.add(T.eq(U, T.times(X, X)), _claim()).status == "committed"
-    # 回到父作用域：u 在此不可见，结论不得含它
+    # back in the parent scope u is not visible here, so the conclusion may not contain it
     wf.enter(root)
     s = wf.add(T.eq(U, T.times(X, X)), _claim())
     assert s.status == "refused"
-    assert "逃逸" in s.note
+    assert "escapes" in s.note
 
 
 def test_sibling_branches_do_not_share_locals():
-    """两个分支各自定义同名局部符号，互不构成对方的可见引入。"""
+    """Two branches each define a local symbol of the same name; neither is a visible
+    introduction for the other."""
     wf = _wf()
     root = wf.scope
     a = _child(wf)
     wf.define(U, T.times(X, X))
     wf.enter(root)
     b = _child(wf)
-    # b 分支链上没有 u（a 的 u 不在 b 的链上）→ 在 b 里用 u 即逃逸
+    # u is not on b's chain (a's u is not on b's chain), so using u in b is an escape
     s = wf.add(T.eq(U, T.times(X, X)), _claim())
-    assert s.status == "refused" and "逃逸" in s.note
+    assert s.status == "refused" and "escapes" in s.note
     assert a != b
 
 

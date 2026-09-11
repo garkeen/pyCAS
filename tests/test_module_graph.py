@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""模块图：每个模块都能独立导入。
+"""Module graph: every module imports standalone.
 
-钉子：cas/syntax/term.py 末尾曾直接 `from cas.termpath import ...`，而
-termpath 顶部又 `from cas import term as T` —— 于是 `import cas.termpath`
-作为入口必然撞上 term 的半初始化状态而 ImportError（基线即崩，当时注释
-却写着"无导入环"）。改 PEP 562 惰性 __getattr__ 后两个方向都能独立导入。
+Nail: cas/syntax/term.py once ended with a direct `from cas.termpath import ...`,
+while termpath began with `from cas import term as T`, so entering through
+`import cas.termpath` necessarily hit term's half-initialized state and raised
+ImportError (the baseline crashed while the comment claimed "no import cycle").
+With the PEP 562 lazy __getattr__ both directions import standalone.
 
-2026-09-10 起按 v4 目标树拆子包（syntax/kernel/workflow/math/frontend），
-清单改为遍历各子包目录，漏测新模块即漏报。
+Since 2026-09-10 the tree is split into subpackages (syntax/kernel/workflow/math/
+frontend), and the inventory walks each subpackage directory instead of a fixed list,
+so a new module that is not tested shows up as a missing entry.
 """
 
 import subprocess
@@ -34,40 +36,41 @@ for rel, prefix in _DIRS:
 
 
 def test_module_list_not_empty():
-    assert len(_MODULES) >= 30, f"只发现 {len(_MODULES)} 个模块，路径可能错了"
+    assert len(_MODULES) >= 30, f"only found {len(_MODULES)} modules; the path is probably wrong"
 
 
 def test_every_module_imports_standalone():
-    """逐个在干净进程里 import——任一模块作入口都必须成功。"""
+    """Import each one in a clean process: any module must succeed as the entry."""
     failed = []
     for m in _MODULES:
         r = subprocess.run([sys.executable, "-c", f"import {m}"],
                            capture_output=True, text=True, cwd=str(_ROOT))
         if r.returncode != 0:
             failed.append(f"{m}: {r.stderr.strip().splitlines()[-1]}")
-    assert not failed, "以下模块无法独立导入:\n" + "\n".join(failed)
+    assert not failed, "these modules cannot be imported standalone:\n" + "\n".join(failed)
 
 
 def test_termpath_imports_standalone():
-    """曾经的基线崩溃点，单独钉住。"""
+    """The former baseline crash point, pinned on its own."""
     r = subprocess.run([sys.executable, "-c", "import cas.syntax.termpath"],
                        capture_output=True, text=True, cwd=str(_ROOT))
     assert r.returncode == 0, r.stderr
 
 
 def test_term_import_surface_unchanged():
-    """惰性回接不得改变对外导入面。
+    """The lazy re-export must not change the public import surface.
 
-    实例化（instantiate）已随模式元语言移居 cas.syntax.pattern（v4 §5.2）：
-    项层无洞，Term 级实例化不存在——此项按 v4 契约更新，不留兼容别名。
+    Instantiation moved to cas.syntax.pattern along with the pattern metalanguage:
+    the term layer has no holes, so term-level instantiation does not exist, and no
+    compatibility alias is kept.
     """
     from cas.syntax import term as T
     for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths",
                  "_subst_raw", "_bind_into"):
-        assert hasattr(T, name), f"导入面丢失: {name}"
+        assert hasattr(T, name), f"import surface lost: {name}"
     from cas.syntax import pattern as P
     for name in ("instantiate", "matches"):
-        assert hasattr(P, name) or name == "matches", f"模式层导出丢失: {name}"
+        assert hasattr(P, name) or name == "matches", f"pattern-layer export lost: {name}"
 
 
 def test_lazy_reexport_does_not_swallow_unknown():
@@ -77,11 +80,11 @@ def test_lazy_reexport_does_not_swallow_unknown():
     except AttributeError:
         pass
     else:
-        raise AssertionError("__getattr__ 静默吞掉了未知属性")
+        raise AssertionError("__getattr__ silently swallowed an unknown attribute")
 
 
 def test_tree_traversal_single_implementation():
-    """_postorder 曾在 pprint 与 simplify 各存一份同构副本。"""
+    """_postorder once existed as an isomorphic copy in both pprint and simplify."""
     import cas.frontend.pprint as P
     import cas.math.simplify as Sm
     from cas.syntax.termpath import postorder

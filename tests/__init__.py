@@ -1,8 +1,10 @@
-# 钉子库：确定性单元测试（cas_v3_arch.md 九"钉子库"）。
+# Deterministic unit tests.
 #
-# 与 stress/ 的分工：
-#   stress/ —— 随机压力测试，覆盖数学性质的全域（P1-P41）
-#   tests/  —— 确定性钉子，逐个固化退化形态、修过的 bug、职责边界
+# Division of labour with stress/:
+#   stress/ -- randomized stress tests covering the mathematical properties broadly
+#   tests/  -- deterministic nails pinning degenerate shapes, fixed bugs, and
+#              responsibility boundaries
 #
-# 二者都要在 CI 上跑，谁也不能替代谁：随机台架负责"数学没错"，
-# 钉子库负责"结构与契约没退化"。
+# Both run in CI and neither substitutes for the other: the randomized bench is
+# responsible for "the mathematics is right", the nails for "the structure and
+# contracts have not regressed".

@@ -1,14 +1,17 @@
-# -*- coding: utf-8 -*-
-"""证据与 checker 注册表（v4 §6.7、§6.5）。
+"""Evidence and the checker registry.
 
-关键纪律：
+Two rules:
 
-· **证书必须对应确切命题**（§6.5）。没有 `sound=True` / `complete=False` 这类
-  模糊标志——「候选正确」与「结果完备」是两条不同命题、两个不同 checker。
-· **守卫不能只由算法自己声明**（§6.7）。checker 必须复核并返回使结论成立所需
-  的直接条件（`Accepted.direct_requirements`）。
-· checker 不导入对应搜索算法（§7.3 / 不变量 14）：注册表只按 id 取用，注册方
-  自己负责独立性。
+· A certificate must match an exact proposition. There is no fuzzy
+  `sound=True` / `complete=False` flag: "the candidate is correct" and "the
+  result is complete" are two different propositions with two different
+  checkers.
+· A guard cannot be declared by the algorithm alone. A checker must re-check
+  the conclusion and return the direct conditions under which it holds
+  (`Accepted.direct_requirements`).
+
+A checker does not import the search algorithm it verifies: the registry only
+looks up by id, and independence is the registrant's responsibility.
 """
 
 from dataclasses import dataclass, field
@@ -20,16 +23,19 @@ from cas.kernel.verdict import Reason
 
 @dataclass(frozen=True, slots=True)
 class Evidence:
-    """证据：checker id + 该 checker 认得的载荷。
+    """Evidence: a checker id plus a payload that checker understands.
 
-    载荷是 checker 私有格式（规则实例、原函数候选、回代证书……），内核只搬运。
+    The payload is private to the checker (a rule instance, an antiderivative
+    candidate, a back-substitution certificate, ...); the kernel only carries
+    it.
     """
     checker_id: str
     payload: object = None
 
 
 class CheckResult:
-    """checker 返回值的封闭层次（v4 §6.7）。消费方必须穷尽三分支。"""
+    """Closed hierarchy returned by a checker. Consumers must exhaust all three
+    branches."""
     __slots__ = ()
 
     def is_accepted(self):
@@ -44,10 +50,11 @@ class CheckResult:
 
 @dataclass(frozen=True, slots=True)
 class Accepted(CheckResult):
-    """通过，并返回**直接条件**与读依赖。
+    """Accepted, reporting the direct conditions and the read dependencies.
 
-    `direct_requirements` 是 checker 复核后认定使结论成立所需的命题——不是
-    算法自称的守卫。内核负责把它们变成 Requirement。
+    `direct_requirements` are the propositions the checker established as
+    necessary for the conclusion, not guards the algorithm claimed for itself.
+    The kernel turns them into Requirements.
     """
     direct_requirements: tuple = ()
     reads: ContextReadSet = field(default_factory=ContextReadSet)
@@ -55,37 +62,40 @@ class Accepted(CheckResult):
 
 @dataclass(frozen=True, slots=True)
 class Rejected(CheckResult):
-    """否证：结论不成立。reason 取自 verdict.Reason。"""
+    """Refuted: the conclusion does not hold. `reason` comes from verdict.Reason."""
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class UnknownResult(CheckResult):
-    """未决：checker 不能断言成立也不能否证（片段外、预算耗尽……）。
+    """Undecided: the checker can neither assert nor refute (outside the
+    fragment, budget exhausted, ...).
 
-    未决候选不能直接参与可信推导（v4 不变量 16）——由 GuardPolicy 决定处置。
+    An undecided candidate cannot enter trusted reasoning; GuardPolicy decides
+    how to handle it.
     """
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
 
 
 class Checker(Protocol):
-    """checker 协议（v4 §6.7）。"""
+    """The checker protocol."""
 
     def check(self, proposal, context, services) -> CheckResult:
         ...
 
 
 class CheckerRegistry:
-    """checker 注册表：Step 无子类，分派走此处（v4 §6.6 / §十一 阶段3）。"""
+    """Checker registry. A Step has no subclasses, so dispatch goes through
+    this table instead."""
 
     def __init__(self):
         self._checkers: dict[str, object] = {}
 
     def register(self, checker_id: str, checker) -> None:
         if checker_id in self._checkers:
-            raise ValueError(f"checker 重复注册: {checker_id}")
+            raise ValueError(f"checker already registered: {checker_id}")
         self._checkers[checker_id] = checker
 
     def get(self, checker_id: str):

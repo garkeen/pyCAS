@@ -1,22 +1,28 @@
-# -*- coding: utf-8 -*-
-"""数域系统：显式声明、按域分派的规范化/判等（cas_v3_arch.md 三）。
+"""The number-field system: explicit declaration plus capability-dispatched
+normalization and equality.
 
-## 分工：本包只声明，装配归投影层
+## Division of labour: this package declares, the projection layer assembles
 
-本包是**纯声明**——定义域与环的类，不产生任何导入期副作用（不自注册）。
-把域注册进阶梯是装配的职责，唯一装配点是投影层 `cas/project`：
+This package is pure declaration: it defines domain and ring classes and
+produces no import-time side effect, registering nothing itself. Registering a
+domain into the ladder is the job of assembly, and the single assembly point is
+the projection layer:
 
-· 域包只依赖 cas.syntax.term（层位纪律，见 base.py 模块串），因此拿不到图书馆
-  声明的常数原子——ℚ(i) 需要注入 library 的 i，装配必然发生在能同时看见
-  常数声明与 domains 的层，即 bootstrap。
-· 注册若散在各域模块（import 即注册），注册表内容就取决于谁碰巧被
-  import：新增一个域模块而无人 import 它，就会静默从 lookup() 里消失。
-  集中装配消除这种导入顺序敏感性。
+· the domain package depends only on cas.syntax.term, so it cannot reach the
+  constant atoms declared in the declaration layer. The Gaussian rationals need the
+  declared i injected, so assembly must happen where both the constant
+  declarations and the domains are visible, namely bootstrap.
+· were registration scattered across domain modules (registering on import), the
+  registry content would depend on which module happened to be imported: adding
+  a domain module that nobody imports would make it silently disappear from
+  lookup. Centralized assembly removes that import-order sensitivity.
 
-注册表只管**常驻基域**（ℤ / ℚ / ℚ(i)）。K[x]、K(x) 是按变元集参数化的
-实例，由各自的工厂缓存持有，不进注册表（理由见 poly_domain 文档串）。
+The registry holds resident base domains only (Z / Q / Q(i)). K[x] and K(x) are
+instances parameterized by variable set, held in their own factory caches and
+never registered.
 
-判定的三值性属于判定层（cas/verdict）；域层 equal 返回 bool | None。
+Three-valued decisions belong to the decision layer; the domain layer's `equal`
+returns bool or None.
 """
 
 from cas.math.domains.base import (Ring, RingError, FracRing, Domain, register,

@@ -1,25 +1,31 @@
 # -*- coding: utf-8 -*-
-"""pyCAS 交互式 REPL（v4 架构）。
+"""pyCAS interactive REPL.
 
-命令：
-  <表达式>              断言方程/表达式入账（Claim）
-  both <op> <expr>      两边施加运算（add/sub/mul/div）
-  norm                  域标准形重写
-  solve <var>           线性求解（战术层求解，验证器独立回代判定；分段
-                        方程自动走逐支求解通道：点解入账、区域解/条件解如实报告）
-  subst <var> = <expr>  代换
-  split <cond>          条件切割（加 <cond> 分支；前缀 ! 取否定分支）
-  diff <var>            对当前表达式关于 <var> 微分（域层导数交叉验证；分段
-                        自动走审慎通道，分段点显式标注未验证；等式拒答——
-                        隐函数求导为独立命令，未建）
-  rules                 列出运行期声明的规则
-  apply <rid>           应用指定规则
-  check                 回代验证当前解
-  steps                 列出全部步骤
-  undo                  撤销最近一步（仅回退指针）
+Commands:
+  <expression>          assert an equation/expression into the ledger (Claim)
+  both <op> <expr>      apply an operation to both sides (add/sub/mul/div)
+  norm                  rewrite to the domain normal form
+  solve <var>           linear solve (the tactic layer solves, an independent
+                        checker decides by back-substitution; a piecewise equation
+                        automatically takes the per-branch solve channel, where point
+                        solutions are committed and region/conditional solutions are
+                        reported as they are)
+  subst <var> = <expr>  substitute
+  split <cond>          case split (add a <cond> branch; a leading ! takes the negated
+                        branch)
+  diff <var>            differentiate the current expression in <var> (cross-checked
+                        by the domain-layer derivative; piecewise takes the cautious
+                        channel and marks breakpoints as unverified; equalities are
+                        refused, since implicit differentiation is a separate command
+                        that does not exist yet)
+  rules                 list the rules declared at runtime
+  apply <rid>           apply the named rule
+  check                 verify the current solution by back-substitution
+  steps                 list every step
+  undo                  undo the most recent step (moves the pointer only)
   quit
 
-运行：python repl.py
+Run: python repl.py
 """
 
 from cas.runtime import get_runtime, new_workflow
@@ -38,12 +44,13 @@ from cas.workflow.command import (Claim, BothSides, Rewrite, Solve,
 
 
 def _fmt(t):
-    """显示前 ℚ 折叠（Times(-1,2) → -2 等）。"""
+    """Fold Q arithmetic before display (Times(-1,2) -> -2 and the like)."""
     return to_str(fold(t))
 
 
 def _iso_str(cell):
-    """点胞腔隔离区间的显示：精确有理根直接给出，无理根给隔离区间。"""
+    """Display a point-cell isolating interval: an exact rational root is given
+    directly, an irrational root as its isolating interval."""
     a, b = cell.iso
     if a == b:
         return str(a)
@@ -52,14 +59,15 @@ def _iso_str(cell):
 
 class REPL:
     def __init__(self):
-        # 显式装配（v4 §7.1）：装配由应用发起，import 期不改全局状态。
+        # explicit assembly: the application starts assembly, and import time
+        # mutates no global state
         get_runtime()
         self.wf = new_workflow()
         self.current = None
         self.original = None
 
     def run(self):
-        print("pyCAS REPL. 输入 'help' 查看命令。\n")
+        print("pyCAS REPL. Type 'help' for commands.\n")
         while True:
             try:
                 line = input("> ").strip()
@@ -97,7 +105,8 @@ class REPL:
         extra = ""
         if d.pred is not None:
             extra = f" <-#{d.pred}"
-        # 显示分派按命令**声明的名字**（数据），不按类型分派（v4 §十一 阶段3）
+        # display dispatch is on the command's **declared name** (data), never on
+        # the type
         if d.name == "BothSides":
             extra += f" {d.op}({_fmt(d.operand)})"
         elif d.name == "Rewrite":
@@ -124,7 +133,7 @@ class REPL:
 
     def _cur(self):
         if self.current is None:
-            print("  无当前步骤")
+            print("  no current step")
             return None
         return self.wf.get(self.current)
 
@@ -135,7 +144,7 @@ class REPL:
         try:
             t = parse(line)
         except Exception as e:
-            print(f"  解析错误: {e}")
+            print(f"  parse error: {e}")
             return
         s = self.wf.add(t, Claim())
         if self.original is None:
@@ -149,19 +158,19 @@ class REPL:
             return
         parts = rest.split(None, 1)
         if len(parts) < 2:
-            print("  用法: both <op> <expr>  (op: add/sub/mul/div)")
+            print("  usage: both <op> <expr>  (op: add/sub/mul/div)")
             return
         op, expr_str = parts[0].lower(), parts[1]
         if op not in ("add", "sub", "mul", "div"):
-            print(f"  未知运算: {op}")
+            print(f"  unknown operation: {op}")
             return
         try:
             operand = parse(expr_str)
         except Exception as e:
-            print(f"  解析错误: {e}")
+            print(f"  parse error: {e}")
             return
         if not is_eq(pred.content):
-            print("  当前步骤不是等式")
+            print("  the current step is not an equality")
             return
         lhs, rhs = pred.content.args
         if op == "add":
@@ -177,7 +186,7 @@ class REPL:
         s = self.wf.add(content, BothSides(pred=self.current, op=op,
                                            operand=operand))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '验证失败'}")
+            print(f"  step refuted: {s.note or 'verification failed'}")
         self.current = s.id
         self._show_step(s)
 
@@ -188,7 +197,7 @@ class REPL:
         n = domain_normal_form(pred.content)
         s = self.wf.add(n, Rewrite(pred=self.current))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '规范化结果不匹配'}")
+            print(f"  step refuted: {s.note or 'normal form does not match'}")
         self.current = s.id
         self._show_step(s)
 
@@ -204,26 +213,28 @@ class REPL:
         try:
             sol = solve_linear(pred.content, var)
         except TacticsError as e:
-            print(f"  战术拒答: {e}")
+            print(f"  tactic refused: {e}")
             return
         content = T.eq(var, sol)
         s = self.wf.add(content, Solve(pred=self.current, var=var,
                                        solution=sol))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '回代判官否决'}")
+            print(f"  step refuted: {s.note or 'rejected by the back-substitution judge'}")
         self.current = s.id
         self._show_step(s)
 
     def _solve_piecewise(self, pred, var):
-        """分段方程求解通道：逐支线性求解 + 条件裁决（战术层），
-        点解逐个入账（回代判官独立验证），区域解/条件解如实报告。"""
+        """Piecewise equation channel: per-branch linear solve plus condition
+        adjudication in the tactic layer, with point solutions committed one by one
+        (independently verified by the back-substitution judge) and
+        region/conditional solutions reported as they are."""
         lhs, rhs = pred.content.args
-        if is_piecewise(rhs):              # 分段在右侧：翻转保持分段在左
+        if is_piecewise(rhs):              # piecewise on the right: flip so it is on the left
             lhs, rhs = rhs, lhs
         try:
             res = solve_piecewise(lhs, var, rhs)
         except TacticsError as e:
-            print(f"  分段求解拒答: {e}")
+            print(f"  piecewise solve refused: {e}")
             return
         base = self.current
         for sol in res["points"]:
@@ -231,37 +242,37 @@ class REPL:
             s = self.wf.add(content, Solve(pred=base, var=var,
                                            solution=sol))
             if s.status == "refused":
-                print(f"  步骤被否证：{s.note or '回代判官否决'}")
+                print(f"  step refuted: {s.note or 'rejected by the back-substitution judge'}")
             self.current = s.id
             self._show_step(s)
         for c in res["regions"]:
-            print(f"  区域解: {_fmt(c)}（该支上恒成立）")
+            print(f"  region solution: {_fmt(c)} (holds identically on that branch)")
         for sol, c in res["conditional"]:
-            so = _fmt(sol) if sol is not None else "该支值"
-            print(f"  条件解: x = {so} 需 {_fmt(c)}（未决）")
+            so = _fmt(sol) if sol is not None else "the branch value"
+            print(f"  conditional solution: x = {so} requires {_fmt(c)} (undecided)")
         if not (res["points"] or res["regions"] or res["conditional"]):
-            print("  无解（各支候选均被分支条件否决）")
+            print("  no solution (every branch candidate was refuted by its branch condition)")
 
     def cmd_subst(self, rest):
         pred = self._cur()
         if pred is None:
             return
         if "=" not in rest:
-            print("  用法: subst <var> = <expr>")
+            print("  usage: subst <var> = <expr>")
             return
         var_str, val_str = rest.split("=", 1)
         var = S(var_str.strip())
         try:
             value = parse(val_str.strip())
         except Exception as e:
-            print(f"  解析错误: {e}")
+            print(f"  parse error: {e}")
             return
         substituted = T.subst(pred.content, {var: value})
         content = domain_normal_form(substituted)
         s = self.wf.add(content, Subst(pred=self.current, var=var,
                                        value=value))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '代换验证失败'}")
+            print(f"  step refuted: {s.note or 'substitution verification failed'}")
         self.current = s.id
         self._show_step(s)
 
@@ -274,14 +285,14 @@ class REPL:
         try:
             cond = parse(cond_str)
         except Exception as e:
-            print(f"  解析错误: {e}")
+            print(f"  parse error: {e}")
             return
         branch_cond = T.mk(S("Not"), (cond,)) if negate else cond
         content = T.mk(S("And"), (pred.content, branch_cond))
         s = self.wf.add(content, Split(pred=self.current, condition=cond,
                                        negate=negate))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '分支验证失败'}")
+            print(f"  step refuted: {s.note or 'branch verification failed'}")
         self.current = s.id
         self._show_step(s)
 
@@ -290,9 +301,11 @@ class REPL:
         if pred is None:
             return
         if is_eq(pred.content):
-            # 等式不是 diff 的合法输入：两边求导不保真（点解方程 x=3 会
-            # "推出" 1=0）。隐函数求导是带依赖声明的独立命令（未建）。
-            print("  等式不可求导（两边求导不保真）；隐函数求导为独立命令（未建）")
+            # An equality is not a legal input to diff: differentiating both sides is
+            # unsound (the point solution x=3 would "imply" 1=0). Implicit
+            # differentiation is a separate command with an explicit dependency
+            # declaration, and does not exist yet.
+            print("  an equality cannot be differentiated (differentiating both sides is unsound); implicit differentiation is a separate command that does not exist yet")
             return
         var = S(rest.strip())
         if is_piecewise(pred.content):
@@ -301,31 +314,33 @@ class REPL:
         try:
             content = differentiate(pred.content, var)
         except DiffError as e:
-            print(f"  微分拒答: {e}")
+            print(f"  differentiation refused: {e}")
             return
         s = self.wf.add(content, Diff(pred=self.current, var=var))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '域层导数交叉验证否决'}")
+            print(f"  step refuted: {s.note or 'rejected by the domain-layer derivative cross-check'}")
         self.current = s.id
         self._show_step(s)
 
     def _diff_piecewise(self, pred, var):
-        """分段求导通道（审慎）：逐支求导入账，分段点显式标注未验证——
-        开区间胞腔上导数成立，分段点可导性须极限层（未建），绝不冒充。"""
+        """Piecewise differentiation channel (cautious): commit the per-branch
+        derivative and mark breakpoints as explicitly unverified -- the derivative
+        holds on the open cells, while differentiability at a breakpoint needs the
+        limit layer, which does not exist yet, and is never faked."""
         try:
             deriv, bounds = differentiate_piecewise(pred.content, var)
         except (DiffError, CadError) as e:
-            print(f"  分段微分拒答: {e}")
+            print(f"  piecewise differentiation refused: {e}")
             return
         s = self.wf.add(deriv, Diff(pred=self.current, var=var))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '域层导数交叉验证否决'}")
+            print(f"  step refuted: {s.note or 'rejected by the domain-layer derivative cross-check'}")
         self.current = s.id
         self._show_step(s)
         if bounds:
             pts = ", ".join(f"x∈[{_iso_str(c)}]" for c in bounds)
-            print(f"  ⚠ 分段点 {pts} 处的可导性未验证"
-                  "（需连续性与单侧导数校验，极限层未建）")
+            print(f"  ⚠ differentiability at the breakpoints {pts} is unverified"
+                  " (it needs continuity and one-sided derivative checks; the limit layer does not exist yet)")
 
     def cmd_integrate(self, rest):
         pred = self._cur()
@@ -336,13 +351,13 @@ class REPL:
         try:
             G = integrate_term(f, var)
         except IntegrateError as e:
-            print(f"  积分拒答: {e}")
+            print(f"  integration refused: {e}")
             return
         content = T.eq(T.mk(S("Integrate"), (T.mk_bound(var, f),)), G)
         s = self.wf.add(content, Integrate(pred=self.current, var=var,
                                            antideriv=G))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '原函数独立验证否决'}")
+            print(f"  step refuted: {s.note or 'rejected by the independent antiderivative verification'}")
         self.current = s.id
         self._show_step(s)
 
@@ -352,34 +367,34 @@ class REPL:
             return
         parts = rest.split()
         if len(parts) < 3:
-            print("  用法: int <var> <a> <b>")
+            print("  usage: int <var> <a> <b>")
             return
         var = S(parts[0])
         try:
             a = fold(parse(parts[1]))
             b = fold(parse(parts[2]))
         except Exception as e:
-            print(f"  解析错误: {e}")
+            print(f"  parse error: {e}")
             return
         f = pred.content
         try:
             G = integrate_term(f, var)
             V = definite_integrate(f, var, a, b)
         except IntegrateError as e:
-            print(f"  定积分拒答: {e}")
+            print(f"  definite integration refused: {e}")
             return
         content = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(var, f), a, b)), V)
         s = self.wf.add(content, Integrate(pred=self.current, var=var,
                                            antideriv=G, bounds=(a, b)))
         if s.status == "refused":
-            print(f"  步骤被否证：{s.note or '定积分独立验证否决'}")
+            print(f"  step refuted: {s.note or 'rejected by the independent definite-integral verification'}")
         self.current = s.id
         self._show_step(s)
 
     def cmd_rules(self, _):
         rs = declared_ruleset()
         if not rs.rules:
-            print("  运行期声明里无规则")
+            print("  no rules in the runtime declarations")
             return
         for rid, r in rs.rules.items():
             auto = " auto" if r.auto else ""
@@ -393,7 +408,7 @@ class REPL:
         rid = rest.strip()
         rule = declared_ruleset().rules.get(rid)
         if rule is None:
-            print(f"  未知规则: {rid}（rules 查看清单）")
+            print(f"  unknown rule: {rid} (use rules to list them)")
             return
         for path in T.all_paths(pred.content):
             res = apply_rule(rule, pred.content, path)
@@ -404,20 +419,20 @@ class REPL:
                                                   substitution=res.subst),
                                 target=path)
                 if s.status == "refused":
-                    print(f"  步骤被否证：{s.note or '规则产物复核失败'}")
+                    print(f"  step refuted: {s.note or 'rule output failed re-check'}")
                 self.current = s.id
                 self._show_step(s)
                 return
-        print(f"  规则 {rid} 不匹配当前步骤")
+        print(f"  rule {rid} does not match the current step")
 
     def cmd_check(self, _):
         if self.original is None or self.current is None:
-            print("  无原始方程或当前步骤")
+            print("  no original equation or current step")
             return
         cur = self.wf.get(self.current)
         orig = self.wf.get(self.original)
         if not is_eq(cur.content) or not is_eq(orig.content):
-            print("  当前步骤或原始方程不是等式")
+            print("  the current step or the original equation is not an equality")
             return
         cl, cr = cur.content.args
         if isinstance(cl, Sym) and T.is_num(cr):
@@ -425,34 +440,36 @@ class REPL:
         elif isinstance(cr, Sym) and T.is_num(cl):
             var, val = cr, cl
         else:
-            print("  当前步骤不是 var = value 形式")
+            print("  the current step is not of the form var = value")
             return
-        print(f"  回代: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
-        # 判零与守卫的裁决权在 cas/judge（唯一实现），此处只做展示
+        print(f"  back-substitute: {_fmt(orig.content)} at {_fmt(var)}={_fmt(val)}")
+        # adjudication of both the zero test and the guards belongs to the judge
+        # (its only implementation); this command only displays the result
         bs = back_substitute(orig.content, var, val)
         if bs.zero is None:
-            print("        判零未决（选支/域外），不能判定为验证通过")
+            print("        zero test undecided (branch selection or outside the domain); cannot be accepted as verified")
             return
         if bs.zero is False:
             shown = f"= {bs.exact}" if bs.exact is not None else "≠ 0"
             print(f"        {shown} ✗ FAILED")
             return
         print(f"        = {bs.exact if bs.exact is not None else 0} ✓")
-        # 守卫统一交判定管线裁决（全谓词头 + 复合命题），不白名单、不静默
+        # guards go to the decision pipeline as a whole (every predicate head and
+        # compound proposition), with no whitelist and no silence
         ok = True
         for c in guard_report(cur.guards, var, val):
             if c.verdict is NO:
-                print(f"        守卫失败: {_fmt(c.guard)} → {_fmt(c.subst)} ✗")
+                print(f"        guard failed: {_fmt(c.guard)} → {_fmt(c.subst)} ✗")
                 ok = False
             elif c.verdict is not YES:
-                print(f"        守卫未决: {_fmt(c.guard)} → {_fmt(c.subst)}"
-                      f"（{c.verdict}）")
+                print(f"        guard undecided: {_fmt(c.guard)} → {_fmt(c.subst)}"
+                      f" ({c.verdict})")
                 ok = False
         if ok:
-            print("        守卫全部通过 ✓")
+            print("        every guard passed ✓")
             print("        === VERIFIED ===")
         else:
-            print("        存在失败/未决守卫，不能判定为验证通过")
+            print("        a guard failed or is undecided; cannot be accepted as verified")
 
     def cmd_steps(self, _):
         for s in self.wf.all_steps():
@@ -461,16 +478,16 @@ class REPL:
     def cmd_undo(self, _):
         steps = self.wf.all_steps()
         if len(steps) <= 1:
-            print("  已是最初步骤")
+            print("  already at the first step")
             return
         last = steps[-1]
-        # DAG 不可变：只回退指针，不删除步骤
+        # the DAG is immutable: only the pointer moves, no step is deleted
         self.current = last.command.pred
         if self.current is not None:
-            print(f"  撤回 #{last.id}，回到 #{self.current}")
+            print(f"  retracted #{last.id}, back at #{self.current}")
             self._show_step(self.wf.get(self.current))
         else:
-            print("  已是最初步骤")
+            print("  already at the first step")
 
 
 def main():

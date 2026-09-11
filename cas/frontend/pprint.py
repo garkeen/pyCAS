@@ -9,13 +9,15 @@ _PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times
 
 
 def _atom_str(a, src=False):
-    """原子渲染。
+    """Render an atom.
 
-    Sym 是用户符号，不做任何重映射——重映射会让名为 pi 的自定义符号被
-    印成 π。只有图书馆声明的常数才吃 print_name。
+    Sym is a user symbol and is never remapped -- remapping would print a custom
+    symbol named pi as the constant pi. Only constants declared in the declaration
+    layer take a print_name.
 
-    src=True（可解析源码形）一律输出内部名：展示名 π/γ 不在词法里，
-    输出即不可重解析——展示与源码是两种用途，各走各的。
+    src=True (parseable source form) always emits the internal name: the display
+    names for pi/gamma are not in the lexer, so emitting them would be unparseable.
+    Display and source are two purposes and take separate routes.
     """
     if isinstance(a, Sym):
         return a.name
@@ -47,20 +49,24 @@ def _name_of(h):
 
 
 def _wrap(child, need):
-    """子节点 (身串, 自身优先级) 在 need 优先级上下文中的括号决策。"""
+    """Parenthesize decision for a child (body string, own precedence) in a context
+    of precedence `need`."""
     s, p = child
     return "(" + s + ")" if need > p else s
 
 
-_ATOM_P = 100   # 非 _PREC 节点自身优先级：永不需要括号（原递归版只有 _PREC 头查 prec）
+_ATOM_P = 100   # own precedence of a node absent from _PREC: never needs parentheses
 
 
 def to_str(t, prec=0, hint=None, src=False):
-    """显式栈后序重建：每节点产出不带外层括号的身串与自身优先级，
-    父层按上下文优先级加括号（与原递归版 prec 机制逐案例等价）。
+    """Explicit-stack postorder rebuild: each node yields a body string without outer
+    parentheses plus its own precedence, and the parent adds parentheses by context
+    precedence (case-for-case equivalent to the original recursive precedence
+    mechanism).
 
-    src=True 时输出可解析源码形式（绑定词输出函数形态 integrate(f,x)/sum(f,x)/
-    product(f,x)/limit(f,x,pt)），供 % 历史展开后重新解析。
+    With src=True it emits a parseable source form (binder words print as function
+    calls integrate(f,x)/sum(f,x)/product(f,x)/limit(f,x,pt)) so that a % history
+    expansion can be reparsed.
     """
     val = {}
     for u in reversed(postorder(t)):
@@ -87,7 +93,7 @@ def to_str(t, prec=0, hint=None, src=False):
             b = u.args[0]
             sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]
             fn = {"Integrate": "integrate", "Sum": "sum", "Product": "product", "Limit": "limit"}[name]
-            _v, ob = T.open_bound(b)   # DB 索引还原为绑定变量名再渲染
+            _v, ob = T.open_bound(b)   # restore the DB index to the bound variable name before rendering
             if src:
                 val[u] = (f"{fn}({to_str(ob, src=True)}, {b.hint})", _ATOM_P)
             else:
@@ -116,8 +122,9 @@ def to_str(t, prec=0, hint=None, src=False):
             val[u] = ("O(" + _wrap(val[u.args[0]], 0) + ")", _ATOM_P)
             continue
         if name == "RootOf" and len(u.args) == 2:
-            # 原样大写输出：parser 对小写头自动首字母大写（rootof -> Rootof
-            # != RootOf），round-trip 要求精确形态
+            # Emit the exact capitalized form: the parser capitalizes the first letter
+            # of a lowercase head (rootof -> Rootof, which differs from RootOf), and
+            # round-tripping requires the exact shape.
             val[u] = (f"RootOf({_wrap(val[u.args[0]], 0)}, {val[u.args[1]][0]})", _ATOM_P)
             continue
         if name in _PREC:
@@ -136,8 +143,10 @@ def to_str(t, prec=0, hint=None, src=False):
                 dens = []
                 keep = []
                 for a in rest:
-                    # 负整数幂因子 -> 分母（b^-k -> /b^k），支持多个；
-                    # 只存 (底, 指数) 不新造项（新项不在后序遍历里，查 val 会 KeyError）
+                    # negative integer power factor -> denominator (b^-k -> /b^k),
+                    # several allowed; store only (base, exponent) and never build a
+                    # new term, since a new term is not in the postorder and looking it
+                    # up in val would raise KeyError
                     if (
                         isinstance(a, Expr)
                         and a.head.name == "Power"
@@ -155,7 +164,7 @@ def to_str(t, prec=0, hint=None, src=False):
                     elif v != 1:
                         coef = _atom_str(n)
                 for a in keep:
-                    facs.append(_wrap(val[a], p))   # prec 机制已负责子表达式括号
+                    facs.append(_wrap(val[a], p))   # the precedence mechanism already parenthesizes subexpressions
                 body = "*".join(facs) if facs else (coef if coef not in ("", "-") else "1")
                 if coef and coef != "-" and facs:
                     body = coef + "*" + body
@@ -166,7 +175,7 @@ def to_str(t, prec=0, hint=None, src=False):
                 if dens:
                     ds = []
                     for base, be in dens:
-                        sb = _wrap(val[base], 6)   # 分母幂底按 Power 内优先级渲染
+                        sb = _wrap(val[base], 6)   # render the denominator power base at Power precedence
                         if T.is_num(base) and (T.num_val(base) < 0 or isinstance(base, Rat)):
                             sb = "(" + sb + ")"
                         ds.append(sb if be == 1 else f"{sb}^{be}")
@@ -181,7 +190,7 @@ def to_str(t, prec=0, hint=None, src=False):
                     sb = "(" + sb + ")"
                 se = _wrap(val[e], p + 1)
                 if isinstance(e, Rat):
-                    se = "(" + se + ")"   # 3^1/2 有歧义（^优先于/），分数指数必加括号
+                    se = "(" + se + ")"   # 3^1/2 is ambiguous (^ binds tighter than /), so a fractional exponent needs parentheses
                 s = f"{sb}^{se}"
             else:
                 parts = [_wrap(val[a], p + 1) for a in u.args]
@@ -192,14 +201,15 @@ def to_str(t, prec=0, hint=None, src=False):
         args = ", ".join(_wrap(val[a], 0) for a in u.args)
         val[u] = (f"{_name_of(u.head)}({args})", _ATOM_P)
     s, p = val[t]
-    # 顶层 prec 只对 _PREC 头生效（与原递归版逐案例等价；原子/函数头不加括号）
+    # top-level precedence only applies to _PREC heads (case-for-case equivalent to
+    # the original recursive version; atoms and function heads get no parentheses)
     if prec > p and isinstance(t, Expr) and t.head.name in _PREC:
         return "(" + s + ")"
     return s
 
 
 # ---------------------------------------------------------------------------
-# 模式渲染（v4 §5.2 模式元语言）：规则清单展示，输出可重解析的 DSL 形
+# Pattern rendering: rule listing display, emitting a reparsable DSL form
 # ---------------------------------------------------------------------------
 
 def _pat_prec(a):
@@ -209,8 +219,9 @@ def _pat_prec(a):
 
 
 def pat_to_str(p, src=False):
-    """模式渲染。字面项交 to_str；洞输出 ?name / ??name / ?name::pred；
-    PatternCall 按 _PREC/_INFIX 中缀渲染，与项打印同形。"""
+    """Render a pattern. A literal term goes to to_str; a hole prints as
+    ?name / ??name / ?name::pred; a PatternCall renders infix via _PREC/_INFIX,
+    matching term printing."""
     if isinstance(p, T.Term):
         return to_str(p, src=src)
     if isinstance(p, P.PatternVar):

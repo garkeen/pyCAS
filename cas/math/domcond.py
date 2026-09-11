@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
-"""定义域条件提取（守卫系统的结构通道）。
+"""Domain-condition extraction: the structural channel of the guard system.
 
-Power 的约束是环层句法的通用规则（负整幂底 ≠ 0、偶分母有理幂底 ≥ 0
-等），住内核；函数头的约束由运行期声明注册（`builder.declare_domain_cond`），
-内核运行时查询（`Runtime.lookup_domain_cond`）——语义归声明，结构归内核，两不混淆。
+Constraints of Power are universal rules of the ring-level syntax (a nonzero
+base for a negative integer power, a nonnegative base for a rational power with
+an even denominator, ...) and live in the kernel. Constraints of function heads
+are declared by the `domain` line of the declaration DSL (carried into the
+runtime with the function declaration) and queried at run time, so semantics
+belong to declarations and structure belongs to the kernel without mixing.
 
-定义域条件的注册**只有运行期声明一个通道**：内核侧不设第二个注入点，
-两条通道做同一件事必然导致语义分叉，无从判定哪条生效。
-
-原居 cas/domain.py（值域+代数域概念分裂的遗留），该模块已废除。
+Domain conditions have exactly one registration channel: the declaration DSL.
+There is no second injection point on the kernel side, because two channels
+doing the same thing necessarily diverge and there is no way to tell which one
+takes effect.
 """
 
 from cas.syntax import term as T
@@ -18,13 +20,15 @@ _DECLS = None
 
 
 def bind_runtime(rt):
-    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+    """Inject the declaration query surface at assembly time.
 
-    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
-    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+    The dependency direction is runtime -> math and the reverse is forbidden, so
+    a math module must not import runtime; declarations are injected during
+    assembly instead.
 
-    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
-    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    Querying before injection raises rather than returning None: a silent None
+    would turn "forgot to assemble" into a hard-to-find wrong answer, whereas
+    "no such name" is a different case that still returns None.
     """
     global _DECLS
     _DECLS = rt
@@ -33,25 +37,29 @@ def bind_runtime(rt):
 def _R():
     if _DECLS is None:
         raise RuntimeError(
-            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+            "not assembled: call cas.runtime.bootstrap() first")
     return _DECLS
 
 
 
 def _guarded(cond, guards):
-    """分支守卫的条件化：¬cond ∨ guard（该分支只在 cond 成立处生效，
-    其定义域义务随之只在 cond 下需要兑现）。"""
+    """Conditionalize a branch guard: `not cond or guard`. The branch is only
+    active where cond holds, so its definedness obligation is only owed there."""
     neg = T.mk(S("Not"), (cond,)) if cond is not T.TRUE else T.FALSE
     return [T.mk(S("Or"), (neg, g)) for g in guards]
 
 
 def dom_condition(t, out=None):
-    """递归提取定义域约束（纯结构，不判值）。
+    """Recursively extract domain constraints, structurally, without deciding
+    values.
 
-    Power 约束为结构性通用规则：负整数幂 a^-k -> a≠0；偶分母有理幂
-    a^(p/q) -> a≥0；负有理幂 a^-e：偶分母 -> a>0（非负且非零），
-    奇分母 -> a≠0。Piecewise 逐分支提取体约束并条件化（¬cond ∨ 约束），
-    分支间的并由判定层按析取处理。其余函数头一律经图书馆声明注入。
+    Power constraints are universal structural rules: a negative integer power
+    a^-k gives a != 0; a rational power a^(p/q) with even q gives a >= 0; a
+    negative rational power a^-e gives a > 0 when the denominator is even and
+    a != 0 when it is odd. A Piecewise contributes each branch's body
+    constraints, conditionalized as `not cond or constraint`; the disjunction
+    across branches is handled by the decision layer. Every other function head
+    goes through the declaration channel.
     """
     if out is None:
         out = []
@@ -74,9 +82,9 @@ def dom_condition(t, out=None):
             for i in range(0, len(a), 2):
                 v, c = a[i], a[i + 1]
                 body = []
-                dom_condition(v, body)          # 分支体自身约束（含嵌套）
+                dom_condition(v, body)          # the branch body's own constraints, nested included
                 out.extend(_guarded(c, body))
-            return out                          # 条件是命题，不作值域守卫
+            return out                          # conditions are propositions, not value guards
         else:
             fn = _R().lookup_domain_cond(name)
             if fn is not None:

@@ -1,17 +1,22 @@
-# -*- coding: utf-8 -*-
-"""一维柱面代数分解（最简 CAD，架构 §6.4/§8"结式引擎即可起步"）。
+"""One-dimensional cylindrical algebraic decomposition, the simplest CAD.
 
-把一组关于单变量 x 的**多项式**条件分解成有序、互斥、覆盖全轴的胞腔
-（开区间 + 点），并逐胞腔判定每个条件的真值。这是分段函数求导/积分/
-解方程的公共地基：一切"分界点在哪、谁在前谁在后"的问题都归结于此。
+Decompose a set of univariate polynomial conditions in x into ordered, pairwise
+disjoint cells (open intervals plus points) that cover the whole line, and decide
+each condition's truth value on each cell. This is the shared foundation of
+piecewise differentiation/integration and equation solving: every "where are the
+breakpoints and in what order" question reduces to it.
 
-判定通道（全精确，无近似）：
-· 开区间胞腔：取无根有理样本点，边界多项式精确求值定符号。
-· 点胞腔（根）：该条件边界多项式若在此根处消没（Sturm 计数 ≥1）则值为 0；
-  否则符号在根的小邻域内恒定，取隔离区间中点求值——不依赖 ℚ(α) 扩张。
+Decision channels, all exact, no approximation:
+· open cell: take a root-free rational sample point and sign the boundary
+  polynomial exactly;
+· point cell (a root): if the condition's boundary polynomial vanishes there
+  (Sturm count >= 1) the value is 0; otherwise the sign is constant in a small
+  neighbourhood and is read from the midpoint of the isolating interval, with no
+  need for an algebraic extension.
 
-诚实边界：条件非单变量多项式即拒答——多变量分区（投影未建）记
-FRAGMENT；含超越结构（超越根比大小，拒答表 §7 第三行）记 UNDECIDABLE。
+Honest boundary: a condition that is not a univariate polynomial is refused --
+multivariate partitioning is FRAGMENT, and transcendental structure
+(comparing transcendental roots) is UNDECIDABLE.
 """
 
 from dataclasses import dataclass
@@ -21,7 +26,7 @@ from cas.syntax import term as T
 from cas.errors import CadError
 from cas.kernel.verdict import Reason
 from cas.math.qarith import fold
-from cas.math.domains.q import Q_RING
+from cas.math.domains.base import find_domain
 from cas.math.domains.poly import from_term, p_mul
 from cas.math.domains.polytools import p_deg
 from cas.math.realroot import (real_roots_intervals, p_eval_at, coef_sign,
@@ -30,49 +35,74 @@ from cas.math.realroot import (real_roots_intervals, p_eval_at, coef_sign,
 _CMP = ("Lt", "Le", "Gt", "Ge", "Eq", "Ne")
 
 
+def _coeff_ring():
+    """The coefficient ring for CAD: an **ordered field**, because Sturm sign
+    determination needs an order structure.
+
+    Taken by capability rather than by hardcoding `Q_RING`. The system currently
+    has exactly one ordered field, Q; if another is added, this query fails
+    loudly on an ambiguous match rather than silently picking one, because an
+    ambiguous domain is a decision that must be made explicitly.
+    """
+    hits = find_domain(lambda d: d.is_field and d.is_ordered
+                       and d.ring is not None)
+    if len(hits) != 1:
+        raise CadError(
+            f"CAD needs a unique ordered field coefficient ring, matched "
+            f"{[d.name for d in hits]}",
+            Reason.FRAGMENT)
+    return hits[0].ring
+
+
 @dataclass(frozen=True, slots=True)
 class Cell:
-    """一个胞腔。
+    """One cell.
 
-    kind=="open"：开区间，sample 为腔内无根有理样本点。
-    kind=="point"：单根胞腔，iso=(a, b) 为该根的隔离区间
-                   （a==b 为精确有理根）。
-    lo / hi：本胞腔下/上界根的隔离区间；None 表示无界（−∞ / +∞）。
-             点胞腔 lo==hi==iso；开胞腔为其两侧根的隔离区间。"""
+    kind == "open": an open interval, with a root-free rational sample point.
+    kind == "point": a simple-root cell, with iso=(a, b) as the isolating
+                     interval (a == b for an exact rational root).
+    lo / hi: the isolating intervals of the lower/upper boundary roots; None
+             means unbounded (-infinity / +infinity). For a point cell
+             lo == hi == iso; for an open cell they are the adjacent root
+             intervals."""
     kind: str
-    sample: object = None     # Fr（open）
-    iso: tuple = None         # (a, b)（point）
-    lo: object = None         # 下界根隔离区间或 None（−∞）
-    hi: object = None         # 上界根隔离区间或 None（+∞）
+    sample: object = None     # Fr (open)
+    iso: tuple = None         # (a, b) (point)
+    lo: object = None         # lower root isolating interval or None (-infinity)
+    hi: object = None         # upper root isolating interval or None (+infinity)
 
 
 # ---------------------------------------------------------------------------
-# 条件 → 边界多项式
+# Condition to boundary polynomial
 # ---------------------------------------------------------------------------
 
 def _refusal_reason(d, x):
     fv = T.free_vars(d)
     if any(s is not x for s in fv):
-        return Reason.FRAGMENT          # 多变量分区：CAD 投影未建
-    return Reason.UNDECIDABLE           # 单变量含超越结构：根比较不可判定
+        return Reason.FRAGMENT          # multivariate partitioning: CAD projection not built
+    return Reason.UNDECIDABLE           # univariate with transcendental structure: root comparison undecidable
 
 
 def _boundary(cond, x):
-    """比较命题两侧之差 → 单变量多项式；非多项式分区拒答。
+    """The difference of the two sides of a comparison proposition, as a
+    univariate polynomial; a non-polynomial partition is refused.
 
-    差值先经 ℚ 折叠——解析产物中未收拢的负指数幂（如 -1/2 的
-    (2^-1)·(-1)）折叠后即是常数，折叠后仍非多项式才是真拒答。"""
+    The difference is folded over Q first: an unfolded negative power from
+    parsing (such as (2^-1)*(-1) for -1/2) folds to a constant, and only a
+    difference that is still non-polynomial after folding is a real refusal.
+    """
     a, b = cond.args
     d = fold(T.plus(a, T.neg(b)))
-    p = from_term(Q_RING, d, (x,))
+    p = from_term(_coeff_ring(), d, (x,))
     if p is None:
-        raise CadError(f"条件非单变量多项式分区: {cond!r}",
+        raise CadError(f"condition is not a univariate polynomial partition: {cond!r}",
                        _refusal_reason(d, x))
     return p
 
 
 def extract_boundary_polys(cond, x):
-    """递归收集条件中的边界多项式（比较两侧之差，去常数）。"""
+    """Recursively collect the boundary polynomials of a condition, taking the
+    difference of the two sides and dropping constants."""
     if cond is T.TRUE or cond is T.FALSE:
         return []
     if isinstance(cond, T.BVal):
@@ -89,53 +119,57 @@ def extract_boundary_polys(cond, x):
         if h in _CMP:
             p = _boundary(cond, x)
             return [p] if p_deg(p, 0) > 0 else []
-    raise CadError(f"非命题条件: {cond!r}", Reason.FRAGMENT)
+    raise CadError(f"not a propositional condition: {cond!r}", Reason.FRAGMENT)
 
 
 # ---------------------------------------------------------------------------
-# 胞腔构造
+# Cell construction
 # ---------------------------------------------------------------------------
 
 def cells(polys):
-    """由边界多项式集合产出有序胞腔。无实根 → 单开区间 (−∞, ∞)。"""
+    """Produce ordered cells from a set of boundary polynomials. With no real
+    root the result is the single open interval (-infinity, +infinity)."""
     if not polys:
         return [Cell("open", sample=Fr(0))]
+    ring = _coeff_ring()
     P = polys[0]
     for q in polys[1:]:
-        P = p_mul(Q_RING, P, q)
-    ivs = real_roots_intervals(Q_RING, P)
+        P = p_mul(ring, P, q)
+    ivs = real_roots_intervals(ring, P)
     if not ivs:
         return [Cell("open", sample=Fr(0))]
     out = []
     a1, _b1 = ivs[0]
-    out.append(Cell("open", sample=a1 - 1, hi=ivs[0]))       # (−∞, r₁)
+    out.append(Cell("open", sample=a1 - 1, hi=ivs[0]))       # (-infinity, r1)
     for i, (a, b) in enumerate(ivs):
         out.append(Cell("point", iso=(a, b), lo=(a, b), hi=(a, b)))
         if i + 1 < len(ivs):
             na, nb = ivs[i + 1]
-            out.append(Cell("open", sample=(b + na) / 2,    # (rᵢ, rᵢ₊₁)
+            out.append(Cell("open", sample=(b + na) / 2,    # (r_i, r_{i+1})
                             lo=(a, b), hi=(na, nb)))
     _ak, bk = ivs[-1]
-    out.append(Cell("open", sample=bk + 1, lo=ivs[-1]))      # (rₖ, +∞)
+    out.append(Cell("open", sample=bk + 1, lo=ivs[-1]))      # (r_k, +infinity)
     return out
 
 
 # ---------------------------------------------------------------------------
-# 胞腔上的符号判定
+# Sign determination on a cell
 # ---------------------------------------------------------------------------
 
 def sign_at_cell(p, cell: Cell) -> int:
-    """边界多项式 p 在胞腔上的符号（−1/0/1）。"""
+    """The sign (-1/0/1) of a boundary polynomial on a cell."""
     if p.is_zero():
         return 0
     if cell.kind == "open":
         return coef_sign(p_eval_at(p, cell.sample))
     a, b = cell.iso
-    if a == b:                                # 精确有理根
+    if a == b:                                # exact rational root
         return coef_sign(p_eval_at(p, a))
-    # 无理根：p 在此根消没 ⟺ p 在隔离区间内有根（Sturm 计数）
-    sf = squarefree_part(Q_RING, p)
-    seq = sturm_sequence(Q_RING, sf)
+    # irrational root: p vanishes there iff p has a root in the isolating
+    # interval (Sturm count)
+    ring = _coeff_ring()
+    sf = squarefree_part(ring, p)
+    seq = sturm_sequence(ring, sf)
     if count_roots_open(seq, sf, a, b) >= 1:
         return 0
     return coef_sign(p_eval_at(p, (a + b) / 2))
@@ -156,7 +190,7 @@ def _apply_cmp(op: str, sgn: int) -> bool:
 
 
 def cond_holds(cond, cell: Cell, x) -> bool:
-    """条件在胞腔上的真值（胞腔内条件恒真/恒假，符号不变）。"""
+    """The truth value of a condition on a cell, where it is constant."""
     if cond is T.TRUE:
         return True
     if cond is T.FALSE:
@@ -171,19 +205,21 @@ def cond_holds(cond, cell: Cell, x) -> bool:
     if h in _CMP:
         p = _boundary(cond, x)
         return _apply_cmp(h, sign_at_cell(p, cell))
-    raise CadError(f"非命题条件: {cond!r}", Reason.FRAGMENT)
+    raise CadError(f"not a propositional condition: {cond!r}", Reason.FRAGMENT)
 
 
 # ---------------------------------------------------------------------------
-# 分区解析（公共入口）
+# Partition resolution (public entry point)
 # ---------------------------------------------------------------------------
 
 def resolve_partition(conds, x):
-    """conds 关于 x 的柱面分解。
+    """The cylindrical decomposition of `conds` with respect to x.
 
-    返回 [(Cell, [bool, ...])]，内层布尔列表与 conds 对齐——胞腔上各条件
-    的真值。空条件列表返回单一全轴开区间。任一条件非单变量多项式分区
-    抛 CadError（reason 见模块说明）。"""
+    Returns [(Cell, [bool, ...])] where the inner list aligns with conds and
+    gives each condition's truth value on the cell. An empty condition list
+    returns the single open interval covering the whole line. Any condition that
+    is not a univariate polynomial partition raises CadError (see the module
+    docstring for the reasons)."""
     polys = []
     for c in conds:
         polys.extend(extract_boundary_polys(c, x))

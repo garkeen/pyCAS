@@ -1,24 +1,24 @@
-# -*- coding: utf-8 -*-
-"""树遍历与重写工具（自 cas/term.py 拆出）：替换（subst）、
-路径寻址（term_at/replace_at/all_paths）、自由变量、子项手术绑定
-（_bind_into）、规模统计。
+"""Tree traversal and rewriting: substitution, path addressing
+(term_at/replace_at/all_paths), free variables, subterm surgery binding
+(_bind_into) and size traversal.
 
-实例化（instantiate）已随模式元语言移居 cas/syntax/pattern.py：项层无洞，
-Term 级实例化不存在（v4 不变量 2）。
+Instantiation lives with the pattern metalanguage in cas/syntax/pattern.py,
+because the term layer has no holes.
 
-依赖纪律：本模块对 term 只持模块引用（函数内经 T.xxx 访问）——
-term.py 末尾延迟导入本模块完成名字回接，无导入环。
+Dependency note: this module holds only a module reference to term (accessed
+as T.xxx inside functions). term.py re-exports these names lazily, so there is
+no import cycle.
 """
 
 from cas.syntax import term as T
-from cas.errors import BudgetExceeded
 
 
 def _subst_raw(t, mapping):
-    """原始结构替换（不规范化，保 held 形）：用于 Quote 内部。
+    """Raw structural substitution (no normalization, held form preserved),
+    used inside Quote.
 
-    与 subst 同构但重建走 _intern_expr——Times/Power 不合并同底幂，
-    保持 held 项的原始结构。Quote 内部含 ?x 替换时用此。
+    Isomorphic to subst but rebuilds through _intern_expr, so Times/Power do
+    not merge same-base powers and the held structure of the term is kept.
     """
     if not mapping:
         return t
@@ -48,13 +48,16 @@ def _subst_raw(t, mapping):
 
 
 def subst(t, mapping):
-    """替换（显式工作栈后序重建，深表达式不触及 Python 递归上限）。
+    """Substitution, rebuilt bottom-up on an explicit work stack so that deep
+    expressions never hit the Python recursion limit.
 
-    Quote 内部走 _subst_raw（保 held 结构，不合并同底幂/同类项）。
+    Inside Quote the raw channel is used, preserving the held structure
+    instead of merging same-base powers and like terms.
     """
     if not mapping:
         return t
-    # 显式栈后序遍历；Bound 的 body 必须始终下行（内部自由变量需替换且防捕获）
+    # Explicit-stack postorder. A Bound body is always entered: its free
+    # variables must be substituted and capture must be prevented.
     order = []
     stack = [t]
     while stack:
@@ -62,9 +65,9 @@ def subst(t, mapping):
         order.append(u)
         if isinstance(u, T.Expr):
             if u in mapping:
-                continue  # 命中替换表的子树不再下行
+                continue  # a substituted subtree is not traversed further
             if isinstance(u.head, T.Sym) and u.head.name == "Quote":
-                continue  # quote 内部不走 mk 重建（保 held 结构，单独 raw subst）
+                continue  # Quote contents do not rebuild through mk
             stack.extend(u.args)
         elif isinstance(u, T.Bound):
             stack.append(u.body)
@@ -75,8 +78,9 @@ def subst(t, mapping):
             val[u] = hit
         elif isinstance(u, T.Expr):
             if isinstance(u.head, T.Sym) and u.head.name == "Quote":
-                # quote 内部保 held 结构：raw subst（_intern_expr 重建，不规范化）
-                val[u] = T._intern_expr(u.head, tuple(T._subst_raw(a, mapping) for a in u.args))
+                # Quote preserves held structure: raw rebuild, no normalization.
+                val[u] = T._intern_expr(
+                    u.head, tuple(T._subst_raw(a, mapping) for a in u.args))
             else:
                 val[u] = T.mk(u.head, tuple(val[a] for a in u.args))
         elif isinstance(u, T.Bound):
@@ -104,8 +108,10 @@ def term_at(t, path):
         if isinstance(t, T.Expr):
             t = t.args[i]
         elif isinstance(t, T.Bound):
-            # 穿过绑定层时打开体：DB 索引还原为绑定符号，子树脱离绑定上下文
-            # 供规则匹配/求值视为自由符号树（replace_at 放回时 mk_bound 重新抽象）
+            # Crossing a binder opens its body: de Bruijn indices become the
+            # bound symbol, so the subterm leaves the binding context and can be
+            # matched/evaluated as a free-symbol tree. replace_at re-abstracts
+            # it through mk_bound when putting it back.
             t = T._lift(t.body, T.S(t.hint), 0)
         else:
             raise IndexError(path)
@@ -113,10 +119,12 @@ def term_at(t, path):
 
 
 def _bind_into(t, var, depth=0):
-    """把打开后的体中的自由变量 var 绑回 de Bruijn 索引，不触碰已有 DB 引用。
+    """Bind the free variable `var` in an opened body back to a de Bruijn
+    index, without touching existing DB references.
 
-    与 _abstract 的区别：_abstract 会提升 body 里已有的 DB(i>=depth)（正常 mk_bound
-    场景 body 无 DB 引用）；replace_at 穿过已绑定层时 body 里已有外层 DB 引用，必须保持。
+    Unlike _abstract, this never shifts DB(i >= depth) already present in the
+    body: replace_at crosses an already-bound layer whose body may hold outer
+    DB references, and those must stay as they are.
     """
     if isinstance(t, T.Sym):
         return T.DB_(depth) if t is var else t
@@ -136,7 +144,8 @@ def replace_at(t, path, v):
         args[i] = replace_at(args[i], path[1:], v)
         return T.mk(t.head, tuple(args))
     if isinstance(t, T.Bound):
-        # 打开当前层 -> 递归替换 -> 只把当前层变量绑回，外层 DB 引用保持不动
+        # Open the current layer, substitute recursively, then bind only the
+        # current layer's variable back; outer DB references stay untouched.
         var = T.S(t.hint)
         inner = replace_at(T._lift(t.body, var, 0), path[1:], v)
         return T._mk_bound_canon(t.hint, _bind_into(inner, var, 0))
@@ -153,10 +162,11 @@ def all_paths(t, base=()):
 
 
 def postorder(t):
-    """显式栈后序遍历（不依赖 Python 递归栈，深表达式安全）。
+    """Explicit-stack postorder traversal, safe for deep expressions because it
+    never relies on the Python recursion stack.
 
-    全系统只此一份：此前 pprint 与 simplify 各存一份同构副本（pprint
-    那份的注释还写着"避免跨模块依赖"），树遍历工具归本模块。
+    This is the single implementation in the system: pprint and the simplifier
+    used to hold isomorphic private copies.
     """
     order = []
     stack = [t]

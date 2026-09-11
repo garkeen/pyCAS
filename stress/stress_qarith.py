@@ -1,14 +1,16 @@
-"""随机压力台架（cas_v3_arch.md 九 验收方法论：生成验证，非手写案例）。
+"""Randomized stress bench (generation-based verification rather than handwritten
+cases: the machine generates the instances and checks the properties).
 
-四条性质，全部自证、无需外部真值：
-  P1 折叠保真    eval_exact(t, env) == eval_exact(fold(t), env)
-  P2 幂等指针    fold(fold(t)) is fold(t)   （内容寻址 ⇒ 结构同 ⇒ 指针同）
-  P3 区间通道    假设 x>k 后，查询 x>j 的三值真值表
-  P4 回代判官    预埋根的方程展开后逐根回代必须精确为 0，
-                 非根样本必须非 0 —— 未来战术层的验收原型
+Four properties, all self-proving with no external ground truth:
+  P1 fold fidelity   eval_exact(t, env) == eval_exact(fold(t), env)
+  P2 idempotent pointer  fold(fold(t)) is fold(t) (content addressing implies that the
+                     same structure has the same pointer)
+  P3 interval channel  after assuming x>k, the three-valued truth table for queries x>j
+  P4 back-substitution judge  an equation built from known roots must evaluate to exactly
+                     0 at each root after expansion, and a non-root sample must not
 
-用法：python stress/stress_qarith.py [轮数] [种子]
-任一失败打印最小反例与种子，退出码 1。
+Usage: python stress/stress_qarith.py [rounds] [seed]
+On any failure it prints a minimal counterexample and the seed and exits with code 1.
 """
 
 import sys
@@ -32,7 +34,7 @@ X, Y = S("x"), S("y")
 
 
 # ---------------------------------------------------------------------------
-# 生成器：随机环层项（深度有界，字面量小分母）
+# Generator: random ring-layer terms (bounded depth, literals with small denominators)
 # ---------------------------------------------------------------------------
 
 def gen_lit(rng):
@@ -53,13 +55,14 @@ def gen(d, rng):
         return plus(*(gen(d - 1, rng) for _ in range(rng.randint(2, 3))))
     if r < 0.80:
         return times(*(gen(d - 1, rng) for _ in range(rng.randint(2, 3))))
-    # 整数幂：指数 0..3 安全（负指数由 gen_safe 处理）
+    # integer powers: exponents 0..3 are safe (negative exponents are handled by gen_safe)
     b = gen(d - 1, rng)
     return pw(b, N(rng.randint(0, 3)))
 
 
 def gen_safe(d, rng):
-    """gen 的保守版：负指数仅作用于非零字面底（避开未定义域争议）。"""
+    """Conservative version of gen: a negative exponent applies only to a nonzero
+    literal base, avoiding undefined-domain disputes."""
     t = gen(d, rng)
 
     def fix(u):
@@ -72,7 +75,7 @@ def gen_safe(d, rng):
             if ev is not None and ev < 0:
                 if isinstance(b2, Int) and b2.v != 0:
                     return pw(b2, e)
-                return b2                      # 弃负指数，保底数
+                return b2                      # drop the negative exponent, keep the base
             return mk(u.head, (b2, e))
         return mk(u.head, tuple(fix(a) for a in u.args))
 
@@ -87,7 +90,7 @@ def fail(msg, seed, t=None):
 
 
 # ---------------------------------------------------------------------------
-# P1/P2：折叠保真与幂等
+# P1/P2: fold fidelity and idempotence
 # ---------------------------------------------------------------------------
 
 def prop_fold(rounds, rng):
@@ -98,7 +101,7 @@ def prop_fold(rounds, rng):
         t = gen_safe(rng.randint(1, 4), rng)
         ft = fold(t)
         if fold(ft) is not ft:
-            fail("P2 幂等指针", rng.seed if hasattr(rng, "seed") else "?", t)
+            fail("P2 idempotent pointer", rng.seed if hasattr(rng, "seed") else "?", t)
         for env in envs:
             try:
                 v1 = eval_exact(t, env)
@@ -106,11 +109,11 @@ def prop_fold(rounds, rng):
             except EvalNumError:
                 continue
             if v1 != v2:
-                fail(f"P1 保真 env={env}", i, t)
+                fail(f"P1 fidelity env={env}", i, t)
 
 
 # ---------------------------------------------------------------------------
-# P3：区间通道三值真值表
+# P3: interval-channel three-valued truth table
 # ---------------------------------------------------------------------------
 
 def prop_interval(rounds, rng):
@@ -124,16 +127,16 @@ def prop_interval(rounds, rng):
             else:
                 ok = isinstance(got, Unknown)
             if not ok:
-                fail(f"P3 区间 assume x>{k} 查 x>{j}: got {got}", k)
+                fail(f"P3 assume x>{k}, query x>{j}: got {got}", k)
         _cond, b_assumptions, _st = branch(
             assumptions, mk(S("Lt"), (X, N(k + 10))))[0]
         got = decide(mk(S("Lt"), (X, N(k + 100))), b_assumptions)
         if got is not YES:
-            fail(f"P3 分支帧继承", k)
+            fail(f"P3 branch frame inheritance", k)
 
 
 # ---------------------------------------------------------------------------
-# P4：回代判官（预埋根 -> 展开 -> 精确回代）
+# P4: back-substitution judge (seed roots -> expand -> exact back-substitution)
 # ---------------------------------------------------------------------------
 
 def _rand_root(rng):
@@ -146,32 +149,33 @@ def prop_backsub(rounds, rng):
         p = N(1)
         for r in roots:
             p = times(p, plus(X, neg(N(r))))
-        # 展开走生产侧多项式机器（职责唯一：term 层不再自备展开实现）
+        # expansion uses the production polynomial machinery (single responsibility:
+        # the term layer carries no expansion implementation of its own)
         poly = _poly_from_term(Q_RING, p, (X,))
         if poly is None:
-            fail("P4 乘积不可表示为 ℚ[x]", i, p)
+            fail("P4 the product is not representable in Q[x]", i, p)
         expanded = _poly_to_term(Q_RING, poly)
         folded = fold(expanded)
         for r in roots:
             if eval_exact(folded, {X: r}) != 0:
-                fail(f"P4 根回代非零 r={r}", i, expanded)
+                fail(f"P4 root back-substitution is nonzero: r={r}", i, expanded)
         for _ in range(4):
             bad = Fr(rng.randint(-9, 9), rng.choice((1, 2)))
             if bad in roots:
                 continue
             if eval_exact(folded, {X: bad}) == 0:
-                fail(f"P4 非根误判零 bad={bad}", i, expanded)
+                fail(f"P4 non-root misjudged zero: bad={bad}", i, expanded)
 
 
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260826
-    print(f"== 压力台架：rounds={rounds} seed={seed} ==")
+    print(f"== stress bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_fold(rounds, rng)
-    print(f"P1+P2 折叠保真/幂等   {rounds} 轮通过")
+    print(f"P1+P2 fold fidelity/idempotence  {rounds} rounds passed")
     prop_interval(200, rng)
-    print(f"P3 区间通道           200×15 查询通过")
+    print(f"P3 interval channel              200x15 queries passed")
     prop_backsub(min(rounds, 500), rng)
-    print(f"P4 回代判官           {min(rounds, 500)} 轮通过")
-    print("== 全部通过 ==")
+    print(f"P4 back-substitution judge       {min(rounds, 500)} rounds passed")
+    print("== all passed ==")

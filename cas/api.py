@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""应用门面（v4 §三 目标树 `api.py`；§四 依赖方向的落点）。
+"""Application facade.
 
-**frontend 只许依赖 `api` / `workflow` / `runtime`**（v4 §四 的表）。此前前端
-直接 import 了七个具体数学模块（`qarith` / `judge` / `tactics` / `diff` / `cad` /
-`integrate` / `piecewise`）以及 `kernel.verdict`，绕过了那张表——而
-`runtime/dispatch.py` 的注释自己写着「前端不得直连 math，§四」。本模块是这些
-设施的**唯一出口**，门禁见 `tests/test_v4_invariants.py`
-（`test_dependency_frontend_only_api_workflow_runtime`）。
+**Frontend may only import `api` / `workflow` / `runtime`.** Previously the
+frontend imported seven concrete math modules (`qarith` / `judge` / `tactics` /
+`diff` / `cad` / `integrate` / `piecewise`) plus `kernel.verdict` directly,
+bypassing that rule. This module is the **single exit** for those facilities; the
+gate is `tests/test_v4_invariants.py::test_dependency_frontend_only_api_workflow_runtime`.
 
-门面只做**转发**：不新增语义、不缓存、不改拒答行为。拒答异常
-（`DiffError` / `IntegrateError` / `CadError` / `TacticsError`）也在此出口，
-前端不必再去 `cas.math.*` 取异常类型。
+The facade only **forwards**: it adds no semantics, caches nothing, and changes no
+refusal behaviour. Refusal exceptions (`DiffError` / `IntegrateError` / `CadError` /
+`TacticsError`) also leave through here, so the frontend never reaches into
+`cas.math.*` for an exception type.
 """
 
 from cas.errors import CadError, DiffError, IntegrateError, TacticsError
@@ -25,19 +25,19 @@ from cas.math.tactics import solve_linear, solve_piecewise
 from cas.runtime.dispatch import domain_normal_form
 
 __all__ = (
-    # 判定结果单例（前端只读比较，不构造 verdict）
+    # verdict singletons (frontend compares read-only, never constructs a verdict)
     "YES", "NO",
-    # 拒答异常
+    # refusal exceptions
     "DiffError", "IntegrateError", "CadError", "TacticsError",
-    # ℚ 字面算术与域标准形
+    # Q literal arithmetic and domain normal form
     "fold", "domain_normal_form",
-    # 回代判官（验证侧；求解器在 tactics）
+    # back-substitution judge (verification side; the solver lives in tactics)
     "back_substitute", "guard_report",
-    # 求解 / 微分 / 积分 / 分段
+    # solving / differentiation / integration / piecewise
     "solve_linear", "solve_piecewise",
     "differentiate", "differentiate_piecewise",
     "integrate_term", "definite_integrate",
     "is_piecewise",
-    # 声明规则（前端 rules / apply 命令）
+    # declared rules (frontend `rules` / `apply` commands)
     "declared_ruleset", "apply_rule",
 )

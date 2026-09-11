@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""回代判官（cas/judge）：验证系统的原子，全系统唯一实现。
+"""The back-substitution judge: the atom of the verification system, with a single
+implementation in the whole system.
 
-钉子：判官曾分散在 workflow._piecewise_aware_zero（私有）与 repl 的
-内联副本，且两处通道顺序已分叉（repl 先试 eval_exact，workflow 只走
-zero_of）。收敛后裁决权威只认 zero_of（域标准形）。
+Nails: the judge was once split between a private
+`workflow._piecewise_aware_zero` and an inline copy in the REPL, and the two had
+already diverged in channel order (the REPL tried eval_exact first, the workflow only
+used zero_of). After converging, the adjudication authority is zero_of (the domain
+normal form) alone.
 """
 
 import pytest
@@ -26,12 +29,12 @@ def eq_of(src):
 
 
 # ---------------------------------------------------------------------------
-# 真解 / 伪解
+# True solutions / spurious solutions
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("src,val,want", [
-    ("2*x + 3 == 7", 2, True),        # 真解
-    ("2*x + 3 == 7", 3, False),       # 伪解
+    ("2*x + 3 == 7", 2, True),        # true solution
+    ("2*x + 3 == 7", 3, False),       # spurious solution
     ("x^2 - 4 == 0", 2, True),
     ("x^2 - 4 == 0", 3, False),
     ("x/2 - 1 == 0", 2, True),
@@ -45,23 +48,24 @@ def test_back_substitution_zero_test(src, val, want):
 def test_spurious_solution_reports_exact_value():
     bs = back_substitute(eq_of("x^2 - 4 == 0"), T.S("x"), Int(3))
     assert bs.zero is False
-    assert bs.exact == 5                      # 展示值，不参与裁决
+    assert bs.exact == 5                      # a display value, not part of adjudication
 
 
 def test_zero_test_authority_is_domain_normal_form():
-    """eval_exact 只取展示值；裁决由 zero_of 出，覆盖严格更广。"""
+    """eval_exact only produces a display value; the decision comes from zero_of, which
+    covers strictly more."""
     bs = back_substitute(eq_of("2*x + 3 == 7"), T.S("x"), Int(2))
     assert bs.zero is True
-    assert bs.exact == 0                      # 两者都是精确算术，必须一致
+    assert bs.exact == 0                      # both are exact arithmetic and must agree
 
 
 # ---------------------------------------------------------------------------
-# 分段：点塌缩后判零
+# Piecewise: zero test after point collapse
 # ---------------------------------------------------------------------------
 
 def _piecewise_equation():
     x = T.S("x")
-    # f(x) = x-1 (x>0), x+1 (x<=0)  =>  f(x)=0 的解为 x=1 与 x=-1
+    # f(x) = x-1 (x>0), x+1 (x<=0)  =>  f(x)=0 has solutions x=1 and x=-1
     pw = piecewise([(T.plus(x, T.neg(Int(1))), parse("x > 0")),
                     (T.plus(x, Int(1)), parse("x <= 0"))])
     return T.mk(S("Eq"), (pw, T.ZERO)), x
@@ -78,23 +82,24 @@ def test_piecewise_uses_collapse_channel():
     eq, x = _piecewise_equation()
     bs = back_substitute(eq, x, Int(1))
     assert has_piecewise(bs.diff) is True
-    assert bs.exact is None                   # 环层求值管不了分段项
+    assert bs.exact is None                   # ring-layer evaluation cannot handle a piecewise term
 
 
 # ---------------------------------------------------------------------------
-# 未决与定义域外
+# Undecided and outside the domain
 # ---------------------------------------------------------------------------
 
 def test_undecided_is_not_reported_as_pass():
-    """含超越函数的项投影落空：None 是未决，不是"非解"。"""
+    """A term containing transcendentals misses the projection: None is undecided, not
+    "not a solution"."""
     eq = T.mk(S("Eq"), (parse("sin(x)"), T.ZERO))
     bs = back_substitute(eq, T.S("x"), Int(0))
-    assert bs.zero is None                      # 判不动
+    assert bs.zero is None                      # cannot be decided
     assert verify_solution(eq, T.S("x"), Int(0)).is_unknown()
 
 
 def test_nonzero_solution_does_not_pass():
-    """verify_solution 的三个出口：NO / Unknown / YES。"""
+    """The three exits of verify_solution: NO / Unknown / YES."""
     ok = verify_solution(eq_of("2*x + 3 == 7"), T.S("x"), Int(2))
     assert ok is YES
     bad = verify_solution(eq_of("2*x + 3 == 7"), T.S("x"), Int(3))
@@ -102,12 +107,12 @@ def test_nonzero_solution_does_not_pass():
 
 
 # ---------------------------------------------------------------------------
-# 守卫
+# Guards
 # ---------------------------------------------------------------------------
 
 def test_guard_failure_and_refutation():
     eq = eq_of("2*x + 3 == 7")
-    # 真解 x=2，但附加一条 x>5 的假守卫：判零过，守卫不过
+    # true solution x=2 with a false guard x>5 attached: the zero test passes, the guard does not
     guards = [parse("x > 5")]
     v = verify_solution(eq, T.S("x"), Int(2), guards=guards)
     assert v is NO
@@ -122,15 +127,16 @@ def test_guard_report_gives_per_item_verdicts():
 
 
 # ---------------------------------------------------------------------------
-# 实现唯一性
+# Single implementation
 # ---------------------------------------------------------------------------
 
 def test_zero_judge_implemented_only_in_judge():
-    """workflow 不得再持有判零副本，repl 不得盗用私有函数。"""
+    """The workflow must no longer hold a zero-test copy, and the REPL must not steal
+    private functions."""
     import cas.workflow.workflow as W
     import cas.math.judge as J
     for name in ("_piecewise_aware_zero", "_has_piecewise", "_has_undef"):
-        assert not hasattr(W, name), f"workflow 仍持有判官副本: {name}"
+        assert not hasattr(W, name), f"workflow still holds a judge copy: {name}"
     assert J.is_zero is not None
 
 

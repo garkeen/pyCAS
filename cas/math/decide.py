@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""判定管线：命题复合 + 域特定可判定原子（架构第七节）。
+"""Decision pipeline: proposition composition plus domain-specific decidable atoms.
 
-返回值是判定 ADT（cas/verdict）：Yes/No/Unknown(理由)。
-Unknown 的理由区分片段没覆盖（FRAGMENT）、被条件挡住（GUARDED）、
-根本不可判定（UNDECIDABLE）、预算耗尽（BUDGET）——四种后果不同，
-禁止折叠成同一个"不知道"。
+The return value is the decision ADT (cas/verdict): Yes/No/Unknown(reason). The
+reasons distinguish a fragment the pipeline does not cover (FRAGMENT), a fact
+blocked by a condition (GUARDED), a genuinely undecidable question (UNDECIDABLE),
+and an exhausted budget (BUDGET) -- four different consequences that must never be
+folded into one "don't know".
 
-原子通道（按序）：指针/数值 → 账本直查 → 投影判零（域标准形）→
-区间传播 → 序链推理 → 规则派生层 → 图书馆引理（常数粗界、函数值域界）。
+Atom channels, in order: pointer/numeric -> direct ledger lookup -> projection zero
+test (domain normal form) -> interval propagation -> order-chain inference -> derived
+rule layer -> declaration lemmas (constant coarse bounds, function range bounds).
 """
 
 from collections import deque
@@ -23,13 +25,17 @@ _DECLS = None
 
 
 def bind_runtime(rt):
-    """由 `bootstrap()` 注入声明查询面（v4 §四 依赖方向）。
+    """Injected by `bootstrap()` to provide the declaration query surface.
 
-    依赖方向是 **runtime → math**（bootstrap 拉全部数学模块），反向禁止：
-    math 模块不得 import runtime。所以声明由装配期注入，而非模块自己去取。
+    The dependency direction is **runtime -> math** (bootstrap pulls every math
+    module) and never the reverse: a math module must not import runtime. The
+    declaration surface is therefore injected at assembly time instead of fetched by
+    the module itself.
 
-    未注入时查询**报错**而不是返回 None——静默 None 会把「忘了装配」变成
-    难查的错答案，而「查无此名」是另一种情况（那条仍返回 None 由调用方降级）。
+    A query before injection **raises** rather than returning None: a silent None
+    would turn "assembly was forgotten" into a hard-to-find wrong answer, whereas
+    "no such name" is a different case that still returns None for the caller to
+    degrade.
     """
     global _DECLS
     _DECLS = rt
@@ -38,13 +44,13 @@ def bind_runtime(rt):
 def _R():
     if _DECLS is None:
         raise RuntimeError(
-            "未装配：先调用 cas.runtime.bootstrap()（v4 §7.1 禁止 import 期自注册）")
+            "not assembled: call cas.runtime.bootstrap() first")
     return _DECLS
 
 
 
 def _A(a):
-    """None 视作空假设集（历史调用点会传 None）。"""
+    """None is treated as the empty assumption set (older call sites pass None)."""
     return a if a is not None else Assumptions()
 
 
@@ -61,7 +67,8 @@ _NEG = {
 
 
 def negate(f):
-    """比较谓词的强否定（¬(a>b) ≡ a≤b 等）；其余走句法 Not。"""
+    """Strong negation of a comparison predicate (not (a>b) == a<=b and so on);
+    everything else goes through a syntactic Not."""
     if isinstance(f, T.Expr) and f.head.name in _NEG:
         return T.mk(S(_NEG[f.head.name]), f.args)
     if isinstance(f, T.Expr) and f.head.name == "Not":
@@ -102,7 +109,8 @@ def _same(op, a, b):
 
 
 def _poly_eq_check(a, b):
-    """投影判零通道：a−b 落入 ℚ/K[x]/K(x) 时域标准形完全判定。"""
+    """Projection zero-test channel: when a-b falls inside Q/K[x]/K(x), the domain
+    normal form decides it completely."""
     d = _qfold(T.plus(a, T.neg(b)))
     if d is T.ZERO:
         return YES
@@ -133,10 +141,12 @@ def _facts_lookup(fact, assumptions):
 
 
 def _chain_query(op, a, b, assumptions):
-    """序链 BFS：账本不等式建边，传递闭包回答 a<b 型查询。
+    """Order-chain BFS: ledger inequalities become edges and the transitive closure
+    answers queries of the form a<b.
 
-    状态为 (节点, 路径是否含严格边)，按节点记录最优严格性；
-    数值界推理与等式代入由 _interval 区间通道负责，此处只走图边。
+    A state is (node, whether the path contains a strict edge), and the best
+    strictness per node is recorded. Numeric-bound inference and equality
+    substitution belong to the interval channel; here only graph edges are walked.
     """
     adj = {}
     strict = op in ("Lt", "Gt")
@@ -159,7 +169,7 @@ def _chain_query(op, a, b, assumptions):
     while queue:
         cur, evs = queue.popleft()
         if best.get(cur._h, False) != evs:
-            continue                       # 过期状态（已有更优严格性）
+            continue                       # stale state: a better strictness was found
         for nxt, st in adj.get(cur, ()):
             ns = evs or st
             if nxt is goal and (not strict or ns):
@@ -172,11 +182,14 @@ def _chain_query(op, a, b, assumptions):
 
 
 def _interval(t, assumptions, seen=None, depth=0):
-    """数值区间传播：(lo, hi, lo_strict, hi_strict)，端点可为 None（无界）。
+    """Numeric interval propagation: (lo, hi, lo_strict, hi_strict) with either
+    endpoint possibly None (unbounded).
 
-    来源：数值原子 / 常数公理界 / 账本数值界直查 / 账本等式代入（递归） /
-    Plus 求和 / 数值标量 Times 缩放 / 偶次幂与 Abs 非负。
-    只读 term + 账本，不回调 decide（防循环）。无任何信息时返回 None。
+    Sources: numeric atoms / declared constant axiom bounds / direct ledger numeric
+    bounds / ledger equality substitution (recursive) / Plus sums / numeric scalar
+    Times scaling / even powers and Abs being nonnegative. It reads only the term and
+    the ledger and never calls back into decide (to prevent cycles). Returns None
+    when there is no information at all.
     """
     from fractions import Fraction as Fr
 
@@ -238,16 +251,19 @@ def _interval(t, assumptions, seen=None, depth=0):
             o = v if u is t else (u if v is t else None)
             if o is not None and o is not t:
                 if T.is_num(o):
-                    # 常数等式 x=c：x 恰为 c，端点非严格（避免 x=5 推出 x<5）
+                    # constant equality x=c: x is exactly c with non-strict endpoints,
+                    # so that x=5 does not imply x<5
                     bv = T.num_val(o)
                     tighten(bv, False, bv, False)
                 else:
-                    # 变量等式 x=y：x 与 y 同值，区间与严格性透明传递
+                    # variable equality x=y: x and y share a value, so interval and
+                    # strictness pass through transparently
                     iv = _interval(o, assumptions, seen, depth + 1)
                     if iv is not None:
                         tighten(*iv)
     if is_int:
-        # 整数属性消费：端点收紧到最近整点（x>2 ∧ x∈Z ⇒ x≥3）
+        # consume the integer attribute: tighten endpoints to the nearest integer
+        # (x>2 and x in Z implies x>=3)
         if lo is not None:
             c = lo.numerator // lo.denominator + 1 if los else -((-lo.numerator) // lo.denominator)
             if c > lo or los:
@@ -288,7 +304,8 @@ def _interval(t, assumptions, seen=None, depth=0):
         elif n == "Power" and isinstance(t.args[1], T.Int) and t.args[1].v % 2 == 0:
             tighten(Fr(0), False, None, False)
         else:
-            # 函数值域界（图书馆声明）：端点可达（lo ≤ f ≤ hi），严格性为假
+            # declared function range bound: endpoints are attained (lo <= f <= hi),
+            # so strictness is false
             bd = _func_bound(n)
             if bd is not None:
                 tighten(bd[0], False, bd[1], False)
@@ -298,7 +315,8 @@ def _interval(t, assumptions, seen=None, depth=0):
 
 
 def _cmp_interval(op, a, b, assumptions):
-    """把 a op b 归为 d = a - b 对 0 的区间比较（d 先经 ℚ 字面折叠）。"""
+    """Reduce a op b to an interval comparison of d = a - b against 0 (d first folded
+    over Q literals)."""
     d = _qfold(T.plus(a, T.neg(b)))
     if op in ("Eq", "Ne"):
         if d is T.ZERO:
@@ -317,7 +335,7 @@ def _cmp_interval(op, a, b, assumptions):
         return None
     lo, hi, los, his = iv
     if lo is not None and hi is not None and lo == hi and not los and not his:
-        # 闭区间退化为单点 = 精确值，直接裁决
+        # the closed interval degenerates to a point, i.e. an exact value: decide directly
         if op == "Gt":
             return YES if lo > 0 else NO
         if op == "Ge":
@@ -349,19 +367,21 @@ def _cmp_interval(op, a, b, assumptions):
 
 
 # ---------------------------------------------------------------------------
-# 符号结构引理（原 cas/domain.py RealDomain 的可判定部分，模块废除后归位）
+# Symbolic structure lemmas
 # ---------------------------------------------------------------------------
 
 def _func_bound(name):
-    """函数值域界（图书馆声明）：返回 (lo|None, hi|None) 或 None。"""
+    """Declared function range bound: returns (lo|None, hi|None) or None."""
     d = _R().lookup_function(name)
     return d.bound if d is not None else None
 
 
 def _nonneg_zero_arg(t):
-    """t = g(u) 且 g 声明"非负下界 0 + g(u)=0⟺u=0"（绝对值/范数类）→ 返回 u。
+    """For t = g(u) where g is declared "nonnegative with lower bound 0 and
+    g(u)=0 iff u=0" (absolute-value / norm family), return u.
 
-    判定据图书馆声明（zero_iff_arg_zero + bound 下界为 0），不据函数名。"""
+    The decision rests on the declaration (zero_iff_arg_zero with a bound whose lower
+    end is 0), never on the function name."""
     if not isinstance(t, T.Expr) or not isinstance(t.head, T.Sym) \
             or len(t.args) != 1:
         return None
@@ -375,7 +395,8 @@ def _nonneg_zero_arg(t):
 
 
 def _nneg(t, assumptions):
-    """非负结构判定：True/False/None（不回调 decide，只读结构与账本）。"""
+    """Nonnegativity structure decision: True/False/None (reads structure and ledger
+    only, never calls back into decide)."""
     if T.is_num(t):
         return T.sign_num(t) >= 0
     if isinstance(t, T.Const) and _R().const_positive(t) is True:
@@ -407,7 +428,7 @@ def _nneg(t, assumptions):
 
 
 def _pos(t, assumptions):
-    """正性结构判定：True/False/None。"""
+    """Positivity structure decision: True/False/None."""
     if T.is_num(t):
         return T.sign_num(t) > 0
     if isinstance(t, T.Const) and _R().const_positive(t) is True:
@@ -551,7 +572,8 @@ def _rule_sign_times(f, assumptions, q):
     if s_zero:
         return NO if op in ("Gt", "Lt") else YES
     odd = neg_count % 2 == 1
-    # 存在未定非负因子：被未确认条件挡住，答案可随条件清偿翻转
+    # an undecided nonnegative factor blocks the answer, which can flip once the
+    # condition is discharged
     guarded = unknown(Reason.GUARDED) if s_nn else unknown()
     if op == "Gt":
         if odd:
@@ -597,8 +619,10 @@ def _rule_sign_even_power(f, assumptions, q):
         lambda f: _is_ord(f) and f.args[1] is T.ZERO
         and _nonneg_zero_arg(f.args[0]) is not None)
 def _rule_sign_nonneg_zero(f, assumptions, q):
-    """g(u) 对 0 的符号（g 声明非负且 g(u)=0⟺u=0，如绝对值/范数）：
-    g≥0 恒真、g<0 恒假；g>0⟺u≠0、g≤0⟺u=0。判定据图书馆声明，不据名。"""
+    """Sign of g(u) against 0 where g is declared nonnegative with g(u)=0 iff u=0
+    (absolute-value / norm family): g>=0 always true and g<0 always false, while
+    g>0 iff u!=0 and g<=0 iff u=0. The decision rests on the declaration, not the
+    name."""
     op = f.head.name
     u = _nonneg_zero_arg(f.args[0])
     if op == "Ge":
@@ -687,9 +711,10 @@ def _rule_sign_sum(f, assumptions, q):
 
 @derive("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
 def _rule_eq_times_zero(f, assumptions, q):
-    """积判零。前提：本系统构造的系数结构（ℚ、K[x]、K(x)、代数/超越塔）
-    均为整环——ab=0 ⟺ a=0 ∨ b=0。将来若引入矩阵环等非整环结构，
-    本规则必须按环境域门控。"""
+    """Zero product. Premise: every coefficient structure this system builds (Q, K[x],
+    K(x), algebraic and transcendental towers) is an integral domain, so ab=0 iff a=0
+    or b=0. If a non-domain structure such as a matrix ring is ever introduced, this
+    rule must be gated on the ambient domain."""
     a = f.args[0]
     any_zero = NO
     for fac in a.args:
@@ -751,7 +776,7 @@ def axiom(fn):
 
 @axiom
 def _axiom_constants(fact, assumptions):
-    """常数粗界引理（来自图书馆 const_bounds 声明）。"""
+    """Constant coarse-bound lemma (from the declaration's const_bounds data)."""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
@@ -776,10 +801,11 @@ def _axiom_constants(fact, assumptions):
 
 @axiom
 def _axiom_function_bounds(fact, assumptions):
-    """函数值域粗界引理（图书馆 FunctionDecl.bound 声明）。
+    """Function range-bound lemma (from the FunctionDecl.bound declaration).
 
-    |f| 类界消费留给区间通道；此处只处理 f(u) op 数值 的直接比较。
-    界端点可为 None（该侧无界），只就有界的一侧背书。"""
+    The |f|-style bounds are left to the interval channel; this handles the direct
+    comparison f(u) op numeric. A bound endpoint may be None (unbounded on that
+    side), and only the bounded side is endorsed."""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
@@ -791,7 +817,8 @@ def _axiom_function_bounds(fact, assumptions):
     lo, hi = d.bound
     bv = T.num_val(b)
     op = fact.head.name
-    # 界端点可达（lo ≤ f(u) ≤ hi）：严格不等式与弱不等式的背书条件不同
+    # endpoints are attained (lo <= f(u) <= hi): strict and weak inequalities are
+    # endorsed under different conditions
     if op == "Gt":
         if lo is not None and bv < lo:
             return YES
@@ -854,13 +881,14 @@ def _family_cmp(fact, assumptions, depth):
     r = _derive_layer(fact, assumptions, depth)
     if r is not None:
         return r
-    # 公理层（图书馆界数据）是**兜底**，不是死代码：
-    # 它与区间通道消费同一份图书馆声明（const_bounds / FunctionDecl.bound），
-    # 但区间通道更通用（能对复合表达式 a−b 整体求区间），故通常先由它
-    # 定案，本层只在所有前序通道都让位（返回 None）时才轮到。
-    # 实测：屏蔽 _cmp_interval 后本层仍能正确裁决 pi>3 / e>2 / sin(x)>2。
-    # 二者不是重复实现——区间通道覆盖广，本层是引理直读，删它会让
-    # 图书馆界数据只剩单一消费路径。关系由 tests/test_decide_axioms.py 锁定。
+    # The axiom layer (declaration bound data) is a **fallback**, not dead code: it
+    # consumes the same declarations as the interval channel (const_bounds and
+    # FunctionDecl.bound), but the interval channel is more general because it can
+    # bound a compound expression a-b as a whole, so the interval channel usually
+    # decides first and this layer only gets a turn when every earlier channel yielded
+    # (returned None). Deleting it would leave the declaration bound data with a
+    # single consumption path. The relationship is pinned by
+    # tests/test_decide_axioms.py.
     for ax in _AXIOM_CHECKS:
         r = ax(fact, assumptions)
         if r is not None:
@@ -877,10 +905,13 @@ def _contains(t, pat):
 
 
 def _eq_subst(fact, assumptions, depth):
-    """账本等式代入归一：把账本中的 Eq(u,v) 双向代入查询事实后重判。
+    """Ledger equality substitution: substitute each Eq(u,v) from the ledger into the
+    queried fact in both directions and decide again.
 
-    不限数值侧：符号等式（如换元定义 t = sin(x)）同样背书查询
-    （decide 相对账本的含义即"在假设下判定"；_MAX_DEPTH 防连锁循环）。
+    Not restricted to numeric sides: a symbolic equality (such as the substitution
+    definition t = sin(x)) endorses a query just as well, since deciding relative to
+    the ledger means "decide under the assumptions". _MAX_DEPTH guards against
+    chained cycles.
     """
     a, b = fact.args
     for f in assumptions:
@@ -953,29 +984,33 @@ def contradicted(fact, assumptions) -> bool:
     return decide(fact, assumptions) is NO or decide(negate(fact), assumptions) is YES
 
 
-# 判等阶段注册表：管线分派从硬编码变为声明式数据。
-# 阶段契约：run(r, a, b, assumptions) -> Verdict 结论 | None（无结论则继续下阶段）。
-# 阶段内部异常 = 阶段实现有 bug，直接向上传播（失败是返回值的一部分，
-# 禁止吞掉；确需"无结论"请显式返回 None）。
+# Identity-stage registry: pipeline dispatch is declaration data rather than
+# hardcoding. Stage contract: run(r, a, b, assumptions) -> Verdict conclusion, or
+# None to let the next stage continue. An exception inside a stage means the stage
+# has a bug and propagates, since failure is part of the return value and must not
+# be swallowed; a stage that genuinely has no conclusion returns None explicitly.
 _EQ_STAGES = []
 
 
 def bind_eq_stages(stages):
-    """由 `bootstrap()` 显式装入判等阶段（v4 §7.1）。
+    """Install the identity stages explicitly from `bootstrap()`.
 
-    以取代 **import 期自注册**：原先本模块在 import 时调用
-    `register_eq_stage("ledger_decide", ...)`，是 AGENTS.md §六 列的三处之一。
-    现在阶段由 `cas/math/base/module.py` 的 `install(builder)` 声明、bootstrap
-    绑定；import 本模块零副作用（阶段表为空，判定只走到「未决」）。
+    This replaces **import-time self-registration**: the module used to call
+    `register_eq_stage("ledger_decide", ...)` on import. The stages are now declared
+    by `install(builder)` in `cas/math/base/module.py` and bound by bootstrap, so
+    importing this module has zero side effects (the stage table stays empty and
+    decisions stop at "undecided").
     """
     global _EQ_STAGES
     _EQ_STAGES = list(stages)
 
 
 def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
-    """统一判等管线：指针 -> 数值常量 -> 标准形归零 -> 注册阶段序列 -> 诚实 UNKNOWN。
+    """The unified identity pipeline: pointer -> numeric constants -> normal-form
+    zero test -> registered stage sequence -> honest UNKNOWN.
 
-    域标准形归零经 autosimplify + 投影判零；塔规范形重建后由注册阶段接入。"""
+    Domain normal-form zeroing goes through autosimplify plus the projection zero
+    test; a tower normal form would attach later as a registered stage."""
     from cas.math.simplify import autosimplify
 
     if a is b:
@@ -1005,26 +1040,31 @@ def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
     return unknown()
 
 
-# 三角基归零阶段仍未重建（原走 cas.trig.trig_reduce）：判零通道覆盖不到
-# exp/sin 组合时，判定必须**诚实未决**，不得报成否证（见 integrate._judge_zero_diff）。
-# 该阶段将来按同一协议作为新 eq_stage 挂入，不改判定器。
+# A trigonometric-basis zeroing stage has not been rebuilt; when the zero channel
+# cannot cover an exp/sin combination, the decision must be **honestly undecided**
+# rather than reported as refuted (see _judge_zero_diff in
+# calculus/integration/verify.py). Such a stage would attach later through the same
+# protocol as a new eq_stage without changing the decider.
 
-# 数值采样阶段被纯符号约束永久移除。未找到与不存在是两个结论，
-# 采样从未有资格产出后者；如需概率通道须先修订宪章。
+# The numeric sampling stage was permanently removed. "Not found" and "does not
+# exist" are two different conclusions, and sampling was never entitled to produce
+# the latter.
 
 
 # ---------------------------------------------------------------------------
-# 上下文上的判定操作（自 kernel/context.py 移出，v4 §四）
+# Decision operations on a context (moved out of kernel/context.py)
 #
-# 这两个操作要调用本模块的判定器，故只能住在 math 侧：`kernel → 具体数学模块`
-# 被 §四 严格禁止。它们引用 kernel 的 Context/Branch（math → kernel，合规）。
+# These two operations must call this module's decider, so they can only live on the
+# math side: `kernel -> concrete math module` is strictly forbidden. They reference
+# the kernel Context/Branch, which is a legal math -> kernel dependency.
 # ---------------------------------------------------------------------------
 
 def extend_checked(assumptions, fact):
-    """域检查 + 矛盾检查通过后**返回扩充后的假设集**（不可变，不改原对象）。
+    """Return the **extended assumption set** after the domain check and the
+    contradiction check both pass (immutable, the original object is not modified).
 
-    返回 `(Verdict, Assumptions | None)`；未通过时第二个为 None。
-    取代 v3 的 `check_and_assume`（那是就地改可变上下文）。
+    Returns `(Verdict, Assumptions | None)`, with the second element None on failure.
+    This replaces the old in-place mutable-context check-and-assume.
     """
     from cas.kernel.verdict import NO, YES
     assumptions = _A(assumptions)
@@ -1036,10 +1076,12 @@ def extend_checked(assumptions, fact):
 
 
 def branch(assumptions, *conds):
-    """为每个条件分出一支：`[(条件, 该支假设集 | None, "open"|"empty")]`。
+    """Split one branch per condition:
+    `[(condition, that branch's assumption set | None, "open"|"empty")]`.
 
-    假设集不可变，分支就是对同一基点做若干次 `extended`——不需要克隆，也不需要
-    撤销。§8.8 的独立子作用域由 kernel 的 ScopeStore 表达，不在这里。
+    The assumption set is immutable, so branching is just a few `extended` calls on
+    the same base point: no cloning and no undoing. The independent sub-scopes of the
+    branch feature are expressed by the kernel ScopeStore, not here.
     """
     from cas.kernel.verdict import NO
     assumptions = _A(assumptions)

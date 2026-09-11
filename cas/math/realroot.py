@@ -1,14 +1,17 @@
-# -*- coding: utf-8 -*-
-"""单变量实根隔离（最简 CAD 的投影骨架，架构 §6.4 / §8"结式引擎即可起步"）。
+"""Univariate real root isolation: the projection skeleton of the simplest CAD.
 
-全程精确有理算术，无近似：
-· Cauchy 界圈定全部实根；
-· Sturm 序列 + 符号变差数给开区间内实根个数（Sturm 定理）；
-· 二分把每个实根隔离进互不相交的有理端点区间——无理根得开区间
-  （根严格在内、端点非根），有理根直接精确命中记为 (r, r)。
+All exact rational arithmetic, no approximation:
+· a Cauchy bound encloses every real root;
+· a Sturm sequence plus the number of sign variations gives the count of real
+  roots in an open interval (Sturm's theorem);
+· bisection isolates each real root into pairwise disjoint rational-endpoint
+  intervals: an irrational root yields an open interval (the root is strictly
+  inside, the endpoints are not roots), while a rational root is hit exactly and
+  recorded as (r, r).
 
-只对 ℚ 上的单变量无平方多项式实现；这是实闭域上可判定片段的地基，
-与超越根（拒答表第三行，UNDECIDABLE）无关。
+Implemented only for squarefree univariate polynomials over Q. This is the
+foundation of the decidable fragment over real closed fields; it has nothing to
+do with transcendental roots, which are undecidable.
 """
 
 from fractions import Fraction as Fr
@@ -19,11 +22,12 @@ from cas.math.domains.polytools import p_deg, p_lc, p_monic, p_div_exact
 
 
 # ---------------------------------------------------------------------------
-# 精确求值与符号
+# Exact evaluation and sign
 # ---------------------------------------------------------------------------
 
 def p_eval_at(p: Poly, x0) -> Fr:
-    """单变量稀疏多项式在有理点 x0 的精确值（Horner）。"""
+    """Exact value of a univariate sparse polynomial at a rational point
+    (Horner)."""
     coefs = {}
     for k, c in p.monos:
         coefs[k[0]] = Fr(c)
@@ -45,11 +49,11 @@ def coef_sign(v) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Sturm 序列与变差数
+# Sturm sequence and sign variations
 # ---------------------------------------------------------------------------
 
 def sturm_sequence(ring, p: Poly):
-    """标准 Sturm 链：p0=p, p1=p', p_{k+1} = −(p_{k−1} mod p_k)。"""
+    """The standard Sturm chain: p0 = p, p1 = p', p_{k+1} = -(p_{k-1} mod p_k)."""
     seq = [p, p_deriv(ring, p, 0)]
     while True:
         _, r = p_divmod_field(ring, seq[-2], seq[-1], 0)
@@ -60,7 +64,8 @@ def sturm_sequence(ring, p: Poly):
 
 
 def sign_variations(seq, x0) -> int:
-    """Sturm 链在 x0 处的符号变差数（逐项求值，零项忽略）。"""
+    """Number of sign variations of the Sturm chain at x0, evaluating term by
+    term and ignoring zero terms."""
     prev = None
     changes = 0
     for q in seq:
@@ -74,14 +79,18 @@ def sign_variations(seq, x0) -> int:
 
 
 def count_roots(seq, p: Poly, a, b) -> int:
-    """Sturm 定理：(a, b] 内不同实根个数 = V(a) − V(b)。
+    """Sturm's theorem: the number of distinct real roots in (a, b] equals
+    V(a) - V(b).
 
-    V 零项忽略，故端点恰为根时该式仍对开/闭端点给出正确计数。"""
+    Zero terms are ignored in V, so the formula still counts correctly for open
+    and closed endpoints when an endpoint is itself a root.
+    """
     return sign_variations(seq, a) - sign_variations(seq, b)
 
 
 def count_roots_open(seq, p: Poly, a, b) -> int:
-    """开区间 (a, b) 内不同实根个数（右端点为根时扣除）。"""
+    """Number of distinct real roots in the open interval (a, b); when the right
+    endpoint is a root it is subtracted."""
     n = count_roots(seq, p, a, b)
     if coef_sign(p_eval_at(p, b)) == 0:
         n -= 1
@@ -89,11 +98,11 @@ def count_roots_open(seq, p: Poly, a, b) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Cauchy 界与二分隔离
+# Cauchy bound and bisection isolation
 # ---------------------------------------------------------------------------
 
 def cauchy_bound(p: Poly) -> Fr:
-    """全部实根绝对值 ≤ 1 + max|c_i/lc|（i < deg）。"""
+    """Every real root has absolute value at most 1 + max|c_i/lc| for i < deg."""
     lc = Fr(p_lc(p, 0))
     m = Fr(0)
     top = p_deg(p, 0)
@@ -106,20 +115,22 @@ def cauchy_bound(p: Poly) -> Fr:
 
 
 def _shrink(seq, p: Poly, iv):
-    """把单根隔离区间向根收缩一步（退化 (r, r) 不动）。"""
+    """Shrink a single-root isolating interval one step toward the root; a
+    degenerate (r, r) is unchanged."""
     a, b = iv
     if a == b:
         return iv
     mid = (a + b) / 2
     if coef_sign(p_eval_at(p, mid)) == 0:
-        return (mid, mid)                    # 恰好命中精确有理根
+        return (mid, mid)                    # hit an exact rational root
     if count_roots_open(seq, p, a, mid) >= 1:
         return (a, mid)
     return (mid, b)
 
 
 def _refine_gaps(seq, p: Poly, ivs):
-    """收缩相邻触碰/交叠的区间，直到每对相邻区间严格留隙。"""
+    """Shrink touching or overlapping adjacent intervals until every adjacent
+    pair has a strict gap."""
     changed = True
     while changed:
         changed = False
@@ -132,7 +143,8 @@ def _refine_gaps(seq, p: Poly, ivs):
 
 
 def _iso_open(seq, p: Poly, a, b, out):
-    """隔离开区间 (a, b) 内的全部实根（端点 a、b 本身不计入）。"""
+    """Isolate every real root strictly inside the open interval (a, b); the
+    endpoints a and b themselves are not counted."""
     n = count_roots_open(seq, p, a, b)
     if n == 0:
         return
@@ -141,7 +153,7 @@ def _iso_open(seq, p: Poly, a, b, out):
         return
     mid = (a + b) / 2
     if coef_sign(p_eval_at(p, mid)) == 0:
-        out.append((mid, mid))            # 精确有理根
+        out.append((mid, mid))            # exact rational root
         _iso_open(seq, p, a, mid, out)
         _iso_open(seq, p, mid, b, out)
     else:
@@ -150,7 +162,7 @@ def _iso_open(seq, p: Poly, a, b, out):
 
 
 def squarefree_part(ring, p: Poly) -> Poly:
-    """无平方部分 p / gcd(p, p')：与原式同根集（均单根）。"""
+    """Squarefree part p / gcd(p, p'): the same root set, all roots simple."""
     if p_deg(p, 0) <= 0:
         return p
     g = p_gcd_univar(ring, p, p_deriv(ring, p, 0))
@@ -160,7 +172,8 @@ def squarefree_part(ring, p: Poly) -> Poly:
 
 
 def divisors(n):
-    """n 的正因子列表（试除到 √n）。有理根定理候选枚举的公共通道。"""
+    """Positive divisors of n, by trial division up to sqrt(n); the shared
+    channel for enumerating rational-root candidates."""
     n = abs(n)
     if n == 0:
         return []
@@ -176,10 +189,14 @@ def divisors(n):
 
 
 def rational_roots(p: Poly):
-    """精确有理根全集（有理根定理），升序去重。
+    """The complete set of exact rational roots, by the rational root theorem,
+    ascending and deduplicated.
 
-    清分母成整系数后，有理根必为 ±(常数项因子)/(首项系数因子)，有限候选
-    逐个精确验证——这是可判定碎片，不是近似。"""
+    Clearing denominators gives integer coefficients, after which a rational
+    root must be ±(factor of the constant term)/(factor of the leading
+    coefficient). The finite candidate set is verified exactly one by one: this
+    is a decidable fragment, not an approximation.
+    """
     if p_deg(p, 0) <= 0:
         return []
     from math import gcd
@@ -189,7 +206,7 @@ def rational_roots(p: Poly):
         lcm = lcm * c.denominator // gcd(lcm, c.denominator)
     ic = {e: int(coefs[e] * lcm) for e in coefs}
     roots = []
-    while ic and ic.get(0, 0) == 0:          # 0 根：逐个降幂
+    while ic and ic.get(0, 0) == 0:          # root 0: reduce the degree one at a time
         roots.append(Fr(0))
         ic = {e - 1: c for e, c in ic.items() if e > 0}
     if not ic:
@@ -209,11 +226,14 @@ def rational_roots(p: Poly):
 
 
 def real_roots_intervals(ring, p: Poly):
-    """任意单变量多项式的实根隔离。
+    """Real root isolation for an arbitrary univariate polynomial.
 
-    有理根由有理根定理精确命中为 (r, r)；它们把实轴切成开区间，无理根
-    在各自开区间内走 Sturm 隔离（被限制在间隙里，与有理根天然不相交）。
-    结果升序、互不相交、相邻严格留隙。"""
+    Rational roots are hit exactly by the rational root theorem as (r, r); they
+    cut the real line into open intervals, and irrational roots are isolated by
+    Sturm inside their own intervals (confined to the gaps, hence naturally
+    disjoint from the rational roots). The result is ascending, pairwise
+    disjoint, and strictly gapped between neighbours.
+    """
     if p_deg(p, 0) <= 0:
         return []
     sf = squarefree_part(ring, p)
@@ -223,6 +243,6 @@ def real_roots_intervals(ring, p: Poly):
     ivs = [(r, r) for r in rat]
     bounds = [Fr(-M)] + rat + [Fr(M)]
     for i in range(len(bounds) - 1):
-        _iso_open(seq, sf, bounds[i], bounds[i + 1], ivs)   # 间隙内无理根
+        _iso_open(seq, sf, bounds[i], bounds[i + 1], ivs)   # irrational roots in the gaps
     ivs.sort(key=lambda iv: iv[0])
     return _refine_gaps(seq, sf, ivs)

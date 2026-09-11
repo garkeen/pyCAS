@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
-"""工作流标识类型（v4 §8）。
+"""Workflow identifier types.
 
-与 kernel 的 id 分开：内核不认识工作流概念（v4 §四「kernel → workflow」禁止），
-所以这些类型只能住在 workflow 侧。
+Separate from the kernel ids: the kernel does not know workflow concepts, so
+these types can only live on the workflow side.
 """
 
 from typing import NewType

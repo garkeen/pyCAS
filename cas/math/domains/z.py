@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
-"""ℤ：有序欧几里得整环（不是域）。
+"""Z: an ordered Euclidean integral domain, not a field.
 
-入格两个理由（架构 3.1）：
-· 因式分解必经之路——Zassenhaus 提升到 ℤ[x]（content、本原部分）
-· 可判定丢番图碎片的宿主——线性丢番图（扩展欧几里得）、
-  单变量整数根（有理根定理）。一般多元丢番图按希尔伯特第十
-  问题归 UNDECIDABLE，那是定理，不是 TODO。
+Two reasons it is a first-class domain:
+· factorization must pass through it: Zassenhaus lifts to Z[x] (content and
+  primitive part);
+· it hosts the decidable Diophantine fragment: linear Diophantine equations by
+  the extended Euclidean algorithm and univariate integer roots by the rational
+  root theorem. The general multivariate Diophantine problem is UNDECIDABLE by
+  Hilbert's tenth problem, which is a theorem rather than a TODO.
 
-带余除法取欧几里得约定：余数与除数同号非负侧（|r| < |b| 且
-b>0 时 r ≥ 0），保证 gcd 链单调下降。
+Division uses the Euclidean convention that the remainder has the same sign as
+the divisor (|r| < |b| and r >= 0 when b > 0), which keeps the gcd chain
+strictly decreasing.
 """
 
 from fractions import Fraction as Fr
@@ -18,7 +20,7 @@ from cas.math.domains.base import Domain, Ring, RingError
 
 
 class ZZRing(Ring):
-    """整数环：原生 int 运算，零包装。"""
+    """The integer ring: native int arithmetic with no wrapping."""
 
     is_euclidean = True
 
@@ -27,7 +29,7 @@ class ZZRing(Ring):
 
     def from_frac(self, f):
         if f.denominator != 1:
-            raise RingError(f"ℤ 不含有理数 {f}")
+            raise RingError(f"Z does not contain the rational {f}")
         return f.numerator
 
     def add(self, a, b):
@@ -46,13 +48,14 @@ class ZZRing(Ring):
         if b == 0:
             raise ZeroDivisionError("division by zero")
         q, r = divmod(a, b)
-        if b < 0 and r > 0:              # 余数与除数同号
+        if b < 0 and r > 0:              # make the remainder share the divisor's sign
             q += 1
             r -= b
         return q, r
 
     def xgcd(self, a, b):
-        """扩展欧几里得：返回 (g, s, t) 使 s*a + t*b = g = gcd(a, b)。"""
+        """Extended Euclidean algorithm: return (g, s, t) with s*a + t*b = g =
+        gcd(a, b)."""
         old_r, r = a, b
         old_s, s = 1, 0
         old_t, t = 0, 1
@@ -70,11 +73,13 @@ Z_RING = ZZRing()
 
 
 class ZDomain(Domain):
-    """整数环 ℤ（作为域阶梯的第一格：求解语义是整除，不是除法）。"""
+    """The integers Z, as the first rung of the domain ladder: solving semantics
+    is divisibility, not division."""
 
     name = "Z"
     is_ordered = True
     is_euclidean = True
+    ring = Z_RING
 
     def member(self, t) -> bool:
         try:
@@ -94,6 +99,7 @@ class ZDomain(Domain):
         return eval_exact(a, {}) == eval_exact(b, {})
 
 
-# 单例。注册不是本模块的事：域包只声明，装配（含注册进阶梯）归
-# 投影层 cas/project——见 cas/domains/__init__.py 的分工说明。
+# The singleton. Registration is not this module's business: the domain package
+# only declares, and assembly (including registration into the projection ladder)
+# belongs to the projection layer.
 Z_DOMAIN = ZDomain()

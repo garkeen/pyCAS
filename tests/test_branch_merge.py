@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""分支合并（v4 §8.8 五条检查）与读依赖归并（§6.11）。
+"""Branch merging (the five checks) and read-dependency union.
 
-`split_on` 只落「覆盖」一条，合并没有实现——`ContextReadSet.merge` 因此没有
-消费者。本文件钉住合并接通后的行为：五条检查各自可拒、成功时在父作用域落地、
-读依赖按各支取并。
+`split_on` only performed "coverage"; merging was not implemented, so
+`ContextReadSet.merge` had no consumer. This file pins the behaviour once merging is
+wired up: each of the five checks can refuse, a successful merge commits at the
+parent scope, and inherited read dependencies are unioned per branch.
 """
 
 import pytest
@@ -26,7 +27,7 @@ X = S("x")
 
 
 def _two_branch_derivatives(wf):
-    """建一对分支，各支对同一前驱求导（请求项相同）。"""
+    """Build two branches, each differentiating the same predecessor (same request)."""
     s0 = wf.add(parse("x^2"), Claim())
     group = wf.split_on(parse("x > 0"))
     results = []
@@ -37,7 +38,7 @@ def _two_branch_derivatives(wf):
 
 
 # ---------------------------------------------------------------------------
-# 成功路径：五条检查全过
+# Success path: all five checks pass
 # ---------------------------------------------------------------------------
 
 def test_merge_commits_at_parent_scope():
@@ -53,23 +54,24 @@ def test_merge_commits_at_parent_scope():
 
 
 def test_merge_records_branch_steps_as_event_inputs():
-    """合并是操作：事件把它消费的分支步骤记为 inputs（§8.9）。"""
+    """A merge is an operation: the event records the branch steps it consumed as
+    inputs."""
     wf = new_workflow()
     group, _s0, results = _two_branch_derivatives(wf)
     wf.enter(group.parent_scope)
     m = wf.merge_branches(group, parse("2*x"), results)
     ids = wf.events.producers_of("artifact", m.artifact)
-    assert ids, "合并步应产出产物并挂到事件"
+    assert ids, "the merge step should produce an artifact and attach it to the event"
     ev = wf.events.events()[ids[0]]
     assert set(ev.inputs) == {st.id for st in results}
 
 
 # ---------------------------------------------------------------------------
-# 五条检查各自可拒
+# Each of the five checks can refuse
 # ---------------------------------------------------------------------------
 
 def test_merge_requires_coverage():
-    """① 未证覆盖不得合并。"""
+    """1. An unproved cover may not be merged."""
     wf = new_workflow()
     empty = BranchStore().create(wf.scope, ())
     with pytest.raises(BranchError):
@@ -77,7 +79,7 @@ def test_merge_requires_coverage():
 
 
 def test_merge_requires_parent_scope():
-    """合并必须在父作用域做——在分支里合并是误用。"""
+    """Merging happens at the parent scope; merging inside a branch is misuse."""
     wf = new_workflow()
     group, _s0, results = _two_branch_derivatives(wf)
     with pytest.raises(BranchError):
@@ -85,7 +87,7 @@ def test_merge_requires_parent_scope():
 
 
 def test_merge_rejects_different_requests():
-    """② 各支必须回答同一个任务（按请求项判）。"""
+    """2. Every branch must answer the same task (judged by request term)."""
     wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     group = wf.split_on(parse("x > 0"))
@@ -99,9 +101,9 @@ def test_merge_rejects_different_requests():
 
 
 def test_merge_rejects_branch_without_conclusion():
-    """③ 分支结果必须各自在其 scope 中有可依赖结论。"""
+    """3. Each branch result must be a dependable conclusion in its own scope."""
     wf = new_workflow()
-    s0 = wf.add(parse("Log(x)"), Claim())      # 微分未建：结果未决，无结论
+    s0 = wf.add(parse("Log(x)"), Claim())      # differentiation not built: undecided, no conclusion
     group = wf.split_on(parse("x > 0"))
     results = []
     for case in group.cases:
@@ -114,7 +116,8 @@ def test_merge_rejects_branch_without_conclusion():
 
 
 def test_merge_rejects_escaped_local_symbol():
-    """④ 分支局部符号不得随合并结论逃逸到父作用域。"""
+    """4. A branch-local symbol must not escape into the parent scope with the merged
+    conclusion."""
     wf = new_workflow()
     s0 = wf.add(parse("x^2"), Claim())
     group = wf.split_on(parse("x > 0"))
@@ -137,12 +140,13 @@ def test_merge_rejects_result_count_mismatch():
 
 
 # ---------------------------------------------------------------------------
-# 读依赖归并（§6.11）
+# Read-dependency union
 # ---------------------------------------------------------------------------
 
 def test_commit_merges_inherited_reads():
-    """`commit` 把继承的读依赖并入本步读集——分支合并的结论依赖各支读过的
-    事实，这正是 `ContextReadSet.merge` 的消费者。"""
+    """`commit` merges inherited read dependencies into this step's read set: the
+    conclusion of a branch merge depends on the facts each branch read, which is
+    exactly the consumer of `ContextReadSet.merge`."""
     wf = new_workflow(mode=ExecutionMode.DERIVATION)
     cond = parse("x > 0")
     inherited = ContextReadSet((("assumption", "x != 0"),))

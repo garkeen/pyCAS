@@ -1,17 +1,19 @@
 # -*- coding: utf-8 -*-
-"""判定服务：把 `cas.math.decide` 接到内核端口上（v4 §6.7）。
+"""Decision services: adapts `cas.math.decide` onto the kernel port.
 
-`KernelServices` 是**内核定义的端口**；它的实现必须住在能同时看见 kernel 与
-math 的层——runtime 正是这样一层（v4 §四：runtime → 所有数学模块）。内核与
-workflow 都不认识 `cas.math.decide`，这正是阶段6 达到的状态。
+`KernelServices` is a port **defined by the kernel**; its implementation must live
+in a layer that can see both kernel and math -- runtime is that layer, since it is
+the only layer allowed to import every math module. Neither the kernel nor the
+workflow knows about `cas.math.decide`.
 
-作用域假设作为判定上下文：条件清偿因此在**正确的分支上下文**里进行——
-分支作用域里的假设会进入判定，而不是全局假设。
+Scope assumptions act as the decision context, so condition discharge happens in
+the **correct branch context**: assumptions made inside a branch scope reach the
+decision, rather than being global assumptions.
 """
 
 
 class ScopeServices:
-    """按作用域做判定的 `KernelServices` 实现。"""
+    """`KernelServices` implementation that decides relative to a scope."""
 
     def __init__(self, scopes):
         self._scopes = scopes
