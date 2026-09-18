@@ -2,7 +2,8 @@
 
 A verdict is an algebraic data type, not a string and not a bare enum:
 
-· Yes carries evidence recording where the decision came from;
+· Yes is a bare singleton; the evidence of a decision lives in the checker's
+  Accepted result and the kernel's Evidence payload, not on the verdict;
 · No is a refutation;
 · Unknown carries a reason, and the reason determines what happens next.
 
@@ -47,13 +48,14 @@ class Verdict:
 
 
 class Yes(Verdict):
-    __slots__ = ("proof",)
-
-    def __init__(self, proof=None):
-        self.proof = proof
+    """A successful decision. YES is a singleton; `is_yes()` is identity against
+    it. The evidence of a Yes is carried by the checker's Accepted result and the
+    kernel's Evidence payload, not on the verdict -- a bare `Yes` is the whole
+    verdict, so there is no `proof` field to mis-set."""
+    __slots__ = ()
 
     def __repr__(self):
-        return "YES" if self.proof is None else f"YES[{self.proof}]"
+        return "YES"
 
 
 class No(Verdict):

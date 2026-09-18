@@ -45,8 +45,6 @@ class SolveChecker:
 CHECKERS = (SolveChecker,)
 
 
-def register(store) -> None:
+def register(builder) -> None:
     for cls in CHECKERS:
-        ck = cls()
-        if ck.id not in store.checkers:
-            store.checkers.register(ck.id, ck)
+        builder.register_checker(cls.id, cls())

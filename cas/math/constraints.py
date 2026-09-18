@@ -24,7 +24,7 @@ form vanishing; it imports no algorithm belonging to the counterpart solver.
 
 from cas.syntax import term as T
 from cas.math.domains.linalg import solve_system
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.project import project, zero_of, normalize as proj_normalize
 
 

@@ -25,4 +25,6 @@ def _ledger_decide(r, a, b, assumptions):
 
 
 def install(builder) -> None:
+    from cas.math.base import checkers
+    checkers.register(builder)
     builder.register_eq_stage("ledger_decide", _ledger_decide)

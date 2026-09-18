@@ -11,7 +11,7 @@ environment.
 from fractions import Fraction as Fr
 
 from cas.syntax import term as T
-from cas.math.qarith import fold, eval_exact, EvalNumError
+from cas.math.domains.qarith import fold, eval_exact, EvalNumError
 from cas.math.domains.base import Domain, FracRing
 
 

@@ -14,7 +14,7 @@ structure enters the system, this channel must work.
 
 from cas.syntax import term as T
 from cas.math.project import project, zero_of, normalize as proj_normalize
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 
 
 def normal_form(t):

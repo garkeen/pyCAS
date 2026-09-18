@@ -12,7 +12,7 @@ from cas.kernel.evidence import Rejected, UnknownResult
 from cas.kernel.verdict import Reason
 from cas.math.domains.poly import Poly, p_deriv, to_term
 from cas.math.domains.ratfunc import RatFunc, rf_deriv, rf_to_term
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.project import project
 from cas.math.base.checkers import (
     _is_piecewise, _ok, _one_conclusion, _premise,
@@ -103,8 +103,6 @@ class DiffChecker:
 CHECKERS = (DiffChecker,)
 
 
-def register(store) -> None:
+def register(builder) -> None:
     for cls in CHECKERS:
-        ck = cls()
-        if ck.id not in store.checkers:
-            store.checkers.register(ck.id, ck)
+        builder.register_checker(cls.id, cls())

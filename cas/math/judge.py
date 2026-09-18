@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from cas.syntax import term as T
 from cas.syntax.term import Expr
 from cas.kernel.verdict import Verdict, YES, NO, unknown
-from cas.math.qarith import fold, eval_exact, EvalNumError
+from cas.math.domains.qarith import fold, eval_exact, EvalNumError
 from cas.math.project import zero_of
 
 

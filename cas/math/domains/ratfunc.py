@@ -133,6 +133,8 @@ def rf_from_term(ring: Ring, t, vars_: tuple) -> RatFunc | None:
             bn, bd_ = pb
             k = e.v
             if k >= 0:
+                if k == 0 and _is_zero(bn):
+                    return None        # 0^0 refused (matches the polynomial path)
                 return _pow(ring, bn, k), _pow(ring, bd_, k)
             if _is_zero(bn):
                 return None            # 0 to a negative power: undefined

@@ -4,8 +4,14 @@ from cas.errors import BudgetExceeded
 from cas.syntax.termpath import postorder
 
 # Memoization by term id: an interned term is immutable and content-addressed,
-# so a rebuild result cached by _h stays valid forever.
+# so a rebuild result cached by _h stays valid forever. A long session would grow
+# this without bound, so a cap is enforced: when the cache fills it is cleared
+# wholesale (rebuild is deterministic and idempotent, so a cleared entry is
+# rebuilt identically on the next miss). This is the eviction policy required of
+# every computation cache; the term intern tables themselves are the hash-consing
+# store and bounding them is a separate design question.
 _MEMO = {}
+_MEMO_CAP = 1 << 16
 
 
 def cost(t):
@@ -65,6 +71,8 @@ def rebuild(t, budget=100000):
     while True:
         nxt = rebuild_node(prev)
         if nxt is prev:
+            if len(_MEMO) >= _MEMO_CAP:
+                _MEMO.clear()
             _MEMO[t._h] = prev
             return prev
         prev = nxt

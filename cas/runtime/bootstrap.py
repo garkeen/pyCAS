@@ -37,6 +37,12 @@ def bootstrap() -> Runtime:
     from cas.math.base import module as base
     base.install(builder)
 
+    from cas.math.calculus import module as calculus
+    calculus.install(builder)
+
+    from cas.math.solving import module as solving
+    solving.install(builder)
+
     rt = Runtime(builder)
 
     # hand the assembly result to consumers that need precomputed state explicitly

@@ -28,7 +28,7 @@ returns UNKNOWN rather than certifying itself.
 from cas.syntax import term as T
 from cas.syntax.term import Expr, Sym, Bound
 from cas.errors import DiffError
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 
 _DECLS = None
 

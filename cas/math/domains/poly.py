@@ -238,6 +238,16 @@ def from_term(ring: Ring, t, vars_: tuple) -> Poly | None:
                 pb = rec(b)
                 if pb is None or not isinstance(e, Int) or e.v < 0:
                     return None
+                if e.v == 0:
+                    # 0^0 is refused (the term-level fold also leaves it interned
+                    # rather than evaluating it, and eval_exact refuses it too).
+                    # A nonzero base to the zero is the polynomial 1; a base that
+                    # folds to the zero polynomial raised to the zero is the
+                    # contentious 0^0, refused so the projection is honestly
+                    # undecided rather than silently 1.
+                    if not pb:
+                        return None
+                    return {zero: ring.from_int(1)}
                 cur = {zero: ring.from_int(1)}
                 base = pb
                 nn = e.v

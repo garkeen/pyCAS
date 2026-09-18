@@ -103,7 +103,15 @@ def fold(t):
             if e.v == 1:
                 return b                      # b^1 = b is a monoid identity, universal
             if e.v == 0:
-                return T.mk(t.head, (b, e))   # u^0: 0^0 is contentious, left to the domain layer
+                # 0^0 is contentious and stays interned for the domain layer to
+                # refuse; a nonzero numeric base to the zero is 1, so the
+                # member/normalize/equal trio of the constant domains agrees
+                # (eval_exact already computes c^0 = 1 for c != 0). A symbolic
+                # base is not an all-numeric subtree, so it is left to the
+                # polynomial domain.
+                if T.is_num(b) and T.num_val(b) != 0:
+                    return T.ONE
+                return T.mk(t.head, (b, e))
             if T.is_num(b):
                 bv = T.num_val(b)
                 if bv != 0:
@@ -145,7 +153,15 @@ def eval_exact(t, env):
             b, e = t.args
             bv = eval_exact(b, env)
             if isinstance(e, Int):
-                if e.v >= 0:
+                if e.v == 0:
+                    # 0^0 is refused rather than evaluated as 1. The term-level
+                    # fold also leaves 0^0 interned (it is contentious), and the
+                    # polynomial projection refuses it, so the three channels
+                    # agree on "undecided" instead of one silently answering 1.
+                    if bv == 0:
+                        raise EvalNumError("zero to the zero is undefined")
+                    return Fr(1)
+                if e.v > 0:
                     return bv ** e.v
                 if bv == 0:
                     raise EvalNumError("zero to negative power")

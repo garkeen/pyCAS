@@ -25,7 +25,7 @@ from fractions import Fraction as Fr
 from cas.syntax import term as T
 from cas.errors import CadError
 from cas.kernel.verdict import Reason
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.domains.base import find_domain
 from cas.math.domains.poly import from_term, p_mul
 from cas.math.domains.polytools import p_deg

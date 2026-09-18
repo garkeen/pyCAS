@@ -14,11 +14,9 @@ bootstrap, instead of fetching it themselves.
 """
 
 from cas.runtime.bootstrap import bootstrap
-from cas.runtime.dispatch import get_runtime, reset_runtime
+from cas.runtime.dispatch import get_runtime
 from cas.runtime.registry import ConstantDecl, FunctionDecl, RuntimeBuilder
-from cas.runtime.runtime import (Runtime, new_workflow,
-                                 register_math_checkers)
+from cas.runtime.runtime import Runtime, new_workflow
 
-__all__ = ("bootstrap", "get_runtime", "reset_runtime", "RuntimeBuilder",
-           "Runtime", "ConstantDecl", "FunctionDecl", "new_workflow",
-           "register_math_checkers")
+__all__ = ("bootstrap", "get_runtime", "RuntimeBuilder",
+           "Runtime", "ConstantDecl", "FunctionDecl", "new_workflow")

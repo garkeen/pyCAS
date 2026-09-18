@@ -45,11 +45,6 @@ class Constraint:
     sources: tuple = ()                      # tuple[TaskId | CandidateRef, ...]
     proposed_evidence: Evidence | None = None    # candidate credentials, NOT verified evidence
 
-    def binds(self, symbol):
-        """Whether this constraint mentions the symbol, used to collect the
-        unknowns of a constraint system."""
-        return symbol in T.free_vars(self.relation)
-
 
 class ConstraintStore:
     """Constraint storage (append-only). A constraint is an Artifact-level

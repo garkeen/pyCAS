@@ -57,7 +57,8 @@ class DecideChecker:
 
 
 def register_core_checkers(store) -> None:
-    """Install the kernel-provided checkers. Called explicitly; import never
-    mutates global state."""
-    if "kernel.decide" not in store.checkers:
-        store.checkers.register("kernel.decide", DecideChecker())
+    """Install the kernel-provided checker. Called explicitly; import never
+    mutates global state. A duplicate raises, matching the builder's policy: a
+    checker-id collision is a decision that must surface, not one to resolve
+    silently by registration order."""
+    store.checkers.register("kernel.decide", DecideChecker())

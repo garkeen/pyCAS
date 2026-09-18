@@ -113,19 +113,22 @@ def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
     return ApplyResult(False, None, expr, None, rule.id)
 
 
-_LIB_RULESET = None
+_LIB_RULESETS = {}
 
 
 def declared_ruleset() -> RuleSet:
-    """Build the rule set from run-time declarations, cached by identity.
+    """Build the rule set from run-time declarations, cached per runtime.
 
-    The declarations carry rule-line strings as pure data and DSL parsing happens
-    at this consumption point, so a math module never imports this module back. A
-    corrupt rule line is a declaration defect: the parse error propagates and is
-    never swallowed.
+    The cache is keyed by the identity of the assembled runtime, so a re-assembly
+    that changes the rule text (a second bootstrap with different declarations)
+    reparses rather than serving a stale ruleset. The declarations carry rule-line
+    strings as pure data and DSL parsing happens at this consumption point, so a
+    math module never imports this module back. A corrupt rule line is a
+    declaration defect: the parse error propagates and is never swallowed.
     """
-    global _LIB_RULESET
-    if _LIB_RULESET is None:
+    rt = _R()
+    rs = _LIB_RULESETS.get(id(rt))
+    if rs is None:
         # Deferred import: this is the back edge of the
         # cas.math.rules <-> cas.math.loader cycle. loader imports Rule at its
         # top, so importing loader at the top here would have both sides hit a
@@ -133,7 +136,7 @@ def declared_ruleset() -> RuleSet:
         # the rule-line DSL is a Rule and the assembly point is this module.
         from cas.math.loader import parse_rule_line
         rs = RuleSet()
-        for line in _R().rules:
+        for line in rt.rules:
             rs.add(parse_rule_line(line))
-        _LIB_RULESET = rs
-    return _LIB_RULESET
+        _LIB_RULESETS[id(rt)] = rs
+    return rs

@@ -41,6 +41,7 @@ class Runtime:
         self._rule_lines = tuple(builder.rule_lines)
         self._eq_stages = tuple(builder.eq_stages)
         self._domains = tuple(builder.domains)
+        self._checkers = tuple(builder.checkers)
         self._by_atom = {id(d.atom): d for d in self._consts.values()}
         # Domain conditions come from each function declaration's domain template
         # (DSL) and are instantiated on demand: the condition of f(u) is
@@ -123,13 +124,22 @@ class Runtime:
     def domains(self) -> tuple:
         return self._domains
 
+    @property
+    def checkers(self) -> tuple:
+        """The (checker_id, checker) pairs each math module registered through
+        its `install(builder)`. Pulled into a session's checker store by
+        `new_workflow`, so a new module adds checkers in exactly one place
+        (its own install) rather than in a second hardcoded list."""
+        return self._checkers
+
     def stats(self):
         return {"constants": len(self._consts), "functions": len(self._funcs),
                 "aliases": len(self._aliases),
                 "rules": len(self._rule_lines),
                 "domain_conds": len(self._domain_conds),
                 "eq_stages": len(self._eq_stages),
-                "domains": len(self._domains)}
+                "domains": len(self._domains),
+                "checkers": len(self._checkers)}
 
 
 # ---------------------------------------------------------------------------
@@ -137,24 +147,23 @@ class Runtime:
 # (the workflow does not depend on cas.math)
 # ---------------------------------------------------------------------------
 
-def register_math_checkers(store) -> None:
-    """Register each math module's checkers into the ledger."""
-    from cas.math.base import checkers as base_c
-    from cas.math.calculus.differentiation import checkers as diff_c
-    from cas.math.calculus.integration import checkers as int_c
-    from cas.math.solving.equations import checkers as eq_c
-    for m in (base_c, diff_c, int_c, eq_c):
-        m.register(store)
-
-
 def new_workflow(**kw):
     """Build a workflow session: ledger + kernel checkers + math checkers +
     decision services.
 
-    The workflow never imports `cas.math`, so checkers and decision services **must
-    be injected by this layer**. That also makes "the workflow does not know which
-    checkers it has" a structural fact rather than a convention.
+    The workflow never imports `cas.math`, so checkers and decision services must
+    be injected by this layer. The math checkers come from the assembled runtime
+    (each math module registered its own checkers through `install(builder)`), so
+    "which checkers exist" is read from the runtime snapshot rather than from a
+    hardcoded module list here.
+
+    Assembly is guaranteed: the first call triggers `bootstrap()` if it has not
+    run yet, so constructing a workflow is a usable entry point even when the
+    caller never touched the parser (which otherwise lazily assembles on its
+    first constant lookup).
     """
+    from cas.runtime.dispatch import get_runtime
+    rt = get_runtime()
     from cas.kernel.services import register_core_checkers
     from cas.kernel.store import KernelStore
     from cas.runtime.algorithms import Algorithms
@@ -165,6 +174,7 @@ def new_workflow(**kw):
     if store is None:
         store = KernelStore()
     register_core_checkers(store)
-    register_math_checkers(store)
+    for checker_id, checker in rt.checkers:
+        store.checkers.register(checker_id, checker)
     return Workflow(store=store, services=ScopeServices(store.scopes),
                     algorithms=Algorithms(), **kw)

@@ -34,7 +34,7 @@ from cas.errors import IntegrateError
 from cas.kernel.verdict import Reason
 from cas.math.project import project
 from cas.math.domains.poly import Poly, to_term, _norm
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 
 _UNDEF = T.SP("Undefined")
 

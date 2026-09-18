@@ -11,7 +11,7 @@ from cas.kernel.evidence import Rejected, UnknownResult
 from cas.kernel.verdict import Reason
 from cas.syntax.term import S
 from cas.syntax import term as T
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.base.checkers import (
     _is_piecewise, _ok, _one_conclusion, _premise,
 )
@@ -59,8 +59,6 @@ class IntegrateChecker:
 CHECKERS = (IntegrateChecker,)
 
 
-def register(store) -> None:
+def register(builder) -> None:
     for cls in CHECKERS:
-        ck = cls()
-        if ck.id not in store.checkers:
-            store.checkers.register(ck.id, ck)
+        builder.register_checker(cls.id, cls())

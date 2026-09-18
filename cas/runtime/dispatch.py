@@ -6,7 +6,10 @@ assembly rather than from an import side effect, so importing any math module
 registers nothing.
 
 The first call triggers `bootstrap()` once; afterwards the runtime is read-only.
-The only write entry point is RuntimeBuilder.
+The only write entry point is RuntimeBuilder. There is no `reset_runtime`:
+dropping only the dispatch cache would leave the math modules bound to the old
+runtime, so a half-reset would be a silent wrong-answer trap. Tests re-assemble
+by calling `bootstrap()` again, which re-binds every math module.
 
 Attribute access is forwarded to the assembled Runtime through the module-level
 `__getattr__` (PEP 562) rather than one hand-written forwarding function per
@@ -27,12 +30,6 @@ def get_runtime():
     if _runtime is None:
         _runtime = bootstrap()
     return _runtime
-
-
-def reset_runtime():
-    """Drop the assembled runtime, for tests; the next query reassembles."""
-    global _runtime
-    _runtime = None
 
 
 def __getattr__(name):

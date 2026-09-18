@@ -24,7 +24,7 @@ from cas.syntax.term import Sym
 from cas.math.project import zero_of
 from cas.math.domains.ratfunc import ratfunc_domain
 from cas.math.diff import differentiate
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 
 
 def _judge_zero_diff(dF, f):

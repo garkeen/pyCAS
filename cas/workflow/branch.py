@@ -28,14 +28,12 @@ from dataclasses import dataclass
 
 from cas.syntax import term as T
 from cas.kernel.ids import JudgmentId, ScopeId
-from cas.workflow.ids import TaskId
 
 
 @dataclass(frozen=True, slots=True)
 class BranchCase:
     condition: T.Term
     scope: ScopeId
-    task: TaskId | None = None
     label: str = ""
 
 

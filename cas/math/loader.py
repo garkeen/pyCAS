@@ -37,9 +37,9 @@ from dataclasses import dataclass
 from fractions import Fraction as Fr
 
 from cas.errors import ParseError
-from cas.frontend.parser import parse
+from cas.syntax.parse import parse
 from cas.syntax.term import C
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.rules import Rule
 
 _HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")

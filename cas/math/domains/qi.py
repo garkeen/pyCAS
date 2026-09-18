@@ -33,7 +33,7 @@ from fractions import Fraction as Fr
 
 from cas.syntax import term as T
 from cas.syntax.term import Sym
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.domains.base import Domain, Ring
 from cas.math.domains.q import Q_RING
 from cas.math.domains.poly import Poly

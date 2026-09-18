@@ -144,13 +144,12 @@ class Workflow:
                                     target, ())
             premises = (pstep.judgment,)
 
-        # Claim: register the proposition as an assumption of the scope first.
-        # Registration is a workflow action declared by the command; the checker
-        # only verifies.
-        if command.registers_assumption:
-            self.store.scopes.extend(self.store.scopes.get(self.scope),
-                                     assumptions=(Assumption(content),))
-
+        # The proposal is committed first; a claim's proposition becomes a scope
+        # assumption only once the commit succeeds. Registering before commit
+        # would leave a refused or undecided claim polluting later decisions in
+        # this scope. The checker verifies the claim from the command payload
+        # (registers_assumption), not from the scope, so it does not need the
+        # assumption to be present at check time.
         proposal = StepProposal(scope=self.scope, premises=premises,
                                 conclusions=(content,),
                                 evidence=Evidence(command.checker_id, command),
@@ -159,6 +158,9 @@ class Workflow:
                      mode=self.mode)
 
         if res.is_committed():
+            if command.registers_assumption:
+                self.store.scopes.extend(self.store.scopes.get(self.scope),
+                                         assumptions=(Assumption(content),))
             j = self.store.get_judgment(res.judgments[0])
             guards = tuple(self.store.get_requirement(r).proposition
                            for r in j.requirements)

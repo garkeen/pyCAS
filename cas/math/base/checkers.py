@@ -87,14 +87,16 @@ def _rule_conditions(rule, subst):
 # ---------------------------------------------------------------------------
 
 class ClaimChecker:
-    """Assert into the ledger: the proposition must already be registered as an
-    assumption of the current scope.
+    """Assert into the ledger: the command declares `registers_assumption`, so
+    the workflow registers the proposition as a scope assumption once this commit
+    succeeds.
 
-    This is not an unconditional pass: the kernel re-checks that the assumption
-    exists, so it is not fail-open. It also reports the expression's own
-    definedness conditions, so asserting `x/x` carries `x != 0` and later
-    rewrites inherit it through the kernel, keeping the condition from being lost
-    in simplification.
+    The checker verifies the claim from the command payload (the only legitimate
+    route to the assumption.entry checker is a claim command), not from the
+    scope: registration now happens after a successful commit, so a refused or
+    undecided claim never pollutes the scope's assumptions. It reports the
+    expression's own definedness conditions, so asserting `x/x` carries `x != 0`
+    and later rewrites inherit it through the kernel.
     """
     id = "assumption.entry"
 
@@ -102,8 +104,10 @@ class ClaimChecker:
         content, bad = _one_conclusion(proposal)
         if bad is not None:
             return bad
-        if not any(a is content for a in context.assumptions()):
-            return Rejected(Reason.FRAGMENT, "claim is not registered as a scope assumption")
+        cmd = proposal.evidence.payload
+        if not getattr(cmd, "registers_assumption", False):
+            return Rejected(Reason.FRAGMENT,
+                            "assumption.entry requires a claim command")
         return _ok(proposal, context)
 
 
@@ -377,10 +381,8 @@ CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,
             ConstraintSatisfiedChecker)
 
 
-def register(store) -> None:
-    """Register this module's checkers into the ledger. Called explicitly; import
-    never mutates global state."""
+def register(builder) -> None:
+    """Register this module's checkers with the assembly builder. Called from
+    `base.install` during bootstrap; import never mutates global state."""
     for cls in CHECKERS:
-        ck = cls()
-        if ck.id not in store.checkers:
-            store.checkers.register(ck.id, ck)
+        builder.register_checker(cls.id, cls())

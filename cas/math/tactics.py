@@ -200,7 +200,7 @@ def solve_piecewise(f, x: Sym, target):
     from cas.math.decide import decide
     from cas.kernel.scope import Assumptions
     from cas.kernel.verdict import YES, NO
-    from cas.math.qarith import fold
+    from cas.math.domains.qarith import fold
     if not is_piecewise(f):
         raise TacticsError("solve_piecewise needs a piecewise function")
     f = fold_nested(f)

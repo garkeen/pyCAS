@@ -16,7 +16,7 @@ from collections import deque
 
 from cas.syntax import term as T
 from cas.syntax.term import S
-from cas.math.qarith import fold as _qfold
+from cas.math.domains.qarith import fold as _qfold
 from cas.kernel.verdict import (Verdict, Reason, YES, NO, unknown,
                           and3, or3, not3)
 from cas.kernel.scope import Assumptions

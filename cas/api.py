@@ -19,7 +19,7 @@ from cas.math.diff import differentiate, differentiate_piecewise
 from cas.math.integrate import definite_integrate, integrate_term
 from cas.math.judge import back_substitute, guard_report
 from cas.math.piecewise import is_piecewise
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.rules import apply_rule, declared_ruleset
 from cas.math.tactics import solve_linear, solve_piecewise
 from cas.runtime.dispatch import domain_normal_form
