@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Stage 4/5 stress bench: piecewise differentiation, piecewise equation solving, and
+"""Stage 4/5 random bench: piecewise differentiation, piecewise equation solving, and
 the REPL channel end to end (fully self-proving).
 
   P36 piecewise differentiation  random piecewise polynomials: the per-branch
@@ -20,7 +20,7 @@ the REPL channel end to end (fully self-proving).
                                  spurious solution (a candidate failing its condition) is
                                  refused by the judge
 
-Usage: python stress/stress_stage45.py [rounds] [seed]
+Usage: python tests/random/random_stage45.py [rounds] [seed]
 """
 
 import sys
@@ -37,7 +37,7 @@ import cas.syntax.term as T
 from cas.syntax.term import S
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.diff import differentiate_piecewise
 from cas.math.tactics import solve_piecewise, TacticsError
 from cas.errors import DiffError, CadError
@@ -249,7 +249,7 @@ def prop_workflow(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260828
-    print(f"== stage 4/5 stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== stage 4/5 random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_piecewise_diff(rounds, rng)
     print(f"P36 piecewise differentiation two-channel  {rounds} rounds passed")

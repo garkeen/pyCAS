@@ -1,4 +1,4 @@
-"""Randomized stress bench (generation-based verification rather than handwritten
+"""Randomized random bench (generation-based verification rather than handwritten
 cases: the machine generates the instances and checks the properties).
 
 Four properties, all self-proving with no external ground truth:
@@ -9,7 +9,7 @@ Four properties, all self-proving with no external ground truth:
   P4 back-substitution judge  an equation built from known roots must evaluate to exactly
                      0 at each root after expansion, and a non-root sample must not
 
-Usage: python stress/stress_qarith.py [rounds] [seed]
+Usage: python tests/random/random_qarith.py [rounds] [seed]
 On any failure it prints a minimal counterexample and the seed and exits with code 1.
 """
 
@@ -20,7 +20,7 @@ from fractions import Fraction as Fr
 sys.path.insert(0, ".")
 
 from cas.syntax.term import S, N, mk, plus, times, pw, neg, Expr, Int
-from cas.math.qarith import fold, eval_exact, EvalNumError
+from cas.math.domains.qarith import fold, eval_exact, EvalNumError
 from cas.kernel.scope import Assumptions
 from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
@@ -170,7 +170,7 @@ def prop_backsub(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260826
-    print(f"== stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_fold(rounds, rng)
     print(f"P1+P2 fold fidelity/idempotence  {rounds} rounds passed")

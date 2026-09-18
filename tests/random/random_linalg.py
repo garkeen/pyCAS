@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Linear algebra and Diophantine-fragment stress bench.
+"""Linear algebra and Diophantine-fragment random bench.
 
 Four properties, all self-proving with no external ground truth:
   P14 rank-nullity  rank(A) + dim ker(A) = number of columns, and every basis vector
@@ -14,7 +14,7 @@ Four properties, all self-proving with no external ground truth:
                     and primitive; integer roots equal the planted root set exactly
                     (nothing missed, nothing spurious)
 
-Usage: python stress/stress_linalg.py [rounds] [seed]
+Usage: python tests/random/random_linalg.py [rounds] [seed]
 """
 
 import sys
@@ -165,7 +165,7 @@ def prop_integer_roots(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== linear algebra / Diophantine stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== linear algebra / Diophantine random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_rank_nullity(rounds, rng)
     print(f"P14 rank-nullity                  {rounds} rounds passed")

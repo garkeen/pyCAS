@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""One-dimensional CAD / real-root isolation stress bench (fully self-proving, no
+"""One-dimensional CAD / real-root isolation random bench (fully self-proving, no
 external ground truth).
 
   P25 isolation correctness  build a polynomial with known roots (rational roots and
@@ -17,7 +17,7 @@ external ground truth).
                              true, Gt/Lt false); a non-vanishing boundary has the same
                              sign as a sample in the neighbourhood
 
-Usage: python stress/stress_cad.py [rounds] [seed]
+Usage: python tests/random/random_cad.py [rounds] [seed]
 """
 
 import sys
@@ -119,7 +119,7 @@ def prop_partition(rounds, rng):
             s = cell.sample
             for ci, c in enumerate(conds):
                 a, b = c.args
-                from cas.math.qarith import eval_exact
+                from cas.math.domains.qarith import eval_exact
                 da = eval_exact(a, {X: s})
                 db = eval_exact(b, {X: s})
                 op = c.head.name
@@ -189,7 +189,7 @@ def prop_point_sign(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== CAD / real-root isolation stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== CAD / real-root isolation random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_isolation(rounds, rng)
     print(f"P25 isolation correctness   {rounds} rounds passed")

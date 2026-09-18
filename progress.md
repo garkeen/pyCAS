@@ -88,7 +88,7 @@
 - REPL 覆盖 claim/norm/solve/subst/split/diff/rules/apply/integrate/check/steps/undo，
   一律经前端门面。
 
-验证：`tests/` 160 通过；`stress/` 10 个台架通过（41 条自证性质）。
+验证：`tests/`（unit/contract/integration/regression）通过；`tests/random/` 10 个台架通过（41 条自证性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
 
 ## 未实现（下一步）
 
@@ -108,7 +108,7 @@
 ## 语言与引用纪律
 
 源码（`.py` / `.dsl`）一律英文，且不得引用设计文档：理由以直述方式写清，不把读者
-指向某份文档去追。两条都是 `tests/test_v4_invariants.py` 里的机械门禁
+指向某份文档去追。两条都是 `tests/contract/test_v4_invariants.py` 里的机械门禁
 （`test_source_is_english_only`、`test_source_cites_no_design_document`），覆盖
-`cas/`、`tests/`、`stress/` 下全部源文件。**文档不受此约束**：设计文档与本文档
+`cas/`、`tests/` 下全部源文件。**文档不受此约束**：设计文档与本文档
 保持中文。

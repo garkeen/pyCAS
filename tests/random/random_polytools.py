@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Resultant and squarefree-decomposition stress bench.
+"""Resultant and squarefree-decomposition random bench.
 
 Four properties, all self-proving with no external ground truth:
   P18 evaluation anchor  res(f, x-r) == f(r) (checked against exact Horner evaluation)
@@ -10,7 +10,7 @@ Four properties, all self-proving with no external ground truth:
                          genuinely squarefree (gcd(h, h') is constant); and the sum of
                          multiplicity times degree equals deg f
 
-Usage: python stress/stress_polytools.py [rounds] [seed]
+Usage: python tests/random/random_polytools.py [rounds] [seed]
 """
 
 import sys
@@ -135,7 +135,7 @@ def prop_squarefree(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== resultant/squarefree stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== resultant/squarefree random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_eval_anchor(rounds, rng)
     print(f"P18 evaluation anchor     {rounds} rounds passed")

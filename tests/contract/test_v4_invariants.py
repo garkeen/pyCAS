@@ -23,7 +23,9 @@ from cas.runtime import new_workflow
 from cas.syntax import term as T
 from cas.syntax import pattern as P
 
-_ROOT = Path(__file__).resolve().parents[1]
+# Walk up to the directory that contains `cas/`: this test may live at any depth
+# under tests/, so a fixed parents[N] would break on a future reclassification.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "cas").is_dir())
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +107,35 @@ def test_dependency_math_not_runtime():
             if m.startswith("cas.runtime"):
                 bad.append(f"{p.relative_to(_ROOT)} -> {m}")
     assert not bad, "math depends on runtime: " + ", ".join(bad)
+
+
+def test_dependency_math_not_frontend():
+    """A math module may not import the frontend: the dependency table lists syntax
+    / kernel / workflow / math.domains only. The declaration DSL parses through the
+    syntax layer (cas.syntax.parse), not the frontend parser, so the trusted
+    admission channel does not rest on a UI-layer module."""
+    bad = []
+    for p in sorted((_ROOT / "cas" / "math").rglob("*.py")):
+        for m in _cas_imports(p):
+            if m.startswith("cas.frontend"):
+                bad.append(f"{p.relative_to(_ROOT)} -> {m}")
+    assert not bad, "a math module imports the frontend:\n" + "\n".join(bad)
+
+
+def test_dependency_domains_syntax_only():
+    """math/domains may depend only on syntax (plus itself and cas.errors). A
+    domain never knows the kernel, workflow, frontend, runtime, or a non-domain
+    math module; qarith lives inside the package as the domains' literal-arithmetic
+    substrate, so the documented rule "math/domains depends on syntax" is now a
+    mechanical fact rather than a convention."""
+    bad = []
+    for p in _pkg_modules("math", "domains"):
+        for m in _cas_imports(p):
+            if m == "cas.errors" or m == "cas.syntax" or m.startswith("cas.syntax.") \
+                    or m == "cas.math.domains" or m.startswith("cas.math.domains."):
+                continue
+            bad.append(f"cas/math/domains/{p.name} -> {m}")
+    assert not bad, "a domain module depends on an upper layer:\n" + "\n".join(bad)
 
 
 def test_dependency_workflow_not_concrete_math():
@@ -404,7 +435,8 @@ def test_assumptions_immutable_and_extend_creates_new():
 # ---------------------------------------------------------------------------
 
 _CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))
-_SOURCE_DIRS = ("cas", "tests", "stress")
+# `tests/` covers tests/random/ too; the old top-level stress/ dir is gone.
+_SOURCE_DIRS = ("cas", "tests")
 
 
 def _source_files():

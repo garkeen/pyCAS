@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Q(i), the Gaussian field, stress bench (fully self-proving, no external ground truth).
+"""Q(i), the Gaussian field, random bench (fully self-proving, no external ground truth).
 
   P39 two-channel cross-check  ring dual arithmetic (QIRing) against the membership
                                channel (i -> z, rational functions over Q(z), reduction
@@ -17,7 +17,7 @@
                                integration-constant channel (integral of a+bi checked
                                independently by the differentiation layer)
 
-Usage: python stress/stress_qi.py [rounds] [seed]
+Usage: python tests/random/random_qi.py [rounds] [seed]
 """
 
 import sys
@@ -180,7 +180,7 @@ def prop_ladder(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260828
-    print(f"== Q(i) Gaussian field stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== Q(i) Gaussian field random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_two_channels(rounds, rng)
     print(f"P39 two-channel + domain axioms   {rounds} rounds passed")

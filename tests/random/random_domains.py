@@ -1,4 +1,4 @@
-"""Domain-layer randomized stress bench.
+"""Domain-layer randomized bench.
 
 Five properties, all self-proving:
   P5 polynomial round trip   random Poly -> to_term -> from_term equals the original monos
@@ -8,7 +8,7 @@ Five properties, all self-proving:
   P9 GCD divisibility        gcd(a,b) divides both a and b (verified by exact division
                              over a univariate field)
 
-Usage: python stress/stress_domains.py [rounds] [seed]
+Usage: python tests/random/random_domains.py [rounds] [seed]
 """
 
 import sys
@@ -170,7 +170,7 @@ def prop_gcd(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 42
-    print(f"== domain-layer stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== domain-layer random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_poly_roundtrip(rounds, rng)
     print(f"P5 polynomial round trip  {rounds} rounds passed")

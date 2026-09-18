@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Differentiation-layer randomized stress bench.
+"""Differentiation-layer randomized bench.
 
 Four properties, all self-proving with no external ground truth:
   P10 term/domain cross-check  for random polynomials and rational functions, the
@@ -14,7 +14,7 @@ Four properties, all self-proving with no external ground truth:
                                domain cross-check, a deliberately wrong derivative is
                                refused by the verifier
 
-Usage: python stress/stress_diff.py [rounds] [seed]
+Usage: python tests/random/random_diff.py [rounds] [seed]
 """
 
 import sys
@@ -28,7 +28,7 @@ from cas.syntax.term import S, N, mk, plus, times, pw, neg
 from cas.syntax import term as T
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.diff import differentiate
 from cas.math.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
                               to_term, _norm)
@@ -182,7 +182,7 @@ def prop_workflow(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== differentiation stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== differentiation random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_cross(rounds, rng)
     print(f"P10 term/domain cross-check   {rounds} rounds passed")

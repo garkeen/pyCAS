@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Integration skeleton stress bench (fully self-proving, no external ground truth).
+"""Integration skeleton random bench (fully self-proving, no external ground truth).
 
   P32 indefinite round trip  random polynomial: verify_antideriv (independently
                              re-checked by the differentiation layer) is true; and the
@@ -11,7 +11,7 @@
   P35 refusal boundary       a proper fraction / transcendental integrand / irrational
                              limits -> IntegrateError
 
-Usage: python stress/stress_integrate.py [rounds] [seed]
+Usage: python tests/random/random_integrate.py [rounds] [seed]
 """
 
 import sys
@@ -27,7 +27,7 @@ import cas.syntax.term as T
 from cas.syntax.term import S
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.qarith import fold
+from cas.math.domains.qarith import fold
 from cas.math.integrate import integrate_term, definite_integrate
 from cas.math.calculus.integration.verify import verify_antideriv
 from cas.errors import IntegrateError
@@ -179,7 +179,7 @@ def prop_refusal(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== integration skeleton stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== integration skeleton random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_indefinite(rounds, rng)
     print(f"P32 indefinite round trip + two channels  {rounds} rounds passed")

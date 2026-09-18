@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Piecewise container randomized stress bench.
+"""Piecewise container randomized bench.
 
 Four properties, all self-proving with no external ground truth:
   P21 independent projection  branch bodies project into their own host domains with no
@@ -20,7 +20,7 @@ Four properties, all self-proving with no external ground truth:
                               provably empty overlap and NO for a provably unequal
                               constant overlap
 
-Usage: python stress/stress_piecewise.py [rounds] [seed]
+Usage: python tests/random/random_piecewise.py [rounds] [seed]
 """
 
 import sys
@@ -227,7 +227,7 @@ def prop_guards(rounds, rng):
 # ---------------------------------------------------------------------------
 
 from cas.math.piecewise import fold_nested, domain_cells, connected_components
-from cas.math.qarith import eval_exact
+from cas.math.domains.qarith import eval_exact
 
 
 def eval_prop(c, a):
@@ -338,7 +338,7 @@ def prop_gap(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260827
-    print(f"== piecewise container stress bench: rounds={rounds} seed={seed} ==")
+    print(f"== piecewise container random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_projection(rounds, rng)
     print(f"P21 independent projection        {rounds} rounds passed")

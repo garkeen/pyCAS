@@ -16,7 +16,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent.parent
+# Walk up to the directory that contains `cas/`: this test may live at any depth
+# under tests/, so a fixed parent.parent would break on a future reclassification.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "cas").is_dir())
 _DIRS = (
     ("cas", "cas"),
     ("cas/syntax", "cas.syntax"),

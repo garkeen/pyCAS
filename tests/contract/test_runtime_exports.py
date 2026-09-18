@@ -39,7 +39,7 @@ def test_print_name_covers_constants_and_functions():
 
 def test_const_literals_live_in_runtime_not_kernel():
     """The kernel must hold no name-to-constant-atom copy table."""
-    import cas.frontend.parser as P
+    import cas.syntax.parse as P
     assert not hasattr(P, "_CONSTS")                   # the old hardcoded table is gone
     assert set(P._SYNTAX_ATOMS) == {"infinity", "true", "false"}
 
