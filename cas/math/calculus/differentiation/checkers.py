@@ -25,29 +25,37 @@ def _cross_diff(src, got, x):
     derivative (a different implementation) and compare it with the term-layer
     result.
 
-    None means the source is outside the projection domain (no independent
-    channel, the caller treats it as undecided); True means the domain-layer
-    rebuild equals the term-layer result in the rational-function field; False
-    means they differ; anything else is honestly undecided.
+    None means the source is outside the projection domain, or its projected
+    element is a representation the cross-check has no independent channel for
+    (None is then the honest undecided result, never an AttributeError from
+    reading fields of a representation the domain does not declare); True means
+    the domain-layer rebuild equals the term-layer result in the
+    rational-function field; False means they differ.
     """
     hit = project(src)
     if hit is None:
         return None
     if hit.element is None:
         expected = T.ZERO                      # a constant cell (Z/Q) differentiates to 0
-    else:
+    elif isinstance(hit.element, Poly):
         vs = hit.domain.vars
         if x not in vs:
             expected = T.ZERO
         else:
-            idx = vs.index(x)
             ring = hit.domain.ring
-            if isinstance(hit.element, Poly):
-                expected = to_term(ring, p_deriv(ring, hit.element, idx))
-            elif isinstance(hit.element, RatFunc):
-                expected = rf_to_term(ring, rf_deriv(ring, hit.element, idx))
-            else:
-                return None
+            expected = to_term(ring, p_deriv(ring, hit.element, vs.index(x)))
+    elif isinstance(hit.element, RatFunc):
+        vs = hit.domain.vars
+        if x not in vs:
+            expected = T.ZERO
+        else:
+            ring = hit.domain.ring
+            expected = rf_to_term(ring, rf_deriv(ring, hit.element, vs.index(x)))
+    else:
+        # The representation-dependent reads (`vars` / `ring`) happen only on a
+        # branch that knows the view: a domain implementing just the projection
+        # protocol owns neither, and falls through to the honest undecided result.
+        return None
     from cas.math.domains.ratfunc import ratfunc_domain
     allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
                         key=lambda s: s.name))

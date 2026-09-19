@@ -66,10 +66,56 @@ _NEG = {
 }
 
 
+_ORD = ("Lt", "Le", "Gt", "Ge")
+
+
+def _nonreal_constant(t):
+    """A constant declared not real that occurs in `t`, or None.
+
+    An order comparison is read over an ordered domain. The declared constants
+    are the only value-domain information the decision layer has (it receives
+    assumptions, not scope declarations), so a constant whose declaration says
+    "not real" is the evidence that the ordered reading does not apply: the
+    sign rules for powers and sums are ordered-field facts, and `i * i >= 0` is
+    not a proposition about an ordered field.
+    """
+    if isinstance(t, T.Const):
+        return t if _R().const_real(t) is False else None
+    if isinstance(t, T.Expr):
+        for a in t.args:
+            bad = _nonreal_constant(a)
+            if bad is not None:
+                return bad
+    return None
+
+
+def _ordered_fact(f):
+    """Whether an assumption can be consumed as ordered information.
+
+    The comparison gate in `decide` withholds answering an order comparison whose
+    operands carry a constant declared not real. The assumption channels build
+    order edges (`_chain_query`) and interval bounds (`_interval`) out of
+    assumptions, so the same evidence must gate them: a fact carrying such a
+    constant is not an ordered fact, and reading `x < i` together with `i < 3`
+    as ordered facts would prove `x < 3` in a domain where no order reading
+    applies. The real-valued path is untouched: `_nonreal_constant` returns None
+    for every fact without a declared-not-real constant.
+    """
+    return _nonreal_constant(f) is None
+
+
 def negate(f):
     """Strong negation of a comparison predicate (not (a>b) == a<=b and so on);
-    everything else goes through a syntactic Not."""
+    everything else goes through a syntactic Not.
+
+    The strong form is an ordered-domain identity, so it is withheld when an
+    operand carries a constant declared not real: such a comparison has no
+    truth value to flip, and the decision layer must report undecided rather
+    than answer the flipped predicate.
+    """
     if isinstance(f, T.Expr) and f.head.name in _NEG:
+        if f.head.name in _ORD and _nonreal_constant(f) is not None:
+            return T.mk(S("Not"), (f,))
         return T.mk(S(_NEG[f.head.name]), f.args)
     if isinstance(f, T.Expr) and f.head.name == "Not":
         return f.args[0]
@@ -147,6 +193,9 @@ def _chain_query(op, a, b, assumptions):
     A state is (node, whether the path contains a strict edge), and the best
     strictness per node is recorded. Numeric-bound inference and equality
     substitution belong to the interval channel; here only graph edges are walked.
+    An assumption carrying a constant declared not real is not an order edge
+    (`_ordered_fact`) and is skipped: otherwise `x < i` and `i < 3` would chain
+    to `x < 3` where the ordered reading does not apply.
     """
     adj = {}
     strict = op in ("Lt", "Gt")
@@ -154,7 +203,8 @@ def _chain_query(op, a, b, assumptions):
     if op in ("Gt", "Ge"):
         want = (b, a)
     for f in assumptions:
-        if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge"):
+        if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge") \
+                and _ordered_fact(f):
             opf = f.head.name
             u, v = f.args
             if opf in ("Gt", "Ge"):
@@ -187,9 +237,10 @@ def _interval(t, assumptions, seen=None, depth=0):
 
     Sources: numeric atoms / declared constant axiom bounds / direct ledger numeric
     bounds / ledger equality substitution (recursive) / Plus sums / numeric scalar
-    Times scaling / even powers and Abs being nonnegative. It reads only the term and
-    the ledger and never calls back into decide (to prevent cycles). Returns None
-    when there is no information at all.
+    Times scaling / even powers and Abs being nonnegative. An assumption carrying a
+    constant declared not real is not an ordered bound (`_ordered_fact`), so it is
+    skipped. It reads only the term and the ledger and never calls back into decide
+    (to prevent cycles). Returns None when there is no information at all.
     """
     from fractions import Fraction as Fr
 
@@ -223,6 +274,11 @@ def _interval(t, assumptions, seen=None, depth=0):
         n = f.head.name
         if n == "Attr" and f.args[0] is t and f.args[1].name == "integer":
             is_int = True
+            continue
+        # Ordered information from an assumption carrying a constant declared not
+        # real is not consumed (neither as a bound nor as an equality that would
+        # bound through substitution): the ordered reading does not apply there.
+        if not _ordered_fact(f):
             continue
         if n in ("Lt", "Le", "Gt", "Ge"):
             u, v = f.args
@@ -938,6 +994,13 @@ def decide(fact, assumptions, _depth=0) -> Verdict:
     if isinstance(fact, T.Expr):
         name = fact.head.name
         if name in _CMP:
+            if name in _ORD:
+                # An order comparison is read over an ordered domain; a constant
+                # declared not real is evidence that no such reading applies.
+                # Answering regardless is how `i^2 >= 0` came out YES: the sign
+                # rules for powers and sums are ordered-field facts.
+                if _nonreal_constant(fact) is not None:
+                    return unknown(Reason.FRAGMENT)
             if name == "Eq":
                 r = _eq_subst(fact, assumptions, _depth)
                 if r is not None:

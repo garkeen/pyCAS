@@ -71,14 +71,20 @@ def integrate_term(f, x: Sym):
                              "rational-function domains", Reason.FRAGMENT)
     if hit.element is None:
         return T.times(f, x)                    # integral of a constant c is c*x
+    el = hit.element
     vs = hit.domain.vars
+    if vs is None:
+        # The domain declares no variable view for its elements, so there is no
+        # honest way to see the integrand as a polynomial in x; refusing here
+        # names the domain instead of reading a field it may not have.
+        raise IntegrateError(
+            "integration is not available for the element representation of "
+            f"{hit.domain.name}", Reason.FRAGMENT)
     if x not in vs:
         return T.times(f, x)                    # independent of x
-    idx = vs.index(x)
-    ring = hit.domain.ring
-    el = hit.element
     if isinstance(el, Poly):
-        return to_term(ring, poly_antideriv(ring, el, idx))
+        ring = hit.domain.ring
+        return to_term(ring, poly_antideriv(ring, el, vs.index(x)))
     raise IntegrateError("proper rational integration needs Hermite reduction, "
                          "not built", Reason.FRAGMENT)
 

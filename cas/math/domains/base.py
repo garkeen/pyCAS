@@ -126,6 +126,11 @@ class Domain(ABC):
     needing "the ring of some capable domain" takes it through find_domain by
     capability rather than hardcoding a specific singleton.
 
+    vars: the variable order of this domain's projected elements, or None when
+    the representation exposes no polynomial variable view. An algorithm that
+    needs to locate a variable inside an element asks the domain for it instead
+    of reading fields of a representation the domain may not have.
+
     scoped: True marks a single-computation domain (an algebraic extension or a
     radical parameter). Such a domain must not be registered resident and must be
     confined to one computation by domain_scope, because a resident registration
@@ -138,12 +143,39 @@ class Domain(ABC):
     is_euclidean = False
     scoped = False
     ring = None
+    vars = None
 
     @abstractmethod
     def normalize(self, t): ...
 
     @abstractmethod
     def equal(self, a, b): ...
+
+    def element_is_zero(self, element) -> bool:
+        """Vanishing of a projected element of this domain, decided completely
+        inside the fragment by the domain's own normal form.
+
+        The projection layer hands the element over without inspecting its
+        representation; a domain that never hands over an element (a constant
+        cell) leaves this unused. The base implementation refuses loudly and
+        names the domain, so a domain that produces elements without consuming
+        them fails here instead of at the projection layer with an anonymous
+        error.
+        """
+        raise NotImplementedError(
+            f"domain {type(self).__name__} ({self.name}) does not consume "
+            "projected elements: implement element_is_zero")
+
+    def element_to_term(self, element):
+        """A projected element as this domain's normal form (an interned term).
+
+        Symmetric to element_is_zero: the base implementation refuses loudly
+        and names the domain rather than letting the projection layer guess at
+        the representation.
+        """
+        raise NotImplementedError(
+            f"domain {type(self).__name__} ({self.name}) does not consume "
+            "projected elements: implement element_to_term")
 
 
 _DOMAINS = {}

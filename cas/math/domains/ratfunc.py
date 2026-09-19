@@ -231,6 +231,15 @@ class RatFuncDomain(Domain):
             return None                  # not a member: caller out of bounds
         return rf_equal(self.ring, ra, rb)
 
+    def element_is_zero(self, element) -> bool:
+        """A fraction vanishes iff its numerator does: the denominator is
+        nonzero by construction."""
+        return element.num.is_zero()
+
+    def element_to_term(self, element):
+        """The existing reduced normal-form rendering path."""
+        return rf_to_term(self.ring, rf_reduce(self.ring, element))
+
 
 _domain_cache = {}
 

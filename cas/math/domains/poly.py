@@ -340,6 +340,14 @@ class PolyDomain(Domain):
             return None                  # not a member: caller out of bounds
         return pa.monos == pb.monos
 
+    def element_is_zero(self, element) -> bool:
+        """The polynomial's own zero test: empty monomial collection."""
+        return element.is_zero()
+
+    def element_to_term(self, element):
+        """The existing Poly -> canonical interned term path."""
+        return to_term(self.ring, element)
+
 
 _domain_cache = {}
 

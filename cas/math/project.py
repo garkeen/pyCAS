@@ -27,18 +27,21 @@ from cas.syntax import term as T
 from cas.math.domains.base import (
     register, lookup, find_domain, set_default_coeff_ring,
 )
-from cas.math.domains.poly import poly_domain, from_term as poly_from_term, \
-    Poly, to_term
-from cas.math.domains.ratfunc import ratfunc_domain, rf_from_term, RatFunc, \
-    rf_reduce, rf_to_term
+from cas.math.domains.poly import poly_domain, from_term as poly_from_term
+from cas.math.domains.ratfunc import ratfunc_domain, rf_from_term
 
 
 @dataclass(frozen=True, slots=True)
 class Projected:
     """Projection result: the domain object, the element inside it, and the
-    original term."""
+    original term.
+
+    `element` is opaque here: the producing domain consumes it
+    (`element_is_zero` / `element_to_term`) and this layer never inspects its
+    representation. None marks a constant cell, whose term the domain consumes
+    directly."""
     domain: object          # a Domain instance
-    element: object         # Poly | RatFunc; None for a constant cell
+    element: object         # the producing domain's own element; None for a constant cell
     term: object            # the original interned term
     name: str               # domain name, for step attribution display
 
@@ -167,28 +170,24 @@ def is_zero(hit: Projected) -> bool:
     """Vanishing of a projected element, decided completely inside the fragment
     by the domain normal form.
 
-    A constant cell (Z/Q/Q(i)) is decided by domain equality, uniformly for every
-    constant domain rather than by type-specific cases: the hit's term is a
-    member of that domain (guaranteed by the projection hit), zero is a member of
-    every number domain, so equality is value comparison."""
+    The producing domain consumes its own element; a constant cell (Z/Q/Q(i))
+    is decided by domain equality, uniformly for every constant domain rather
+    than by type-specific cases: the hit's term is a member of that domain
+    (guaranteed by the projection hit), zero is a member of every number
+    domain, so equality is value comparison."""
     if hit.element is None:
         return hit.domain.equal(hit.term, T.ZERO) is True
-    if isinstance(hit.element, Poly):
-        return hit.element.is_zero()
-    if isinstance(hit.element, RatFunc):
-        return hit.element.num.is_zero()
-    raise TypeError(f"unknown projected element {hit.element!r}")
+    return hit.domain.element_is_zero(hit.element)
 
 
 def normalize(hit: Projected):
-    """A projected element to its domain normal form as an interned term."""
+    """A projected element to its domain normal form as an interned term.
+
+    The producing domain consumes its own element; a constant cell goes through
+    the domain normal form directly."""
     if hit.element is None:                 # constant cell: domain normal form
         return hit.domain.normalize(hit.term)
-    if isinstance(hit.element, Poly):
-        return to_term(hit.domain.ring, hit.element)
-    if isinstance(hit.element, RatFunc):
-        return rf_to_term(hit.domain.ring, rf_reduce(hit.domain.ring, hit.element))
-    raise TypeError(f"unknown projected element {hit.element!r}")
+    return hit.domain.element_to_term(hit.element)
 
 
 def zero_of(t):
