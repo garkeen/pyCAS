@@ -59,7 +59,7 @@ def rebuild(t, budget=100000):
             elif isinstance(u, T.Bound):
                 # Rebuilding an abstracted body must not call mk_bound again,
                 # because _abstract would shift existing DB references.
-                val[u] = T._mk_bound_canon(u.hint, val[u.body])
+                val[u] = T.mk_bound_canon(u.hint, val[u.body])
             else:
                 val[u] = u
         return val[root]

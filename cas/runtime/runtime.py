@@ -18,13 +18,13 @@ def _domain_callable(template):
     """Domain-condition template -> callable `fn(call) -> [condition terms]`.
 
     The template contains the `DB(0)` placeholder (the function argument slot) and
-    is instantiated through the syntax layer's `_lift` -- the same de Bruijn
+    is instantiated through the syntax layer's `lift` -- the same de Bruijn
     mechanism as derivative templates, not a second substitution scheme.
     """
-    from cas.syntax.term import _lift
+    from cas.syntax.term import lift
 
     def cond(t):
-        return [_lift(template, t.args[0], 0)]
+        return [lift(template, t.args[0], 0)]
 
     return cond
 

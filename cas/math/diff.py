@@ -132,7 +132,7 @@ def _diff(t, x):
     if len(t.args) != 1:
         raise DiffError(f"differentiation of the multivariate {head} is not implemented")
     arg = t.args[0]
-    inner = T._lift(tpl, arg, 0)            # instantiate DB(0) with the argument
+    inner = T.lift(tpl, arg, 0)            # instantiate DB(0) with the argument
     return T.times(inner, _diff(arg, x))    # chain rule: template value times inner derivative
 
 

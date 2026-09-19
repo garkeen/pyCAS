@@ -444,15 +444,9 @@ def _pos(t, assumptions):
     return None
 
 
-_RULES = []
 _MAX_DEPTH = 6
 
 
-def derive(name, applies):
-    def deco(fn):
-        _RULES.append((name, applies, fn))
-        return fn
-    return deco
 
 
 def _is_cmp(f):
@@ -497,7 +491,6 @@ def _zero_cmp_of(a, assumptions, q, op):
     return None
 
 
-@derive("ne-from-ord", lambda f: f.head.name == "Ne")
 def _rule_ne_from_ord(f, assumptions, q):
     a, b = f.args
     if q(T.mk(S("Gt"), (a, b))) is YES or q(T.mk(S("Lt"), (a, b))) is YES:
@@ -507,7 +500,6 @@ def _rule_ne_from_ord(f, assumptions, q):
     return None
 
 
-@derive("cmp-via-eq", lambda f: _is_ord(f))
 def _rule_cmp_via_eq(f, assumptions, q):
     a, b = f.args
     if T.is_num(b):
@@ -547,12 +539,10 @@ def _sign_of_term(t, assumptions, q):
     return None
 
 
-@derive("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO)
 def _rule_sign_atom(f, assumptions, q):
     return _zero_cmp_of(f.args[0], assumptions, q, f.head.name)
 
 
-@derive("sign-times", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
 def _rule_sign_times(f, assumptions, q):
     op = f.head.name
     a = f.args[0]
@@ -590,7 +580,6 @@ def _rule_sign_times(f, assumptions, q):
     return YES if odd else (guarded if s_nn else NO)
 
 
-@derive("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0)
 def _rule_sign_even_power(f, assumptions, q):
     op = f.head.name
     b = f.args[0].args[0]
@@ -615,9 +604,6 @@ def _rule_sign_even_power(f, assumptions, q):
     return None
 
 
-@derive("sign-nonneg-zero",
-        lambda f: _is_ord(f) and f.args[1] is T.ZERO
-        and _nonneg_zero_arg(f.args[0]) is not None)
 def _rule_sign_nonneg_zero(f, assumptions, q):
     """Sign of g(u) against 0 where g is declared nonnegative with g(u)=0 iff u=0
     (absolute-value / norm family): g>=0 always true and g<0 always false, while
@@ -646,13 +632,11 @@ def _rule_sign_nonneg_zero(f, assumptions, q):
     return None
 
 
-@derive("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1)
 def _rule_sign_odd_power(f, assumptions, q):
     b = f.args[0].args[0]
     return q(T.mk(S(f.head.name), (b, T.ZERO)))
 
 
-@derive("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus")
 def _rule_sign_sum(f, assumptions, q):
     op = f.head.name
     a = f.args[0]
@@ -709,7 +693,6 @@ def _rule_sign_sum(f, assumptions, q):
     return None
 
 
-@derive("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times")
 def _rule_eq_times_zero(f, assumptions, q):
     """Zero product. Premise: every coefficient structure this system builds (Q, K[x],
     K(x), algebraic and transcendental towers) is an integral domain, so ab=0 iff a=0
@@ -726,7 +709,6 @@ def _rule_eq_times_zero(f, assumptions, q):
     return any_zero
 
 
-@derive("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]))
 def _rule_sign_num(f, assumptions, q):
     s = T.sign_num(f.args[0])
     op = f.head.name
@@ -739,14 +721,12 @@ def _rule_sign_num(f, assumptions, q):
     return YES if s <= 0 else NO
 
 
-@derive("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]))
 def _rule_eq_num(f, assumptions, q):
     if f.head.name == "Eq":
         return YES if T.num_val(f.args[0]) == T.num_val(f.args[1]) else NO
     return YES if T.num_val(f.args[0]) != T.num_val(f.args[1]) else NO
 
 
-@derive("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO)
 def _rule_cmp_flip(f, assumptions, q):
     op = f.head.name
     a, b = f.args
@@ -756,6 +736,26 @@ def _rule_cmp_flip(f, assumptions, q):
     return q(T.mk(S(flip[op]), (b, a)))
 
 
+# The derive rules are an explicit data table, not import-time self-registration:
+# the (name, applies, fn) triples are listed once here, after the functions are
+# defined, so the table is data rather than a side effect of decoration. This is
+# the intra-module pipeline table; the cross-module eq_stages channel is the one
+# that must be assembled explicitly by bootstrap (it carries plugins from other
+# modules), and these two are deliberately different mechanisms.
+_RULES = (
+    ("ne-from-ord", lambda f: f.head.name == "Ne", _rule_ne_from_ord),
+    ("cmp-via-eq", lambda f: _is_ord(f), _rule_cmp_via_eq),
+    ("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_atom),
+    ("sign-times", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_sign_times),
+    ("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0, _rule_sign_even_power),
+    ("sign-nonneg-zero", lambda f: _is_ord(f) and f.args[1] is T.ZERO and _nonneg_zero_arg(f.args[0]) is not None, _rule_sign_nonneg_zero),
+    ("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1, _rule_sign_odd_power),
+    ("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus", _rule_sign_sum),
+    ("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_eq_times_zero),
+    ("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]), _rule_sign_num),
+    ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _rule_eq_num),
+    ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _rule_cmp_flip),
+)
 def _derive_layer(fact, assumptions, depth):
     q = lambda f: decide(f, assumptions, depth + 1)
     for name, applies, fn in _RULES:
@@ -766,15 +766,10 @@ def _derive_layer(fact, assumptions, depth):
     return None
 
 
-_AXIOM_CHECKS = []
 
 
-def axiom(fn):
-    _AXIOM_CHECKS.append(fn)
-    return fn
 
 
-@axiom
 def _axiom_constants(fact, assumptions):
     """Constant coarse-bound lemma (from the declaration's const_bounds data)."""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
@@ -799,7 +794,6 @@ def _axiom_constants(fact, assumptions):
     return None
 
 
-@axiom
 def _axiom_function_bounds(fact, assumptions):
     """Function range-bound lemma (from the FunctionDecl.bound declaration).
 
@@ -842,6 +836,9 @@ def _axiom_function_bounds(fact, assumptions):
     return None
 
 
+# Same as _RULES: explicit data, built after the functions are defined, not a
+# decorator side effect. These are the declaration-bound fallback lemmas.
+_AXIOM_CHECKS = (_axiom_constants, _axiom_function_bounds)
 def _family_cmp(fact, assumptions, depth):
     op = fact.head.name
     a, b = fact.args

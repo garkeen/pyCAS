@@ -1,3 +1,4 @@
+import weakref
 from functools import partial
 
 from fractions import Fraction
@@ -13,7 +14,12 @@ def _next_h():
 
 
 class Term:
-    __slots__ = ("_h",)
+    # `__weakref__` lets the intern store hold terms weakly (WeakValueDictionary),
+    # so a long session no longer retains terms no live reference holds. Pointer
+    # equality (`is`) is preserved among all live references: an intern entry
+    # survives while any caller holds the term, so mk/S/N return the same object
+    # for the same content as long as anyone is still holding it.
+    __slots__ = ("_h", "__weakref__")
 
     def __hash__(self):
         return self._h
@@ -143,13 +149,18 @@ _INFIX = {
     "Or": "||",
 }
 
-_SYMS = {}
-_CONSTS = {}
-_NUMS = {}
-_SPECIALS = {}
-_EXPRS = {}
-_BOUNDS = {}
-_DBS = {}
+# The intern tables are weak: an entry survives only while some live reference
+# holds the term. This bounds memory to live terms (a long session no longer
+# retains transient terms that the computation has dropped) while preserving
+# pointer equality among every term still in use. `__weakref__` in Term.__slots__
+# is what makes the values weakly referenceable.
+_SYMS = weakref.WeakValueDictionary()
+_CONSTS = weakref.WeakValueDictionary()
+_NUMS = weakref.WeakValueDictionary()
+_SPECIALS = weakref.WeakValueDictionary()
+_EXPRS = weakref.WeakValueDictionary()
+_BOUNDS = weakref.WeakValueDictionary()
+_DBS = weakref.WeakValueDictionary()
 
 
 def DB_(i):
@@ -313,7 +324,7 @@ def _fold_bool_ac(head, args):
     return sorted(out)
 
 
-def _intern_expr(head, args):
+def intern_expr(head, args):
     key = (head._h, tuple(a._h for a in args))
     t = _EXPRS.get(key)
     if t is None:
@@ -350,10 +361,10 @@ def mk(head, args):
         if name in BOOL_HEADS:
             r = _fold_bool_ac(head, list(args))
             if isinstance(r, list):
-                return _intern_expr(head, tuple(r))
+                return intern_expr(head, tuple(r))
             return r
-        return _intern_expr(head, tuple(_flatten_ac(head, list(args))))
-    return _intern_expr(head, tuple(args))
+        return intern_expr(head, tuple(_flatten_ac(head, list(args))))
+    return intern_expr(head, tuple(args))
 
 
 def call(name, *args):
@@ -460,7 +471,7 @@ def _abstract(t, var, depth):
     return t
 
 
-def _mk_bound_canon(hint, cbody):
+def mk_bound_canon(hint, cbody):
     key = cbody._h
     t = _BOUNDS.get(key)
     if t is None:
@@ -474,27 +485,27 @@ def mk_bound(var_hint, body, var=None):
     if var is None:
         var = S(var_hint) if isinstance(var_hint, str) else var_hint
     hint = var.name if isinstance(var, Sym) else str(var_hint)
-    return _mk_bound_canon(hint, _abstract(body, var, 0))
+    return mk_bound_canon(hint, _abstract(body, var, 0))
 
 
 def open_bound(b):
     """Bound -> (hint symbol, body): restore DB(0) to the hint symbol, the
     inverse of mk_bound. Nested binders are shifted by depth."""
     var = S(b.hint)
-    return var, _lift(b.body, var, 0)
+    return var, lift(b.body, var, 0)
 
 
-def _lift(t, var, depth):
+def lift(t, var, depth):
     if isinstance(t, DB):
         return var if t.i == depth else t
     if isinstance(t, Expr):
-        args = tuple(_lift(a, var, depth) for a in t.args)
+        args = tuple(lift(a, var, depth) for a in t.args)
         if all(a is b for a, b in zip(args, t.args)):
             return t
         return mk(t.head, args)
     if isinstance(t, Bound):
-        nb = _lift(t.body, var, depth + 1)
-        return t if nb is t.body else _mk_bound_canon(t.hint, nb)
+        nb = lift(t.body, var, depth + 1)
+        return t if nb is t.body else mk_bound_canon(t.hint, nb)
     return t
 
 
@@ -511,9 +522,12 @@ def _lift(t, var, depth):
 # ---------------------------------------------------------------------------
 
 _TERMPATH_REEXPORT = frozenset((
-    "_subst_raw", "subst",
-    "free_vars", "term_at", "_bind_into", "replace_at", "all_paths",
+    "subst",
+    "free_vars", "term_at", "replace_at", "all_paths",
 ))
+# `subst_raw` and `_bind_into` are termpath-internal helpers (used only inside
+# termpath.subst / replace_at), not part of the cross-package surface, so they
+# are not re-exported here.
 
 
 def __getattr__(name):

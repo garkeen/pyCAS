@@ -180,7 +180,7 @@ def instantiate(pat, sub):
     if pat.head.name == "Quote":
         # Inside Quote the held structure is preserved: rebuild raw, no AC
         # normalization.
-        return T._intern_expr(pat.head, tuple(_inst_raw(a, sub) for a in pat.args))
+        return T.intern_expr(pat.head, tuple(_inst_raw(a, sub) for a in pat.args))
     out = []
     for a in pat.args:
         if a.__class__ is PatternSeq:
@@ -194,7 +194,7 @@ def instantiate(pat, sub):
 
 
 def _inst_raw(pat, sub):
-    """Held channel of `instantiate`: rebuild through _intern_expr, with no AC
+    """Held channel of `instantiate`: rebuild through intern_expr, with no AC
     normalization."""
     if isinstance(pat, T.Term):
         return pat
@@ -215,4 +215,4 @@ def _inst_raw(pat, sub):
             out.extend(seq)
         else:
             out.append(_inst_raw(a, sub))
-    return T._intern_expr(pat.head, tuple(out))
+    return T.intern_expr(pat.head, tuple(out))

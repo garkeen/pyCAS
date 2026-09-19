@@ -67,9 +67,11 @@ def test_term_import_surface_unchanged():
     compatibility alias is kept.
     """
     from cas.syntax import term as T
-    for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths",
-                 "_subst_raw", "_bind_into"):
+    for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths"):
         assert hasattr(T, name), f"import surface lost: {name}"
+    # termpath-internal helpers are not re-exported (no cross-package caller)
+    for name in ("_bind_into", "subst_raw", "_subst_raw"):
+        assert not hasattr(T, name), f"termpath-internal name leaked to term: {name}"
     from cas.syntax import pattern as P
     for name in ("instantiate", "matches"):
         assert hasattr(P, name) or name == "matches", f"pattern-layer export lost: {name}"

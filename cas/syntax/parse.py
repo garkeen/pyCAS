@@ -57,7 +57,7 @@ class Parser:
     """Expression parser.
 
     The raw channel (quote contents, entered automatically inside '...') builds
-    through _intern_expr, which interns without simplifying, preserving the
+    through intern_expr, which interns without simplifying, preserving the
     anti-normalized shape: like terms and like-base powers are not merged and
     constants are not folded, so 'cos(x)/cos(x)^2 stays as
     Times(cos, Power(cos, -2)) and the domain constraint is preserved with it
@@ -121,13 +121,13 @@ class Parser:
     def _mk(self, head, args):
         if self.pattern:
             return P.pcall(head, tuple(args))
-        return T._intern_expr(head, tuple(args)) if self.raw \
+        return T.intern_expr(head, tuple(args)) if self.raw \
             else mk(head, tuple(args))
 
     def _neg(self, e):
         if self.pattern:
             return P.pcall(S("Times"), (T.MONE, e))
-        return T._intern_expr(S("Times"), (T.MONE, e)) if self.raw \
+        return T.intern_expr(S("Times"), (T.MONE, e)) if self.raw \
             else T.neg(e)
 
     def _quote(self, e):
@@ -228,7 +228,7 @@ class Parser:
             self.next()
             # the de Bruijn placeholder `@0` marks the argument slot of a bound body
             # (derivative templates, domain-condition templates); the syntax layer
-            # owns binding abstraction and instantiation (mk_bound / _lift)
+            # owns binding abstraction and instantiation (mk_bound / lift)
             return T.DB_(int(v[1:]))
         if k == "num":
             self.next()
