@@ -88,12 +88,21 @@
 - REPL 覆盖 claim/norm/solve/subst/split/diff/rules/apply/integrate/check/steps/undo，
   一律经前端门面。
 
-验证：`tests/`（unit/contract/integration/regression）通过；`tests/random/` 10 个台架通过（41 条自证性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
+- 作用域为**版本链**：`extend` 产新 id（Γ 对每个 id 冻结，分支从固定版本父分叉），
+  `lineage_of`/`head_of` 区分谱系与版本；引入者反向索引与否证反向索引消除每 commit 全扫。
+- 真 undo/redo：事件视图是带 redo 栈的分支指针（`visible()` 有真实消费方），workflow 的
+  scope 指针随 revision 回退，declare/define 记为事件。
+- 语言表面全声明化：无隐式大小写折叠；binder 由 DSL `binder <Head>` 声明并经注入通道交给
+  语法层；`src` 打印形态有往返清单测试。
+- 分段提升有预算（`BudgetExceeded` 诚实拒答）与相邻同值支合并。
+- 投影元由域自身消费（`element_is_zero`/`element_to_term`），投影层不嗅表示；序比较按
+  值域证据分派（非实常数上诚实拒答）。
+
+验证：`tests/`（unit/contract/integration/regression）通过；`tests/random/` 10 个台架通过（各台架自证若干条数学性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
 
 ## 未实现（下一步）
 
-- 交互通道：工作流序列化与回放；超越「移动 revision 指针」的真正 undo/redo；带版本
-  的上下文折叠；后续求解消费已分裂的分支。
+- 交互通道：工作流序列化与回放；带版本的上下文折叠；后续求解消费已分裂的分支。
 - 战术层：带判别式分支的二次求解；循环方程求解；一般丢番图拒答接入 UNDECIDABLE；
   多变量与绑定体内微分。
 - Risch 之前的数域：poly/ratfunc 的 ℚ(i) 系数吸收；高斯整数；一般代数扩张；参数化
@@ -104,6 +113,16 @@
   微分层能验证它，但判零通道还不能把差值展开为零。
 - 未决设计：分支合并在不引入蕴含引入规则（Γ, C ⊢ P 推出 Γ ⊢ C → P）的前提下，
   无法独立复核「各支都回答了 P」。这是一条尚未采纳的新内核规则。
+
+
+## 已知缺陷（已定位，未修）
+
+- 打印机的数值因子合并不完整：含多个数值因子的 `Times` 只保留最后一个，故
+  `to_str(parse("-2*x")) == "2*x"`（丢符号）、`to_str(parse("x^-2")) == "x^(2)"`。
+  交互路径不受影响（REPL 先 `fold`），程序化打印会丢信息；修法是把数值因子按精确有理数
+  收敛后再渲染（既有 `3/4` 形态已是这套约定）。
+- `cas/math/tactics.py::_lin_core` 仍对投影元做 `isinstance(RatFunc/Poly)` 分派：新表示的
+  多项式域会被它拒答（诚实拒答，不致命）。修法是给域协议加「单变量多项式视图」查询。
 
 ## 语言与引用纪律
 
