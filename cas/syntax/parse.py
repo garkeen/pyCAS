@@ -1,3 +1,15 @@
+"""Expression parser: the term language's own grammar.
+
+Surface names carry no case convention. An identifier reaches a canonical head
+**only** through declared data -- the alias table, a constant declaration, a
+function declaration or a binder declaration -- each injected as a query by the
+caller (`alias_fn` / `const_fn` / `binder_fn`). With no injection a name is a
+symbol, so `foo` and `Foo` are two different heads and a lowercase declaration
+(`function foo`) is directly reachable from the surface syntax. The syntax layer
+therefore knows no mathematical head; it knows the term language's own structure
+(ring signature, comparisons, boolean structure, Quote, and binders that the
+declaration layer reports as such).
+"""
 import re
 
 from fractions import Fraction as Fr
@@ -23,8 +35,6 @@ _TOKEN = re.compile(
 # are always looked up by name from the declaration layer; the kernel keeps no copy
 # of a name-to-atom mapping.
 _SYNTAX_ATOMS = {"infinity": INFINITY, "true": TRUE, "false": FALSE}
-
-_BINDERS = {"Integrate", "Sum", "Product", "Limit"}
 
 _PREC = {"=": 1, "==": 2, "!=": 2, "<": 2, ">": 2, "<=": 2, ">=": 2,
          "+": 3, "-": 3, "*": 4, "/": 4, "^": 6}
@@ -72,7 +82,7 @@ class Parser:
     """
 
     def __init__(self, toks, raw=False, pattern=False, constants=None,
-                 alias_fn=None, const_fn=None):
+                 alias_fn=None, const_fn=None, binder_fn=None):
         self.toks = toks
         self.i = 0
         self.raw = raw
@@ -84,6 +94,7 @@ class Parser:
         self.constants = constants
         self._alias_fn = alias_fn
         self._const_fn = const_fn
+        self._binder_fn = binder_fn
 
     # --- construction primitives: the only point where the channels differ ---
 
@@ -102,6 +113,19 @@ class Parser:
             h = self._alias_fn(name)
             return h if h is not None else name
         return name
+
+    def _is_binder(self, head):
+        """Whether a canonical head is a declared binder head.
+
+        Binder heads are declaration data (`binder <Head>` in the declaration DSL),
+        injected as a query exactly like the alias and constant channels. With no
+        injected query nothing is a binder, so the syntax layer on its own knows no
+        mathematical head. A surface word reaches this query only after the alias
+        table has resolved it, which is what makes a declared surface word such as
+        `integrate` produce the declared binder head `Integrate` without any case
+        rewriting.
+        """
+        return self._binder_fn is not None and self._binder_fn(head)
 
     def _const_atom(self, name):
         """Identifier -> mathematical constant atom (None when absent, so the caller
@@ -267,30 +291,48 @@ class Parser:
                         self.next()
                         args.append(self.expr(0))
                 self.expect(")")
-                # binder words are case insensitive (integrate/Integrate both produce
-                # the bound form)
-                bv = v[0].upper() + v[1:] if v else v
-                if bv in _BINDERS and len(args) == 2:
+                # A declared binder word binds its second argument: word(body, var)
+                # produces Head(Bound(var, body)), and any further arguments follow
+                # the bound body, so the definite-integral word
+                # word(body, var, lo, hi) produces Head(Bound(var, body), lo, hi).
+                # Which heads are binder words is declaration data (binder_fn), not
+                # a table in the syntax layer.
+                if self._is_binder(v) and len(args) >= 2:
                     if self.pattern and P.has_holes(args[1]):
                         raise ParseError(
                             "binder pattern with a hole in variable position is not supported")
-                    return self._mk(S(bv), (T.mk_bound(args[1], args[0]),))
-                if v[0].islower() and len(v) > 1 and v not in ("and", "or", "not"):
-                    v = v[0].upper() + v[1:]
+                    return self._mk(S(v), (T.mk_bound(args[1], args[0]),) + tuple(args[2:]))
                 return self._mk(S(v), tuple(args))
             return S(v)
         raise ParseError(f"unexpected {v!r}")
 
 
-def parse(s, pattern=False, constants=None, alias_fn=None, const_fn=None):
+def parse(s, pattern=False, constants=None, alias_fn=None, const_fn=None,
+          binder_fn=None):
     """Parse an expression.
 
     `constants` is an optional name-to-constant-atom table for the declaration DSL
     channel (parsed at bootstrap, when the runtime is not ready, so it injects the
     table instead of calling back into the runtime). The ordinary expression channel
-    passes `alias_fn` / `const_fn` instead; the frontend shim supplies the
-    runtime-backed pair. With none of these, names degrade to symbols and no alias
-    is applied, so this module depends on neither the runtime nor any math module.
+    passes `alias_fn` / `const_fn` / `binder_fn` instead; the frontend shim supplies
+    the runtime-backed triple. With none of these, names degrade to symbols, no
+    alias is applied and nothing is a binder, so this module depends on neither
+    the runtime nor any math module.
     """
     return Parser(tokenize(s), pattern=pattern, constants=constants,
-                  alias_fn=alias_fn, const_fn=const_fn).parse()
+                  alias_fn=alias_fn, const_fn=const_fn,
+                  binder_fn=binder_fn).parse()
+
+
+def atom_notation(atom):
+    """The surface spelling of a language atom (None when the atom has no notation).
+
+    The spelling belongs to the language, so it lives next to the atom table
+    instead of being repeated by the printer: the source form of an atom that the
+    lexer accepts must re-parse to the same atom, and the atom whose notation the
+    lexer accepts is asked for here rather than being transcribed a second time.
+    """
+    for name, a in _SYNTAX_ATOMS.items():
+        if a is atom:
+            return name
+    return None

@@ -2,6 +2,7 @@ from cas.runtime import dispatch as rt
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
+from cas.syntax.parse import atom_notation
 from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, BVal, Special, DB
 from cas.syntax.termpath import postorder
 
@@ -18,6 +19,10 @@ def _atom_str(a, src=False):
     src=True (parseable source form) always emits the internal name: the display
     names for pi/gamma are not in the lexer, so emitting them would be unparseable.
     Display and source are two purposes and take separate routes.
+
+    An atom whose notation the lexer accepts asks the syntax layer for that notation;
+    an atom without one (the empty solution set, Undefined) has no parseable spelling
+    and falls back to the display spelling.
     """
     if isinstance(a, Sym):
         return a.name
@@ -33,18 +38,35 @@ def _atom_str(a, src=False):
     if isinstance(a, Rat):
         return f"{a.f.numerator}/{a.f.denominator}"
     if isinstance(a, Special):
+        if src:
+            n = atom_notation(a)
+            if n is not None:
+                return n
         if a is T.EMPTY_SET:
             return "{}"
         return a.name
     if isinstance(a, DB):
-        return f"#{a.i}"
+        # the lexer's placeholder notation is `@n` (`#n` is the template display form
+        # and is not a token), so the source form uses the notation the lexer accepts
+        return f"@{a.i}" if src else f"#{a.i}"
     return repr(a)
 
 
-def _name_of(h):
+def _name_of(h, src=False):
+    """The spelling of a head: the declared print name when there is one, else the
+    display name (lowercased) or, in source mode, the canonical head name.
+
+    The parser holds no case convention, so the source form must emit a spelling the
+    declarations map back to this head: a lowercased undeclared head would re-parse as
+    a different head. The display form keeps the friendly lowercase because it is not
+    meant to be re-parsed. A declared print name resolves through the alias table,
+    which is what makes the source form of a declared function round-trip.
+    """
     if isinstance(h, Sym):
         pn = rt.print_name(h.name)
-        return pn if pn is not None else h.name.lower()
+        if pn is not None:
+            return pn
+        return h.name if src else h.name.lower()
     return repr(h)
 
 
@@ -53,6 +75,41 @@ def _wrap(child, need):
     of precedence `need`."""
     s, p = child
     return "(" + s + ")" if need > p else s
+
+
+def _call_str(name, val, args):
+    """Canonical call spelling of a structure: its head name plus its arguments.
+
+    The parser reproduces a call of any head by that name, so this is the source form
+    of a container whose display notation (set braces, interval brackets, an infix
+    union) is not part of the lexer.
+    """
+    return f"{name}(" + ", ".join(_wrap(val[a], 0) for a in args) + ")"
+
+
+# Display notation of the standard binder heads: presentation only. Display mode
+# is not promised to re-parse, so the friendly symbols may live in a table; the
+# **source** form never consults it (see the declared-binder branch of to_str). A
+# declared binder without an entry falls back to the canonical call spelling with
+# the bound variable visible, since there is no notation to invent for it.
+_BINDER_SYMBOLS = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}
+
+
+def _binder_display(u, b, ob):
+    """Display spelling of one declared binder node (presentation only).
+
+    The definite-integral shape carries its limits; the four traditional words
+    keep their symbol; anything else prints as a call so the bound variable
+    stays visible.
+    """
+    if u.head.name == "DefIntegrate" and len(u.args) == 3:
+        lo, hi = u.args[1], u.args[2]
+        return f"∫_{to_str(lo)}^{to_str(hi)}[{to_str(ob)}] d{b.hint}"
+    sym = _BINDER_SYMBOLS.get(u.head.name)
+    if sym is not None and len(u.args) == 1:
+        return f"{sym}[{to_str(ob)}] d{b.hint}"
+    parts = [to_str(ob), b.hint] + [to_str(a) for a in u.args[1:]]
+    return f"{_name_of(u.head)}({', '.join(parts)})"
 
 
 _ATOM_P = 100   # own precedence of a node absent from _PREC: never needs parentheses
@@ -64,14 +121,21 @@ def to_str(t, prec=0, hint=None, src=False):
     precedence (case-for-case equivalent to the original recursive precedence
     mechanism).
 
-    With src=True it emits a parseable source form (binder words print as function
-    calls integrate(f,x)/sum(f,x)/product(f,x)/limit(f,x,pt)) so that a % history
-    expansion can be reparsed.
+    With src=True it emits a parseable source form: a declared binder head prints
+    as a canonical call `Head(body, var, ...)` -- binder recognition runs on the
+    canonical head after alias resolution, so the emitted spelling always
+    re-parses, and a newly declared binder or a renamed surface word needs no
+    printer change. Container heads print as canonical calls (Piecewise(...),
+    FiniteSet(...), Interval(...), Union(...)) instead of set notation the lexer
+    does not accept. Every spelling the source form emits therefore re-parses to
+    the same term.
     """
     val = {}
     for u in reversed(postorder(t)):
         if not isinstance(u, Expr):
             if isinstance(u, Bound):
+                # A Bound alone has no notation: only the parent node knows whether
+                # a declared binder head can render the binding.
                 val[u] = val[u.body]
             else:
                 val[u] = (_atom_str(u, src), _ATOM_P)
@@ -80,52 +144,56 @@ def to_str(t, prec=0, hint=None, src=False):
         if name == "Quote":
             val[u] = ("'" + _wrap(val[u.args[0]], 0), _ATOM_P)
             continue
-        if name == "DefIntegrate" and len(u.args) == 3 and isinstance(u.args[0], Bound):
-            b, lo, hi = u.args
+        if u.args and isinstance(u.args[0], Bound) \
+                and isinstance(u.head, Sym) and rt.is_binder(u.head.name):
+            # A declared binder head, asked of the same runtime query the parser
+            # uses: no binder head name is a literal here. The source form is the
+            # canonical head with body and bound variable (plus trailing
+            # arguments); alias resolution maps a surface word to the canonical
+            # head, where binder recognition runs, so this spelling re-parses even
+            # for a fresh binder or after the surface word was renamed.
+            b = u.args[0]
             _v, ob = T.open_bound(b)
             if src:
-                val[u] = (f"int({to_str(ob, src=True)}, {b.hint}, "
-                          f"{to_str(lo, src=True)}, {to_str(hi, src=True)})", _ATOM_P)
+                parts = [to_str(ob, src=True), b.hint]
+                parts.extend(to_str(a, src=True) for a in u.args[1:])
+                val[u] = (f"{u.head.name}(" + ", ".join(parts) + ")", _ATOM_P)
             else:
-                val[u] = (f"∫_{to_str(lo)}^{to_str(hi)}[{to_str(ob)}] d{b.hint}", _ATOM_P)
-            continue
-        if name in ("Integrate", "Sum", "Product", "Limit") and len(u.args) == 1 and isinstance(u.args[0], Bound):
-            b = u.args[0]
-            sym = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}[name]
-            fn = {"Integrate": "integrate", "Sum": "sum", "Product": "product", "Limit": "limit"}[name]
-            _v, ob = T.open_bound(b)   # restore the DB index to the bound variable name before rendering
-            if src:
-                val[u] = (f"{fn}({to_str(ob, src=True)}, {b.hint})", _ATOM_P)
-            else:
-                val[u] = (f"{sym}[{to_str(ob)}] d{b.hint}", _ATOM_P)
+                val[u] = (_binder_display(u, b, ob), _ATOM_P)
             continue
         if name == "Piecewise" and len(u.args) % 2 == 0:
-            parts = [
-                f"{_wrap(val[u.args[i]], 0)} if {_wrap(val[u.args[i + 1]], 0)}"
-                for i in range(0, len(u.args), 2)
-            ]
-            val[u] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
+            if src:
+                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+            else:
+                parts = [
+                    f"{_wrap(val[u.args[i]], 0)} if {_wrap(val[u.args[i + 1]], 0)}"
+                    for i in range(0, len(u.args), 2)
+                ]
+                val[u] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
             continue
         if name == "FiniteSet":
-            val[u] = ("{" + ", ".join(_wrap(val[a], 0) for a in u.args) + "}", _ATOM_P)
+            if src:
+                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+            else:
+                val[u] = ("{" + ", ".join(_wrap(val[a], 0) for a in u.args) + "}", _ATOM_P)
             continue
         if name == "Interval" and len(u.args) == 4:
-            lo, hi, lo_o, hi_o = u.args
-            lb = "(" if (isinstance(lo_o, BVal) and lo_o.val) else "["
-            rb = ")" if (isinstance(hi_o, BVal) and hi_o.val) else "]"
-            val[u] = (f"{lb}{_wrap(val[lo], 0)}, {_wrap(val[hi], 0)}{rb}", _ATOM_P)
+            if src:
+                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+            else:
+                lo, hi, lo_o, hi_o = u.args
+                lb = "(" if (isinstance(lo_o, BVal) and lo_o.val) else "["
+                rb = ")" if (isinstance(hi_o, BVal) and hi_o.val) else "]"
+                val[u] = (f"{lb}{_wrap(val[lo], 0)}, {_wrap(val[hi], 0)}{rb}", _ATOM_P)
             continue
         if name == "Union":
-            val[u] = (" U ".join(_wrap(val[a], 0) for a in u.args), _ATOM_P)
+            if src:
+                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+            else:
+                val[u] = (" U ".join(_wrap(val[a], 0) for a in u.args), _ATOM_P)
             continue
         if name == "O" and len(u.args) == 1:
             val[u] = ("O(" + _wrap(val[u.args[0]], 0) + ")", _ATOM_P)
-            continue
-        if name == "RootOf" and len(u.args) == 2:
-            # Emit the exact capitalized form: the parser capitalizes the first letter
-            # of a lowercase head (rootof -> Rootof, which differs from RootOf), and
-            # round-tripping requires the exact shape.
-            val[u] = (f"RootOf({_wrap(val[u.args[0]], 0)}, {val[u.args[1]][0]})", _ATOM_P)
             continue
         if name in _PREC:
             p = _PREC[name]
@@ -198,8 +266,12 @@ def to_str(t, prec=0, hint=None, src=False):
                 s = f" {op} ".join(parts)
             val[u] = (s, p)
             continue
+        # An undeclared head (or a declared one used without a bound first
+        # argument): a Bound renders as its body, because there is no notation
+        # that could re-parse the binding; declared binders were rendered above
+        # with the variable kept.
         args = ", ".join(_wrap(val[a], 0) for a in u.args)
-        val[u] = (f"{_name_of(u.head)}({args})", _ATOM_P)
+        val[u] = (f"{_name_of(u.head, src)}({args})", _ATOM_P)
     s, p = val[t]
     # top-level precedence only applies to _PREC heads (case-for-case equivalent to
     # the original recursive version; atoms and function heads get no parentheses)
@@ -239,4 +311,4 @@ def pat_to_str(p, src=False):
         parts = [_wrap((pat_to_str(a, src), _pat_prec(a)), pr + 1) for a in p.args]
         return f" {T._INFIX.get(name, name)} ".join(parts)
     args = ", ".join(pat_to_str(a, src) for a in p.args)
-    return f"{_name_of(p.head)}({args})"
+    return f"{_name_of(p.head, src)}({args})"

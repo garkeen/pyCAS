@@ -15,6 +15,7 @@ Two kinds of DSL text are parsed here:
                      [deriv "<template>"] [domain "<condition>"] [note "<text>"]
 
       alias <surface> = <Head>         # a parse-level token (ln, sqrt) to a canonical head
+      binder <Head>                    # a canonical head whose surface word binds a variable
       role <role> = <Head>             # a canonical function an algorithm refers to
 
   `<lo>` / `<hi>` are integers or `none` for unbounded. Inside `<template>` and
@@ -43,17 +44,84 @@ from cas.math.domains.qarith import fold
 from cas.math.rules import Rule
 
 _HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")
-_KWS = ("guard", "prio", "auto")
-_SEP = "\x00"
+_OPEN = "(["
+_CLOSE = ")]"
+
+
+def _tokens_at_depth_zero(body):
+    """Whitespace-delimited tokens at bracket depth 0, as (text, start, end).
+
+    Whitespace inside `(...)` / `[...]` does not split a token, so a bracketed
+    call is one token and an identifier in argument position (as in
+    `f(?x, auto)`) is never seen as a keyword.
+    """
+    toks = []
+    depth = 0
+    start = None
+    for i, ch in enumerate(body):
+        if ch in _OPEN:
+            depth += 1
+        elif ch in _CLOSE and depth > 0:
+            depth -= 1
+        if ch.isspace() and depth == 0:
+            if start is not None:
+                toks.append((body[start:i], start, i))
+                start = None
+        elif start is None:
+            start = i
+    if start is not None:
+        toks.append((body[start:], start, len(body)))
+    return toks
 
 
 def _split_keywords(body):
-    rest = " " + body.strip() + " "
-    rest = re.sub(r"\s+auto\s*$", " \x00auto\x00 ", rest)
-    for kw in _KWS:
-        rest = re.sub(rf"\s+{kw}\s+", f" {_SEP}{kw}{_SEP} ", rest)
-    parts = [p.strip() for p in rest.split(_SEP) if p.strip()]
-    return parts
+    """Split a rule body into the `pattern -> template` text and its keyword
+    sections.
+
+    Grammar: `<pattern> -> <template> [guard <pattern...>] [prio <int>] [auto]`.
+    The optional suffix is consumed right to left (auto, then prio, then guard),
+    because a guard value may run over many whitespace-separated tokens; what is
+    left of the first consumed keyword is the head. Only a whole token at bracket
+    depth 0 is a keyword.
+
+    Returns (head, guard_text, prio_text, auto); an absent section is None.
+    """
+    toks = _tokens_at_depth_zero(body)
+    i = len(toks)
+    auto = False
+    prio_text = None
+    guard_text = None
+
+    if i and toks[i - 1][0] == "auto":
+        auto = True
+        i -= 1
+    if i > 1 and toks[i - 2][0] == "prio":
+        prio_text = toks[i - 1][0]
+        i -= 2
+    elif i and toks[i - 1][0] == "prio":
+        raise ParseError(f"prio needs an integer value: {body!r}")
+
+    guard_at = None
+    for k in range(i):
+        if toks[k][0] == "guard":
+            guard_at = k
+            break
+    if guard_at is not None:
+        if guard_at + 1 == i:
+            raise ParseError(f"guard needs a value: {body!r}")
+        guard_text = body[toks[guard_at][2] : toks[i - 1][2]].strip()
+        i = guard_at
+
+    head = body[: toks[i - 1][2]].strip() if i else ""
+    # A bare keyword where the template must stand would otherwise surface only
+    # as an empty right hand side of the arrow, which names no cause.
+    kw = ("guard" if guard_text is not None else
+          "prio" if prio_text is not None else
+          "auto" if auto else None)
+    if kw is not None and not head.rpartition("->")[2].strip():
+        raise ParseError(
+            f"keyword {kw!r} found where a template is required: {body!r}")
+    return head, guard_text, prio_text, auto
 
 
 def _split_arrow(s):
@@ -68,30 +136,20 @@ def parse_rule_line(line):
     if not m:
         raise ParseError(f"bad rule line: {line}")
     rid = m.group(1)
-    parts = _split_keywords(m.group(2))
-    pat_s, tpl_s = _split_arrow(parts[0])
+    head, guard_text, prio_text, auto = _split_keywords(m.group(2))
+    pat_s, tpl_s = _split_arrow(head)
     # LHS/RHS/guard are all parsed through the pattern channel, so the products
     # are Patterns rather than Terms.
     pat = parse(pat_s, pattern=True)
     tpl = parse(tpl_s, pattern=True)
-    guard = None
-    auto = False
+    guard = parse(guard_text, pattern=True) if guard_text is not None else None
     priority = 100
-    i = 1
-    while i < len(parts):
-        kw = parts[i]
-        val = parts[i + 1] if i + 1 < len(parts) else None
-        if kw == "guard":
-            guard = parse(val, pattern=True)
-            i += 2
-        elif kw == "prio":
-            priority = int(val)
-            i += 2
-        elif kw == "auto":
-            auto = True
-            i += 1
-        else:
-            i += 1
+    if prio_text is not None:
+        try:
+            priority = int(prio_text)
+        except ValueError:
+            raise ParseError(
+                f"prio value {prio_text!r} is not an integer: {line!r}") from None
     return Rule(id=rid, pattern=pat, template=tpl, guard=guard,
                 auto=auto, priority=priority)
 
@@ -133,6 +191,7 @@ class Declarations:
     constants: tuple      # tuple[dict]
     functions: tuple      # tuple[dict]
     aliases: tuple        # tuple[(surface name, canonical head)]
+    binders: tuple        # tuple[canonical head] of binder heads
     roles: tuple          # tuple[(role, canonical head)]
     rules: tuple          # tuple[str] of rule lines, parsed by parse_rule_line
 
@@ -145,6 +204,22 @@ def _parse_alias(lineno, line):
     if not m:
         raise ParseError(f"line {lineno}: alias must look like 'alias <name> = <Head>'")
     return (m.group(1), m.group(2))
+
+
+_BINDER = re.compile(r"^binder\s+([A-Za-z_]\w*)$")
+
+
+def _parse_binder(lineno, line):
+    """`binder <Head>`: one canonical head whose surface word binds a variable.
+
+    The statement carries the canonical head only; the surface word that reaches
+    it is an ordinary alias declaration, so the parser resolves the word through
+    the alias table and then asks whether the resulting head is a declared binder.
+    """
+    m = _BINDER.match(line)
+    if not m:
+        raise ParseError(f"line {lineno}: binder must look like 'binder <Head>'")
+    return m.group(1)
 
 
 _ROLE = re.compile(r"^role\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
@@ -233,7 +308,8 @@ def parse_declarations(text) -> Declarations:
     declared constant is treated as a symbol (a function head), which is exactly
     what templates like `Sin(@0)` need.
     """
-    const_lines, func_lines, alias_lines, role_lines, rules = [], [], [], [], []
+    const_lines, func_lines, alias_lines, binder_lines, role_lines, rules = \
+        [], [], [], [], [], []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = _strip_comment(raw).strip()
         if not line:
@@ -246,6 +322,8 @@ def parse_declarations(text) -> Declarations:
             func_lines.append((lineno, line))
         elif line.startswith("alias "):
             alias_lines.append((lineno, line))
+        elif line.startswith("binder "):
+            binder_lines.append((lineno, line))
         elif line.startswith("role "):
             role_lines.append((lineno, line))
         else:
@@ -255,8 +333,9 @@ def parse_declarations(text) -> Declarations:
     const_map = {c["name"]: C(c["name"]) for c in constants}
     functions = tuple(_parse_function(ln, l, const_map) for ln, l in func_lines)
     aliases = tuple(_parse_alias(ln, l) for ln, l in alias_lines)
+    binders = tuple(_parse_binder(ln, l) for ln, l in binder_lines)
     roles = tuple(_parse_role(ln, l) for ln, l in role_lines)
-    return Declarations(constants, functions, aliases, roles, tuple(rules))
+    return Declarations(constants, functions, aliases, binders, roles, tuple(rules))
 
 
 def load_declarations(path) -> Declarations:

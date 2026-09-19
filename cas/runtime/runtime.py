@@ -37,6 +37,7 @@ class Runtime:
         self._consts = dict(builder.constants)
         self._funcs = dict(builder.functions)
         self._aliases = dict(builder.aliases)
+        self._binders = frozenset(builder.binders)
         self._roles = dict(builder.roles)
         self._rule_lines = tuple(builder.rule_lines)
         self._eq_stages = tuple(builder.eq_stages)
@@ -105,6 +106,15 @@ class Runtime:
         declaration data."""
         return self._aliases.get(surface)
 
+    def is_binder(self, head_name: str) -> bool:
+        """Whether a canonical head is a declared binder head.
+
+        The parser resolves a surface word through the alias table and then asks
+        this question, so a bound form (integrate/sum/product/limit and the
+        definite integral) comes from declarations rather than from a parser table.
+        """
+        return head_name in self._binders
+
     def role_head(self, role: str):
         """Role -> canonical head (None when absent). Algorithms fetch by role and
         never hardcode a function name."""
@@ -134,7 +144,7 @@ class Runtime:
 
     def stats(self):
         return {"constants": len(self._consts), "functions": len(self._funcs),
-                "aliases": len(self._aliases),
+                "aliases": len(self._aliases), "binders": len(self._binders),
                 "rules": len(self._rule_lines),
                 "domain_conds": len(self._domain_conds),
                 "eq_stages": len(self._eq_stages),

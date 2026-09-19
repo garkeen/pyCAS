@@ -31,5 +31,7 @@ def install(builder) -> None:
         builder.declare_alias(surface, head)
     for role, head in decls.roles:
         builder.declare_role(role, head)
+    for head in decls.binders:
+        builder.declare_binder(head)
     for line in decls.rules:
         builder.declare_rule(line)

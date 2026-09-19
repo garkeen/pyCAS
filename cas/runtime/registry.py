@@ -70,6 +70,7 @@ class RuntimeBuilder:
         self.constants: dict[str, ConstantDecl] = {}
         self.functions: dict[str, FunctionDecl] = {}
         self.aliases: dict[str, str] = {}  # surface name -> canonical head (parser notation)
+        self.binders: list[str] = []       # canonical heads whose surface word binds a variable
         self.roles: dict[str, str] = {}    # role -> canonical head (algorithms fetch by role)
         self.rule_lines: list[str] = []    # rule lines (DSL text; math/rules.py parses)
         self.eq_stages: list = []          # (name, run)
@@ -143,6 +144,17 @@ class RuntimeBuilder:
         if role in self.roles:
             raise ValueError(f"role redeclared: {role}")
         self.roles[role] = head
+
+    def declare_binder(self, head: str) -> None:
+        """Declare a canonical head as a binder head: its surface word takes the bound
+        variable as its second argument and the parser builds the bound form.
+
+        The head is declaration data like an alias, so the syntax layer knows no
+        binder by name; a new binder needs a declaration, not a parser change.
+        """
+        if head in self.binders:
+            raise ValueError(f"binder redeclared: {head}")
+        self.binders.append(head)
 
     def declare_rule(self, line: str) -> None:
         """Register the **text** of one rule DSL line (parsing happens at the

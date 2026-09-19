@@ -8,6 +8,7 @@ registration statements. That is what turns "admit only unconditional identities
 instead of something a human has to notice in code.
 """
 
+import pytest
 from pathlib import Path
 
 from cas.math.loader import load_declarations, parse_declarations, parse_rule_line
@@ -71,7 +72,37 @@ def test_dsl_is_the_only_declaration_source():
     rt = dispatch.get_runtime()
     assert rt.stats()["constants"] == len(d.constants)
     assert rt.stats()["functions"] == len(d.functions)
+    assert rt.stats()["binders"] == len(d.binders)
     assert rt.stats()["rules"] == len(d.rules)
+
+
+def test_binder_heads_are_declared():
+    """The bound heads come from the DSL `binder` statement and are visible in the
+    runtime, so the parser holds no binder table of its own. The surface word that
+    reaches a binder head is an ordinary alias declaration."""
+    from cas.runtime import dispatch
+    d = load_declarations(str(_DSL))
+    assert set(d.binders) == {"Integrate", "Sum", "Product", "Limit", "DefIntegrate"}
+    for head in d.binders:
+        assert dispatch.is_binder(head) is True, head
+    assert dispatch.is_binder("Sin") is False
+    amap = dict(d.aliases)
+    for word, head in (("integrate", "Integrate"), ("sum", "Sum"),
+                       ("product", "Product"), ("limit", "Limit"),
+                       ("int", "DefIntegrate")):
+        assert amap.get(word) == head, word
+
+
+def test_statement_dispatch_rejects_everything_it_does_not_know():
+    """A declaration statement the DSL does not admit is a declaration defect and
+    raises, and a malformed binder statement does not slip through as data."""
+    from cas.errors import ParseError
+    with pytest.raises(ParseError):
+        parse_declarations("bind Integrate")
+    with pytest.raises(ParseError):
+        parse_declarations("binder")
+    with pytest.raises(ParseError):
+        parse_declarations("binder Foo Bar")
 
 
 def test_admission_auto_rules_have_no_guard():

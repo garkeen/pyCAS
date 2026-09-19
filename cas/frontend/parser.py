@@ -7,8 +7,9 @@ the syntax layer instead of reaching into the frontend, so the trusted admission
 channel no longer depends on a UI-layer module.
 
 This module is the thin runtime-binding shim for ordinary surface expressions: it
-injects the assembled runtime's alias and constant-atom lookup into the syntax
-parser. The DSL channel passes its own constant table and bypasses these hooks.
+injects the assembled runtime's alias, constant-atom and binder-head lookup into
+the syntax parser. The DSL channel passes its own constant table and bypasses
+these hooks.
 """
 
 from cas.syntax.parse import tokenize, Parser
@@ -25,14 +26,19 @@ def _const_atom(name):
     return d.atom if d is not None else None
 
 
+def _is_binder(name):
+    return rt.is_binder(name)
+
+
 def parse(s, pattern=False, constants=None):
     """Parse an expression.
 
     `constants` is an optional name-to-constant-atom table; the declaration DSL
     passes it to avoid calling back into the runtime during bootstrap. Ordinary
-    expressions are resolved through the assembled runtime's alias and constant
-    tables (injected here), so a new surface name or constant needs no parser
-    change.
+    expressions are resolved through the assembled runtime's alias, constant and
+    binder tables (injected here), so a new surface name, constant or binder needs
+    no parser change.
     """
     return Parser(tokenize(s), pattern=pattern, constants=constants,
-                  alias_fn=_alias, const_fn=_const_atom).parse()
+                  alias_fn=_alias, const_fn=_const_atom,
+                  binder_fn=_is_binder).parse()
