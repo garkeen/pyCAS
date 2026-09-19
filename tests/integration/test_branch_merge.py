@@ -50,7 +50,9 @@ def test_merge_commits_at_parent_scope():
     m = wf.merge_branches(group, parse("2*x"), results)
     assert m.status == "committed", m.note
     assert m.judgment is not None
-    assert wf.store.get_judgment(m.judgment).scope == root
+    merged = wf.store.get_judgment(m.judgment).scope
+    assert merged == wf.scope
+    assert wf.store.scopes.lineage_of(merged) == wf.store.scopes.lineage_of(root)
 
 
 def test_merge_records_branch_steps_as_event_inputs():

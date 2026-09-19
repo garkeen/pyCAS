@@ -14,8 +14,15 @@ workflow -> kernel. The provenance chain is therefore
 `Judgment -> Step -> Event`, and the reverse query ("which operation produced
 this conclusion") is answered by the inverted index in this module.
 
-undo/redo only moves the revision pointer; the event list is append-only and
-never physically deletes.
+The log is append-only and the view is a branch pointer over it: `_events`
+keeps every recorded operation, `_view` lists the indices currently in view (in
+occurrence order), and `_future` holds the indices an undo moved out of the
+view, most recent last, so a redo can put them back. `parent_revision` records
+the revision in view when an operation was performed -- the point in history it
+was applied to, not the raw event count. An operation performed after an undo
+is therefore performed on the shortened view and discards the redo branch: the
+undone events stay recorded, but they cannot be replayed past the new
+operation.
 """
 
 from dataclasses import dataclass
@@ -45,54 +52,76 @@ class Event:
 
 
 class EventLog:
-    """Append-only operation history with a revision pointer and an artifact
-    inverted index."""
+    """Append-only operation history with a branch-aware view, a revision
+    pointer and an artifact inverted index."""
 
     def __init__(self):
         self._events: list[Event] = []
+        self._view: list[int] = []          # event indices in view, in order
+        self._future: list[int] = []        # undone indices, most recent last
         self._next = 0
         self._revision = RevisionId(0)      # current revision = number of events in view
         self._producers: dict[object, list] = {}
 
     def append(self, command, inputs=(), outputs=()) -> Event:
+        """Record one operation on top of the current view.
+
+        `parent_revision` is the revision in view *before* this operation, so
+        an operation performed after an undo is recorded as branching from the
+        shortened history. Recording discards the redo branch: the undone
+        events stay in `_events` but can no longer be put back.
+        """
         eid = EventId(self._next)
         self._next += 1
         ev = Event(id=eid, command=command, inputs=tuple(inputs),
                    outputs=tuple(outputs), parent_revision=self._revision)
         self._events.append(ev)
+        self._view.append(len(self._events) - 1)
+        self._future.clear()
         for obj in ev.outputs:
             self._producers.setdefault(obj, []).append(eid)
-        self._revision = RevisionId(len(self._events))
+        self._revision = RevisionId(len(self._view))
         return ev
 
     # --- queries ---
 
     def events(self):
+        """Every recorded event, in recording order (the append-only history)."""
         return tuple(self._events)
 
     def visible(self):
-        """Events visible at the current revision; after an undo, later events
-        remain in the list but are not visible."""
-        return tuple(self._events[: self._revision])
+        """The events in view, in view order.
+
+        After an undo the later events stay recorded and are still listed by
+        `events()`; they are simply not part of the current branch.
+        """
+        return tuple(self._events[i] for i in self._view)
 
     def current_revision(self) -> RevisionId:
+        """The revision in view: how many operations the view holds."""
         return self._revision
 
     def producers_of(self, kind, ident) -> tuple:
         """Inverted index: which event(s) produced this id in the `kind` id
-        space. The kernel takes no part."""
+        space. The kernel takes no part. Every recorded event is indexed, not
+        only the visible ones: the provenance query is about history.
+        """
         return tuple(self._producers.get(Ref(kind, ident), ()))
 
-    # --- undo / redo (pointer only, no event deletion) ---
+    # --- undo / redo (view pointer only, no event deletion) ---
 
     def undo(self) -> RevisionId:
-        if self._revision > 0:
-            self._revision = RevisionId(self._revision - 1)
+        """Move the most recent event in view out of it, for a redo to restore."""
+        if self._view:
+            self._future.append(self._view.pop())
+        self._revision = RevisionId(len(self._view))
         return self._revision
 
     def redo(self) -> RevisionId:
-        if self._revision < len(self._events):
-            self._revision = RevisionId(self._revision + 1)
+        """Put the most recently undone event back into view, if any."""
+        if self._future:
+            self._view.append(self._future.pop())
+        self._revision = RevisionId(len(self._view))
         return self._revision
 
     def __len__(self):

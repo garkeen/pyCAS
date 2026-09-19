@@ -86,7 +86,7 @@ def test_task_and_candidate_state_derived_from_data():
     assert c.artifact == s1.artifact
     assert c.validation == s1.judgment
     assert c.is_validated()
-    assert c.state(wf.tasks) in ("validated", "conditional")
+    assert c.state(wf.tasks, wf.scope) == "validated"
 
 
 def test_command_without_request_opens_no_task():
@@ -106,6 +106,60 @@ def test_applicability_is_queryable():
     assert app.is_conditional(), app
     s1 = wf.add(parse("x^2"), Claim())              # unconditional
     assert wf.applicability_of(s1).is_applicable()
+
+
+def test_candidate_state_is_relative_to_the_query_scope():
+    """A validation produced inside a branch does not read as validated outside.
+
+    The guard of `x/x` is discharged by the branch assumption, so the same
+    judgment is applicable inside the branch and only conditional in the parent
+    scope. Candidate state is a query in a scope, not a stored flag, which is
+    why the scope is passed in: otherwise a branch-local proof would be reported
+    as a verified candidate where it does not hold.
+    """
+    from cas.kernel.mode import ExecutionMode
+    wf = new_workflow(mode=ExecutionMode.DERIVATION)
+    root = wf.scope
+    wf.add(parse("x/x"), Claim())                # carries the condition x != 0
+    group = wf.split_on(parse("x != 0"))
+    case = group.cases[0]
+    wf.enter(case.scope)
+    s = wf.add(parse("x/x"), Claim())            # the branch assumption discharges it
+    assert s.status == "committed", s.note
+    task = wf.tasks.open_task(root, parse("x/x"))
+    cand = wf.tasks.propose(task.id, s.artifact, validation=s.judgment)
+    assert wf.tasks.is_applicable(s.judgment, case.scope)
+    assert not wf.tasks.is_applicable(s.judgment, root)
+    assert cand.state(wf.tasks, case.scope) == "validated"
+    assert cand.state(wf.tasks, root) == "conditional"
+
+
+def test_branch_local_unconditional_claim_is_not_applicable_outside_the_branch():
+    """Usability needs both the condition question and the scope relation.
+
+    A branch-local claim that carries no requirement at all has its conditions
+    trivially discharged, so the kernel's `applicability` alone would report it
+    applicable in the parent scope -- while `commit` refuses to use that same
+    judgment as a premise there. `TaskStore.is_applicable` therefore also
+    requires the judgment's own scope to be visible from the query scope: the
+    candidate is validated inside the branch and only conditional outside it.
+    """
+    from cas.kernel.mode import ExecutionMode
+    wf = new_workflow(mode=ExecutionMode.DERIVATION)
+    root = wf.scope
+    group = wf.split_on(parse("x != 0"))
+    case = group.cases[0]
+    wf.enter(case.scope)
+    s = wf.add(parse("x^2"), Claim())            # unconditional: nothing to discharge
+    assert s.status == "committed", s.note
+    jid = s.judgment
+    assert wf.store.requirements_of(jid) == (), "the nail needs the unconditional case"
+    assert wf.tasks.is_applicable(jid, case.scope)
+    assert not wf.tasks.is_applicable(jid, root)
+    task = wf.tasks.open_task(root, parse("x^2"))
+    cand = wf.tasks.propose(task.id, s.artifact, validation=jid)
+    assert cand.state(wf.tasks, case.scope) == "validated"
+    assert cand.state(wf.tasks, root) == "conditional"
 
 
 def test_step_without_conclusion_has_no_applicability():

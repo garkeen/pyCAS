@@ -9,6 +9,7 @@ The store holds **committed** facts only. Intermediate computation products are
 Artifacts and never enter here, so the ledger size depends on the number of
 commits, not on the number of rewrites.
 """
+from cas.syntax import term as T
 
 from cas.kernel.evidence import CheckerRegistry
 from cas.kernel.ids import JudgmentId, RequirementId, StepId
@@ -16,6 +17,14 @@ from cas.kernel.model import (
     Applicable, Conditional, Discharge, Inapplicable, Judgment, Requirement, Step,
 )
 from cas.kernel.scope import ScopeStore
+
+
+def negation_arg(p):
+    """The operand of a syntactic negation `Not(p)`, or None when `p` is not a
+    negation call. Syntactic only: no semantic guessing about other shapes."""
+    if isinstance(p, T.Expr) and p.head.name == "Not":
+        return p.args[0]
+    return None
 
 
 class KernelStore:
@@ -29,6 +38,12 @@ class KernelStore:
         self._steps: dict[StepId, Step] = {}
         self._discharges: dict[RequirementId, list] = {}
         self._refutations: dict[RequirementId, list] = {}
+        # Reverse index over requirement propositions, maintained at the single
+        # requirement write site: proposition -> ids, and the operand of a
+        # syntactic negation -> ids. Each bucket is in insertion order, so a
+        # refutation query sees the candidates in the order a full scan did.
+        self._req_by_prop: dict = {}
+        self._req_by_negation: dict = {}
         self._next_req = 0
         self._next_jud = 0
         self._next_step = 0
@@ -53,7 +68,13 @@ class KernelStore:
     # --- writes (only commit calls these) ---
 
     def put_requirement(self, req: Requirement) -> Requirement:
+        """The single requirement write site; it also maintains the reverse
+        index over propositions."""
         self._requirements[req.id] = req
+        self._req_by_prop.setdefault(req.proposition, []).append(req.id)
+        neg = negation_arg(req.proposition)
+        if neg is not None:
+            self._req_by_negation.setdefault(neg, []).append(req.id)
         return req
 
     def put_judgment(self, j: Judgment) -> Judgment:
@@ -94,6 +115,25 @@ class KernelStore:
 
     def all_requirements(self) -> tuple:
         return tuple(self._requirements.values())
+
+    def requirements_refuted_by(self, proposition) -> tuple:
+        """Requirement ids that `proposition` syntactically refutes, in
+        insertion order.
+
+        A requirement is refuted when its proposition is the operand of the
+        conclusion's syntactic negation, or when the requirement's own
+        syntactic negation is the conclusion; both sides compare by term
+        identity, exactly as the full scan did. The two buckets are disjoint
+        (a requirement whose proposition were both the operand and the
+        negation itself would have to contain itself as a strict subterm), so
+        no deduplication is needed.
+        """
+        out = []
+        neg = negation_arg(proposition)
+        if neg is not None:
+            out.extend(self._req_by_prop.get(neg, ()))
+        out.extend(self._req_by_negation.get(proposition, ()))
+        return tuple(out)
 
     def discharges_of(self, rid: RequirementId) -> tuple:
         return tuple(self._discharges.get(rid, ()))

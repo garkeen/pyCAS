@@ -43,16 +43,25 @@ def test_definition_visible_on_scope_chain():
     root = wf.scope
     body = T.times(X, X)
     wf.define(U, body)
-    assert wf.store.scopes.lookup_definition(root, U) is body
-    assert wf.store.scopes.definition_map(root)[U] is body
+    # the definition lands in a new version of the same scope, and that version
+    # becomes the current one
+    assert wf.scope != root
+    assert wf.store.scopes.lookup_definition(wf.scope, U) is body
+    assert wf.store.scopes.definition_map(wf.scope)[U] is body
+    assert wf.store.scopes.head_of(root) == wf.scope
+    assert wf.store.scopes.lineage_of(root) == wf.store.scopes.lineage_of(wf.scope)
+    # the earlier version stays frozen: the entry did not grow there retroactively
+    assert wf.store.scopes.lookup_definition(root, U) is None
 
 
 def test_declaration_enters_scope_entries():
     wf = _wf()
     root = wf.scope
     wf.declare(U, S("Real"))
-    decls = wf.store.scopes.declarations(root)
+    decls = wf.store.scopes.declarations(wf.scope)
     assert len(decls) == 1 and decls[0].symbol is U
+    # a declaration appends on top of the previous version, which stays frozen
+    assert wf.store.scopes.declarations(root) == ()
 
 
 def test_defined_symbol_not_flagged_as_escape():

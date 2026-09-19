@@ -51,8 +51,8 @@ from cas.workflow.branch import BranchCase, BranchStore, promote_guard
 from cas.workflow.command import Command, ValuationCheck
 from cas.workflow.constraint import ConstraintStore
 from cas.workflow.event import EventLog, Ref
+from cas.workflow.ids import RevisionId
 from cas.workflow.task import TaskStore
-
 
 # ---------------------------------------------------------------------------
 # Command shapes live in cas/workflow/command.py: a command is a pure data
@@ -126,14 +126,37 @@ class Workflow:
         self.constraints = ConstraintStore()
         self._steps: dict = {}
         self._next_id = 0
+        # Undo/redo state: which scope version was current at each revision in
+        # view, and which event produced each step record. Both are written at
+        # the single site that appends an event / creates a step and are never
+        # removed: moving the pointer back never deletes history.
+        self._scope_at = {RevisionId(0): self.scope}
+        self._event_of_step: dict = {}
 
     def get(self, sid) -> WorkflowStep:
         return self._steps[sid]
 
     def all_steps(self):
+        """Every step ever recorded, in recording order: the audit/history view
+        (`visible_steps` is what the current revision shows)."""
         return [self._steps[i] for i in range(self._next_id)]
 
+    def visible_steps(self):
+        """The steps whose operation is in the current event view, in view order.
+
+        A step stays in `_steps` after an undo; it drops out of this list
+        because its event is no longer visible, while `all_steps()` still holds
+        it for history.
+        """
+        view = {ev.id for ev in self.events.visible()}
+        return [self._steps[i] for i in range(self._next_id)
+                if self._event_of_step.get(i) in view]
+
     def add(self, content, command, note="", target=()) -> WorkflowStep:
+        # The context a step is submitted in is the current scope version. A
+        # committed claim afterwards grows the scope by appending the
+        # assumption, and this step keeps the version it was checked in.
+        submitted = self.scope
         pred_id = command.pred
         premises = ()
         if pred_id is not None:
@@ -141,7 +164,7 @@ class Workflow:
             if pstep is None or pstep.judgment is None:
                 return self._record(content, command, "undecided",
                                     note or "predecessor has no dependable conclusion",
-                                    target, ())
+                                    target, (), scope=submitted)
             premises = (pstep.judgment,)
 
         # The proposal is committed first; a claim's proposition becomes a scope
@@ -150,7 +173,7 @@ class Workflow:
         # this scope. The checker verifies the claim from the command payload
         # (registers_assumption), not from the scope, so it does not need the
         # assumption to be present at check time.
-        proposal = StepProposal(scope=self.scope, premises=premises,
+        proposal = StepProposal(scope=submitted, premises=premises,
                                 conclusions=(content,),
                                 evidence=Evidence(command.checker_id, command),
                                 guard_policy=self.policy)
@@ -159,39 +182,60 @@ class Workflow:
 
         if res.is_committed():
             if command.registers_assumption:
-                self.store.scopes.extend(self.store.scopes.get(self.scope),
-                                         assumptions=(Assumption(content),))
+                # The conclusion keeps the context it was checked in; later
+                # submissions see the assumption because the scope grows into a
+                # new version rather than the old id changing under its readers.
+                self.scope = self._grow_scope(
+                    submitted, assumptions=(Assumption(content),)).id
             j = self.store.get_judgment(res.judgments[0])
             guards = tuple(self.store.get_requirement(r).proposition
                            for r in j.requirements)
             return self._record(content, command, "committed", note, target,
-                                guards, j.id)
+                                guards, j.id, scope=submitted)
         if res.is_refused():
             return self._record(content, command, "refused",
-                                res.detail or note, target, ())
+                                res.detail or note, target, (), scope=submitted)
         if res.is_needs_split():
             # The policy requests a case split: hand the pending condition back
             # to the caller, which opens branches via split_on.
             return self._record(content, command, "needs_split",
                                 "case split required", target,
-                                tuple(res.conditions))
+                                tuple(res.conditions), scope=submitted)
         return self._record(content, command, "undecided",
                             getattr(res, "detail", "") or "not re-checked",
-                            target, ())
+                            target, (), scope=submitted)
+
+    def _append_event(self, command, inputs=(), outputs=()):
+        """Record one operation and note the scope version the new revision
+        starts from.
+
+        Undo and redo move the pointer by revision, so the version that was
+        current at each revision has to be remembered; doing it here, at the
+        single site that appends an event, keeps the mapping complete for every
+        operation (a step record, a split, a constraint, a declaration).
+        """
+        ev = self.events.append(command=command, inputs=tuple(inputs),
+                                outputs=tuple(outputs))
+        self._scope_at[self.events.current_revision()] = self.scope
+        return ev
 
     def _record(self, content, command, status, note, target, guards,
-                judgment=None, inputs=None) -> WorkflowStep:
+                judgment=None, inputs=None, scope=None) -> WorkflowStep:
+        # The records below belong to the version the step was submitted in; the
+        # workflow's current scope may already be a later version (a claim grew
+        # it), so the caller passes the version explicitly.
+        scope = self.scope if scope is None else scope
         # 1. computation product (no truth value)
-        artifact = self.artifacts.create(self.scope, content)
+        artifact = self.artifacts.create(scope, content)
         # 2. computation problem plus candidate (commands with no request head
         #    open no task)
-        task = self._open_task(command, artifact, judgment)
+        task = self._open_task(command, artifact, judgment, scope)
         # 3. operation history: outputs is the only exit connecting an operation
         #    to kernel conclusions
         if inputs is None:
             pred_id = command.pred
             inputs = () if pred_id is None else (pred_id,)
-        ev = self.events.append(
+        ev = self._append_event(
             command=command.name,
             inputs=tuple(inputs),
             outputs=tuple(
@@ -208,10 +252,11 @@ class Workflow:
                          judgment=judgment, artifact=artifact.id,
                          task=None if task is None else task.id)
         self._steps[self._next_id] = s
+        self._event_of_step[self._next_id] = ev.id
         self._next_id += 1
         return s
 
-    def _open_task(self, command, artifact, judgment):
+    def _open_task(self, command, artifact, judgment, scope):
         """Open a task by the request head the command declares and register the
         candidate. Returns None for commands with no request head.
 
@@ -227,7 +272,7 @@ class Workflow:
         pred = pstep.content if pstep is not None else artifact.value
         var = command.var
         args = (pred, var) if var is not None else (pred,)
-        task = self.tasks.open_task(self.scope, T.mk(S(head), args))
+        task = self.tasks.open_task(scope, T.mk(S(head), args))
         self.tasks.propose(task.id, artifact.id, judgment)
         return task
 
@@ -240,7 +285,7 @@ class Workflow:
         still requires commit and an accepting checker."""
         c = self.constraints.add(self.scope, relation, sources,
                                  proposed_evidence)
-        self.events.append(command="AddConstraint", inputs=(),
+        self._append_event(command="AddConstraint", inputs=(),
                            outputs=(Ref("constraint", c.id),))
         return c
 
@@ -309,15 +354,19 @@ class Workflow:
                    services=self.services, mode=self.mode)
         self.branches.set_coverage(group.id, r.judgments[0] if r.is_committed()
                                    else None)
-        self.events.append(command="Split", inputs=(),
+        self._append_event(command="Split", inputs=(),
                            outputs=(Ref("branch", group.id),))
         return self.branches.get(group.id)
 
     def enter(self, scope):
-        """Enter a branch scope: later submissions happen there."""
-        self.store.scopes.get(scope)
-        self.scope = scope
-        return scope
+        """Enter a scope lineage at its current version: later submissions
+        happen in that context.
+
+        An id naming an older version resolves to the lineage's head, since
+        entries only ever append on top of the current version.
+        """
+        self.scope = self.store.scopes.head_of(scope)
+        return self.scope
 
     def promote_guard(self, case, guard):
         """Promote an undischarged guard from inside a branch to the parent as
@@ -349,7 +398,8 @@ class Workflow:
         re-checked by the kernel would require commit to support implication
         introduction, which is a design decision not yet taken.
         """
-        if self.scope != group.parent_scope:
+        scopes = self.store.scopes
+        if scopes.lineage_of(self.scope) != scopes.lineage_of(group.parent_scope):
             raise BranchError("merge must happen in the branch's parent scope "
                               "(call enter first)")
         if len(results) != len(group.cases):
@@ -362,7 +412,7 @@ class Workflow:
             if st.judgment is None:
                 raise BranchError(f"branch result has no dependable conclusion: #{st.id}")
             j = self.store.get_judgment(st.judgment)
-            if j.scope != case.scope:
+            if scopes.lineage_of(j.scope) != scopes.lineage_of(case.scope):
                 raise BranchError(f"branch result #{st.id} is not in its branch scope")
             answers.append(j.proposition)
         requests = []                                    # (2) the same task
@@ -372,8 +422,8 @@ class Workflow:
             requests.append(self.tasks.get_task(st.task).request)
         if any(r is not requests[0] for r in requests):
             raise BranchError("the branches did not answer the same task")
-        escaped = self.store.scopes.escapes(              # (4) no symbol escapes
-            group.parent_scope, proposition)
+        escaped = scopes.escapes(                         # (4) no symbol escapes
+            self.scope, proposition)
         if escaped:
             raise BranchError(f"merge conclusion contains an escaped local symbol: {escaped!r}")
         conditions = tuple(c.condition for c in group.cases)
@@ -428,19 +478,47 @@ class Workflow:
 
     # --- declare / define ---
 
+    def _grow_scope(self, parent_id, *, declarations=(), definitions=(),
+                    assumptions=()):
+        """Append entries on top of `parent_id` and return the new version.
+
+        The scope store only extends the head of a version chain, because
+        extending an older version in place would leave which version new
+        entries land on ambiguous. After an undo the workflow pointer
+        deliberately names an older version again, so a new entry starts a new
+        chain under that version with the fork constructor; both histories stay
+        addressable and no kernel record is rewritten. Without an undo the
+        ordinary extension keeps the session on one lineage.
+        """
+        scopes = self.store.scopes
+        parent = scopes.get(parent_id)
+        if scopes.head_of(parent_id) == parent_id:
+            return scopes.extend(parent, declarations=declarations,
+                                 definitions=definitions,
+                                 assumptions=assumptions)
+        return scopes.child(parent, declarations=declarations,
+                            definitions=definitions, assumptions=assumptions)
+
     def declare(self, symbol, sort):
         """Declare `symbol : sort`.
 
         The symbol must be fresh: neither declared nor defined along the chain.
         A declaration is not a proposition and does not enter the decision
         channel; it records which class the symbol belongs to, for consumers
-        such as the type/domain layer. Returns the new scope, since scopes are
-        immutable and an extension produces a new object.
+        such as the type/domain layer. The declaration is recorded as an
+        operation, so undo moves the scope pointer back to the version without
+        it and redo re-applies it. Returns the new scope version, which also
+        becomes the workflow's current scope: entries append on top of the
+        previous version, so later steps must be submitted in the new one to see
+        the declaration.
         """
         self._require_fresh(symbol, "declaration")
-        return self.store.scopes.extend(
-            self.store.scopes.get(self.scope),
-            declarations=(Declaration(symbol, sort),))
+        new = self._grow_scope(self.scope,
+                               declarations=(Declaration(symbol, sort),))
+        self.scope = new.id
+        self._append_event(command="Declare",
+                           outputs=(Ref("scope", new.id),))
+        return new
 
     def define(self, symbol, body):
         """Define `symbol := body`: a local alias, not an equation to prove.
@@ -468,8 +546,10 @@ class Workflow:
         Mathematica's SetDelayed/Module, so the expanded reference graph must be
         acyclic.
 
-        Returns the new scope; the symbol can afterwards be resolved through
-        ScopeStore.lookup_definition.
+        Returns the new scope version; the symbol can afterwards be resolved
+        through ScopeStore.lookup_definition, and the new version becomes the
+        workflow's current scope. The definition is recorded as an operation,
+        so undo removes it from view and redo re-applies it.
         """
         self._require_fresh(symbol, "definition")
         if self._alias_cycle(symbol, body):
@@ -479,9 +559,12 @@ class Workflow:
         if bad:
             raise ScopeError(f"definition right-hand side references a local "
                              f"symbol of another scope: {bad!r}")
-        return self.store.scopes.extend(
-            self.store.scopes.get(self.scope),
-            definitions=(Definition(symbol, body),))
+        new = self._grow_scope(self.scope,
+                               definitions=(Definition(symbol, body),))
+        self.scope = new.id
+        self._append_event(command="Define",
+                           outputs=(Ref("scope", new.id),))
+        return new
 
     def _alias_cycle(self, symbol, body, seen=None) -> bool:
         """Whether `symbol` appears in `body` after alias expansion.
@@ -516,13 +599,32 @@ class Workflow:
         if any(d.symbol is symbol for d in scopes.declarations(self.scope)):
             raise ScopeError(f"{what} symbol already declared along the chain: {symbol!r}")
 
-    # --- undo / redo: move the revision pointer only ---
+    # --- undo / redo: the view, the visible steps and the scope version move
+    #     together ---
 
     def undo(self):
-        return self.events.undo()
+        """Move the revision pointer one step back and restore the scope pointer
+        to the version that was current at the resulting revision.
+
+        The event view and the visible step set follow the revision because they
+        are read through the log's view; nothing is deleted, so a redo can put
+        the operation back. A pointer that cannot move (already at the first
+        revision) leaves the scope pointer untouched.
+        """
+        before = self.events.current_revision()
+        rev = self.events.undo()
+        if rev != before:
+            self.scope = self._scope_at[rev]
+        return rev
 
     def redo(self):
-        return self.events.redo()
+        """Move the revision pointer one step forward, if an operation is on the
+        redo stack, restoring the scope pointer the same way `undo` does."""
+        before = self.events.current_revision()
+        rev = self.events.redo()
+        if rev != before:
+            self.scope = self._scope_at[rev]
+        return rev
 
     def _domain_of(self, content) -> str:
         """The domain of a step, assigned by the projection layer through the

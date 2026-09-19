@@ -29,7 +29,6 @@ provable subset of the full flow.
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
-from cas.syntax import term as T
 from cas.kernel.context import TrackedContext
 from cas.kernel.evidence import Evidence
 from cas.kernel.ids import StepId
@@ -277,19 +276,14 @@ def _commit_decided(store, scope, proposition, ctx, services, checker_id,
     return res.judgments[0] if res.is_committed() else None
 
 
-def _negated(p):
-    if isinstance(p, T.Expr) and isinstance(p.head, T.Sym) and p.head.name == "Not":
-        return p.args[0]
-    return None
-
-
 def _record_refutations(store, scope, proposition, jid):
     """When a conclusion is the syntactic negation of a pending condition,
-    register a refutation. Syntactic negation only, no semantic guessing."""
-    neg = _negated(proposition)
-    for req in store.all_requirements():
-        if store.is_discharged(req.id, scope):
+    register a refutation. Syntactic negation only, no semantic guessing.
+
+    Candidates come from the store's reverse index over requirement
+    propositions, so no scan over the whole ledger happens per commit.
+    """
+    for rid in store.requirements_refuted_by(proposition):
+        if store.is_discharged(rid, scope):
             continue
-        rp = req.proposition
-        if (neg is not None and rp is neg) or (_negated(rp) is proposition):
-            store.add_refutation(req.id, jid)
+        store.add_refutation(rid, jid)

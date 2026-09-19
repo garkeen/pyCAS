@@ -21,8 +21,9 @@ Commands:
   rules                 list the rules declared at runtime
   apply <rid>           apply the named rule
   check                 verify the current solution by back-substitution
-  steps                 list every step
-  undo                  undo the most recent step (moves the pointer only)
+  steps                 list the steps in the current view
+  undo                  undo the most recent visible step (the event view, the
+                        step listing and the scope version move one revision back)
   quit
 
 Run: python repl.py
@@ -472,22 +473,23 @@ class REPL:
             print("        a guard failed or is undecided; cannot be accepted as verified")
 
     def cmd_steps(self, _):
-        for s in self.wf.all_steps():
+        for s in self.wf.visible_steps():
             self._show_step(s)
 
     def cmd_undo(self, _):
-        steps = self.wf.all_steps()
+        steps = self.wf.visible_steps()
         if len(steps) <= 1:
+            # keep one visible step, so the REPL always has a current step
             print("  already at the first step")
             return
         last = steps[-1]
-        # the DAG is immutable: only the pointer moves, no step is deleted
-        self.current = last.command.pred
-        if self.current is not None:
-            print(f"  retracted #{last.id}, back at #{self.current}")
-            self._show_step(self.wf.get(self.current))
-        else:
-            print("  already at the first step")
+        # the logs are immutable: the pointer moves back and the scope version
+        # recorded at the previous revision becomes current again; no step is
+        # deleted
+        self.wf.undo()
+        self.current = self.wf.visible_steps()[-1].id
+        print(f"  retracted #{last.id}, back at #{self.current}")
+        self._show_step(self.wf.get(self.current))
 
 
 def main():

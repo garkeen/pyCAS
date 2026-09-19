@@ -41,18 +41,23 @@ class TaskCandidate:
     def is_validated(self) -> bool:
         return self.validation is not None
 
-    def state(self, store) -> str:
+    def state(self, store, scope: ScopeId) -> str:
         """Derive the state from data: unverified, verified but conditional, or
         verified.
 
-        `store` is required: without it "verified" cannot be distinguished from
-        "conditional", and any silent downgrade would call an unverified
-        candidate verified. Applicability is computed by the kernel per scope;
-        the workflow only queries it.
+        `store` and `scope` are both required: without them "verified" cannot be
+        distinguished from "conditional", and any silent downgrade would call an
+        unverified candidate verified. Applicability is computed by the kernel
+        per scope; the workflow only queries it.
+
+        `scope` is the scope the candidate would be used in, not the scope its
+        validation was produced in. The two differ as soon as branches exist: a
+        validation whose conditions were discharged by a branch assumption is
+        applicable inside that branch and only conditional outside it.
         """
         if self.validation is None:
             return "unverified"
-        if not store.is_applicable(self.validation):
+        if not store.is_applicable(self.validation, scope):
             return "conditional"
         return "validated"
 
@@ -108,9 +113,26 @@ class TaskStore:
     def candidates_of(self, task: TaskId):
         return tuple(c for c in self._cands.values() if c.task == task)
 
-    def is_applicable(self, jid: JudgmentId) -> bool:
-        scope = self.kernel.get_judgment(jid).scope
-        return self.kernel.applicability(jid, scope).is_applicable()
+    def is_applicable(self, jid: JudgmentId, scope: ScopeId) -> bool:
+        """Whether the conclusion `jid` is usable in `scope`.
+
+        `scope` is the query scope (where the conclusion is to be used), never
+        the judgment's own scope: a conclusion proved under a branch assumption
+        is applicable in that branch and not in the parent.
+
+        Two questions are answered together, because usability needs both. The
+        kernel's `applicability` answers the *condition* question (are the
+        judgment's requirements discharged in `scope`), which does not look at
+        where the conclusion was asserted: a branch-local claim that happens to
+        carry no requirement would read as applicable in the parent. The kernel
+        refuses to use a judgment as a premise outside its scope (`commit`'s
+        premise visibility check), so the *scope* relation must gate usability
+        as well: the judgment's own scope has to be visible from the query
+        scope.
+        """
+        j = self.kernel.get_judgment(jid)
+        return (self.kernel.scopes.is_visible(j.scope, scope)
+                and self.kernel.applicability(jid, scope).is_applicable())
 
     def __len__(self):
         return self._next_t
