@@ -89,11 +89,14 @@ def autosimplify(t, budget=100000):
       interactive channel instead.
     · every accepted step must strictly decrease the cost, so termination is
       guaranteed by well-foundedness rather than by a round limit.
+    · at each path the candidate rules are narrowed by the subterm's root key:
+      a rule that cannot match there is skipped without a match attempt, which
+      changes the scan cost only.
     """
     from cas.math.rules import declared_ruleset, apply_rule
 
     rs = declared_ruleset()
-    auto_rules = [r for r in rs.rules.values() if r.auto and r.guard is None]
+    auto_ids = {r.id for r in rs.rules.values() if r.auto and r.guard is None}
     cur = rebuild(t, budget)
     # Termination: every accepted rule strictly decreases the cost, a
     # well-founded natural number, so a fixed point is reached with no round cap.
@@ -101,7 +104,9 @@ def autosimplify(t, budget=100000):
         base = cost(cur)
         nxt = None
         for path in T.all_paths(cur):
-            for rule in sorted(auto_rules, key=lambda r: r.priority):
+            sub = T.term_at(cur, path)
+            cands = [r for r in rs.candidates(sub) if r.id in auto_ids]
+            for rule in sorted(cands, key=lambda r: r.priority):
                 res = apply_rule(rule, cur, path, budget=budget)
                 if res.ok and cost(res.term) < base:
                     nxt = res.term

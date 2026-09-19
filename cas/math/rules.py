@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from cas.syntax import term as T
 from cas.syntax import pattern as P
-from cas.syntax.match import matches
+from cas.syntax.match import identity_element, matches
 from cas.kernel.verdict import YES, NO, unknown
 
 _DECLS = None
@@ -70,24 +70,89 @@ def root_key(p):
     return P.root_key(p)
 
 
+def _matches_any_root(p):
+    """Whether a pattern can match a subterm whose root is any head.
+
+    A hole matches anything; a call of a head with an identity element reaches
+    through the OneIdentity channel even when the target's root is a different
+    head. Only a literal and a call of an identity-free head are confined to
+    their own root key.
+    """
+    if isinstance(p, T.Term):
+        return False
+    if p.__class__ is P.PatternCall:
+        return identity_element(p.head.name) is not None
+    return True
+
+
 class RuleSet:
+    """Rule storage plus a root-key index that narrows match candidates.
+
+    `index` maps a pattern's root key to the rules whose pattern can only match
+    at that root; `_universal` holds the rules whose pattern can match under any
+    root. `candidates` returns the union in insertion order, so narrowing proves
+    a rule cannot match instead of guessing, and the set and order of match
+    attempts are unchanged.
+    """
+
     def __init__(self):
         self.rules = {}
         self.index = {}
+        self._universal = []
+        self._seq = {}
+        self._next_seq = 0
+
+    def _detach(self, rule):
+        if _matches_any_root(rule.pattern):
+            if rule in self._universal:
+                self._universal.remove(rule)
+            return
+        key = root_key(rule.pattern)
+        lst = self.index.get(key)
+        if lst and rule in lst:
+            lst.remove(rule)
+            if not lst:
+                del self.index[key]
 
     def add(self, rule):
+        old = self.rules.pop(rule.id, None)
+        if old is not None:
+            self._detach(old)
         self.rules[rule.id] = rule
-        self.index.setdefault(root_key(rule.pattern), []).append(rule)
+        self._seq[rule.id] = self._next_seq
+        self._next_seq += 1
+        if _matches_any_root(rule.pattern):
+            self._universal.append(rule)
+        else:
+            self.index.setdefault(root_key(rule.pattern), []).append(rule)
 
     def remove(self, rid):
         r = self.rules.pop(rid, None)
-        if r:
-            lst = self.index.get(root_key(r.pattern), [])
-            if r in lst:
-                lst.remove(r)
+        if r is not None:
+            self._detach(r)
+            self._seq.pop(rid, None)
 
     def ids(self):
         return list(self.rules)
+
+    def candidates(self, tgt):
+        """The rules whose pattern can match `tgt` at a root position, in
+        insertion order.
+
+        Soundness: a match at a root position requires the pattern's root key
+        to equal the target's (a literal matches only an identical term, an
+        identity-free call only an Expr with the same interned head), or the
+        pattern to be a hole or an identity-element call, which matches every
+        term. Everything else is left out, and no matchable rule is lost.
+        """
+        bucket = self.index.get(root_key(tgt), ())
+        if not self._universal:
+            return tuple(bucket)
+        if not bucket:
+            return tuple(self._universal)
+        merged = list(bucket) + list(self._universal)
+        merged.sort(key=lambda r: self._seq[r.id])
+        return tuple(merged)
 
 
 def apply_rule(rule, expr, path, guard_eval=None, budget=10000):

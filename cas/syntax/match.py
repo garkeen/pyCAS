@@ -45,6 +45,16 @@ def _one_identity():
     return _ONE_ID
 
 
+def identity_element(head_name):
+    """The identity element a head absorbs, or None when it has none.
+
+    A call of such a head matches the identity element through the OneIdentity
+    channel, so it can match a term whose root is a different head and is not
+    confined to its own root key.
+    """
+    return _one_identity().get(head_name)
+
+
 def _bind_identity(p, ident, sub):
     """Bind pattern argument `p` to the identity element: a PatternVar is
     bound or consistency-checked, a PatternSeq is bound to the empty tuple."""
