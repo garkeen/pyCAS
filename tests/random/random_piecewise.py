@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Piecewise container randomized bench.
 
-Four properties, all self-proving with no external ground truth:
+Properties, all self-proving with no external ground truth:
   P21 independent projection  branch bodies project into their own host domains with no
                               requirement of a shared host -- the per-branch project and
                               an independent project agree branch for branch, and
@@ -11,14 +11,19 @@ Four properties, all self-proving with no external ground truth:
                               ones false": force a unique hit with ledger facts (assume
                               that branch's condition, refute the earlier ones) and it
                               returns that branch's value
-  P23 per-branch lifting      lift(op, p, q) expands the Cartesian product: branch count
-                              is the product and conditions are conjoined; and in a
+  P23 per-branch lifting      lift(op, p, q) expands the Cartesian product after merging
+                              adjacent same-value branches in each argument: branch count
+                              is at most the product (equal only when no argument had such
+                              an adjacent pair) and conditions are conjoined; and in a
                               uniquely-hit context select(lift) == op(select p, select q)
   P24 guarded conditions      dom_condition on a piecewise guards each branch body as
                               not-cond or constraint, matching per-branch extraction
                               followed by guarding; overlap consistency gives YES for a
                               provably empty overlap and NO for a provably unequal
                               constant overlap
+  P33 lift merge              a lift whose arguments contain adjacent same-value branches
+                              produces no adjacent same-value pair, and the merged result
+                              still agrees pointwise with the selected argument values
 
 Usage: python tests/random/random_piecewise.py [rounds] [seed]
 """
@@ -157,6 +162,13 @@ def prop_select(rounds, rng):
 # P23: per-branch operation lifting
 # ---------------------------------------------------------------------------
 
+def forced_pairs(conds, values):
+    """Branch pairs whose adjacent entries share a value: entry k takes value k//2 when
+    k is even and value 0 when k is odd, so entries (0,1), (2,3), ... are adjacent
+    same-value runs by construction."""
+    return [(values[k // 2] if k % 2 == 0 else values[0], c) for k, c in enumerate(conds)]
+
+
 def prop_lift(rounds, rng):
     vals = [N(k) for k in range(-4, 5)]
     for i in range(rounds):
@@ -164,9 +176,14 @@ def prop_lift(rounds, rng):
         q = rand_pw(rng, vals, minb=2, maxb=3)
         m = lift(T.plus, p, q)
         bp, bq = branches(p), branches(q)
-        if len(branches(m)) != len(bp) * len(bq):
-            fail("P23 expanded branch count", i,
-                 f"{len(branches(m))} != {len(bp)}*{len(bq)}")
+        # the count is at most the product: adjacent same-value branches in an argument
+        # are merged into one branch before expanding, so equal values only coincide
+        # when no argument had such an adjacent pair (the merged form is pointwise
+        # equivalent to the unmerged product, which is what the agreement check below
+        # re-proves)
+        if len(branches(m)) > len(bp) * len(bq):
+            fail("P23 lifted branch count above the product", i,
+                 f"{len(branches(m))} > {len(bp)}*{len(bq)}")
         # pointwise agreement: at x = a, select(lift(plus,p,q)) == plus(select p, select q)
         for a in range(-7, 8):
             ctx = at_ctx(a)
@@ -177,6 +194,41 @@ def prop_lift(rounds, rng):
                 fail("P23 lifted container did not hit", i, f"a={a}")
             if plus(vp, vq) is not vm:
                 fail("P23 pointwise disagreement", i, f"a={a} "
+                     f"plus({to_str(vp)},{to_str(vq)})={to_str(plus(vp,vq))} "
+                     f"vs {to_str(vm)}")
+
+
+# ---------------------------------------------------------------------------
+# P33: adjacent same-value branch merging inside lift
+# ---------------------------------------------------------------------------
+
+def prop_lift_merge(rounds, rng):
+    vals = [N(k) for k in range(1, 6)]
+    for i in range(rounds):
+        # arguments built so that at least one adjacent pair shares a value; the runs are
+        # guaranteed by construction, not by chance, so the property always exercises a merge
+        np_ = rng.choice((3, 4, 5))
+        nq = 2
+        p = piecewise(forced_pairs([rand_cmp(rng) for _ in range(np_ - 1)] + [T.TRUE], vals))
+        q = piecewise(forced_pairs([rand_cmp(rng) for _ in range(nq - 1)] + [T.TRUE], vals))
+        m = lift(T.plus, p, q)
+        bs = branches(m)
+        if len(bs) > len(branches(p)) * len(branches(q)):
+            fail("P33 merged lift above the raw product", i, len(bs))
+        for (va, _ca), (vb, _cb) in zip(bs, bs[1:]):
+            if va is vb:
+                fail("P33 adjacent same-value branches survived the merge", i,
+                     to_str(m))
+        # the merged container still takes the pointwise product value
+        for a in range(-7, 8):
+            ctx = at_ctx(a)
+            _, vp = select(p, ctx)
+            _, vq = select(q, ctx)
+            st_m, vm = select(m, ctx)
+            if st_m != "value":
+                fail("P33 merged container did not hit", i, f"a={a}")
+            if plus(vp, vq) is not vm:
+                fail("P33 merge changed the pointwise value", i, f"a={a} ",
                      f"plus({to_str(vp)},{to_str(vq)})={to_str(plus(vp,vq))} "
                      f"vs {to_str(vm)}")
 
@@ -346,6 +398,8 @@ if __name__ == "__main__":
     print(f"P22 branch-selection semantics    {rounds} rounds passed")
     prop_lift(min(rounds, 200), rng)
     print(f"P23 per-branch lifting            {min(rounds,200)} rounds passed")
+    prop_lift_merge(min(rounds, 200), rng)
+    print(f"P33 lift merge                    {min(rounds,200)} rounds passed")
     prop_guards(rounds, rng)
     print(f"P24 guarded conditions + overlap  {rounds} rounds passed")
     prop_fold_nested(rounds, rng)

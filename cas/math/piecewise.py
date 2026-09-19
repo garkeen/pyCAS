@@ -37,6 +37,7 @@ from cas.syntax import term as T
 from cas.syntax.term import S, Expr
 from cas.math.project import project
 from cas.kernel.verdict import YES, NO, unknown, Reason
+from cas.errors import BudgetExceeded
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +254,41 @@ def _agree(vi, vj, conds, assumptions):
 # Per-branch operation lifting
 # ---------------------------------------------------------------------------
 
-def lift(op, *terms):
-    """Lift an n-ary operation op over Piecewise arguments per branch (Cartesian
-    expansion).
+# Largest number of branch combinations a single `lift` may expand. Repeated
+# operations on piecewise values multiply the branch count, so a piecewise chain
+# without an operation node would otherwise grow without bound; past the budget the
+# lift refuses (BudgetExceeded) instead of returning a truncated result. Callers
+# with a proven larger operation pass their own budget explicitly.
+LIFT_BRANCH_BUDGET = 1024
+
+
+def _merge_runs(bs):
+    """Collapse adjacent branches carrying the same value into one.
+
+    Ordered first-hit semantics: two adjacent branches with the *same* value
+    yield that value whether or not their conditions overlap, so replacing them
+    by one branch conditioned on their disjunction is semantics preserving. The
+    merge is deliberately restricted to adjacent branches: same-value branches
+    separated by another branch cannot be merged without deciding whether the
+    intervening branch is reached first.
+
+    `T.or_` normalizes a disjunction, so an adjacent pair that already covers
+    everything collapses to TRUE and the merged branch stays the final else branch.
+    """
+    out = []
+    for v, c in bs:
+        if out:
+            pv, pc = out[-1]
+            if pv is v:                     # same value: one branch, disjoined condition
+                out[-1] = (pv, T.or_(pc, c))
+                continue
+        out.append((v, c))
+    return out
+
+
+def lift(op, *terms, budget=LIFT_BRANCH_BUDGET):
+    """Lift an n-ary operation op over Piecewise arguments per branch (pointwise,
+    Cartesian expansion).
 
     Semantics: a piecewise function participates in an operation pointwise,
     `(f+g)(x) = f(x)+g(x)`. Each combination of (p-branch, q-branch, ...) produces a
@@ -264,10 +297,27 @@ def lift(op, *terms):
     false (the two branches cannot hold together) has an empty overlap and is dropped.
     op takes interned terms and returns an interned term (such as T.plus / T.times). A
     non-Piecewise argument counts as a single always-true branch. The result is
-    normalized by `piecewise`."""
+    normalized by `piecewise`.
+
+    Merging: each argument's branch list is first collapsed by `_merge_runs`, so
+    adjacent branches with the same value enter the product as one branch. The merged
+    form is pointwise identical to the unmerged one, and no branch that could have
+    been kept is dropped.
+
+    Budget: the product of the merged branch-list sizes is computed before expanding.
+    A product above `budget` (default LIFT_BRANCH_BUDGET) refuses with
+    `BudgetExceeded`, whose `spent` is the product size; the operation never returns a
+    truncated Piecewise. A caller that needs a larger expansion passes its own budget.
+    """
     if not any(is_piecewise(x) for x in terms):
         return op(*terms)
-    exps = [branches(x) for x in terms]
+    exps = [_merge_runs(branches(x)) for x in terms]
+    total = 1
+    for ex in exps:
+        total *= len(ex)
+    if total > budget:
+        raise BudgetExceeded(total, f"piecewise lift would expand to {total} branches "
+                                    f"(budget {budget})")
     combos = [[]]
     for ex in exps:
         combos = [c + [b] for c in combos for b in ex]
