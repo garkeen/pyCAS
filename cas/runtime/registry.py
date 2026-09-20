@@ -15,51 +15,13 @@ added when it has content.
 **No import-time global state mutation**: this module writes to the builder only
 when explicitly called, and math modules register nothing on import. Assembly is
 triggered explicitly by `bootstrap()`.
+The declaration **data types** live in the math layer (`cas.math.decls`), because
+"which functions exist and what is true of them" is mathematical semantics; this
+module imports them and holds the assembly-time tables.
 """
 
-from dataclasses import dataclass
-from fractions import Fraction
-
+from cas.math.decls import ConstantDecl, FunctionDecl
 from cas.syntax.term import C as _mk_const
-from cas.syntax.term import Const
-
-
-@dataclass(frozen=True, slots=True)
-class ConstantDecl:
-    """Mathematical constant: the atom plus lemma declarations for decidable
-    properties."""
-    atom: Const
-    name: str
-    print_name: str
-    real: bool | None = None
-    positive: bool | None = None
-    bounds: tuple[int, int] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FunctionDecl:
-    """Mathematical function: head name, print name, properties, derivative
-    template, and domain-condition template.
-
-    Every field comes from the declaration DSL
-    (`math/elementary/declarations.dsl`); this layer holds pure data only.
-    `deriv` is a derivative template containing the `DB(0)` placeholder, meaning
-    `f'(u) = template[DB(0) := u]`, with the chain-rule factor multiplied in by the
-    differentiation layer; a template whose branch splits is None and carries a
-    `deriv_note`, since derivative templates are only admitted when unconditionally
-    provable. `domain` is a domain-condition template using the same `DB(0)`
-    placeholder (None when absent).
-    """
-    name: str
-    print_name: str
-    arity: int | None
-    real_on_real: bool | None = None
-    bound: tuple[Fraction | None, Fraction | None] | None = None
-    zero_iff_arg_zero: bool = False
-    deriv: object = None
-    domain: object = None
-    deriv_note: str = ""
-    note: str = ""
 
 
 class RuntimeBuilder:
