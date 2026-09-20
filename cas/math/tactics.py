@@ -12,8 +12,6 @@ from cas.syntax import term as T
 from cas.syntax.term import Sym
 from cas.errors import TacticsError
 from cas.math.project import project, zero_of, is_zero
-from cas.math.domains.poly import Poly
-from cas.math.domains.ratfunc import RatFunc, rf_reduce
 
 
 def _lin_core(diff, var: Sym):
@@ -22,7 +20,12 @@ def _lin_core(diff, var: Sym):
 
     Whether something involves `var` is not read off the shape of the original
     term (the difference of x+1 and x contains x syntactically but is constant
-    semantically); it is read off the projected domain element. Returns:
+    semantically); it is read off the projected domain element. The projected
+    element is consumed through the domain's polynomial-view capability: the
+    classifier never inspects a Python representation, so a domain either
+    exposes the view or is honestly refused, never half-recognized by type.
+
+    Returns:
 
     ("zero", None)     the difference vanishes identically (zero polynomial /
                        zero rational function / rational zero): an identity
@@ -39,14 +42,9 @@ def _lin_core(diff, var: Sym):
         # rational constant cell: identity or contradiction, independent of var
         return ("zero", None) if is_zero(hit) else ("nonzero", None)
     ring = hit.domain.ring
-    el = hit.element
-    if isinstance(el, RatFunc):
-        red = rf_reduce(ring, el)
-        if red.num.is_zero():
-            return ("zero", None)            # num == 0 iff the fraction == 0 (den != 0 is a guard)
-        el = red.num
-    if not isinstance(el, Poly):
-        return ("refuse", "projected element is not a polynomial")
+    el = hit.domain.element_poly(hit.element)
+    if el is None:
+        return ("refuse", "the projected domain exposes no polynomial view of its element")
     if el.is_zero():
         return ("zero", None)
     if any(v is not var for v in el.vars):

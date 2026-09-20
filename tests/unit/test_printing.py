@@ -9,6 +9,7 @@ Nails:
    display form, which the lexer does not accept, breaking round-tripping.
 """
 
+from cas.api import fold
 from cas.syntax import term as T
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
@@ -35,9 +36,43 @@ def test_source_form_round_trips():
     """The src=True promise: the output is accepted by the lexer and returns the same
     interned term."""
     for s in ["pi", "gamma", "pi + gamma", "2*pi*x", "gamma^2",
-              "e^(i*pi)", "sin(x) + pi"]:
+              "e^(i*pi)", "sin(x) + pi",
+              "-2*x", "x^-2", "2/3*x", "-3/4*x", "-2/3", "3*x^-2"]:
         t = parse(s)
         assert parse(to_str(t, src=True)) is t, f"round trip broke: {s}"
+
+
+def test_times_converges_every_numeric_factor():
+    """The coefficient of a Times is the product of all its numeric factors, rendered as
+    one exact rational value.
+
+    The printer used to keep only the last numeric factor, so Times(x, -1, 2) printed as
+    2*x and Times(x, -1, 2, 3) as 3*x: the sign and every factor but the last were
+    dropped. A numeric reciprocal (k^-1, the shape the lexer produces for the
+    denominator of 2/3) is numeric as well and converges into the same value, which is
+    then spelled numerator over denominator, as the rational atoms already are.
+    """
+    assert to_str(parse("-2*x")) == "-2*x"
+    assert to_str(parse("-2*3*x")) == "-6*x"
+    assert to_str(parse("x^-2")) == "x^(-2)"
+    assert to_str(parse("-3/4*x")) == "-3*x/4"
+    assert to_str(parse("6/4")) == "3/2"
+    assert to_str(parse("1/2*x/3")) == "x/6"
+    # a unit factor is absorbed exactly as in the folding path; no value is lost
+    assert to_str(parse("1*x")) == "x"
+
+
+def test_times_round_trip_preserves_the_folded_value():
+    """The general statement behind the reported shapes: printing converges the numeric
+    factors, so a coefficient written as several factors or as an unreduced fraction
+    re-parses to an equal (differently shaped) term. The round trip is required to
+    preserve the exact folded value, and to preserve the interned term wherever the
+    spelling is already canonical.
+    """
+    for s in ["-2*x", "x^-2", "1*x", "-2*3*x", "2/3*x", "-3/4*x", "x/3", "2*x/3",
+              "1/2*x/3", "6/4", "0*3*x", "x*y/3", "-0.5*x"]:
+        t = parse(s)
+        assert fold(parse(to_str(t, src=True))) is fold(t), f"round trip lost value: {s}"
 
 
 def test_syntax_atoms_not_from_declarations():

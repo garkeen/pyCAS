@@ -177,6 +177,40 @@ class Domain(ABC):
             f"domain {type(self).__name__} ({self.name}) does not consume "
             "projected elements: implement element_to_term")
 
+    def element_poly(self, element):
+        """The polynomial view of a projected element, or None when this domain
+        exposes no such view.
+
+        The view is a polynomial element (the representation of the polynomial
+        domain) whose vanishing coincides with the element's: a polynomial
+        domain answers with the element itself and a rational-function domain
+        with the denominator-cleared numerator. A consumer that needs the view
+        asks for it here and refuses honestly on None. Unlike element_is_zero /
+        element_to_term this is an optional view, so the base answer is None
+        instead of a loud failure: a domain without a polynomial view is a
+        legitimate domain, not a producer that forgot a consumer.
+        """
+        return None
+
+    def element_as_poly(self, element):
+        """The element ITSELF as a polynomial, or None when it is not one.
+
+        A different question from element_poly: that query returns a polynomial
+        whose *vanishing* coincides with the element's (for a rational function
+        the denominator-cleared numerator), which is the right view for root
+        finding but not a denotation of the element. This query returns the
+        element's own polynomial denotation: a polynomial domain answers with
+        the element itself, a rational-function domain with the numerator when
+        the reduced denominator is a nonzero constant (the fraction then equals
+        a polynomial) and None for a genuine fraction. A consumer that needs the
+        element as a value (an integrand, a derivative) asks here, because the
+        vanishing view would integrate or differentiate a different function.
+
+        Optional view like element_poly: the base answer is None, an honest
+        absence rather than a loud failure.
+        """
+        return None
+
 
 _DOMAINS = {}
 _SCOPES = []

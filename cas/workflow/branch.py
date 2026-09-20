@@ -40,7 +40,10 @@ class BranchCase:
 @dataclass(frozen=True, slots=True)
 class BranchGroup:
     id: int
-    parent_scope: ScopeId
+    # The branches forked from this lineage. The parent context is resolved to
+    # that lineage's current version at merge time, so an undo that later forks
+    # the version chain does not strand the group on an abandoned version.
+    parent_lineage: ScopeId
     cases: tuple
     coverage: JudgmentId | None = None
 
@@ -79,10 +82,10 @@ class BranchStore:
         self._groups: dict[int, BranchGroup] = {}
         self._next = 0
 
-    def create(self, parent_scope, cases) -> BranchGroup:
+    def create(self, parent_lineage, cases) -> BranchGroup:
         gid = self._next
         self._next += 1
-        g = BranchGroup(id=gid, parent_scope=parent_scope,
+        g = BranchGroup(id=gid, parent_lineage=parent_lineage,
                         cases=tuple(cases))
         self._groups[gid] = g
         return g

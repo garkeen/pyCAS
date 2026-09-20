@@ -212,7 +212,8 @@ class Workflow:
         Undo and redo move the pointer by revision, so the version that was
         current at each revision has to be remembered; doing it here, at the
         single site that appends an event, keeps the mapping complete for every
-        operation (a step record, a split, a constraint, a declaration).
+        operation (a step record, a split, a constraint, a declaration,
+        entering a scope).
         """
         ev = self.events.append(command=command, inputs=tuple(inputs),
                                 outputs=tuple(outputs))
@@ -335,13 +336,17 @@ class Workflow:
         checks. This method only lands the coverage part (the law of excluded
         middle, a syntactic tautology decided on the verification side).
         """
-        parent = self.store.scopes.get(self.scope)
+        scopes = self.store.scopes
+        parent = scopes.get(self.scope)
         cases = []
         for cond, label in ((condition, "+"), (T.not_(condition), "-")):
-            child = self.store.scopes.child(parent,
-                                            assumptions=(Assumption(cond),))
+            child = scopes.child(parent, assumptions=(Assumption(cond),))
             cases.append(BranchCase(condition=cond, scope=child.id, label=label))
-        group = self.branches.create(self.scope, cases)
+        # The group names its parent by lineage, not by version: the version the
+        # branches forked from stays frozen while the parent context may grow,
+        # and merge resolves the lineage's current version as the scope the
+        # merged conclusion lands in.
+        group = self.branches.create(scopes.lineage_of(self.scope), cases)
 
         # Coverage: the disjunction of the conditions, independently re-checked
         # by a checker. The decision is made on the verification side rather
@@ -363,9 +368,14 @@ class Workflow:
         happen in that context.
 
         An id naming an older version resolves to the lineage's head, since
-        entries only ever append on top of the current version.
+        entries only ever append on top of the current version. Entering is an
+        operation of its own and is recorded in the event view -- it produces
+        no conclusion, task or artifact; what it changes is the context later
+        submissions use. Undo and redo therefore move through it like through
+        any other operation.
         """
         self.scope = self.store.scopes.head_of(scope)
+        self._append_event(command="Enter")
         return self.scope
 
     def promote_guard(self, case, guard):
@@ -383,6 +393,13 @@ class Workflow:
         branch's open guards are promoted to `C_i => G_i`. The read dependencies
         of the merge step are the union of the branches' read sets.
 
+        The group names its parent by lineage, not by version. The merge
+        resolves that lineage's current version as the scope the conclusion
+        lands in, so an undo that later forked the version chain does not
+        strand the group on an abandoned version. It must be called from a
+        scope that descends from the parent lineage and is not inside one of
+        the branches being merged.
+
         Five checks: (1) coverage holds; (2) every branch answers the same task
         (compared by request term: each branch opens its own task, so ids differ
         but the request must match); (3) each branch result holds in its own
@@ -399,9 +416,14 @@ class Workflow:
         introduction, which is a design decision not yet taken.
         """
         scopes = self.store.scopes
-        if scopes.lineage_of(self.scope) != scopes.lineage_of(group.parent_scope):
+        parent = scopes.head_of(group.parent_lineage)
+        chain = scopes.chain(self.scope)
+        if not any(s.lineage == group.parent_lineage for s in chain):
             raise BranchError("merge must happen in the branch's parent scope "
                               "(call enter first)")
+        if any(s.id == case.scope for s in chain for case in group.cases):
+            raise BranchError("merge must not be performed inside one of the "
+                              "branches being merged")
         if len(results) != len(group.cases):
             raise BranchError("number of branch results does not match the "
                               "number of cases")
@@ -423,13 +445,13 @@ class Workflow:
         if any(r is not requests[0] for r in requests):
             raise BranchError("the branches did not answer the same task")
         escaped = scopes.escapes(                         # (4) no symbol escapes
-            self.scope, proposition)
+            parent, proposition)
         if escaped:
             raise BranchError(f"merge conclusion contains an escaped local symbol: {escaped!r}")
         conditions = tuple(c.condition for c in group.cases)
         guards = tuple(tuple(st.guards) for st in results)
         for g in (g for gs in guards for g in gs):       # (4) promoted guards must not escape either
-            esc = self.store.scopes.escapes(group.parent_scope, g)
+            esc = scopes.escapes(parent, g)
             if esc:
                 raise BranchError(f"promoted guard contains an escaped local symbol: {esc!r}")
 
@@ -442,7 +464,7 @@ class Workflow:
                       conditions=conditions, guards=guards,
                       answers=tuple(answers))
         proposal = StepProposal(
-            scope=group.parent_scope,
+            scope=parent,
             premises=(group.coverage,),                  # the only parent-visible premise
             conclusions=(proposition,),
             evidence=Evidence("branch.merge", cmd),

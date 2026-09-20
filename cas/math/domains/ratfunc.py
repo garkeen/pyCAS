@@ -240,6 +240,31 @@ class RatFuncDomain(Domain):
         """The existing reduced normal-form rendering path."""
         return rf_to_term(self.ring, rf_reduce(self.ring, element))
 
+    def element_poly(self, element):
+        """The denominator-cleared polynomial view: the numerator of the reduced
+        fraction. The denominator is nonzero by construction, so the view vanishes
+        exactly where the fraction does."""
+        return rf_reduce(self.ring, element).num
+
+    def element_as_poly(self, element):
+        """The element itself as a polynomial, or None when it is a genuine
+        fraction.
+
+        The reduced fraction is a polynomial exactly when its denominator has no
+        variable part: the value is then the numerator scaled by the inverse of
+        that nonzero constant. A denominator with a variable part leaves a
+        genuine fraction, and the element_poly view (the denominator-cleared
+        numerator) would be a different value that only shares its vanishing, so
+        None is the honest answer.
+        """
+        rf = rf_reduce(self.ring, element)
+        den = rf.den.monos
+        if len(den) != 1 or any(e for e in den[0][0]):
+            return None
+        c = den[0][1]
+        return p_scale(self.ring, rf.num,
+                       self.ring.div_exact(self.ring.from_int(1), c))
+
 
 _domain_cache = {}
 

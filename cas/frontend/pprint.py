@@ -1,3 +1,5 @@
+from fractions import Fraction as Fr
+
 from cas.runtime import dispatch as rt
 
 from cas.syntax import term as T
@@ -206,31 +208,45 @@ def to_str(t, prec=0, hint=None, src=False):
                 s = " ".join(parts)
             elif name == "Times":
                 facs = []
-                nums = [a for a in u.args if T.is_num(a)]
-                rest = [a for a in u.args if not T.is_num(a)]
                 dens = []
                 keep = []
-                for a in rest:
-                    # negative integer power factor -> denominator (b^-k -> /b^k),
-                    # several allowed; store only (base, exponent) and never build a
-                    # new term, since a new term is not in the postorder and looking it
-                    # up in val would raise KeyError
+                v = Fr(1)
+                for a in u.args:
+                    if T.is_num(a):
+                        v *= T.num_val(a)
+                        continue
                     if (
                         isinstance(a, Expr)
                         and a.head.name == "Power"
                         and isinstance(a.args[1], T.Int)
                         and a.args[1].v < 0
                     ):
-                        dens.append((a.args[0], -a.args[1].v))
-                    else:
-                        keep.append(a)
+                        base, e = a.args
+                        if T.is_num(base) and T.num_val(base) != 0:
+                            # a reciprocal of a number is numeric as well, so it
+                            # converges into the one exact rational coefficient
+                            # (b^-k = 1/b^k for a nonzero b)
+                            v *= T.num_val(base) ** e.v
+                        else:
+                            # a symbolic negative integer power factor -> denominator
+                            # (b^-k -> /b^k), several allowed; store only (base, exponent)
+                            # and never build a new term, since a new term is not in the
+                            # postorder and looking it up in val would raise KeyError
+                            dens.append((base, -e.v))
+                        continue
+                    keep.append(a)
+                # all numeric factors are multiplied into one exact rational value before
+                # anything is rendered, so no factor can overwrite another and the sign
+                # of the whole product survives; that value is spelled as its numerator
+                # over its denominator, the same convention a rational atom uses, with a
+                # numerator of 1 absorbed and -1 keeping its bare sign spelling
+                num_v, den_v = v.numerator, v.denominator
                 coef = ""
-                for n in nums:
-                    v = T.num_val(n)
-                    if v == -1:
-                        coef = "-"
-                    elif v != 1:
-                        coef = _atom_str(n)
+                if num_v == -1:
+                    coef = "-"
+                elif num_v != 1:
+                    coef = _atom_str(T.N(num_v))
+                cden = "" if den_v == 1 else str(den_v)
                 for a in keep:
                     facs.append(_wrap(val[a], p))   # the precedence mechanism already parenthesizes subexpressions
                 body = "*".join(facs) if facs else (coef if coef not in ("", "-") else "1")
@@ -240,8 +256,8 @@ def to_str(t, prec=0, hint=None, src=False):
                     body = "-" + body
                 elif coef and not facs:
                     body = coef
-                if dens:
-                    ds = []
+                if dens or cden:
+                    ds = [cden] if cden else []   # the coefficient's denominator comes first
                     for base, be in dens:
                         sb = _wrap(val[base], 6)   # render the denominator power base at Power precedence
                         if T.is_num(base) and (T.num_val(base) < 0 or isinstance(base, Rat)):

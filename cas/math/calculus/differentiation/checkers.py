@@ -10,14 +10,48 @@ honestly undecided rather than passing itself off as verified.
 
 from cas.kernel.evidence import Rejected, UnknownResult
 from cas.kernel.verdict import Reason
-from cas.math.domains.poly import Poly, p_deriv, to_term
-from cas.math.domains.ratfunc import RatFunc, rf_deriv, rf_to_term
+from cas.math.domains.poly import p_deriv, to_term
+from cas.math.domains.ratfunc import rf_deriv, rf_from_term, rf_to_term
 from cas.math.domains.qarith import fold
 from cas.math.project import project
 from cas.math.base.checkers import (
     _is_piecewise, _ok, _one_conclusion, _premise,
 )
 from cas.syntax import term as T
+
+
+def _element_deriv(hit, x):
+    """The domain-layer derivative of a projected element as an interned term, or
+    None when the domain exposes no independent channel for it.
+
+    Dispatch is by capability, never by Python type. When the domain returns the
+    element itself as a polynomial through `element_as_poly`, the polynomial
+    derivative applies. Otherwise the element is a genuine fraction of a domain
+    that declares a rational-function variable view: the projection's own term
+    is read as a rational function of those variables and differentiated by the
+    quotient rule. A domain that exposes only the documented protocol declares
+    no variable view at all, so the answer is None (honestly undecided), never a
+    field read the domain does not declare.
+    """
+    domain = hit.domain
+    p = domain.element_as_poly(hit.element)
+    if p is not None:
+        # The element's own polynomial denotation, not its vanishing view.
+        vs, ring = domain.vars, domain.ring
+        if vs is None or ring is None:
+            return None
+        if x not in vs:
+            return T.ZERO
+        return to_term(ring, p_deriv(ring, p, vs.index(x)))
+    vs, ring = domain.vars, domain.ring
+    if vs is None or ring is None:
+        return None
+    rf = rf_from_term(ring, hit.term, vs)
+    if rf is None:
+        return None
+    if x not in vs:
+        return T.ZERO
+    return rf_to_term(ring, rf_deriv(ring, rf, vs.index(x)))
 
 
 def _cross_diff(src, got, x):
@@ -37,25 +71,10 @@ def _cross_diff(src, got, x):
         return None
     if hit.element is None:
         expected = T.ZERO                      # a constant cell (Z/Q) differentiates to 0
-    elif isinstance(hit.element, Poly):
-        vs = hit.domain.vars
-        if x not in vs:
-            expected = T.ZERO
-        else:
-            ring = hit.domain.ring
-            expected = to_term(ring, p_deriv(ring, hit.element, vs.index(x)))
-    elif isinstance(hit.element, RatFunc):
-        vs = hit.domain.vars
-        if x not in vs:
-            expected = T.ZERO
-        else:
-            ring = hit.domain.ring
-            expected = rf_to_term(ring, rf_deriv(ring, hit.element, vs.index(x)))
     else:
-        # The representation-dependent reads (`vars` / `ring`) happen only on a
-        # branch that knows the view: a domain implementing just the projection
-        # protocol owns neither, and falls through to the honest undecided result.
-        return None
+        expected = _element_deriv(hit, x)
+        if expected is None:
+            return None
     from cas.math.domains.ratfunc import ratfunc_domain
     allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
                         key=lambda s: s.name))

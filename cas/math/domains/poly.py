@@ -348,6 +348,17 @@ class PolyDomain(Domain):
         """The existing Poly -> canonical interned term path."""
         return to_term(self.ring, element)
 
+    def element_poly(self, element):
+        """The elements of this domain are polynomials, so the polynomial view is
+        the element itself."""
+        return element
+
+    def element_as_poly(self, element):
+        """The elements of this domain are polynomials, so the element itself is
+        the polynomial denotation (not merely a polynomial sharing its
+        vanishing)."""
+        return element
+
 
 _domain_cache = {}
 

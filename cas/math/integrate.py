@@ -2,10 +2,12 @@
 independent verifier.
 
 Scope, all exact, no heuristics and no approximation:
-· indefinite integration of polynomial integrands (power rule); piecewise
-  integrands are integrated branch by branch. Proper rational functions need
-  Hermite reduction and transcendental ones need Risch; neither is built, so
-  they raise IntegrateError.
+· indefinite integration of polynomial integrands (power rule), with the
+  polynomial denotation taken through the domain capability (so a rational
+  function whose value is a polynomial is included); piecewise integrands are
+  integrated branch by branch. Proper rational functions need Hermite reduction
+  and transcendental ones need Risch; neither is built, so they raise
+  IntegrateError.
 · definite integration of [a, b] follows the domain-first discipline: intersect
   the domain with [a, b], never integrate across a gap as if it were 0, and
   refuse when a cell is undefined. A piecewise integrand is summed over its open
@@ -82,9 +84,13 @@ def integrate_term(f, x: Sym):
             f"{hit.domain.name}", Reason.FRAGMENT)
     if x not in vs:
         return T.times(f, x)                    # independent of x
-    if isinstance(el, Poly):
+    # The element's own polynomial denotation, not its vanishing view: a
+    # rational function whose value is a polynomial integrates here, and a
+    # genuine fraction stays refused below.
+    p = hit.domain.element_as_poly(el)
+    if p is not None:
         ring = hit.domain.ring
-        return to_term(ring, poly_antideriv(ring, el, vs.index(x)))
+        return to_term(ring, poly_antideriv(ring, p, vs.index(x)))
     raise IntegrateError("proper rational integration needs Hermite reduction, "
                          "not built", Reason.FRAGMENT)
 

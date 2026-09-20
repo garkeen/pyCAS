@@ -64,7 +64,7 @@ def test_branch_does_not_see_later_parent_entries():
     wf = new_workflow()
     group = wf.split_on(parse("x != 0"))
     case = group.cases[0]
-    wf.enter(group.parent_scope)
+    wf.enter(group.parent_lineage)
     wf.add(parse("u > 0"), Claim())              # the parent grows afterwards
     scopes = wf.store.scopes
     assert [a.proposition for a in scopes.assumptions(case.scope)] == [
