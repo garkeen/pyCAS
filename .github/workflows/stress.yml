@@ -13,7 +13,7 @@ jobs:
       - run: pip install pytest pytest-timeout
       # 钉子库：确定性单测，失败直接定位到断言
       - name: 钉子库
-        run: python -m pytest tests/ -q
-      # 随机压力台架：41 条性质，全自证无外部真值
+        run: python -m pytest tests/ -m "not random" -q
+      # 随机压力台架：自证性质，全自证无外部真值
       - name: 压力台架
-        run: python -m pytest stress/test_stress.py -q
+        run: python -m pytest tests/random -q
