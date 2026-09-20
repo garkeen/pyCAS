@@ -54,7 +54,7 @@ def _element_deriv(hit, x):
     return rf_to_term(ring, rf_deriv(ring, rf, vs.index(x)))
 
 
-def _cross_diff(src, got, x):
+def _cross_diff(ctx, src, got, x):
     """Cross-check one term: rebuild the expected value from the domain-layer
     derivative (a different implementation) and compare it with the term-layer
     result.
@@ -66,7 +66,7 @@ def _cross_diff(src, got, x):
     the domain-layer rebuild equals the term-layer result in the
     rational-function field; False means they differ.
     """
-    hit = project(src)
+    hit = project(ctx, src)
     if hit is None:
         return None
     if hit.element is None:
@@ -80,7 +80,7 @@ def _cross_diff(src, got, x):
                         key=lambda s: s.name))
     if not allv:
         return True if fold(T.plus(expected, T.neg(got))) is T.ZERO else False
-    rfd = ratfunc_domain(*allv)
+    rfd = ratfunc_domain(*allv, ring=ctx.coeff_ring)
     if rfd.equal(expected, got) is True:
         return True
     if rfd.equal(expected, got) is False:
@@ -90,6 +90,9 @@ def _cross_diff(src, got, x):
 
 class DiffChecker:
     id = "calculus.derivative"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -113,18 +116,18 @@ class DiffChecker:
             for (sv, sc), (gv, gc) in zip(sbs, gbs):
                 if sc is not gc:
                     return UnknownResult(Reason.FRAGMENT, "branch conditions differ")
-                r = _cross_diff(sv, gv, x)
+                r = _cross_diff(self.ctx, sv, gv, x)
                 if r is None:
                     return UnknownResult(Reason.FRAGMENT, "this branch is outside the projection domain")
                 if r is not True:
                     return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees on this branch")
-            return _ok(proposal, context)
-        r = _cross_diff(pred, content, x)
+            return _ok(self.ctx, proposal, context)
+        r = _cross_diff(self.ctx, pred, content, x)
         if r is None:
             return UnknownResult(Reason.FRAGMENT, "source is outside the projection domain: no independent channel")
         if r is not True:
             return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees with the term-layer result")
-        return _ok(proposal, context)
+        return _ok(self.ctx, proposal, context)
 
 
 CHECKERS = (DiffChecker,)
@@ -132,4 +135,4 @@ CHECKERS = (DiffChecker,)
 
 def register(builder) -> None:
     for cls in CHECKERS:
-        builder.register_checker(cls.id, cls())
+        builder.register_checker(cls.id, cls)

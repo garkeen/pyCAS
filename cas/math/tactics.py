@@ -14,7 +14,7 @@ from cas.errors import TacticsError
 from cas.math.project import project, zero_of, is_zero
 
 
-def _lin_core(diff, var: Sym):
+def _lin_core(ctx, diff, var: Sym):
     """Classify the difference of an equation on its projection normal form: a
     semantic criterion, not a shape criterion.
 
@@ -35,7 +35,7 @@ def _lin_core(diff, var: Sym):
     ("refuse", reason) anything else: nonlinear / involves other variables /
                        outside the domain, so completeness cannot be guaranteed
     """
-    hit = project(diff)
+    hit = project(ctx, diff)
     if hit is None:
         return ("refuse", "difference is outside Q/polynomial/rational-function domains")
     if hit.element is None:
@@ -63,7 +63,7 @@ def _lin_core(diff, var: Sym):
     return ("linear", T.N(-b / a))
 
 
-def solve_linear(content, var: Sym):
+def solve_linear(ctx, content, var: Sym):
     """Linear solving tactic: an equation to a solution term (the certificate).
 
     The difference is classified by `_lin_core` on its projection normal form: a
@@ -75,7 +75,7 @@ def solve_linear(content, var: Sym):
     if not (isinstance(content, T.Expr) and content.head.name == "Eq"):
         raise TacticsError("solve needs an equation")
     lhs, rhs = content.args
-    kind, payload = _lin_core(T.plus(lhs, T.neg(rhs)), var)
+    kind, payload = _lin_core(ctx, T.plus(lhs, T.neg(rhs)), var)
     if kind == "linear":
         return payload
     if kind == "zero":
@@ -171,7 +171,7 @@ def integer_roots(p, var):
     return sorted(set(roots))
 
 
-def solve_piecewise(f, x: Sym, target):
+def solve_piecewise(ctx, f, x: Sym, target):
     """Solve the piecewise equation pw(...) = target: solve branch by branch and
     check membership in the branch condition.
 
@@ -206,13 +206,13 @@ def solve_piecewise(f, x: Sym, target):
     for v, c in branches(f):
         d = fold(T.plus(v, T.neg(target)))
         if x not in T.free_vars(d):
-            z = zero_of(d)
+            z = zero_of(ctx, d)
             if z is True:
                 regions.append(c)                 # branch equation holds identically
             elif z is None:
                 conditional.append((None, c))     # identity undecided
             continue
-        kind, payload = _lin_core(d, x)
+        kind, payload = _lin_core(ctx, d, x)
         if kind == "zero":
             regions.append(c)                     # projects to zero (v == target)
             continue
@@ -222,7 +222,7 @@ def solve_piecewise(f, x: Sym, target):
             raise TacticsError(
                 f"branch equation is outside the linear fragment, completeness "
                 f"cannot be guaranteed: {payload}")
-        verdict = decide(fold(T.subst(c, {x: payload})), Assumptions())
+        verdict = decide(ctx, fold(T.subst(c, {x: payload})), Assumptions())
         if verdict is YES:
             points.append(payload)
         elif verdict is NO:

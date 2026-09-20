@@ -19,7 +19,15 @@ facade only forwards the call.
 
 
 class Algorithms:
-    """Math algorithm facade visible to the workflow."""
+    """Math algorithm facade visible to the workflow.
+
+    The math context arrives in the constructor (runtime builds this facade from
+    the assembled runtime), so the workflow still knows only "an algorithms object
+    can answer these two questions" and nothing about declarations.
+    """
+
+    def __init__(self, math):
+        self._math = math
 
     def domain_of(self, term) -> str:
         """Domain name the term belongs to (given by projection, never by leaf
@@ -32,7 +40,7 @@ class Algorithms:
             la, ra = term.args
             from cas.syntax import term as T
             t = T.plus(la, T.neg(ra))
-        hit = project(t)
+        hit = project(self._math, t)
         return hit.name if hit is not None else ""
 
     def solve_linear_constraints(self, relations, unknowns):
@@ -43,4 +51,4 @@ class Algorithms:
         inconsistent) returns None.
         """
         from cas.math.constraints import solve_linear_constraints
-        return solve_linear_constraints(relations, unknowns)
+        return solve_linear_constraints(self._math, relations, unknowns)

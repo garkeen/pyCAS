@@ -10,6 +10,7 @@ parent scope, and inherited read dependencies are unioned per branch.
 import pytest
 
 from cas.runtime import bootstrap, new_workflow
+from cas.runtime.dispatch import install
 from cas.errors import BranchError
 from cas.frontend.parser import parse
 from cas.syntax import term as T
@@ -21,7 +22,7 @@ from cas.kernel.evidence import Evidence
 from cas.kernel.mode import ExecutionMode
 from cas.kernel.model import ContextReadSet
 
-bootstrap()
+install(bootstrap())
 
 X = S("x")
 

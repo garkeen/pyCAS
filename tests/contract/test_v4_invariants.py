@@ -14,6 +14,7 @@ The invariants pinned here:
 * automatic simplification applies no unproved conditional rule
 """
 
+import ast
 import inspect
 from pathlib import Path
 
@@ -270,7 +271,8 @@ def test_invariant18_auto_simplify_skips_unproved_conditional_rules():
     """An auto rule may only be unconditional; a guarded one is never auto, so a
     branch-breaking rewrite cannot land silently."""
     from cas.math.rules import declared_ruleset
-    rs = declared_ruleset()
+    from cas.runtime import get_runtime
+    rs = declared_ruleset(get_runtime().math)
     bad = [r.id for r in rs.rules.values() if r.auto and r.guard is not None]
     assert not bad, f"an auto rule carries a guard: {bad}"
 
@@ -482,3 +484,53 @@ def test_source_cites_no_design_document():
             if needle in text:
                 bad.append(f"{p.relative_to(_ROOT)}: {needle}")
     assert not bad, "source cites a design document:\n" + "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# C3: the declaration surface and the assembly configuration are explicit
+# ---------------------------------------------------------------------------
+
+_REMOVED_ASSEMBLY_HANDLES = {
+    "decide.py": ("_DECLS", "_EQ_STAGES", "bind_runtime", "bind_eq_stages"),
+    "rules.py": ("_DECLS", "bind_runtime"),
+    "diff.py": ("_DECLS", "bind_runtime"),
+    "domcond.py": ("_DECLS", "bind_runtime"),
+    "project.py": ("_STAGES", "register_stage", "clear_stages", "bind_domains"),
+    "domains/base.py": ("_DEFAULT_COEFF_RING", "default_coeff_ring"),
+    "domains/poly.py": ("default_coeff_ring",),
+    "domains/ratfunc.py": ("default_coeff_ring",),
+}
+
+
+def test_c3_no_module_level_assembly_state_in_math():
+    """No module in the math layer keeps assembly state in a module handle.
+
+    A `global` statement there means a handle that assembly fills in behind the
+    reader's back. The declaration surface and the assembly configuration travel
+    as explicit arguments instead, so an algorithm cannot read semantics it was
+    never given.
+    """
+    bad = []
+    for p in sorted((_ROOT / "cas" / "math").rglob("*.py")):
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Global):
+                bad.append(f"{p.relative_to(_ROOT)}:{node.lineno} -> "
+                           + ", ".join(node.names))
+    assert not bad, "math layer holds module-level state:\n" + "\n".join(bad)
+
+
+def test_c3_removed_declaration_handles_stay_removed():
+    """The handles assembly used to write into are gone, not merely unused.
+
+    Each name was a second way to reach the declarations, and keeping one around
+    leaves a reader unable to tell which channel is in effect.
+    """
+    math_dir = _ROOT / "cas" / "math"
+    bad = []
+    for name, needles in _REMOVED_ASSEMBLY_HANDLES.items():
+        text = (math_dir / name).read_text(encoding="utf-8")
+        for needle in needles:
+            if needle in text:
+                bad.append(f"cas/math/{name}: {needle}")
+    assert not bad, "a removed assembly handle is back:\n" + "\n".join(bad)

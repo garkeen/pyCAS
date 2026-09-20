@@ -78,9 +78,9 @@ def rebuild(t, budget=100000):
         prev = nxt
 
 
-def autosimplify(t, budget=100000):
+def autosimplify(ctx, t, budget=100000):
     """Automatic simplification: re-intern, then iterate the declared auto rules
-    to a fixed point.
+    to a fixed point. The declared rules arrive through the explicit context.
 
     Discipline:
     · only auto rules with no guard are applied. Evaluating a guard would call
@@ -95,7 +95,7 @@ def autosimplify(t, budget=100000):
     """
     from cas.math.rules import declared_ruleset, apply_rule
 
-    rs = declared_ruleset()
+    rs = declared_ruleset(ctx)
     auto_ids = {r.id for r in rs.rules.values() if r.auto and r.guard is None}
     cur = rebuild(t, budget)
     # Termination: every accepted rule strictly decreases the cost, a

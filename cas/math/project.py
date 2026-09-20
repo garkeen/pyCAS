@@ -1,17 +1,17 @@
 """Domain projection layer: which domain an expression belongs to is assigned by
 projection, never by leaf sniffing.
 
-Projection is a **registered ladder**: assembly registers stages in order
-(`ProjectionStage`) and `project()` tries them in turn, returning the first hit.
-The ladder order is given explicitly by assembly (bootstrap -> bind_domains); it
-is not an if-chain hardcoded here, and nothing is registered on import.
+Projection is a **registered ladder**: assembly builds the rungs in order
+(`ProjectionStage`) and `project` tries them in turn, returning the first hit.
+The ladder is a value produced by `build_ladder`, not module-level state, and the
+caller passes it in through the math context -- so nothing is registered on import
+and no assembly-time write is hidden behind a module global.
 
 · resident base domains (Z / Q / Q(i)) are built by bootstrap through the builder
-  and bound by `bind_domains` into constant-cell stages in the assembly-provided
-  domain order;
-· the K[x] and K(x) stages are registered here, and their coefficient domain is
-  taken by capability through `find_domain` as the unique base field rather than
-  by hardcoding `Q_RING`.
+  and bound here into constant-cell rungs in the assembly-provided domain order;
+· the K[x] and K(x) stages are built here, and their coefficient domain is taken
+  by capability through `find_domain` as the unique base field rather than by
+  hardcoding `Q_RING`.
 
 A domain enters by explicit declaration, never by name sniffing; ladder order is
 given by assembly, not scattered through decision logic.
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from cas.syntax import term as T
 from cas.math.domains.base import (
-    register, lookup, find_domain, set_default_coeff_ring,
+    register, lookup, find_domain,
 )
 from cas.math.domains.poly import poly_domain, from_term as poly_from_term
 from cas.math.domains.ratfunc import ratfunc_domain, rf_from_term
@@ -58,22 +58,17 @@ class ProjectionStage:
     try_fn: object
 
 
-_STAGES = ()
+@dataclass(frozen=True, slots=True)
+class ProjectionLadder:
+    """The assembled ladder: the rungs in order, plus the coefficient ring the
+    parameterized rungs were built with.
 
-
-def register_stage(stage) -> None:
-    """Register one projection rung at assembly time; never on import. A duplicate
-    name is rejected."""
-    global _STAGES
-    if any(existing.name == stage.name for existing in _STAGES):
-        raise ValueError(f"projection stage already registered: {stage.name}")
-    _STAGES = _STAGES + (stage,)
-
-
-def clear_stages() -> None:
-    """Clear the ladder, for re-assembly."""
-    global _STAGES
-    _STAGES = ()
+    A value, not a registry: `build_ladder` returns it, the caller keeps it (in the
+    math context), and a test that wants its own rung builds its own ladder
+    instead of mutating a shared one.
+    """
+    stages: tuple
+    coeff_ring: object
 
 
 def _vars_of(t):
@@ -132,34 +127,31 @@ def _ratfunc_stage(ring) -> ProjectionStage:
     return ProjectionStage("K(x)", try_fn)
 
 
-def bind_domains(domains) -> None:
-    """Install the resident base domains and build the projection ladder in
+def build_ladder(domains) -> ProjectionLadder:
+    """Register the resident base domains and build the projection ladder in
     order.
 
     The ladder order is the assembly-provided domain order (Z then Q then Q(i)),
     followed by K[x] and K(x). The coefficient ring of the parameterized domains
-    is chosen here by capability and injected into the domain foundations
-    (`set_default_coeff_ring`), so the domain package never has to bootstrap a
-    concrete domain. Re-assembly clears the old ladder first, avoiding duplicate
-    registration.
+    is chosen here by capability and carried in the returned value, so the domain
+    package never has to bootstrap a concrete domain and no module-level default
+    ring is needed. Re-assembly builds a fresh ladder rather than appending to an
+    old one, so duplicate rungs cannot accumulate.
     """
     for d in domains:
         if lookup(d.name) is None:
             register(d)
     ring = _base_field_ring()
-    set_default_coeff_ring(ring)
-    clear_stages()
-    for d in domains:
-        register_stage(_const_stage(d))
-    register_stage(_poly_stage(ring))
-    register_stage(_ratfunc_stage(ring))
+    stages = (tuple(_const_stage(d) for d in domains)
+              + (_poly_stage(ring), _ratfunc_stage(ring)))
+    return ProjectionLadder(stages=stages, coeff_ring=ring)
 
 
-def project(t) -> Projected | None:
-    """Project along the registered ladder. Returns None when every rung misses:
+def project(ctx, t) -> Projected | None:
+    """Project along the context's ladder. Returns None when every rung misses:
     honest, no guessing."""
     vs = _vars_of(t)
-    for stage in _STAGES:
+    for stage in ctx.projection_stages:
         hit = stage.try_fn(t, vs)
         if hit is not None:
             return hit
@@ -190,10 +182,10 @@ def normalize(hit: Projected):
     return hit.domain.element_to_term(hit.element)
 
 
-def zero_of(t):
+def zero_of(ctx, t):
     """The vanishing shortcut for a term's projection: True / False / None, where
     None means non-member and outside the fragment."""
-    hit = project(t)
+    hit = project(ctx, t)
     if hit is None:
         return None
     return is_zero(hit)

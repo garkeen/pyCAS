@@ -20,6 +20,9 @@ from cas.math.base.checkers import (
 class SolveChecker:
     id = "solve.back_substitute"
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
         if bad is not None:
@@ -32,9 +35,9 @@ class SolveChecker:
                 and content.args[1] is d.solution):
             return Rejected(Reason.FRAGMENT,
                             "conclusion is not that variable equal to that solution")
-        z = back_substitute(pred, d.var, d.solution).zero
+        z = back_substitute(self.ctx, pred, d.var, d.solution).zero
         if z is True:
-            return _ok(proposal, context)
+            return _ok(self.ctx, proposal, context)
         if z is False:
             return Rejected(Reason.FRAGMENT,
                             "back-substitution does not vanish: not a solution")
@@ -47,4 +50,4 @@ CHECKERS = (SolveChecker,)
 
 def register(builder) -> None:
     for cls in CHECKERS:
-        builder.register_checker(cls.id, cls())
+        builder.register_checker(cls.id, cls)

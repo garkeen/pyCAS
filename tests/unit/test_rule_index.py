@@ -28,6 +28,11 @@ _TERMS = ("f(x)", "x + 1", "x", "0", "h(x)", "f(f(x))", "x*f(x)",
           "g(x, y)", "x + f(x)", "k(x)")
 
 
+def _ctx():
+    from cas.runtime import get_runtime
+    return get_runtime().math
+
+
 def _ruleset():
     rs = RuleSet()
     for line in _LINES:
@@ -94,7 +99,7 @@ def _full_scan_autosimplify(t, rs, budget=100000):
 
 def test_autosimplify_matches_the_full_scan_reference(monkeypatch):
     rs = _ruleset()
-    monkeypatch.setattr("cas.math.rules.declared_ruleset", lambda: rs)
+    monkeypatch.setattr("cas.math.rules.declared_ruleset", lambda ctx: rs)
     for src in _TERMS:
         t = parse(src)
-        assert autosimplify(t) is _full_scan_autosimplify(t, rs), src
+        assert autosimplify(_ctx(), t) is _full_scan_autosimplify(t, rs), src

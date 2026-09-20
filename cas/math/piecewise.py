@@ -95,20 +95,20 @@ def conditions(t):
 # Independent per-branch projection (no shared host)
 # ---------------------------------------------------------------------------
 
-def project_pw(t):
+def project_pw(ctx, t):
     """Project each branch into its own host domain, independently.
 
     Returns [(value, condition, Projected|None)]. A Projected of None means the
     branch lies outside the current projection ladder (not a member of Q / K[x] /
     K(x)), which the caller handles honestly."""
-    return [(v, c, project(v)) for v, c in branches(t)]
+    return [(v, c, project(ctx, v)) for v, c in branches(t)]
 
 
 # ---------------------------------------------------------------------------
 # Condition semantics: consumed by the decision pipeline
 # ---------------------------------------------------------------------------
 
-def select(t, assumptions):
+def select(ctx, t, assumptions):
     """Evaluate a piecewise function under `assumptions` by ordered first-match
     (if/elif/else): the first condition provably true.
 
@@ -133,7 +133,7 @@ def select(t, assumptions):
                 return ("value", v)
             survivors.append((v, c))            # an earlier branch is undecided, so shadowing is open
             break
-        verdict = decide(c, assumptions)
+        verdict = decide(ctx, c, assumptions)
         if verdict is NO:
             continue                            # branch does not hold, try the next
         if verdict is YES:
@@ -150,7 +150,7 @@ def select(t, assumptions):
                          first_unknown or Reason.FRAGMENT))
 
 
-def coverage(t, assumptions):
+def coverage(ctx, t, assumptions):
     """Whether the disjunction of branch conditions covers the whole space (completeness
     is the user's declaration, decided here when decidable).
 
@@ -162,7 +162,7 @@ def coverage(t, assumptions):
     for c in conds:
         if c is T.TRUE:
             return YES
-        v = decide(c, assumptions)
+        v = decide(ctx, c, assumptions)
         if v is YES:
             return YES
         if v is NO:
@@ -171,7 +171,7 @@ def coverage(t, assumptions):
     return unknown(Reason.GUARDED) if guarded else NO
 
 
-def collapse(t, assumptions):
+def collapse(ctx, t, assumptions):
     """Point collapse: replace every Piecewise subterm by its selected value under
     `assumptions`.
 
@@ -186,16 +186,16 @@ def collapse(t, assumptions):
     piecewise in condition position is a malformed structure that fold_nested already
     refuses, so it is never seen here."""
     if is_piecewise(t):
-        status, load = select(t, assumptions)
+        status, load = select(ctx, t, assumptions)
         if status != "value":
             return None                        # branch selection undecided: shadowing cannot be settled
-        return collapse(load, assumptions)             # keep collapsing if the branch value is still piecewise
+        return collapse(ctx, load, assumptions)             # keep collapsing if the branch value is still piecewise
     if not isinstance(t, Expr) or not t.args:
         return t
     new_args = []
     changed = False
     for a in t.args:
-        na = collapse(a, assumptions)
+        na = collapse(ctx, a, assumptions)
         if na is None:
             return None
         changed = changed or (na is not a)
@@ -203,7 +203,7 @@ def collapse(t, assumptions):
     return T.mk(t.head, tuple(new_args)) if changed else t
 
 
-def conflicts(t, assumptions):
+def conflicts(ctx, t, assumptions):
     """Order-independence lint (not an evaluation gate): values differing on an
     overlap mean the value there depends on declaration order.
 
@@ -227,15 +227,15 @@ def conflicts(t, assumptions):
         vi, ci = bs[i]
         for j in range(i + 1, n):
             vj, cj = bs[j]
-            sat = satisfiable([ci, cj], assumptions)      # is the overlap satisfiable
+            sat = satisfiable(ctx, [ci, cj], assumptions)      # is the overlap satisfiable
             if sat is NO:
                 out.append((i, j, YES))            # empty overlap: order independent by construction
                 continue
-            out.append((i, j, _agree(vi, vj, (ci, cj), assumptions)))
+            out.append((i, j, _agree(ctx, vi, vj, (ci, cj), assumptions)))
     return out
 
 
-def _agree(vi, vj, conds, assumptions):
+def _agree(ctx, vi, vj, conds, assumptions):
     """Whether two values are equal under the overlap conditions: decide after
     **extending** the assumption set.
 
@@ -247,7 +247,7 @@ def _agree(vi, vj, conds, assumptions):
         return YES
     tmp = assumptions.extended(*[c for c in conds if c is not T.TRUE])
     from cas.math.decide import equivalent
-    return equivalent(vi, vj, tmp)
+    return equivalent(ctx, vi, vj, tmp)
 
 
 # ---------------------------------------------------------------------------

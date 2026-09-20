@@ -64,7 +64,7 @@ def has_undef(t) -> bool:
 # Vanishing
 # ---------------------------------------------------------------------------
 
-def is_zero(t) -> bool | None:
+def is_zero(ctx, t) -> bool | None:
     """Piecewise-aware vanishing test: an ordinary term is decided by the domain
     normal form, a term with piecewise subterms is point-collapsed first.
 
@@ -74,15 +74,15 @@ def is_zero(t) -> bool | None:
     hence False.
     """
     if not has_piecewise(t):
-        return zero_of(t)
+        return zero_of(ctx, t)
     from cas.math.piecewise import collapse        # deferred: piecewise consumes the decision layer
     from cas.kernel.scope import Assumptions
-    c = collapse(t, Assumptions())
+    c = collapse(ctx, t, Assumptions())
     if c is None:
         return None                           # branch selection undecided
     if has_undef(c):
         return False                          # outside the domain: no value, not a solution
-    return zero_of(fold(c))
+    return zero_of(ctx, fold(c))
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class BackSub:
     exact: object | None
 
 
-def back_substitute(eq, var, value) -> BackSub:
+def back_substitute(ctx, eq, var, value) -> BackSub:
     """Substitute var := value into the equation and return the difference and
     the vanishing verdict.
 
@@ -119,7 +119,7 @@ def back_substitute(eq, var, value) -> BackSub:
         v = eval_exact(diff, {})
     except EvalNumError:
         v = None
-    return BackSub(diff=diff, zero=is_zero(diff), exact=v)
+    return BackSub(diff=diff, zero=is_zero(ctx, diff), exact=v)
 
 
 # ---------------------------------------------------------------------------
@@ -134,26 +134,27 @@ class GuardCheck:
     verdict: Verdict    # the decision pipeline's verdict
 
 
-def guard_report(guards, var, value, ctx=None) -> tuple[GuardCheck, ...]:
+def guard_report(ctx, guards, var, value, assumptions=None) -> tuple[GuardCheck, ...]:
     """Back-substitute each guard and hand it to the decision pipeline, covering
     all predicate heads and compound propositions with no whitelist.
 
     A guard is not an optional extra check: a solution is a solution only where
     its guards hold. If any guard is No or undecided, the whole thing cannot be
-    reported as verified.
+    reported as verified. The math context is the first argument; the trailing
+    `assumptions` are the caller's scope assumptions.
     """
     from cas.math.decide import decide
     from cas.kernel.scope import Assumptions
-    if ctx is None:
-        ctx = Assumptions()
+    if assumptions is None:
+        assumptions = Assumptions()
     out = []
     for g in guards:
         gsub = fold(T.subst(g, {var: value}))
-        out.append(GuardCheck(guard=g, subst=gsub, verdict=decide(gsub, ctx)))
+        out.append(GuardCheck(guard=g, subst=gsub, verdict=decide(ctx, gsub, assumptions)))
     return tuple(out)
 
 
-def verify_solution(eq, var, value, guards=(), ctx=None) -> Verdict:
+def verify_solution(ctx, eq, var, value, guards=(), assumptions=None) -> Verdict:
     """Full decision: back-substitution vanishing plus all guards holding; only
     both passing makes it a solution.
 
@@ -162,10 +163,10 @@ def verify_solution(eq, var, value, guards=(), ctx=None) -> Verdict:
     · vanishing is None, or any guard is undecided   -> Unknown
     · vanishing is True and every guard is Yes       -> YES
     """
-    bs = back_substitute(eq, var, value)
+    bs = back_substitute(ctx, eq, var, value)
     if bs.zero is False:
         return NO
-    checks = guard_report(guards, var, value, ctx)
+    checks = guard_report(ctx, guards, var, value, assumptions)
     if any(c.verdict is NO for c in checks):
         return NO
     if bs.zero is None or any(c.verdict is not YES for c in checks):

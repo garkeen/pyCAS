@@ -38,7 +38,9 @@ from cas.math.domains.q import Q_RING
 from cas.workflow.command import Claim, Diff
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 X, Y, H = S("x"), S("y"), S("h")
 
@@ -74,10 +76,16 @@ def rand_nonzero_poly(rng):
             return p
 
 
+def _ctx():
+    """The installed math context: the bench assembled its own runtime above."""
+    from cas.runtime import get_runtime
+    return get_runtime().math
+
+
 def rf_equal_terms(a, b):
     """Compare two terms in Q(x, y) (cross-multiplication, independent of term-layer
     folding)."""
-    rfd = ratfunc_domain(X, Y)
+    rfd = ratfunc_domain(X, Y, ring=Q_RING)
     return rfd.equal(a, b) is True
 
 
@@ -91,7 +99,7 @@ def prop_cross(rounds, rng):
             p = rand_poly(rng)
             t = to_term(Q_RING, p)
             for var, idx in ((X, 0), (Y, 1)):
-                got = differentiate(t, var)
+                got = differentiate(_ctx(), t, var)
                 want = to_term(Q_RING, p_deriv(Q_RING, p, idx))
                 if not rf_equal_terms(got, want):
                     fail("P10 polynomial cross-check", i, f"t={to_str(t)} d/d{var.name}",
@@ -102,7 +110,7 @@ def prop_cross(rounds, rng):
             ta, tb = to_term(Q_RING, a), to_term(Q_RING, b)
             t = times(ta, pw(tb, N(-1)))
             for var, idx in ((X, 0), (Y, 1)):
-                got = differentiate(t, var)
+                got = differentiate(_ctx(), t, var)
                 d = rf_deriv(Q_RING, rf, idx)
                 want = times(to_term(Q_RING, d.num),
                              pw(to_term(Q_RING, d.den), N(-1)))
@@ -120,19 +128,19 @@ def prop_leibniz(rounds, rng):
     for i in range(rounds):
         a = to_term(Q_RING, rand_poly(rng))
         b = to_term(Q_RING, rand_nonzero_poly(rng))
-        da, db = differentiate(a, X), differentiate(b, X)
+        da, db = differentiate(_ctx(), a, X), differentiate(_ctx(), b, X)
         # d(a+b) = da + db
-        if not rf_equal_terms(differentiate(plus(a, b), X), plus(da, db)):
+        if not rf_equal_terms(differentiate(_ctx(), plus(a, b), X), plus(da, db)):
             fail("P11 linearity", i, to_str(a), to_str(b))
         # d(ab) = a*db + b*da
         want = plus(times(a, db), times(b, da))
-        if not rf_equal_terms(differentiate(times(a, b), X), want):
+        if not rf_equal_terms(differentiate(_ctx(), times(a, b), X), want):
             fail("P11 Leibniz", i, to_str(a), to_str(b))
         # d(a/b) = (da*b - a*db)/b^2
         q = times(a, pw(b, N(-1)))
         want_q = times(plus(times(da, b), neg(times(a, db))),
                        pw(b, N(-2)))
-        if not rf_equal_terms(differentiate(q, X), want_q):
+        if not rf_equal_terms(differentiate(_ctx(), q, X), want_q):
             fail("P11 quotient rule", i, to_str(q))
 
 
@@ -152,7 +160,7 @@ def prop_taylor(rounds, rng):
         for k, c in ph.monos:
             coefs.setdefault(k[0], {})[(k[1], k[2])] = c
         lin = _norm(Q_RING, (X, Y), coefs.get(1, {}))
-        got = differentiate(t, X)
+        got = differentiate(_ctx(), t, X)
         want = to_term(Q_RING, lin)
         if not rf_equal_terms(got, want):
             fail("P12 Taylor h^1", i, f"t={to_str(t)}",
@@ -167,7 +175,7 @@ def prop_workflow(rounds, rng):
     for i in range(rounds):
         p = rand_poly(rng)
         t = to_term(Q_RING, p)
-        good = differentiate(t, X)
+        good = differentiate(_ctx(), t, X)
         wf = new_workflow()
         s0 = wf.add(t, Claim())
         s1 = wf.add(good, Diff(pred=s0.id, var=X))

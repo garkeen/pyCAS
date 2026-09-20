@@ -10,16 +10,21 @@ is not consumed as an order fact either. Equality is not affected, because equal
 is available in every domain.
 """
 
-from cas.runtime import bootstrap
+from cas.runtime import bootstrap, get_runtime
+from cas.runtime.dispatch import install
 from cas.frontend.parser import parse
 from cas.kernel.scope import Assumptions
 from cas.math.decide import decide, negate
 
-bootstrap()
+install(bootstrap())
+
+
+def _ctx():
+    return get_runtime().math
 
 
 def _v(src, assumptions=None):
-    return decide(parse(src), assumptions)
+    return decide(_ctx(), parse(src), assumptions)
 
 
 def _assume(*srcs):
@@ -49,9 +54,9 @@ def test_strong_negation_is_withheld_for_nonreal_operands():
     """`not (a > b)` is `a <= b` only where an order exists; equality negation
     needs no order and stays available."""
     from cas.syntax import term as T
-    assert negate(parse("x > 0")) == parse("x <= 0")
-    assert negate(parse("i > 0")) == T.not_(parse("i > 0"))
-    assert negate(parse("i == 0")) == parse("i != 0")
+    assert negate(_ctx(), parse("x > 0")) == parse("x <= 0")
+    assert negate(_ctx(), parse("i > 0")) == T.not_(parse("i > 0"))
+    assert negate(_ctx(), parse("i == 0")) == parse("i != 0")
 
 
 def test_assumption_order_edges_with_a_nonreal_constant_are_not_consumed():

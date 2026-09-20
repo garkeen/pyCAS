@@ -19,6 +19,13 @@ from cas.math.domains.base import _DOMAINS, lookup
 from cas.syntax.term import S
 
 
+def _ring():
+    """The coefficient ring K of K[x] / K(x): assembly provides it explicitly, so a
+    caller never falls back to a module default."""
+    from cas.runtime import get_runtime
+    return get_runtime().math.coeff_ring
+
+
 def test_domain_packages_are_declaration_only():
     """Importing cas.math.domains must write nothing into the registry."""
     code = ("from cas.math.domains.base import _DOMAINS; "
@@ -57,9 +64,10 @@ def test_parametric_domains_not_in_registry():
     before = set(_DOMAINS)
     from cas.math.domains.poly import poly_domain
     from cas.math.domains.ratfunc import ratfunc_domain
+    ring = _ring()
     for v in ("x", "y", "zzz_unique"):
-        poly_domain(S(v))
-        ratfunc_domain(S(v))
+        poly_domain(S(v), ring=ring)
+        ratfunc_domain(S(v), ring=ring)
     assert set(_DOMAINS) == before, "parameterized instances flooded the registry"
 
 
@@ -74,9 +82,10 @@ def test_registry_consumed_by_projection():
 def test_factory_cache_reuses_same_var_set():
     from cas.math.domains.poly import poly_domain
     from cas.math.domains.ratfunc import ratfunc_domain
-    assert poly_domain(S("x")) is poly_domain(S("x"))
-    assert ratfunc_domain(S("x")) is ratfunc_domain(S("x"))
-    assert poly_domain(S("x")) is not poly_domain(S("y"))
+    ring = _ring()
+    assert poly_domain(S("x"), ring=ring) is poly_domain(S("x"), ring=ring)
+    assert ratfunc_domain(S("x"), ring=ring) is ratfunc_domain(S("x"), ring=ring)
+    assert poly_domain(S("x"), ring=ring) is not poly_domain(S("y"), ring=ring)
 
 
 def test_register_has_single_call_site():

@@ -27,6 +27,16 @@ from cas.math.piecewise import (LIFT_BRANCH_BUDGET, branches, lift, piecewise,
 X = S("x")
 
 
+def _math():
+    """The installed math context.
+
+    Note the local name `ctx` in this file is an **assumption set** passed to the
+    piecewise channels, never the math context.
+    """
+    from cas.runtime import get_runtime
+    return get_runtime().math
+
+
 def cond(op, k):
     return mk(S(op), (X, N(k)))
 
@@ -96,9 +106,9 @@ def test_merged_lift_agrees_pointwise_with_the_selected_values():
     m = lift(T.plus, p, q)
     for a in range(-7, 8):
         ctx = at(a)
-        st_p, vp = select(p, ctx)
-        st_q, vq = select(q, ctx)
-        st_m, vm = select(m, ctx)
+        st_p, vp = select(_math(), p, ctx)
+        st_q, vq = select(_math(), q, ctx)
+        st_m, vm = select(_math(), m, ctx)
         assert (st_p, st_q, st_m) == ("value", "value", "value")
         assert T.plus(vp, vq) is vm
 

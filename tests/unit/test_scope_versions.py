@@ -10,11 +10,12 @@ its ancestors.
 import pytest
 
 from cas.runtime import bootstrap, new_workflow
+from cas.runtime.dispatch import install
 from cas.errors import ScopeError
 from cas.frontend.parser import parse
 from cas.workflow.command import Claim
 
-bootstrap()
+install(bootstrap())
 
 
 def test_extension_appends_a_new_version():

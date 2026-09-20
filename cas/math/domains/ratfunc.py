@@ -269,20 +269,18 @@ class RatFuncDomain(Domain):
 _domain_cache = {}
 
 
-def ratfunc_domain(*vars_, ring=None) -> RatFuncDomain:
+def ratfunc_domain(*vars_, ring) -> RatFuncDomain:
     """Fetch the domain object for a (variable set, coefficient ring) pair, sharing
     instances at the same level.
 
     Same strategy as poly_domain: only the factory cache is used, never the domain
     registry (the reason is in poly_domain's docstring). The two parameterized domain
-    families must behave symmetrically, including defaulting the coefficient ring to
-    the assembly-injected base field rather than hardcoding `Q_RING`.
+    families behave symmetrically, including requiring the coefficient ring
+    explicitly rather than hardcoding `Q_RING`.
     """
-    from cas.math.domains.base import default_coeff_ring
-    r = default_coeff_ring() if ring is None else ring
-    key = (tuple(vars_), r)
+    key = (tuple(vars_), ring)
     d = _domain_cache.get(key)
     if d is None:
-        d = RatFuncDomain(tuple(vars_), r)
+        d = RatFuncDomain(tuple(vars_), ring)
         _domain_cache[key] = d
     return d

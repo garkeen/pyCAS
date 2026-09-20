@@ -27,7 +27,9 @@ from fractions import Fraction as Fr
 sys.path.insert(0, ".")
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 import cas.syntax.term as T
 from cas.syntax.term import S
@@ -40,8 +42,9 @@ from cas.math.calculus.integration.verify import verify_antideriv
 
 X = S("x")
 from cas.runtime import get_runtime
-I = get_runtime().const_by_name("i").atom
-DOM = project(parse("i")).domain
+MATH = get_runtime().math         # the bench assembled its own runtime above
+I = MATH.const_by_name("i").atom
+DOM = project(MATH, parse("i")).domain
 
 
 def fail(msg, seed, *extra):
@@ -127,8 +130,8 @@ def prop_membership(rounds, rng):
             if qi_of_term(I, shape) != a:
                 fail("P40 reordered shape mismatch", i, to_str(shape), a)
         # normalization idempotence: normalizing the output again gives the same interned pointer
-        t1 = normalize(project(parse(expr)))
-        t2 = normalize(project(t1))
+        t1 = normalize(project(MATH, parse(expr)))
+        t2 = normalize(project(MATH, t1))
         if t1 is not t2:
             fail("P40 normalization is not idempotent", i, to_str(t1), to_str(t2))
         # non-members: pi+i, sin(i), a square root, one with a variable, division by zero
@@ -145,11 +148,11 @@ def prop_ladder(rounds, rng):
     for i in range(rounds):
         a = rand_qi(rng)
         # ladder order: integers -> Q -> Q(i)
-        if project(parse("3")).name != "Z":
+        if project(MATH, parse("3")).name != "Z":
             fail("P41 integer ladder", i)
-        if project(parse("1/3")).name != "Q":
+        if project(MATH, parse("1/3")).name != "Q":
             fail("P41 rational ladder", i)
-        h = project(DOM.to_term(a))
+        h = project(MATH, DOM.to_term(a))
         if a[1] == 0:
             # the pair with im=0 is a rational number: the canonical term is purely
             # rational, so the ladder correctly hits Z/Q
@@ -159,12 +162,12 @@ def prop_ladder(rounds, rng):
             fail("P41 Gaussian ladder", i, a)
         # zero channel: the folded value difference must give the exact truth value
         t = DOM.to_term(a)
-        z = zero_of(t)
+        z = zero_of(MATH, t)
         if z is not (a == (Fr(0), Fr(0))):
             fail("P41 zero test distorted", i, a, z)
-        if zero_of(parse("i*i+1")) is not True:
+        if zero_of(MATH, parse("i*i+1")) is not True:
             fail("P41 i^2+1 was not decided zero", i)
-        if zero_of(parse("(1+i)*(1-i) - 2")) is not True:
+        if zero_of(MATH, parse("(1+i)*(1-i) - 2")) is not True:
             fail("P41 (1+i)(1-i)=2 was not decided zero", i)
         # capability fields: the capability lookup that must refuse an order test
         if not DOM.is_field or DOM.is_ordered or DOM.is_euclidean:
@@ -172,8 +175,8 @@ def prop_ladder(rounds, rng):
         # integration-constant channel: integral of (a+bi) dx = (a+bi)x, checked
         # independently by the differentiation layer
         f = DOM.to_term(a)
-        F = integrate_term(f, X)
-        if verify_antideriv(F, f, X) is not True:
+        F = integrate_term(MATH, f, X)
+        if verify_antideriv(MATH, F, f, X) is not True:
             fail("P41 integration-constant verification failed", i, to_str(f), to_str(F))
 
 

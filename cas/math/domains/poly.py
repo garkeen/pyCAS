@@ -363,7 +363,7 @@ class PolyDomain(Domain):
 _domain_cache = {}
 
 
-def poly_domain(*vars_, ring=None) -> PolyDomain:
+def poly_domain(*vars_, ring) -> PolyDomain:
     """Fetch the domain object for a (variable set, coefficient ring) pair, sharing
     instances at the same level.
 
@@ -374,17 +374,16 @@ def poly_domain(*vars_, ring=None) -> PolyDomain:
     base field" and "parameterized instance", into one table. Parameterized domains
     are held by their factory caches (K(x) likewise).
 
-    The coefficient ring defaults to the **assembly-injected** base field
-    (`base.default_coeff_ring`); this module neither hardcodes `Q_RING` nor
-    bootstraps a concrete domain itself. An explicit `ring` is for the projection
-    layer choosing a coefficient domain by capability; the cache key contains the
-    ring, so a different ring is a different domain.
+    The coefficient ring is **required**: K[x] has no ambient default. The
+    projection layer picks the base field by capability and carries it in the
+    math context, so this module neither hardcodes `Q_RING` nor bootstraps a
+    concrete domain itself, and a missing ring cannot be papered over by a
+    module-level default. The cache key contains the ring, so a different ring
+    is a different domain.
     """
-    from cas.math.domains.base import default_coeff_ring
-    r = default_coeff_ring() if ring is None else ring
-    key = (tuple(vars_), r)
+    key = (tuple(vars_), ring)
     d = _domain_cache.get(key)
     if d is None:
-        d = PolyDomain(tuple(vars_), r)
+        d = PolyDomain(tuple(vars_), ring)
         _domain_cache[key] = d
     return d

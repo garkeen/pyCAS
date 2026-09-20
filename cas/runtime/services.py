@@ -9,16 +9,21 @@ workflow knows about `cas.math.decide`.
 Scope assumptions act as the decision context, so condition discharge happens in
 the **correct branch context**: assumptions made inside a branch scope reach the
 decision, rather than being global assumptions.
+
+The decision context arrives explicitly in the constructor (the assembled math
+context), so this adapter holds no ambient state either.
 """
 
 
 class ScopeServices:
     """`KernelServices` implementation that decides relative to a scope."""
 
-    def __init__(self, scopes):
+    def __init__(self, scopes, math):
         self._scopes = scopes
+        self._math = math
 
     def decide(self, proposition, scope_id):
         from cas.kernel.scope import Assumptions
         from cas.math.decide import decide
-        return decide(proposition, Assumptions.of(self._scopes, scope_id))
+        return decide(self._math, proposition,
+                      Assumptions.of(self._scopes, scope_id))

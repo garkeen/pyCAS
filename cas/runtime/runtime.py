@@ -1,105 +1,87 @@
 # -*- coding: utf-8 -*-
 """`Runtime`: the read-only query surface once assembly is complete.
 
-It exposes print names, positivity, coarse bounds, derivative templates, domain
-conditions, and the function list -- every read-only exit for math semantics.
-The only write entry is `RuntimeBuilder` (during assembly); there is no runtime
-write path.
+It composes the math context (the declaration query surface plus the
+assembly-computed configuration) with what only this layer needs: surface names
+for the parser, print names for the printer, the binder heads, the resident
+domains, and the checkers the math modules registered as factories.
 
-Consumers (parser / pprint / decide / project / rules / domcond / diff ...) receive
-`None` for an unknown name and degrade on their own -- **no semantic fallback**,
-this layer never guesses.
+Consumers (parser / pprint / decide / project / rules / domcond / diff ...)
+receive `None` for an unknown name and degrade on their own -- **no semantic
+fallback**, this layer never guesses. The declaration surface itself is reachable
+as `Runtime.math` and is passed explicitly to every algorithm that needs it, so
+no module depends on a handle that assembly fills in behind its back.
 """
 
 from cas.syntax.term import Const
-
-
-def _domain_callable(template):
-    """Domain-condition template -> callable `fn(call) -> [condition terms]`.
-
-    The template contains the `DB(0)` placeholder (the function argument slot) and
-    is instantiated through the syntax layer's `lift` -- the same de Bruijn
-    mechanism as derivative templates, not a second substitution scheme.
-    """
-    from cas.syntax.term import lift
-
-    def cond(t):
-        return [lift(template, t.args[0], 0)]
-
-    return cond
+from cas.math.context import MathContext
 
 
 class Runtime:
     """Read-only snapshot. It does not change after construction, and construction
     happens only in bootstrap."""
 
-    def __init__(self, builder):
-        self._consts = dict(builder.constants)
-        self._funcs = dict(builder.functions)
+    def __init__(self, builder, math: MathContext):
+        self._math = math
         self._aliases = dict(builder.aliases)
         self._binders = frozenset(builder.binders)
-        self._roles = dict(builder.roles)
-        self._rule_lines = tuple(builder.rule_lines)
-        self._eq_stages = tuple(builder.eq_stages)
         self._domains = tuple(builder.domains)
-        self._checkers = tuple(builder.checkers)
-        self._by_atom = {id(d.atom): d for d in self._consts.values()}
-        # Domain conditions come from each function declaration's domain template
-        # (DSL) and are instantiated on demand: the condition of f(u) is
-        # template[DB(0) := u], the same de Bruijn mechanism as derivative templates.
-        self._domain_conds = {
-            name: _domain_callable(d.domain)
-            for name, d in self._funcs.items() if d.domain is not None
-        }
+        # A checker reads declarations and therefore needs the math context, which
+        # does not exist while `install(builder)` runs; modules therefore register a
+        # factory and the context is supplied here -- the single point where
+        # checkers meet declarations.
+        self._checkers = tuple((cid, factory(math))
+                               for cid, factory in builder.checkers)
 
-    # --- constants ---
+    @property
+    def math(self) -> MathContext:
+        """The declaration query surface and the assembly configuration."""
+        return self._math
+
+    # --- constants (the context owns the data, this layer owns the surface) ---
 
     def const_by_atom(self, atom: Const):
-        return self._by_atom.get(id(atom))
+        return self._math.const_by_atom(atom)
 
     def const_by_name(self, name: str):
-        return self._consts.get(name)
+        return self._math.const_by_name(name)
 
     def is_const_name(self, name: str) -> bool:
-        return name in self._consts
+        return self._math.is_const_name(name)
 
     def const_positive(self, atom):
-        d = self.const_by_atom(atom)
-        return d.positive if d else None
+        return self._math.const_positive(atom)
 
     def const_real(self, atom):
-        d = self.const_by_atom(atom)
-        return d.real if d else None
+        return self._math.const_real(atom)
 
     def const_bounds(self, atom):
-        d = self.const_by_atom(atom)
-        return d.bounds if d else None
+        return self._math.const_bounds(atom)
 
     # --- functions ---
 
     def lookup_function(self, name: str):
-        return self._funcs.get(name)
+        return self._math.lookup_function(name)
 
     def function_deriv(self, name: str):
-        d = self._funcs.get(name)
-        return (None, "") if d is None else (d.deriv, d.deriv_note)
+        return self._math.function_deriv(name)
 
     def all_functions(self) -> tuple:
-        return tuple(self._funcs.values())
+        return self._math.all_functions()
 
     def print_name(self, head_name: str):
         """Display name: constants by internal name, functions by head name (the
         two namespaces do not overlap)."""
-        c = self._consts.get(head_name)
+        c = self._math.const_by_name(head_name)
         if c is not None:
             return c.print_name
-        d = self._funcs.get(head_name)
+        d = self._math.lookup_function(head_name)
         return d.print_name if d else None
 
     # --- domain conditions / decision stages / domains ---
 
     def lookup_domain_cond(self, name: str):
-        return self._domain_conds.get(name)
+        return self._math.lookup_domain_cond(name)
 
     def alias_head(self, surface: str):
         """Surface name -> canonical head (None when absent). Parser aliases are
@@ -118,17 +100,17 @@ class Runtime:
     def role_head(self, role: str):
         """Role -> canonical head (None when absent). Algorithms fetch by role and
         never hardcode a function name."""
-        return self._roles.get(role)
+        return self._math.role_head(role)
 
     @property
     def rules(self) -> tuple:
         """Rule DSL line texts (parsed at the consumption point in math/rules.py).
         Rules are data."""
-        return self._rule_lines
+        return self._math.rules
 
     @property
     def eq_stages(self) -> tuple:
-        return self._eq_stages
+        return self._math.eq_stages
 
     @property
     def domains(self) -> tuple:
@@ -143,11 +125,12 @@ class Runtime:
         return self._checkers
 
     def stats(self):
-        return {"constants": len(self._consts), "functions": len(self._funcs),
+        return {"constants": len(self._math.consts),
+                "functions": len(self._math.funcs),
                 "aliases": len(self._aliases), "binders": len(self._binders),
-                "rules": len(self._rule_lines),
-                "domain_conds": len(self._domain_conds),
-                "eq_stages": len(self._eq_stages),
+                "rules": len(self._math.rule_lines),
+                "domain_conds": len(self._math._domain_conds),
+                "eq_stages": len(self._math.eq_stages),
                 "domains": len(self._domains),
                 "checkers": len(self._checkers)}
 
@@ -167,10 +150,8 @@ def new_workflow(**kw):
     "which checkers exist" is read from the runtime snapshot rather than from a
     hardcoded module list here.
 
-    Assembly is guaranteed: the first call triggers `bootstrap()` if it has not
-    run yet, so constructing a workflow is a usable entry point even when the
-    caller never touched the parser (which otherwise lazily assembles on its
-    first constant lookup).
+    Assembly is guaranteed: the runtime is taken from the installed one, so
+    constructing a workflow requires an application that assembled explicitly.
     """
     from cas.runtime.dispatch import get_runtime
     rt = get_runtime()
@@ -186,5 +167,5 @@ def new_workflow(**kw):
     register_core_checkers(store)
     for checker_id, checker in rt.checkers:
         store.checkers.register(checker_id, checker)
-    return Workflow(store=store, services=ScopeServices(store.scopes),
-                    algorithms=Algorithms(), **kw)
+    return Workflow(store=store, services=ScopeServices(store.scopes, rt.math),
+                    algorithms=Algorithms(rt.math), **kw)

@@ -65,7 +65,7 @@ def test_claim_checker_rejects_non_claim_command():
     store = KernelStore()
     register_core_checkers(store)
     # wire the claim checker directly so a non-claim payload is rejected
-    store.checkers.register("assumption.entry", ClaimChecker())
+    store.checkers.register("assumption.entry", ClaimChecker(get_runtime().math))
 
     class NonClaim:
         # no registers_assumption attribute

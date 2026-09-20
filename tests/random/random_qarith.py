@@ -28,7 +28,9 @@ from cas.math.domains.poly import from_term as _poly_from_term, to_term as _poly
 from cas.math.domains.q import Q_RING
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 X, Y = S("x"), S("y")
 
@@ -112,6 +114,12 @@ def prop_fold(rounds, rng):
                 fail(f"P1 fidelity env={env}", i, t)
 
 
+def _ctx():
+    """The installed math context: the bench assembled its own runtime above."""
+    from cas.runtime import get_runtime
+    return get_runtime().math
+
+
 # ---------------------------------------------------------------------------
 # P3: interval-channel three-valued truth table
 # ---------------------------------------------------------------------------
@@ -121,7 +129,7 @@ def prop_interval(rounds, rng):
         k = rng.randint(-5, 5)
         assumptions = Assumptions().extended(mk(S("Gt"), (X, N(k))))
         for j in range(-7, 8):
-            got = decide(mk(S("Gt"), (X, N(j))), assumptions)
+            got = decide(_ctx(), mk(S("Gt"), (X, N(j))), assumptions)
             if j <= k:
                 ok = got is YES
             else:
@@ -129,8 +137,8 @@ def prop_interval(rounds, rng):
             if not ok:
                 fail(f"P3 assume x>{k}, query x>{j}: got {got}", k)
         _cond, b_assumptions, _st = branch(
-            assumptions, mk(S("Lt"), (X, N(k + 10))))[0]
-        got = decide(mk(S("Lt"), (X, N(k + 100))), b_assumptions)
+            _ctx(), assumptions, mk(S("Lt"), (X, N(k + 10))))[0]
+        got = decide(_ctx(), mk(S("Lt"), (X, N(k + 100))), b_assumptions)
         if got is not YES:
             fail(f"P3 branch frame inheritance", k)
 

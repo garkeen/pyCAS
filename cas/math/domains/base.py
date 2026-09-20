@@ -289,31 +289,3 @@ def find_domain(predicate):
     ambiguous match. Silently taking the first would hide the ambiguity.
     """
     return tuple(d for d in _DOMAINS.values() if predicate(d))
-
-
-# ---------------------------------------------------------------------------
-# The default coefficient ring for parameterized domains (the K in K[x] / K(x))
-#
-# Injected at assembly time (bootstrap -> the projection layer picks a base field
-# by capability): the domain package neither hardcodes Q_RING nor bootstraps a
-# concrete domain on import or first call. An unset ring raises, because a silent
-# default domain would turn "forgot to assemble" into a hard-to-find wrong answer.
-# ---------------------------------------------------------------------------
-
-_DEFAULT_COEFF_RING = None
-
-
-def set_default_coeff_ring(ring) -> None:
-    """Inject the default coefficient ring of K[x] / K(x) at assembly time."""
-    global _DEFAULT_COEFF_RING
-    _DEFAULT_COEFF_RING = ring
-
-
-def default_coeff_ring():
-    """Take the default coefficient ring; raises when not assembled, failing
-    loudly instead of degrading silently."""
-    if _DEFAULT_COEFF_RING is None:
-        raise RingError("default coefficient ring is not assembled: call "
-                        "bootstrap() first (the domain package never bootstraps "
-                        "a concrete domain itself)")
-    return _DEFAULT_COEFF_RING

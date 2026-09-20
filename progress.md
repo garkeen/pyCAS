@@ -15,7 +15,7 @@
 | `cas/kernel/` | `verdict`、`model`、`evidence`、`scope`、`context`、`commit`、`store`、`services`、`ids`、`mode` |
 | `cas/workflow/` | `workflow`、`command`、`artifact`、`task`、`event`、`constraint`、`branch`、`ids` |
 | `cas/math/domains/` | `base`、`z`、`q`、`qi`、`poly`、`ratfunc`、`polytools`、`linalg`、`module` |
-| `cas/math/` | `project`、`qarith`、`decide`、`diff`、`integrate`、`cad`、`realroot`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader`，以及 `base/`、`elementary/`、`calculus/`、`solving/` |
+| `cas/math/` | `context`、`project`、`qarith`、`decide`、`diff`、`integrate`、`cad`、`realroot`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader`，以及 `base/`、`elementary/`、`calculus/`、`solving/` |
 | `cas/runtime/` | `registry`（RuntimeBuilder）、`runtime`（Runtime、new_workflow）、`bootstrap`、`dispatch`、`algorithms`、`services` |
 | `cas/frontend/` | `parser`、`pprint`、`repl`；根目录 `repl.py` 是入口外壳 |
 | `cas/api.py`、`cas/errors.py` | 前端计算门面；共享异常 |
@@ -31,8 +31,9 @@
   故其中不存在 `cas.math` 导入。
 - `math/domains` 依赖 `syntax`；其余 math 模块可用 `syntax`、`kernel`、`workflow`
   与 `math/domains`。math 永不导入 `runtime`。
-- runtime 是装配者：`bootstrap()` 装入全部 math 模块并绑定只读查询面，不存在
-  import 期全局状态修改。
+- runtime 是装配者：`bootstrap()` 装入全部 math 模块，把声明查询面与装配配置
+  收进 `MathContext` 返回（不写模块句柄）；应用入口 `install(bootstrap())` 才使
+  其生效，未装配即读语义报错。import 期与装配期都不修改全局状态。
 - 前端只经 `cas/api.py` 与 `cas/runtime/dispatch.py` 触达计算，不导入
   `cas.math` 或 `cas.kernel`。
 
@@ -46,8 +47,11 @@
 | 4 | Artifact / Task / Event 三图分离 | 部分：三图与约束已有真实消费方，历史截断与 Applicability 缓存尚未建 |
 | 5 | 持久化 Scope 树取代可变 Context | 完成 |
 | 6 | math 模块归入 `cas/math`，显式 `install(builder)` 装配 | 完成 |
+| 6b | 声明查询面与装配配置显式传参（`MathContext`），取代装配期写模块句柄 | 完成 |
 
-不变量 1 / 2 / 14 / 16 / 18 已绿，另有四条依赖与引用方向门禁；无 xfail 项。
+不变量 1 / 2 / 14 / 16 / 18 已绿，另有四条依赖与引用方向门禁、两条 C3 门禁
+（math 层不得持有模块级装配状态；被删句柄不得回潮），以及数学语义 head 字面量、
+求解器内嵌验证器、声明 DSL 准入三条全库门禁；无 xfail 项。
 「红灯先挂」策略现在只适用于确有跨阶段迁移待做之处。
 
 ## 实现纪律
@@ -64,9 +68,13 @@
 - 签名 head（Plus/Times/Power、各比较、And/Or/Not、Quote/Piecewise）在算法中仍可
   分派：它们是项语言自身的结构。
 - 具体域单例改为能力查询（`find_domain`）：CAD 取唯一有序域，丢番图碎片取唯一
-  欧几里得整环，投影基域同法选取。K[x]/K(x) 的缺省系数环由装配期注入，不再由
-  域包自举。
-- 投影阶梯以 `ProjectionStage` 注册，而非写死 if 链。
+  欧几里得整环，投影基域同法选取。K[x]/K(x) 的系数环由装配期选定并随上下文传参，
+  域包不自举缺省环。
+- 声明与装配配置只有一个通道：`MathContext`（声明查询面 + `eq_stages` + 投影阶梯
+  + 系数环）作为首参数显式传给算法；`project.build_ladder` 值化产出阶梯
+  （`ProjectionStage` 是数据，不是注册项），math 层不持有任何模块级装配状态。
+- 检查器由工厂装配（`register_checker(id, factory)`，上下文在 runtime 组装完成后
+  注入），新增 math 模块不必再改第二处硬编码清单。
 - 积分验证器住在 `math/calculus/integration/verify.py`，与求解器分家；门禁拒绝任何
   checker 导入自己的求解器模块。
 - 工作流步骤记录命名为 `WorkflowStep`，与内核 `Step` 区分。
@@ -95,10 +103,12 @@
 - 语言表面全声明化：无隐式大小写折叠；binder 由 DSL `binder <Head>` 声明并经注入通道交给
   语法层；`src` 打印形态有往返清单测试。
 - 分段提升有预算（`BudgetExceeded` 诚实拒答）与相邻同值支合并。
-- 投影元由域自身消费（`element_is_zero`/`element_to_term`），投影层不嗅表示；序比较按
-  值域证据分派（非实常数上诚实拒答）。
+- 投影元由域自身消费（`element_is_zero`/`element_to_term`），投影层不嗅表示；多项式视图
+  同为能力查询（`element_poly` 消失视图 / `element_as_poly` 元素本身），消费方不按类型
+  识别表示；序比较按值域证据分派（非实常数上诚实拒答）。
 
-验证：`tests/`（unit/contract/integration/regression）通过；`tests/random/` 10 个台架通过（各台架自证若干条数学性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
+验证：`pytest tests` 285 项全绿（275 项确定性钉子 + 10 个随机台架，各台架自证
+若干条数学性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
 
 ## 未实现（下一步）
 
@@ -117,12 +127,9 @@
 
 ## 已知缺陷（已定位，未修）
 
-- 打印机的数值因子合并不完整：含多个数值因子的 `Times` 只保留最后一个，故
-  `to_str(parse("-2*x")) == "2*x"`（丢符号）、`to_str(parse("x^-2")) == "x^(2)"`。
-  交互路径不受影响（REPL 先 `fold`），程序化打印会丢信息；修法是把数值因子按精确有理数
-  收敛后再渲染（既有 `3/4` 形态已是这套约定）。
-- `cas/math/tactics.py::_lin_core` 仍对投影元做 `isinstance(RatFunc/Poly)` 分派：新表示的
-  多项式域会被它拒答（诚实拒答，不致命）。修法是给域协议加「单变量多项式视图」查询。
+无。曾记录的两条均已修复并有钉子：打印机的 `Times` 数值因子按精确有理数收敛后再
+渲染（`src` 往返清单测试覆盖），`tactics._lin_core` 改为消费域能力查询
+（`element_poly` / `element_as_poly`），不再按 Python 表示分派。
 
 ## 语言与引用纪律
 

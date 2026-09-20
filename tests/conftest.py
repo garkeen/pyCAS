@@ -13,8 +13,9 @@ The directory is the source of truth; the marker mirrors it.
 import pytest
 
 from cas.runtime import bootstrap
+from cas.runtime.dispatch import install
 
-bootstrap()
+install(bootstrap())
 
 _KIND_BY_DIR = {
     "unit": "unit",

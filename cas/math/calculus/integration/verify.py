@@ -27,7 +27,7 @@ from cas.math.diff import differentiate
 from cas.math.domains.qarith import fold
 
 
-def _judge_zero_diff(dF, f):
+def _judge_zero_diff(ctx, dF, f):
     """Whether `dF - f` vanishes identically. **Three-valued**: True proves
     vanishing, False proves non-vanishing, None is undecided.
 
@@ -39,7 +39,7 @@ def _judge_zero_diff(dF, f):
     diff = fold(T.plus(dF, T.neg(f)))
     if diff is T.ZERO:
         return True
-    z = zero_of(diff)
+    z = zero_of(ctx, diff)
     if z is True:
         return True
     if z is False:
@@ -48,7 +48,7 @@ def _judge_zero_diff(dF, f):
                         key=lambda s: s.name))
     if not allv:
         return None
-    r = ratfunc_domain(*allv).equal(dF, f)
+    r = ratfunc_domain(*allv, ring=ctx.coeff_ring).equal(dF, f)
     if r is True:
         return True
     if r is False:
@@ -56,7 +56,7 @@ def _judge_zero_diff(dF, f):
     return None                               # non-member (transcendental): outside the vanishing channel
 
 
-def verify_antideriv(F, f, x: Sym):
+def verify_antideriv(ctx, F, f, x: Sym):
     """Independently verify that `F` is an antiderivative of `f`, with no
     dependence on the integrator.
 
@@ -76,10 +76,10 @@ def verify_antideriv(F, f, x: Sym):
         for (vf, cf), (vF, cF) in zip(bf, bF):
             if cf is not cF:
                 return False
-            r = _judge_zero_diff(differentiate(vF, x), vf)
+            r = _judge_zero_diff(ctx, differentiate(ctx, vF, x), vf)
             if r is False:
                 return False
             if r is None:
                 unknown = True
         return None if unknown else True
-    return _judge_zero_diff(differentiate(F, x), f)
+    return _judge_zero_diff(ctx, differentiate(ctx, F, x), f)

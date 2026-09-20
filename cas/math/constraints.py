@@ -28,7 +28,7 @@ from cas.math.domains.qarith import fold
 from cas.math.project import project, zero_of, normalize as proj_normalize
 
 
-def _nf(t):
+def _nf(ctx, t):
     """Coefficient normalization: on a projection hit take the domain normal
     form (canonical rational function over K(x)); otherwise fall back to literal
     folding.
@@ -36,7 +36,7 @@ def _nf(t):
     Folding literals alone is not enough: `x - x` and `x^2 - x^2 + 1` only
     collapse through the domain normal form.
     """
-    hit = project(t)
+    hit = project(ctx, t)
     if hit is not None:
         return proj_normalize(hit)
     return fold(t)
@@ -50,31 +50,36 @@ class TermField:
     K(x1..xn), with division represented as `b^-1`. The adapter does no
     mathematics itself; it only exposes the existing explicit algebraic
     operations (domain normal form plus vanishing) as the few operations the
-    eliminator needs.
+    eliminator needs. The math context is held on the instance because the
+    elimination protocol invokes these methods with ring elements only, so no
+    argument could carry it.
     """
 
     is_field = True
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def from_int(self, n):
         return T.N(n)
 
     def is_zero(self, t):
-        return zero_of(t) is True
+        return zero_of(self.ctx, t) is True
 
     def add(self, a, b):
-        return _nf(T.plus(a, b))
+        return _nf(self.ctx, T.plus(a, b))
 
     def sub(self, a, b):
-        return _nf(T.plus(a, T.neg(b)))
+        return _nf(self.ctx, T.plus(a, T.neg(b)))
 
     def mul(self, a, b):
-        return _nf(T.times(a, b))
+        return _nf(self.ctx, T.times(a, b))
 
     def neg(self, a):
-        return _nf(T.neg(a))
+        return _nf(self.ctx, T.neg(a))
 
     def div_exact(self, a, b):
-        return _nf(T.times(a, T.pw(b, T.MONE)))
+        return _nf(self.ctx, T.times(a, T.pw(b, T.MONE)))
 
 
 def _decompose(t, unknowns):
@@ -139,7 +144,7 @@ def is_linear(e, unknowns):
     return _decompose(e, unknowns) is not None
 
 
-def _constrained_relation(rel, unknowns):
+def _constrained_relation(ctx, rel, unknowns):
     """An equation relation to a coefficient row plus right-hand side; returns
     None when it is nonlinear or not an equation.
 
@@ -159,12 +164,12 @@ def _constrained_relation(rel, unknowns):
     # Coefficients must be normalized before reaching the eliminator:
     # decomposition can produce unfolded forms like `0 + 1`, which would defeat
     # pivot zero-testing and division in Gaussian elimination.
-    row = [_nf(T.plus(cl.get(u, T.ZERO), T.neg(cr.get(u, T.ZERO))))
+    row = [_nf(ctx, T.plus(cl.get(u, T.ZERO), T.neg(cr.get(u, T.ZERO))))
            for u in unknowns]
-    return row, _nf(T.plus(c0r, T.neg(c0l)))    # sum(c_i u_i) = c0r - c0l
+    return row, _nf(ctx, T.plus(c0r, T.neg(c0l)))    # sum(c_i u_i) = c0r - c0l
 
 
-def solve_linear_constraints(relations, unknowns):
+def solve_linear_constraints(ctx, relations, unknowns):
     """Find an assignment satisfying all relations.
 
     Returns `(valuation, complete)`:
@@ -177,14 +182,14 @@ def solve_linear_constraints(relations, unknowns):
     unknowns = tuple(unknowns)
     rows, b = [], []
     for rel in relations:
-        got = _constrained_relation(rel, unknowns)
+        got = _constrained_relation(ctx, rel, unknowns)
         if got is None:
             return None
         row, rhs = got
         rows.append(row)
-        b.append(_nf(rhs))
+        b.append(_nf(ctx, rhs))
 
-    ring = TermField()
+    ring = TermField(ctx)
     sol = solve_system(ring, rows, b)
     if sol is None:
         return None

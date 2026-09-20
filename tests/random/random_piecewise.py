@@ -34,7 +34,9 @@ import random
 sys.path.insert(0, ".")
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 from cas.syntax import term as T
 from cas.syntax.term import S, N, mk, plus, times, pw
@@ -48,6 +50,12 @@ from cas.math.piecewise import (piecewise, branches, project_pw, select, coverag
                            conflicts, lift, is_piecewise)
 
 X = S("x")
+
+
+def _ctx():
+    """The installed math context: the bench assembled its own runtime above."""
+    from cas.runtime import get_runtime
+    return get_runtime().math
 
 
 def fail(msg, seed, *extra):
@@ -115,11 +123,11 @@ def prop_projection(rounds, rng):
         picks = [rng.choice(het) for _ in range(nb)]
         conds = [rand_cmp(rng) for _ in range(nb - 1)] + [T.TRUE]
         t = piecewise(list(zip(picks, conds)))
-        proj = project_pw(t)
+        proj = project_pw(_ctx(), t)
         if len(proj) != len(branches(t)):
             fail("P21 branch count mismatch", i)
         for k, (v, c, hit) in enumerate(proj):
-            solo = project(v)                       # independent projection
+            solo = project(_ctx(), v)               # independent projection
             a = hit.name if hit else None
             b = solo.name if solo else None
             if a != b:
@@ -142,7 +150,7 @@ def prop_select(rounds, rng):
         t = rand_pw(rng, vals)
         for a in range(-7, 8):
             want = ref_first(t, a)
-            st, payload = select(t, at_ctx(a))
+            st, payload = select(_ctx(), t, at_ctx(a))
             if want is None:
                 if st == "value":
                     fail("P22 false hit with no branch holding", i, f"a={a}", to_str(t))
@@ -154,7 +162,7 @@ def prop_select(rounds, rng):
                 fail("P22 wrong branch selected", i, f"a={a} want={to_str(want)} "
                      f"got={to_str(payload)} t={to_str(t)}")
         # the final TRUE branch always covers, so an empty context must not falsely report a gap (NO)
-        if coverage(t, Assumptions()) is NO:
+        if coverage(_ctx(), t, Assumptions()) is NO:
             fail("P22 coverage misjudged", i, to_str(t))
 
 
@@ -187,9 +195,9 @@ def prop_lift(rounds, rng):
         # pointwise agreement: at x = a, select(lift(plus,p,q)) == plus(select p, select q)
         for a in range(-7, 8):
             ctx = at_ctx(a)
-            _, vp = select(p, ctx)
-            _, vq = select(q, ctx)
-            st_m, vm = select(m, ctx)
+            _, vp = select(_ctx(), p, ctx)
+            _, vq = select(_ctx(), q, ctx)
+            st_m, vm = select(_ctx(), m, ctx)
             if st_m != "value":
                 fail("P23 lifted container did not hit", i, f"a={a}")
             if plus(vp, vq) is not vm:
@@ -222,9 +230,9 @@ def prop_lift_merge(rounds, rng):
         # the merged container still takes the pointwise product value
         for a in range(-7, 8):
             ctx = at_ctx(a)
-            _, vp = select(p, ctx)
-            _, vq = select(q, ctx)
-            st_m, vm = select(m, ctx)
+            _, vp = select(_ctx(), p, ctx)
+            _, vq = select(_ctx(), q, ctx)
+            st_m, vm = select(_ctx(), m, ctx)
             if st_m != "value":
                 fail("P33 merged container did not hit", i, f"a={a}")
             if plus(vp, vq) is not vm:
@@ -247,12 +255,12 @@ def prop_guards(rounds, rng):
         for k in range(nb):
             pairs.append((rng.choice(bodies), conds[k]))
         t = piecewise(pairs)
-        got = dom_condition(t)
+        got = dom_condition(_ctx(), t)
         # expected: each branch body's own constraints guarded as not-cond or g (a TRUE
         # branch needs no guard)
         want = []
         for v, c in branches(t):
-            solo = dom_condition(v)
+            solo = dom_condition(_ctx(), v)
             neg = T.FALSE if c is T.TRUE else mk(S("Not"), (c,))
             for g in solo:
                 want.append(mk(S("Or"), (neg, g)))
@@ -264,12 +272,12 @@ def prop_guards(rounds, rng):
         # a provably unequal constant overlap -> NO
         disjoint = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                               (N(2), mk(S("Lt"), (X, N(0))))])
-        for _a, _b, verdict in conflicts(disjoint, Assumptions()):
+        for _a, _b, verdict in conflicts(_ctx(), disjoint, Assumptions()):
             if verdict is not YES:
                 fail("P24 empty overlap misjudged", i, verdict)
         clash = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                            (N(2), mk(S("Gt"), (X, N(0))))])
-        vs = [verdict for _a, _b, verdict in conflicts(clash, Assumptions())]
+        vs = [verdict for _a, _b, verdict in conflicts(_ctx(), clash, Assumptions())]
         if not any(v is NO for v in vs):
             fail("P24 constant conflict not detected", i, vs)
 

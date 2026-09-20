@@ -37,19 +37,26 @@ class RuntimeBuilder:
         self.rule_lines: list[str] = []    # rule lines (DSL text; math/rules.py parses)
         self.eq_stages: list = []          # (name, run)
         self.domains: list = []            # resident base field builders (ladder order)
-        self.checkers: list = []           # (checker_id, checker) installed by math modules
+        self.checkers: list = []           # (checker_id, factory) registered by math modules
 
     # --- checkers (a math module's install registers its own checkers here,
     #     so adding a module never requires editing a second hardcoded list) ---
 
-    def register_checker(self, checker_id: str, checker) -> None:
-        """Register one checker. A duplicate id raises, matching the
-        duplicate-reject policy of every other registry here: a collision
-        between two modules' checker ids is a decision that must surface, not
-        one to resolve silently by registration order."""
+    def register_checker(self, checker_id: str, factory) -> None:
+        """Register one checker as a **factory** `(math_context) -> checker`.
+
+        A factory rather than a ready instance, because every checker reads
+        declarations and therefore needs the math context -- and the context does
+        not exist while `install(builder)` runs (assembly order is: every module
+        installs, then the context is assembled from what the builder holds).
+
+        A duplicate id raises, matching the duplicate-reject policy of every other
+        registry here: a collision between two modules' checker ids is a decision
+        that must surface, not one to resolve silently by registration order.
+        """
         if any(cid == checker_id for cid, _ in self.checkers):
             raise ValueError(f"checker already registered: {checker_id}")
-        self.checkers.append((checker_id, checker))
+        self.checkers.append((checker_id, factory))
 
     # --- constants ---
 

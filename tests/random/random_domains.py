@@ -29,7 +29,9 @@ from cas.math.domains.q import Q_RING
 from cas.math.domains import poly_domain, ratfunc_domain
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 X, Y = S("x"), S("y")
 
@@ -93,7 +95,7 @@ def prop_poly_roundtrip(rounds, rng):
 
 def prop_equal(rounds, rng):
     """P6 factored vs expanded equality; P7 inequality refutation."""
-    P = poly_domain(X)
+    P = poly_domain(X, ring=Q_RING)
     for i in range(rounds):
         a = rand_poly_uni(rng)
         b = rand_poly_uni(rng)
@@ -117,7 +119,7 @@ def prop_equal(rounds, rng):
 # ---------------------------------------------------------------------------
 
 def prop_ratfunc(rounds, rng):
-    RF = ratfunc_domain(X)
+    RF = ratfunc_domain(X, ring=Q_RING)
     for i in range(rounds):
         a = rand_poly_uni(rng)
         b = rand_poly_uni(rng)

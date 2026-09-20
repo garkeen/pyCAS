@@ -29,7 +29,8 @@ Commands:
 Run: python repl.py
 """
 
-from cas.runtime import get_runtime, new_workflow
+from cas.runtime import bootstrap, get_runtime, new_workflow
+from cas.runtime.dispatch import install
 from cas.syntax import term as T
 from cas.syntax.term import S, Sym, is_eq
 from cas.api import (CadError, DiffError, IntegrateError, NO, TacticsError, YES,
@@ -60,8 +61,9 @@ def _iso_str(cell):
 
 class REPL:
     def __init__(self):
-        # explicit assembly: the application starts assembly, and import time
-        # mutates no global state
+        # the entry point installed the runtime; reaching a REPL before that is
+        # a wiring error, and this read reports it instead of assembling behind
+        # the caller's back
         get_runtime()
         self.wf = new_workflow()
         self.current = None
@@ -493,6 +495,9 @@ class REPL:
 
 
 def main():
+    # explicit assembly: the entry point installs the runtime, and import time
+    # mutates no global state
+    install(bootstrap())
     REPL().run()
 
 

@@ -31,7 +31,9 @@ sys.path.insert(0, ".")
 
 from cas.runtime import new_workflow
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 import cas.syntax.term as T
 from cas.syntax.term import S
@@ -47,6 +49,12 @@ from cas.math.piecewise import piecewise, fold_nested, branches
 from cas.workflow.command import Claim, Solve, Diff
 
 X = S("x")
+
+
+def _ctx():
+    """The installed math context: the bench assembled its own runtime above."""
+    from cas.runtime import get_runtime
+    return get_runtime().math
 
 
 def fail(msg, seed, *extra):
@@ -85,7 +93,7 @@ def prop_piecewise_diff(rounds, rng):
         p2, _, _ = rand_lin(rng)
         pw = piecewise([(p1, parse(f"x <= {r}")), (p2, parse(f"x > {r}"))])
         try:
-            deriv, bounds = differentiate_piecewise(pw, X)
+            deriv, bounds = differentiate_piecewise(_ctx(), pw, X)
         except (DiffError, CadError) as e:
             fail("P36 piecewise differentiation refused", i, to_str(pw), e)
         bs = branches(fold_nested(deriv))
@@ -132,7 +140,7 @@ def prop_piecewise_solve(rounds, rng):
         pw = piecewise([(t1, parse(f"x <= {r}")), (t2, parse(f"x > {r}"))])
         target = Fr(rng.randint(-6, 6), 1)
         try:
-            res = solve_piecewise(pw, X, T.N(target))
+            res = solve_piecewise(_ctx(), pw, X, T.N(target))
         except TacticsError as e:
             fail("P37 a linear piecewise was refused", i, to_str(pw), e)
         got = sorted(T.num_val(s) for s in res["points"])
@@ -145,14 +153,14 @@ def prop_piecewise_solve(rounds, rng):
         # constant branch identity -> region solution
         c_pw = piecewise([(T.N(target), parse(f"x < {r}")),
                           (T.N(target + 1), parse(f"x >= {r}"))])
-        res2 = solve_piecewise(c_pw, X, T.N(target))
+        res2 = solve_piecewise(_ctx(), c_pw, X, T.N(target))
         if len(res2["regions"]) != 1 or res2["points"]:
             fail("P37 region solution missing", i, res2)
         # nonlinear branch -> honest refusal
         nl = piecewise([(parse("x*x"), parse(f"x <= {r}")),
                         (t2, parse(f"x > {r}"))])
         try:
-            solve_piecewise(nl, X, T.N(target))
+            solve_piecewise(_ctx(), nl, X, T.N(target))
             fail("P37 a nonlinear branch was not refused", i)
         except TacticsError:
             pass
@@ -173,7 +181,7 @@ def prop_piecewise_solve(rounds, rng):
         pw3 = piecewise([(T.N(k1), parse(f"x <= {r}")),
                          (fold(T.plus(T.times(T.N(a2v), X), T.N(b2v))),
                           parse(f"x > {r}"))])
-        res3 = solve_piecewise(pw3, X, tgt)
+        res3 = solve_piecewise(_ctx(), pw3, X, tgt)
         want3 = []
         x1 = (k1 - b) / m                  # k1 = m*x + b
         if x1 <= r:
@@ -189,7 +197,7 @@ def prop_piecewise_solve(rounds, rng):
         # after projection) -> region solution
         id_pw = piecewise([(tgt, parse(f"x <= {r}")),
                            (T.N(k1), parse(f"x > {r}"))])
-        res4 = solve_piecewise(id_pw, X, tgt)
+        res4 = solve_piecewise(_ctx(), id_pw, X, tgt)
         want4 = [x1] if x1 > r else []
         got4 = sorted(T.num_val(s) for s in res4["points"])
         if len(res4["regions"]) != 1 or got4 != sorted(want4) \
@@ -199,7 +207,7 @@ def prop_piecewise_solve(rounds, rng):
         # -> no contribution
         con_pw = piecewise([(fold(T.plus(tgt, T.N(1))), parse(f"x <= {r}")),
                             (T.N(k1), parse(f"x > {r}"))])
-        res5 = solve_piecewise(con_pw, X, tgt)
+        res5 = solve_piecewise(_ctx(), con_pw, X, tgt)
         want5 = [x1] if x1 > r else []
         got5 = sorted(T.num_val(s) for s in res5["points"])
         if got5 != sorted(want5) or res5["regions"] or res5["conditional"]:
@@ -239,7 +247,7 @@ def prop_workflow(rounds, rng):
         # piecewise differentiation step: the per-branch domain cross-check must pass
         s1 = wf.add(piecewise([(t1, parse(f"x <= {r}")),
                                (t2, parse(f"x > {r}"))]), Claim())
-        d, _b = differentiate_piecewise(s1.content, X)
+        d, _b = differentiate_piecewise(_ctx(), s1.content, X)
         s2 = wf.add(d, Diff(pred=s1.id, var=X))
         if s2.status == "refused":
             fail("P38 piecewise Diff was refused by the cross-check", i, to_str(s1.content),

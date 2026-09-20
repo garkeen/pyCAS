@@ -17,7 +17,7 @@ from cas.math.project import project, zero_of, normalize as proj_normalize
 from cas.math.domains.qarith import fold
 
 
-def normal_form(t):
+def normal_form(ctx, t):
     """The domain normal form of a term or equation: on a projection hit, the
     domain normal form; otherwise the input unchanged.
 
@@ -28,17 +28,17 @@ def normal_form(t):
     """
     if T.is_eq(t):
         lhs, rhs = t.args
-        hit = project(T.plus(lhs, T.neg(rhs)))
+        hit = project(ctx, T.plus(lhs, T.neg(rhs)))
         if hit is not None:
             return T.eq(proj_normalize(hit), T.ZERO)
         return t
-    hit = project(t)
+    hit = project(ctx, t)
     if hit is not None:
         return proj_normalize(hit)
     return t
 
 
-def equal(a, b) -> bool:
+def equal(ctx, a, b) -> bool:
     """Equality of equations: the difference of the two sides is decided to
     vanish through projection (K(x) contains K[x] contains Q).
 
@@ -54,7 +54,7 @@ def equal(a, b) -> bool:
     la, ra = a.args
     lb, rb = b.args
     d = T.plus(T.plus(la, T.neg(ra)), T.neg(T.plus(lb, T.neg(rb))))
-    z = zero_of(d)
+    z = zero_of(ctx, d)
     if z is True:
         return True
     if z is False:

@@ -12,11 +12,12 @@ had no execution point. This file pins the behaviour once it is wired up.
 import pytest
 
 from cas.runtime import bootstrap, new_workflow
+from cas.runtime.dispatch import install
 from cas.errors import ScopeError
 from cas.syntax import term as T
 from cas.syntax.term import S
 
-bootstrap()
+install(bootstrap())
 
 X = S("x")
 U = S("u")

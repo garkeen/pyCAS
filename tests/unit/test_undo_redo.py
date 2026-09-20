@@ -11,11 +11,12 @@ discards the redo branch.
 """
 
 from cas.runtime import bootstrap, new_workflow
+from cas.runtime.dispatch import install
 from cas.frontend.parser import parse
 from cas.syntax.term import S
 from cas.workflow.command import Claim, Diff
 
-bootstrap()
+install(bootstrap())
 
 X = S("x")
 

@@ -10,7 +10,8 @@ rational-function projection) cannot silently diverge again.
 
 import pytest
 
-from cas.runtime import bootstrap
+from cas.runtime import bootstrap, get_runtime
+from cas.runtime.dispatch import install
 from cas.frontend.parser import parse
 from cas.runtime.dispatch import domain_normal_form
 from cas.math.domains.qarith import fold, eval_exact, EvalNumError
@@ -21,7 +22,12 @@ from cas.math.domains.z import Z_RING, Z_DOMAIN
 from cas.math.domains.q import Q_RING
 from cas.syntax import term as T
 
-bootstrap()
+install(bootstrap())
+
+
+def _ctx():
+    """The installed math context: the projection channels read it explicitly."""
+    return get_runtime().math
 
 
 def _x():
@@ -75,8 +81,8 @@ def test_ratfunc_projection_refuses_zero_to_zero():
 
 def test_projection_misses_zero_to_zero():
     # no projection hit: honestly undecided, never silently 1.
-    assert project(parse("0^0")) is None
-    assert project(parse("x + 0^0")) is None
+    assert project(_ctx(), parse("0^0")) is None
+    assert project(_ctx(), parse("x + 0^0")) is None
 
 
 def test_normal_form_leaves_zero_to_zero_in_place():
@@ -93,4 +99,4 @@ def test_zero_test_is_undecided_for_zero_to_zero_identity():
     # x + 0^0 is NOT provably equal to x + 1: zero_of is None (undecided),
     # never True. This is the regression the fix prevents.
     diff = T.plus(parse("x + 0^0"), T.neg(parse("x + 1")))
-    assert zero_of(diff) is None
+    assert zero_of(_ctx(), diff) is None

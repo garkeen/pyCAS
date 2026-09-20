@@ -5,7 +5,10 @@ verifiers and were moved to the mathematical side, because they verify
 mathematics and living in the workflow would create a reverse dependency from
 the workflow onto the math layer.
 
-Checker protocol: `check(proposal, context, services) -> CheckResult`. Two
+Checker protocol: `check(proposal, context, services) -> CheckResult`. The math
+context is injected through `__init__` and kept as `self.ctx` (the kernel knows
+no math context; a checker is registered as a factory `(math_context) -> checker`).
+Two
 invariant rules:
 
 · the *instance* of the conclusion must be re-checked, never trust what the
@@ -37,11 +40,11 @@ def _is_piecewise(t) -> bool:
     return is_piecewise(t)
 
 
-def _ok(proposal, context, extra=()):
+def _ok(ctx, proposal, context, extra=()):
     """Accept, reporting the direct conditions: the content's definedness
     constraints plus any type-specific conditions."""
     content = proposal.conclusions[0]
-    reqs = tuple(dom_condition(content)) + tuple(extra)
+    reqs = tuple(dom_condition(ctx, content)) + tuple(extra)
     return Accepted(direct_requirements=reqs, reads=context.read_set())
 
 
@@ -100,6 +103,9 @@ class ClaimChecker:
     """
     id = "assumption.entry"
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
         if bad is not None:
@@ -108,7 +114,7 @@ class ClaimChecker:
         if not getattr(cmd, "registers_assumption", False):
             return Rejected(Reason.FRAGMENT,
                             "assumption.entry requires a claim command")
-        return _ok(proposal, context)
+        return _ok(self.ctx, proposal, context)
 
 
 class BothSidesChecker:
@@ -117,6 +123,9 @@ class BothSidesChecker:
     decide and discharge; the checker declares the condition rather than
     deciding it."""
     id = "both_sides.operate"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -140,18 +149,21 @@ class BothSidesChecker:
                        T.times(rhs, T.pw(d.operand, T.N(-1))))
         else:
             return Rejected(Reason.FRAGMENT, f"unknown operation: {op}")
-        if not equal(content, exp):
+        if not equal(self.ctx, content, exp):
             return Rejected(Reason.FRAGMENT, "content does not match the operation on the predecessor")
         extra = ()
         if op in ("mul", "div"):
             extra = (T.mk(S("Ne"), (d.operand, T.ZERO)),)
-        return _ok(proposal, context, extra)
+        return _ok(self.ctx, proposal, context, extra)
 
 
 class NormalizeChecker:
     """Rewrite to the domain normal form: the content equals the predecessor's
     domain normal form, with no rule search involved."""
     id = "equality.normalize"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -160,8 +172,8 @@ class NormalizeChecker:
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
-        if equal(content, normal_form(pred)):
-            return _ok(proposal, context)
+        if equal(self.ctx, content, normal_form(self.ctx, pred)):
+            return _ok(self.ctx, proposal, context)
         return Rejected(Reason.FRAGMENT, "content is not the domain normal form of the predecessor")
 
 
@@ -182,6 +194,9 @@ class RuleInstanceChecker:
     """
     id = "rule.instance"
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
         if bad is not None:
@@ -191,7 +206,7 @@ class RuleInstanceChecker:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         d = proposal.evidence.payload
         from cas.math.rules import declared_ruleset
-        rule = declared_ruleset().rules.get(d.rule)
+        rule = declared_ruleset(self.ctx).rules.get(d.rule)
         if rule is None:
             return Rejected(Reason.FRAGMENT, f"unknown rule: {d.rule}")
         if d.substitution is None:
@@ -207,13 +222,16 @@ class RuleInstanceChecker:
         inst = P.instantiate(rule.template, d.substitution)
         if T.replace_at(pred, path, inst) is not content:
             return Rejected(Reason.FRAGMENT, "content is not the result of that instance")
-        return _ok(proposal, context, _rule_conditions(rule, d.substitution))
+        return _ok(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
 
 
 class SubstChecker:
     """Substitution: replace a variable in the predecessor with a value, a purely
     syntactic operation."""
     id = "substitute"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -224,8 +242,9 @@ class SubstChecker:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         d = proposal.evidence.payload
         substituted = T.subst(pred, {d.var: d.value})
-        if equal(content, substituted) or equal(content, normal_form(substituted)):
-            return _ok(proposal, context)
+        if (equal(self.ctx, content, substituted)
+                or equal(self.ctx, content, normal_form(self.ctx, substituted))):
+            return _ok(self.ctx, proposal, context)
         return Rejected(Reason.FRAGMENT, "content does not match the substitution result")
 
 
@@ -233,6 +252,9 @@ class SplitChecker:
     """Conditional branch split: content is equivalent to
     predecessor and (not) condition."""
     id = "branch.split"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -246,10 +268,10 @@ class SplitChecker:
         branch = T.not_(cond) if d.negate else cond
         expected = T.mk(S("And"), (pred, branch))
         if content is expected:
-            return _ok(proposal, context)
+            return _ok(self.ctx, proposal, context)
         v = context.decide(T.mk(S("Eq"), (content, expected)))
         if v.is_yes():
-            return _ok(proposal, context)
+            return _ok(self.ctx, proposal, context)
         if v.is_no():
             return Rejected(Reason.FRAGMENT, "content is not the conjunction of the predecessor and the branch condition")
         return UnknownResult(v.reason, "branch equivalence undecided")
@@ -284,6 +306,9 @@ class BranchCoverageChecker:
     rather than pretending.
     """
     id = "branch.coverage"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
 
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
@@ -320,6 +345,9 @@ class BranchMergeChecker:
     """
     id = "branch.merge"
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
         if bad is not None:
@@ -336,7 +364,7 @@ class BranchMergeChecker:
             return Rejected(Reason.FRAGMENT, "not every branch answered the same proposition")
         promoted = tuple(T.implies(c, g)
                          for c, gs in zip(d.conditions, d.guards) for g in gs)
-        return Accepted(direct_requirements=tuple(dom_condition(content)) + promoted,
+        return Accepted(direct_requirements=tuple(dom_condition(self.ctx, content)) + promoted,
                         reads=context.read_set())
 
 
@@ -358,6 +386,9 @@ class ConstraintSatisfiedChecker:
     """
     id = "constraint.satisfied"
 
+    def __init__(self, ctx):
+        self.ctx = ctx
+
     def check(self, proposal, context, services):
         content, bad = _one_conclusion(proposal)
         if bad is not None:
@@ -369,7 +400,7 @@ class ConstraintSatisfiedChecker:
             return Rejected(Reason.FRAGMENT, "content is not this constraint's instance under that valuation")
         v = context.decide(inst)
         if v.is_yes():
-            return _ok(proposal, context)
+            return _ok(self.ctx, proposal, context)
         if v.is_no():
             return Rejected(Reason.FRAGMENT, "the constraint does not hold under this valuation")
         return UnknownResult(v.reason, "constraint instance vanishing undecided")
@@ -385,4 +416,4 @@ def register(builder) -> None:
     """Register this module's checkers with the assembly builder. Called from
     `base.install` during bootstrap; import never mutates global state."""
     for cls in CHECKERS:
-        builder.register_checker(cls.id, cls())
+        builder.register_checker(cls.id, cls)

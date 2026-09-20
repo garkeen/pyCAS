@@ -27,7 +27,9 @@ from fractions import Fraction as Fr
 sys.path.insert(0, ".")
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 from cas.syntax.term import S
 from cas.frontend.parser import parse

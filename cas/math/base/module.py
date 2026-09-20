@@ -16,11 +16,11 @@ from cas.syntax import term as T
 from cas.syntax.term import S
 
 
-def _ledger_decide(r, a, b, assumptions):
+def _ledger_decide(ctx, r, a, b, assumptions):
     """Hand `Eq(r, 0)` to the decision pipeline; return None if undecided so a
     later stage can take over."""
     from cas.math.decide import decide
-    d = decide(T.mk(S("Eq"), (r, T.ZERO)), assumptions)
+    d = decide(ctx, T.mk(S("Eq"), (r, T.ZERO)), assumptions)
     return None if d.is_unknown() else d
 
 

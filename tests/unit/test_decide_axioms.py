@@ -26,11 +26,17 @@ from cas.kernel.verdict import YES, NO
 def no_interval(monkeypatch):
     """Disable the interval channel: return None (yield) rather than Unknown, which
     would short-circuit later channels."""
-    monkeypatch.setattr(D, "_cmp_interval", lambda op, a, b, ctx: None)
+    monkeypatch.setattr(D, "_cmp_interval",
+                        lambda ctx, op, a, b, assumptions: None)
+
+
+def _ctx():
+    from cas.runtime import get_runtime
+    return get_runtime().math
 
 
 def _decide(src):
-    return D.decide(parse(src), Assumptions())
+    return D.decide(_ctx(), parse(src), Assumptions())
 
 
 @pytest.mark.parametrize("src,want", [
@@ -63,7 +69,7 @@ def test_axiom_layer_agrees_with_interval_channel():
     with_axioms = []
     saved = D._cmp_interval
     try:
-        D._cmp_interval = lambda op, a, b, ctx: None
+        D._cmp_interval = lambda ctx, op, a, b, assumptions: None
         with_axioms = [_decide(s) for s in cases]
     finally:
         D._cmp_interval = saved
@@ -75,7 +81,7 @@ def test_axiom_layer_incomplete_returns_undecided():
     everything else must stay undecided."""
     saved = D._cmp_interval
     try:
-        D._cmp_interval = lambda op, a, b, ctx: None
+        D._cmp_interval = lambda ctx, op, a, b, assumptions: None
         for src in ["x > 0", "sin(x) < -2", "pi + gamma > 4"]:
             assert _decide(src).is_unknown(), f"{src} should not be decided by the axiom layer"
     finally:
@@ -91,7 +97,7 @@ def test_axiom_layer_consumes_runtime_declarations():
     lo, hi = d.bounds
     saved = D._cmp_interval
     try:
-        D._cmp_interval = lambda op, a, b, ctx: None
+        D._cmp_interval = lambda ctx, op, a, b, assumptions: None
         assert _decide(f"gamma > {lo}") is YES
         assert _decide(f"gamma < {lo}") is NO
         assert _decide(f"gamma > {hi}") is NO

@@ -10,6 +10,11 @@ folded into one "don't know".
 Atom channels, in order: pointer/numeric -> direct ledger lookup -> projection zero
 test (domain normal form) -> interval propagation -> order-chain inference -> derived
 rule layer -> declaration lemmas (constant coarse bounds, function range bounds).
+
+Every entry point takes the math context as its first parameter: the declaration
+surface (constants, functions, domain conditions) and the identity-decision stages
+travel there, so this module keeps no handle of its own and importing it has zero
+side effects.
 """
 
 from collections import deque
@@ -21,39 +26,10 @@ from cas.kernel.verdict import (Verdict, Reason, YES, NO, unknown,
                           and3, or3, not3)
 from cas.kernel.scope import Assumptions
 
-_DECLS = None
-
-
-def bind_runtime(rt):
-    """Injected by `bootstrap()` to provide the declaration query surface.
-
-    The dependency direction is **runtime -> math** (bootstrap pulls every math
-    module) and never the reverse: a math module must not import runtime. The
-    declaration surface is therefore injected at assembly time instead of fetched by
-    the module itself.
-
-    A query before injection **raises** rather than returning None: a silent None
-    would turn "assembly was forgotten" into a hard-to-find wrong answer, whereas
-    "no such name" is a different case that still returns None for the caller to
-    degrade.
-    """
-    global _DECLS
-    _DECLS = rt
-
-
-def _R():
-    if _DECLS is None:
-        raise RuntimeError(
-            "not assembled: call cas.runtime.bootstrap() first")
-    return _DECLS
-
-
 
 def _A(a):
     """None is treated as the empty assumption set (older call sites pass None)."""
     return a if a is not None else Assumptions()
-
-
 
 
 _NEG = {
@@ -69,27 +45,27 @@ _NEG = {
 _ORD = ("Lt", "Le", "Gt", "Ge")
 
 
-def _nonreal_constant(t):
+def _nonreal_constant(ctx, t):
     """A constant declared not real that occurs in `t`, or None.
 
     An order comparison is read over an ordered domain. The declared constants
-    are the only value-domain information the decision layer has (it receives
-    assumptions, not scope declarations), so a constant whose declaration says
-    "not real" is the evidence that the ordered reading does not apply: the
-    sign rules for powers and sums are ordered-field facts, and `i * i >= 0` is
-    not a proposition about an ordered field.
+    are the only value-domain information the decision layer has (it reads the
+    declaration context and the assumption ledger, never a kernel scope), so a
+    constant whose declaration says "not real" is the evidence that the ordered
+    reading does not apply: the sign rules for powers and sums are ordered-field
+    facts, and `i * i >= 0` is not a proposition about an ordered field.
     """
     if isinstance(t, T.Const):
-        return t if _R().const_real(t) is False else None
+        return t if ctx.const_real(t) is False else None
     if isinstance(t, T.Expr):
         for a in t.args:
-            bad = _nonreal_constant(a)
+            bad = _nonreal_constant(ctx, a)
             if bad is not None:
                 return bad
     return None
 
 
-def _ordered_fact(f):
+def _ordered_fact(ctx, f):
     """Whether an assumption can be consumed as ordered information.
 
     The comparison gate in `decide` withholds answering an order comparison whose
@@ -101,10 +77,10 @@ def _ordered_fact(f):
     applies. The real-valued path is untouched: `_nonreal_constant` returns None
     for every fact without a declared-not-real constant.
     """
-    return _nonreal_constant(f) is None
+    return _nonreal_constant(ctx, f) is None
 
 
-def negate(f):
+def negate(ctx, f):
     """Strong negation of a comparison predicate (not (a>b) == a<=b and so on);
     everything else goes through a syntactic Not.
 
@@ -114,7 +90,7 @@ def negate(f):
     than answer the flipped predicate.
     """
     if isinstance(f, T.Expr) and f.head.name in _NEG:
-        if f.head.name in _ORD and _nonreal_constant(f) is not None:
+        if f.head.name in _ORD and _nonreal_constant(ctx, f) is not None:
             return T.mk(S("Not"), (f,))
         return T.mk(S(_NEG[f.head.name]), f.args)
     if isinstance(f, T.Expr) and f.head.name == "Not":
@@ -154,14 +130,14 @@ def _same(op, a, b):
     return NO
 
 
-def _poly_eq_check(a, b):
+def _poly_eq_check(ctx, a, b):
     """Projection zero-test channel: when a-b falls inside Q/K[x]/K(x), the domain
     normal form decides it completely."""
     d = _qfold(T.plus(a, T.neg(b)))
     if d is T.ZERO:
         return YES
     from cas.math.project import zero_of
-    r = zero_of(d)
+    r = zero_of(ctx, d)
     if r is True:
         return YES
     if r is False:
@@ -169,11 +145,11 @@ def _poly_eq_check(a, b):
     return None
 
 
-def _facts_lookup(fact, assumptions):
+def _facts_lookup(ctx, fact, assumptions):
     for f in assumptions:
         if f is fact:
             return YES
-        if f is negate(fact):
+        if f is negate(ctx, fact):
             return NO
         if isinstance(f, T.Expr) and isinstance(fact, T.Expr):
             if f.head.name in _CMP_INV and fact.head.name in _CMP_INV:
@@ -186,7 +162,7 @@ def _facts_lookup(fact, assumptions):
     return None
 
 
-def _chain_query(op, a, b, assumptions):
+def _chain_query(ctx, op, a, b, assumptions):
     """Order-chain BFS: ledger inequalities become edges and the transitive closure
     answers queries of the form a<b.
 
@@ -204,7 +180,7 @@ def _chain_query(op, a, b, assumptions):
         want = (b, a)
     for f in assumptions:
         if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge") \
-                and _ordered_fact(f):
+                and _ordered_fact(ctx, f):
             opf = f.head.name
             u, v = f.args
             if opf in ("Gt", "Ge"):
@@ -231,7 +207,7 @@ def _chain_query(op, a, b, assumptions):
     return None
 
 
-def _interval(t, assumptions, seen=None, depth=0):
+def _interval(ctx, t, assumptions, seen=None, depth=0):
     """Numeric interval propagation: (lo, hi, lo_strict, hi_strict) with either
     endpoint possibly None (unbounded).
 
@@ -247,7 +223,7 @@ def _interval(t, assumptions, seen=None, depth=0):
     if T.is_num(t):
         v = T.num_val(t)
         return (v, v, False, False)
-    lb = _R().const_bounds(t)
+    lb = ctx.const_bounds(t)
     if lb is not None:
         return (Fr(lb[0]), Fr(lb[1]), True, True)
     if depth > 8:
@@ -278,7 +254,7 @@ def _interval(t, assumptions, seen=None, depth=0):
         # Ordered information from an assumption carrying a constant declared not
         # real is not consumed (neither as a bound nor as an equality that would
         # bound through substitution): the ordered reading does not apply there.
-        if not _ordered_fact(f):
+        if not _ordered_fact(ctx, f):
             continue
         if n in ("Lt", "Le", "Gt", "Ge"):
             u, v = f.args
@@ -314,7 +290,7 @@ def _interval(t, assumptions, seen=None, depth=0):
                 else:
                     # variable equality x=y: x and y share a value, so interval and
                     # strictness pass through transparently
-                    iv = _interval(o, assumptions, seen, depth + 1)
+                    iv = _interval(ctx, o, assumptions, seen, depth + 1)
                     if iv is not None:
                         tighten(*iv)
     if is_int:
@@ -331,7 +307,7 @@ def _interval(t, assumptions, seen=None, depth=0):
     if isinstance(t, T.Expr):
         n = t.head.name
         if n == "Plus":
-            ivs = [_interval(a, assumptions, seen, depth + 1) for a in t.args]
+            ivs = [_interval(ctx, a, assumptions, seen, depth + 1) for a in t.args]
             if all(iv is not None for iv in ivs):
                 slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
                 shi = sum(iv[1] for iv in ivs) if all(iv[1] is not None for iv in ivs) else None
@@ -345,7 +321,7 @@ def _interval(t, assumptions, seen=None, depth=0):
                 c = Fr(1)
                 for nn in nums:
                     c *= T.num_val(nn)
-                iv = _interval(rest[0], assumptions, seen, depth + 1)
+                iv = _interval(ctx, rest[0], assumptions, seen, depth + 1)
                 if iv is not None:
                     if c > 0:
                         tighten(
@@ -362,7 +338,7 @@ def _interval(t, assumptions, seen=None, depth=0):
         else:
             # declared function range bound: endpoints are attained (lo <= f <= hi),
             # so strictness is false
-            bd = _func_bound(n)
+            bd = _func_bound(ctx, n)
             if bd is not None:
                 tighten(bd[0], False, bd[1], False)
     if lo is None and hi is None:
@@ -370,14 +346,14 @@ def _interval(t, assumptions, seen=None, depth=0):
     return (lo, hi, los, his)
 
 
-def _cmp_interval(op, a, b, assumptions):
+def _cmp_interval(ctx, op, a, b, assumptions):
     """Reduce a op b to an interval comparison of d = a - b against 0 (d first folded
     over Q literals)."""
     d = _qfold(T.plus(a, T.neg(b)))
     if op in ("Eq", "Ne"):
         if d is T.ZERO:
             return YES if op == "Eq" else NO
-        iv = _interval(d, assumptions)
+        iv = _interval(ctx, d, assumptions)
         if iv is not None:
             lo, hi, _, _ = iv
             away = (lo is not None and lo > 0) or (hi is not None and hi < 0)
@@ -386,7 +362,7 @@ def _cmp_interval(op, a, b, assumptions):
         return None
     if d is T.ZERO:
         return YES if op in ("Le", "Ge") else NO
-    iv = _interval(d, assumptions)
+    iv = _interval(ctx, d, assumptions)
     if iv is None:
         return None
     lo, hi, los, his = iv
@@ -426,13 +402,13 @@ def _cmp_interval(op, a, b, assumptions):
 # Symbolic structure lemmas
 # ---------------------------------------------------------------------------
 
-def _func_bound(name):
+def _func_bound(ctx, name):
     """Declared function range bound: returns (lo|None, hi|None) or None."""
-    d = _R().lookup_function(name)
+    d = ctx.lookup_function(name)
     return d.bound if d is not None else None
 
 
-def _nonneg_zero_arg(t):
+def _nonneg_zero_arg(ctx, t):
     """For t = g(u) where g is declared "nonnegative with lower bound 0 and
     g(u)=0 iff u=0" (absolute-value / norm family), return u.
 
@@ -441,7 +417,7 @@ def _nonneg_zero_arg(t):
     if not isinstance(t, T.Expr) or not isinstance(t.head, T.Sym) \
             or len(t.args) != 1:
         return None
-    d = _R().lookup_function(t.head.name)
+    d = ctx.lookup_function(t.head.name)
     if d is None or not d.zero_iff_arg_zero:
         return None
     bd = d.bound
@@ -450,12 +426,12 @@ def _nonneg_zero_arg(t):
     return t.args[0]
 
 
-def _nneg(t, assumptions):
+def _nneg(ctx, t, assumptions):
     """Nonnegativity structure decision: True/False/None (reads structure and ledger
     only, never calls back into decide)."""
     if T.is_num(t):
         return T.sign_num(t) >= 0
-    if isinstance(t, T.Const) and _R().const_positive(t) is True:
+    if isinstance(t, T.Const) and ctx.const_positive(t) is True:
         return True
     if isinstance(t, T.Expr):
         name = t.head.name
@@ -466,10 +442,10 @@ def _nneg(t, assumptions):
             if (
                 isinstance(e, T.Rat)
                 and e.f.denominator % 2 == 1
-                and _pos(b, assumptions) is True
+                and _pos(ctx, b, assumptions) is True
             ):
                 return True
-        bd = _func_bound(name)
+        bd = _func_bound(ctx, name)
         if bd is not None and bd[0] is not None and bd[0] >= 0:
             return True
     if assumptions is not None:
@@ -483,11 +459,11 @@ def _nneg(t, assumptions):
     return None
 
 
-def _pos(t, assumptions):
+def _pos(ctx, t, assumptions):
     """Positivity structure decision: True/False/None."""
     if T.is_num(t):
         return T.sign_num(t) > 0
-    if isinstance(t, T.Const) and _R().const_positive(t) is True:
+    if isinstance(t, T.Const) and ctx.const_positive(t) is True:
         return True
     if assumptions is not None:
         for f in assumptions:
@@ -503,8 +479,6 @@ def _pos(t, assumptions):
 _MAX_DEPTH = 6
 
 
-
-
 def _is_cmp(f):
     return isinstance(f, T.Expr) and f.head.name in _CMP
 
@@ -513,9 +487,9 @@ def _is_ord(f):
     return isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge")
 
 
-def _zero_cmp_of(a, assumptions, q, op):
-    nneg = _nneg(a, assumptions)
-    pos = _pos(a, assumptions)
+def _zero_cmp_of(ctx, a, assumptions, q, op):
+    nneg = _nneg(ctx, a, assumptions)
+    pos = _pos(ctx, a, assumptions)
     if op == "Gt":
         if pos is True:
             return YES
@@ -570,7 +544,7 @@ def _rule_cmp_via_eq(f, assumptions, q):
     return None
 
 
-def _sign_of_term(t, assumptions, q):
+def _sign_of_term(ctx, t, assumptions, q):
     if T.is_num(t):
         s = T.sign_num(t)
         if s > 0:
@@ -578,7 +552,7 @@ def _sign_of_term(t, assumptions, q):
         if s < 0:
             return -1
         return 0
-    if isinstance(t, T.Const) and _R().const_positive(t) is True:
+    if isinstance(t, T.Const) and ctx.const_positive(t) is True:
         return 1
     r = q(T.mk(S("Gt"), (t, T.ZERO)))
     if r is YES:
@@ -595,18 +569,18 @@ def _sign_of_term(t, assumptions, q):
     return None
 
 
-def _rule_sign_atom(f, assumptions, q):
-    return _zero_cmp_of(f.args[0], assumptions, q, f.head.name)
+def _rule_sign_atom(ctx, f, assumptions, q):
+    return _zero_cmp_of(ctx, f.args[0], assumptions, q, f.head.name)
 
 
-def _rule_sign_times(f, assumptions, q):
+def _rule_sign_times(ctx, f, assumptions, q):
     op = f.head.name
     a = f.args[0]
     s_zero = False
     s_nn = False
     neg_count = 0
     for fac in a.args:
-        s = _sign_of_term(fac, assumptions, q)
+        s = _sign_of_term(ctx, fac, assumptions, q)
         if s is None:
             return None
         if s == 0:
@@ -660,13 +634,15 @@ def _rule_sign_even_power(f, assumptions, q):
     return None
 
 
-def _rule_sign_nonneg_zero(f, assumptions, q):
+def _rule_sign_nonneg_zero(ctx, f, assumptions, q):
     """Sign of g(u) against 0 where g is declared nonnegative with g(u)=0 iff u=0
     (absolute-value / norm family): g>=0 always true and g<0 always false, while
     g>0 iff u!=0 and g<=0 iff u=0. The decision rests on the declaration, not the
-    name."""
+    name. Returns None when the argument carries no declaration of that shape."""
     op = f.head.name
-    u = _nonneg_zero_arg(f.args[0])
+    u = _nonneg_zero_arg(ctx, f.args[0])
+    if u is None:
+        return None
     if op == "Ge":
         return YES
     if op == "Lt":
@@ -792,46 +768,52 @@ def _rule_cmp_flip(f, assumptions, q):
     return q(T.mk(S(flip[op]), (b, a)))
 
 
+def _ctx_free(fn):
+    """Lift a derive rule that reads no declarations to the table's `fn(ctx, ...)`
+    call protocol, so every `_RULES` entry has the same call shape. A rule that
+    reads declarations takes the context itself as its first parameter and appears
+    in the table unwrapped."""
+    return lambda ctx, f, assumptions, q: fn(f, assumptions, q)
+
+
 # The derive rules are an explicit data table, not import-time self-registration:
 # the (name, applies, fn) triples are listed once here, after the functions are
-# defined, so the table is data rather than a side effect of decoration. This is
-# the intra-module pipeline table; the cross-module eq_stages channel is the one
-# that must be assembled explicitly by bootstrap (it carries plugins from other
-# modules), and these two are deliberately different mechanisms.
+# defined, so the table is data rather than a side effect of decoration. The call
+# protocol is `applies(f)` to select an entry and `fn(ctx, f, assumptions, q)` to
+# derive a conclusion (None lets the next entry continue). This is the intra-module
+# pipeline table; the cross-module eq_stages channel is the one that must be
+# assembled explicitly by bootstrap (it carries plugins from other modules), and
+# these two are deliberately different mechanisms.
 _RULES = (
-    ("ne-from-ord", lambda f: f.head.name == "Ne", _rule_ne_from_ord),
-    ("cmp-via-eq", lambda f: _is_ord(f), _rule_cmp_via_eq),
+    ("ne-from-ord", lambda f: f.head.name == "Ne", _ctx_free(_rule_ne_from_ord)),
+    ("cmp-via-eq", lambda f: _is_ord(f), _ctx_free(_rule_cmp_via_eq)),
     ("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_atom),
     ("sign-times", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_sign_times),
-    ("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0, _rule_sign_even_power),
-    ("sign-nonneg-zero", lambda f: _is_ord(f) and f.args[1] is T.ZERO and _nonneg_zero_arg(f.args[0]) is not None, _rule_sign_nonneg_zero),
-    ("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1, _rule_sign_odd_power),
-    ("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus", _rule_sign_sum),
-    ("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_eq_times_zero),
-    ("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]), _rule_sign_num),
-    ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _rule_eq_num),
-    ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _rule_cmp_flip),
+    ("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0, _ctx_free(_rule_sign_even_power)),
+    ("sign-nonneg-zero", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_nonneg_zero),
+    ("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1, _ctx_free(_rule_sign_odd_power)),
+    ("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus", _ctx_free(_rule_sign_sum)),
+    ("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _ctx_free(_rule_eq_times_zero)),
+    ("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]), _ctx_free(_rule_sign_num)),
+    ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _ctx_free(_rule_eq_num)),
+    ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _ctx_free(_rule_cmp_flip)),
 )
-def _derive_layer(fact, assumptions, depth):
-    q = lambda f: decide(f, assumptions, depth + 1)
+def _derive_layer(ctx, fact, assumptions, depth):
+    q = lambda f: decide(ctx, f, assumptions, depth + 1)
     for name, applies, fn in _RULES:
         if applies(fact):
-            r = fn(fact, assumptions, q)
+            r = fn(ctx, fact, assumptions, q)
             if r is not None:
                 return r
     return None
 
 
-
-
-
-
-def _axiom_constants(fact, assumptions):
+def _axiom_constants(ctx, fact, assumptions):
     """Constant coarse-bound lemma (from the declaration's const_bounds data)."""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
-    bounds = _R().const_bounds(a)
+    bounds = ctx.const_bounds(a)
     if bounds is None or not T.is_num(b):
         return None
     lo, hi = bounds
@@ -850,7 +832,7 @@ def _axiom_constants(fact, assumptions):
     return None
 
 
-def _axiom_function_bounds(fact, assumptions):
+def _axiom_function_bounds(ctx, fact, assumptions):
     """Function range-bound lemma (from the FunctionDecl.bound declaration).
 
     The |f|-style bounds are left to the interval channel; this handles the direct
@@ -861,7 +843,7 @@ def _axiom_function_bounds(fact, assumptions):
     a, b = fact.args
     if not (isinstance(a, T.Expr) and isinstance(a.head, T.Sym)) or not T.is_num(b):
         return None
-    d = _R().lookup_function(a.head.name)
+    d = ctx.lookup_function(a.head.name)
     if d is None or d.bound is None:
         return None
     lo, hi = d.bound
@@ -895,7 +877,7 @@ def _axiom_function_bounds(fact, assumptions):
 # Same as _RULES: explicit data, built after the functions are defined, not a
 # decorator side effect. These are the declaration-bound fallback lemmas.
 _AXIOM_CHECKS = (_axiom_constants, _axiom_function_bounds)
-def _family_cmp(fact, assumptions, depth):
+def _family_cmp(ctx, fact, assumptions, depth):
     op = fact.head.name
     a, b = fact.args
     if op in ("Eq", "Ne"):
@@ -905,14 +887,14 @@ def _family_cmp(fact, assumptions, depth):
         r = _cmp_numeric(op, a, b)
         if r is not None:
             return r
-        r = _facts_lookup(fact, assumptions)
+        r = _facts_lookup(ctx, fact, assumptions)
         if r is not None:
             return r
         if op == "Eq":
-            r = _poly_eq_check(a, b)
+            r = _poly_eq_check(ctx, a, b)
             if r is not None:
                 return r
-        r = _cmp_interval(op, a, b, assumptions)
+        r = _cmp_interval(ctx, op, a, b, assumptions)
         if r is not None:
             return r
     else:
@@ -922,16 +904,16 @@ def _family_cmp(fact, assumptions, depth):
         r = _same(op, a, b)
         if r is not None:
             return r
-        r = _facts_lookup(fact, assumptions)
+        r = _facts_lookup(ctx, fact, assumptions)
         if r is not None:
             return r
-        r = _cmp_interval(op, a, b, assumptions)
+        r = _cmp_interval(ctx, op, a, b, assumptions)
         if r is not None:
             return r
-        r = _chain_query(op, a, b, assumptions)
+        r = _chain_query(ctx, op, a, b, assumptions)
         if r is not None:
             return r
-    r = _derive_layer(fact, assumptions, depth)
+    r = _derive_layer(ctx, fact, assumptions, depth)
     if r is not None:
         return r
     # The axiom layer (declaration bound data) is a **fallback**, not dead code: it
@@ -943,7 +925,7 @@ def _family_cmp(fact, assumptions, depth):
     # single consumption path. The relationship is pinned by
     # tests/test_decide_axioms.py.
     for ax in _AXIOM_CHECKS:
-        r = ax(fact, assumptions)
+        r = ax(ctx, fact, assumptions)
         if r is not None:
             return r
     return unknown()
@@ -957,7 +939,7 @@ def _contains(t, pat):
     return False
 
 
-def _eq_subst(fact, assumptions, depth):
+def _eq_subst(ctx, fact, assumptions, depth):
     """Ledger equality substitution: substitute each Eq(u,v) from the ledger into the
     queried fact in both directions and decide again.
 
@@ -977,13 +959,13 @@ def _eq_subst(fact, assumptions, depth):
                 nb = T.subst(b, {pat: rep})
                 if na is a and nb is b:
                     continue
-                r = decide(T.mk(S("Eq"), (na, nb)), assumptions, depth + 1)
+                r = decide(ctx, T.mk(S("Eq"), (na, nb)), assumptions, depth + 1)
                 if not r.is_unknown():
                     return r
     return None
 
 
-def decide(fact, assumptions, _depth=0) -> Verdict:
+def decide(ctx, fact, assumptions, _depth=0) -> Verdict:
     assumptions = _A(assumptions)
     if _depth > _MAX_DEPTH:
         return unknown(Reason.BUDGET)
@@ -999,73 +981,60 @@ def decide(fact, assumptions, _depth=0) -> Verdict:
                 # declared not real is evidence that no such reading applies.
                 # Answering regardless is how `i^2 >= 0` came out YES: the sign
                 # rules for powers and sums are ordered-field facts.
-                if _nonreal_constant(fact) is not None:
+                if _nonreal_constant(ctx, fact) is not None:
                     return unknown(Reason.FRAGMENT)
             if name == "Eq":
-                r = _eq_subst(fact, assumptions, _depth)
+                r = _eq_subst(ctx, fact, assumptions, _depth)
                 if r is not None:
                     return r
-            return _family_cmp(fact, assumptions, _depth)
+            return _family_cmp(ctx, fact, assumptions, _depth)
         if name == "And":
             r = YES
             for a in fact.args:
-                r = and3(r, decide(a, assumptions, _depth))
+                r = and3(r, decide(ctx, a, assumptions, _depth))
                 if r is NO:
                     return r
             return r
         if name == "Or":
             r = NO
             for a in fact.args:
-                r = or3(r, decide(a, assumptions, _depth))
+                r = or3(r, decide(ctx, a, assumptions, _depth))
                 if r is YES:
                     return r
             return r
         if name == "Not":
-            return not3(decide(fact.args[0], assumptions, _depth))
+            return not3(decide(ctx, fact.args[0], assumptions, _depth))
     return unknown()
 
 
-def satisfiable(constraints, assumptions) -> Verdict:
+def satisfiable(ctx, constraints, assumptions) -> Verdict:
     assumptions = _A(assumptions)
     for i, c in enumerate(constraints):
         tmp = assumptions.extended(*[d for j, d in enumerate(constraints) if j != i])
-        if decide(c, tmp) is NO or decide(negate(c), tmp) is YES:
+        if decide(ctx, c, tmp) is NO or decide(ctx, negate(ctx, c), tmp) is YES:
             return NO
     return YES if not constraints else unknown()
 
 
-def domain_ok(fact, assumptions) -> Verdict:
+def domain_ok(ctx, fact, assumptions) -> Verdict:
     from cas.math.domcond import dom_condition
 
-    return satisfiable(dom_condition(fact), assumptions)
+    return satisfiable(ctx, dom_condition(ctx, fact), assumptions)
 
 
-def contradicted(fact, assumptions) -> bool:
-    return decide(fact, assumptions) is NO or decide(negate(fact), assumptions) is YES
+def contradicted(ctx, fact, assumptions) -> bool:
+    return decide(ctx, fact, assumptions) is NO or decide(ctx, negate(ctx, fact), assumptions) is YES
 
 
-# Identity-stage registry: pipeline dispatch is declaration data rather than
-# hardcoding. Stage contract: run(r, a, b, assumptions) -> Verdict conclusion, or
+# Identity stages: pipeline dispatch is declaration data rather than hardcoding.
+# The stages travel in the math context (declared by each module's `install(builder)`
+# and assembled by bootstrap), so this module keeps no stage table of its own and
+# importing it has zero side effects: without a context no decision can be started
+# at all. Stage contract: run(ctx, r, a, b, assumptions) -> Verdict conclusion, or
 # None to let the next stage continue. An exception inside a stage means the stage
 # has a bug and propagates, since failure is part of the return value and must not
 # be swallowed; a stage that genuinely has no conclusion returns None explicitly.
-_EQ_STAGES = []
-
-
-def bind_eq_stages(stages):
-    """Install the identity stages explicitly from `bootstrap()`.
-
-    This replaces **import-time self-registration**: the module used to call
-    `register_eq_stage("ledger_decide", ...)` on import. The stages are now declared
-    by `install(builder)` in `cas/math/base/module.py` and bound by bootstrap, so
-    importing this module has zero side effects (the stage table stays empty and
-    decisions stop at "undecided").
-    """
-    global _EQ_STAGES
-    _EQ_STAGES = list(stages)
-
-
-def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
+def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
     """The unified identity pipeline: pointer -> numeric constants -> normal-form
     zero test -> registered stage sequence -> honest UNKNOWN.
 
@@ -1083,18 +1052,18 @@ def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
         return YES
     if T.is_num(a) and T.is_num(b):
         return YES if T.num_val(a) == T.num_val(b) else NO
-    r = autosimplify(T.plus(a, T.neg(b)), budget)
+    r = autosimplify(ctx, T.plus(a, T.neg(b)), budget)
     if r is T.ZERO:
         return YES
     from cas.math.project import zero_of
-    z = zero_of(r)
+    z = zero_of(ctx, r)
     if z is True:
         return YES
     if z is False:
         return NO
     assumptions = _A(assumptions)
-    for _name, run in _EQ_STAGES:
-        d = run(r, a, b, assumptions)
+    for _name, run in ctx.eq_stages:
+        d = run(ctx, r, a, b, assumptions)
         if d is not None and not d.is_unknown():
             return d
     return unknown()
@@ -1119,7 +1088,7 @@ def equivalent(a, b, assumptions=None, budget=100000) -> Verdict:
 # the kernel Context/Branch, which is a legal math -> kernel dependency.
 # ---------------------------------------------------------------------------
 
-def extend_checked(assumptions, fact):
+def extend_checked(ctx, assumptions, fact):
     """Return the **extended assumption set** after the domain check and the
     contradiction check both pass (immutable, the original object is not modified).
 
@@ -1128,14 +1097,14 @@ def extend_checked(assumptions, fact):
     """
     from cas.kernel.verdict import NO, YES
     assumptions = _A(assumptions)
-    if domain_ok(fact, assumptions) is NO:
+    if domain_ok(ctx, fact, assumptions) is NO:
         return NO, None
-    if contradicted(fact, assumptions):
+    if contradicted(ctx, fact, assumptions):
         return NO, None
     return YES, assumptions.extended(fact)
 
 
-def branch(assumptions, *conds):
+def branch(ctx, assumptions, *conds):
     """Split one branch per condition:
     `[(condition, that branch's assumption set | None, "open"|"empty")]`.
 
@@ -1147,6 +1116,6 @@ def branch(assumptions, *conds):
     assumptions = _A(assumptions)
     out = []
     for c in conds:
-        st, ext = extend_checked(assumptions, c)
+        st, ext = extend_checked(ctx, assumptions, c)
         out.append((c, ext, "empty" if st is NO else "open"))
     return out

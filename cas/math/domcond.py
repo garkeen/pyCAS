@@ -5,7 +5,8 @@ base for a negative integer power, a nonnegative base for a rational power with
 an even denominator, ...) and live in the kernel. Constraints of function heads
 are declared by the `domain` line of the declaration DSL (carried into the
 runtime with the function declaration) and queried at run time, so semantics
-belong to declarations and structure belongs to the kernel without mixing.
+belong to declarations and structure belongs to the kernel without mixing. The
+declaration lookup arrives as the explicit first argument, a `MathContext`.
 
 Domain conditions have exactly one registration channel: the declaration DSL.
 There is no second injection point on the kernel side, because two channels
@@ -16,31 +17,6 @@ takes effect.
 from cas.syntax import term as T
 from cas.syntax.term import S, Int, Rat
 
-_DECLS = None
-
-
-def bind_runtime(rt):
-    """Inject the declaration query surface at assembly time.
-
-    The dependency direction is runtime -> math and the reverse is forbidden, so
-    a math module must not import runtime; declarations are injected during
-    assembly instead.
-
-    Querying before injection raises rather than returning None: a silent None
-    would turn "forgot to assemble" into a hard-to-find wrong answer, whereas
-    "no such name" is a different case that still returns None.
-    """
-    global _DECLS
-    _DECLS = rt
-
-
-def _R():
-    if _DECLS is None:
-        raise RuntimeError(
-            "not assembled: call cas.runtime.bootstrap() first")
-    return _DECLS
-
-
 
 def _guarded(cond, guards):
     """Conditionalize a branch guard: `not cond or guard`. The branch is only
@@ -49,7 +25,7 @@ def _guarded(cond, guards):
     return [T.mk(S("Or"), (neg, g)) for g in guards]
 
 
-def dom_condition(t, out=None):
+def dom_condition(ctx, t, out=None):
     """Recursively extract domain constraints, structurally, without deciding
     values.
 
@@ -59,7 +35,7 @@ def dom_condition(t, out=None):
     a != 0 when it is odd. A Piecewise contributes each branch's body
     constraints, conditionalized as `not cond or constraint`; the disjunction
     across branches is handled by the decision layer. Every other function head
-    goes through the declaration channel.
+    goes through the declaration channel of the given context.
     """
     if out is None:
         out = []
@@ -82,15 +58,15 @@ def dom_condition(t, out=None):
             for i in range(0, len(a), 2):
                 v, c = a[i], a[i + 1]
                 body = []
-                dom_condition(v, body)          # the branch body's own constraints, nested included
+                dom_condition(ctx, v, body)     # the branch body's own constraints, nested included
                 out.extend(_guarded(c, body))
             return out                          # conditions are propositions, not value guards
         else:
-            fn = _R().lookup_domain_cond(name)
+            fn = ctx.lookup_domain_cond(name)
             if fn is not None:
                 out.extend(fn(t))
         for x in t.args:
-            dom_condition(x, out)
+            dom_condition(ctx, x, out)
     elif isinstance(t, T.Bound):
-        dom_condition(t.body, out)
+        dom_condition(ctx, t.body, out)
     return out

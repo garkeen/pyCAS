@@ -20,31 +20,6 @@ from cas.syntax import pattern as P
 from cas.syntax.match import identity_element, matches
 from cas.kernel.verdict import YES, NO, unknown
 
-_DECLS = None
-
-
-def bind_runtime(rt):
-    """Inject the declaration query surface at assembly time.
-
-    The dependency direction is runtime -> math and the reverse is forbidden, so
-    a math module must not import runtime; declarations are injected during
-    assembly instead.
-
-    Querying before injection raises rather than returning None: a silent None
-    would turn "forgot to assemble" into a hard-to-find wrong answer, whereas
-    "no such name" is a different case that still returns None.
-    """
-    global _DECLS
-    _DECLS = rt
-
-
-def _R():
-    if _DECLS is None:
-        raise RuntimeError(
-            "not assembled: call cas.runtime.bootstrap() first")
-    return _DECLS
-
-
 
 @dataclass(frozen=True)
 class Rule:
@@ -178,21 +153,22 @@ def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
     return ApplyResult(False, None, expr, None, rule.id)
 
 
+# Memoization of the parsed rule set, keyed by the identity of the context it was
+# parsed from. A cache, not configuration: it holds nothing assembly wrote into it.
 _LIB_RULESETS = {}
 
 
-def declared_ruleset() -> RuleSet:
-    """Build the rule set from run-time declarations, cached per runtime.
+def declared_ruleset(ctx) -> RuleSet:
+    """Build the rule set from the given declarations, cached per context.
 
-    The cache is keyed by the identity of the assembled runtime, so a re-assembly
-    that changes the rule text (a second bootstrap with different declarations)
-    reparses rather than serving a stale ruleset. The declarations carry rule-line
-    strings as pure data and DSL parsing happens at this consumption point, so a
-    math module never imports this module back. A corrupt rule line is a
-    declaration defect: the parse error propagates and is never swallowed.
+    The cache is keyed by the identity of the context, so a re-assembly that changes
+    the rule text (a second bootstrap with different declarations) reparses rather
+    than serving a stale ruleset. The declarations carry rule-line strings as pure
+    data and DSL parsing happens at this consumption point, so a math module never
+    imports this module back. A corrupt rule line is a declaration defect: the parse
+    error propagates and is never swallowed.
     """
-    rt = _R()
-    rs = _LIB_RULESETS.get(id(rt))
+    rs = _LIB_RULESETS.get(id(ctx))
     if rs is None:
         # Deferred import: this is the back edge of the
         # cas.math.rules <-> cas.math.loader cycle. loader imports Rule at its
@@ -201,7 +177,7 @@ def declared_ruleset() -> RuleSet:
         # the rule-line DSL is a Rule and the assembly point is this module.
         from cas.math.loader import parse_rule_line
         rs = RuleSet()
-        for line in rt.rules:
+        for line in ctx.rules:
             rs.add(parse_rule_line(line))
-        _LIB_RULESETS[id(rt)] = rs
+        _LIB_RULESETS[id(ctx)] = rs
     return rs

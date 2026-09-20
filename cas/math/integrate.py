@@ -56,7 +56,7 @@ def poly_antideriv(ring, p: Poly, var_i: int) -> Poly:
     return _norm(ring, p.vars, d)
 
 
-def integrate_term(f, x: Sym):
+def integrate_term(ctx, f, x: Sym):
     """The integral of f with respect to x: direct integration on the polynomial
     fragment, branch by branch for a piecewise integrand, and an honest refusal
     otherwise.
@@ -66,8 +66,8 @@ def integrate_term(f, x: Sym):
     independent, see the piecewise case."""
     from cas.math.piecewise import is_piecewise
     if is_piecewise(f):
-        return integrate_piecewise_indefinite(f, x)
-    hit = project(f)
+        return integrate_piecewise_indefinite(ctx, f, x)
+    hit = project(ctx, f)
     if hit is None:
         raise IntegrateError("integrand is outside the rational/polynomial/"
                              "rational-function domains", Reason.FRAGMENT)
@@ -95,7 +95,7 @@ def integrate_term(f, x: Sym):
                          "not built", Reason.FRAGMENT)
 
 
-def integrate_piecewise_indefinite(f, x: Sym):
+def integrate_piecewise_indefinite(ctx, f, x: Sym):
     """Integrate a piecewise integrand branch by branch, leaving conditions
     unchanged.
 
@@ -105,7 +105,7 @@ def integrate_piecewise_indefinite(f, x: Sym):
     that differentiating each branch restores the integrand."""
     from cas.math.piecewise import fold_nested, branches, piecewise
     f = fold_nested(f)
-    return piecewise([(integrate_term(v, x), c) for v, c in branches(f)])
+    return piecewise([(integrate_term(ctx, v, x), c) for v, c in branches(f)])
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ def _rat_iso(iso, tag):
                          f"in an algebraic extension ({tag})", Reason.FRAGMENT)
 
 
-def definite_integrate(f, x: Sym, a, b):
+def definite_integrate(ctx, f, x: Sym, a, b):
     """The definite integral of f with respect to x from a to b, with a and b
     rational terms. Never integrates across a gap as if it were 0, and refuses
     when the integrand is undefined."""
@@ -152,12 +152,12 @@ def definite_integrate(f, x: Sym, a, b):
         return T.ZERO                          # integral from a to a is 0
     from cas.math.piecewise import is_piecewise
     if is_piecewise(f):
-        return _definite_piecewise(f, x, ar, br)
-    F = integrate_term(f, x)
+        return _definite_piecewise(ctx, f, x, ar, br)
+    F = integrate_term(ctx, f, x)
     return _ftc(F, x, ar, br)
 
 
-def _definite_piecewise(f, x: Sym, a, b):
+def _definite_piecewise(ctx, f, x: Sym, a, b):
     """Piecewise definite integration: Newton-Leibniz on each open cell covering
     [a, b].
 
@@ -183,7 +183,7 @@ def _definite_piecewise(f, x: Sym, a, b):
         if val is _UNDEF:
             raise IntegrateError("integrand has a gap in [a, b]; refusing to "
                                  "integrate across it", Reason.FRAGMENT)
-        t = _ftc(integrate_term(val, x), x, L, R)
+        t = _ftc(integrate_term(ctx, val, x), x, L, R)
         total = t if total is None else fold(T.plus(total, t))
     if total is None:
         raise IntegrateError("integration interval does not meet the domain: "

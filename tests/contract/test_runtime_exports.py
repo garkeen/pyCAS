@@ -50,23 +50,51 @@ def test_domain_condition_single_registration_channel():
 
 
 def test_importing_math_has_no_registration_side_effect():
-    """No import-time mutation of global state.
+    """No import-time mutation of global state, and no declaration handle either.
 
-    In a clean process, import only the math modules: the constant table, function
-    table, domain ladder, and identity stages must all be empty.
+    In a clean process, import only the math modules: the domain ladder stays empty
+    and a freshly built context is empty, so nothing was registered behind the
+    reader's back. The handles declarations used to travel through (`_DECLS`,
+    `_EQ_STAGES`) must be gone rather than merely unwritten: a second channel would
+    leave a reader unable to tell which one is in effect.
     """
     import subprocess
     import sys
     code = ("import cas.math.decide, cas.math.diff, cas.math.domcond, "
             "cas.math.rules, cas.math.project; "
-            "from cas.math.decide import _EQ_STAGES; "
-            "from cas.math.domains.base import _DOMAINS; "
             "import cas.math.decide as D; "
-            "print(len(_EQ_STAGES), len(_DOMAINS), D._DECLS is None)")
+            "from cas.math.domains.base import _DOMAINS; "
+            "from cas.math.context import MathContext; "
+            "c = MathContext(); "
+            "print(len(_DOMAINS), len(c.consts), len(c.funcs), len(c.eq_stages), "
+            "hasattr(D, '_DECLS'), hasattr(D, '_EQ_STAGES'), "
+            "hasattr(D, 'bind_runtime'))")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True,
                        text=True, cwd=".")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "0 0 True", r.stdout
+    assert r.stdout.strip() == "0 0 0 0 False False False", r.stdout
+
+
+def test_reading_semantics_before_assembly_raises():
+    """Reading the semantics before the application assembled them is a wiring error.
+
+    The query exit names the fix instead of assembling a runtime on the first
+    attribute read: a module that assembles itself hides an application-level
+    decision inside a read.
+    """
+    import subprocess
+    import sys
+    code = ("import cas.runtime.dispatch as disp\n"
+            "try:\n"
+            "    disp.get_runtime()\n"
+            "except RuntimeError as e:\n"
+            "    print('refused' if 'install(bootstrap())' in str(e) else 'wrong message')\n"
+            "else:\n"
+            "    print('assembled silently')\n")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, cwd=".")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "refused", r.stdout
 
 
 def test_semantics_complete_after_bootstrap():

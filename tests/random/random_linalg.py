@@ -31,7 +31,9 @@ from cas.math.tactics import solve_diophantine_linear, integer_roots, TacticsErr
 from cas.syntax.term import S
 
 from cas.runtime import bootstrap
-bootstrap()
+from cas.runtime.dispatch import install
+
+install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 X = S("x")
 
