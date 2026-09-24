@@ -28,7 +28,7 @@ from cas.syntax.match import matches
 from cas.kernel.evidence import Accepted, Rejected, UnknownResult
 from cas.kernel.verdict import Reason
 from cas.math.domcond import dom_condition
-from cas.math.base.equality import equal, normal_form
+from cas.math.base.equality import identity_verdict, normal_form
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +41,13 @@ def _is_piecewise(t) -> bool:
 
 
 def _ok(ctx, proposal, context, extra=()):
-    """Accept, reporting the direct conditions: the content's definedness
-    constraints plus any type-specific conditions."""
+    """Accept with de-duplicated direct requirements and tracked reads."""
     content = proposal.conclusions[0]
-    reqs = tuple(dom_condition(ctx, content)) + tuple(extra)
-    return Accepted(direct_requirements=reqs, reads=context.read_set())
+    reqs = []
+    for req in tuple(dom_condition(ctx, content)) + tuple(extra):
+        if req not in reqs:
+            reqs.append(req)
+    return Accepted(direct_requirements=tuple(reqs), reads=context.read_set())
 
 
 def _one_conclusion(proposal):
@@ -58,6 +60,49 @@ def _premise(proposal):
     if not proposal.premise_propositions:
         return None
     return proposal.premise_propositions[0]
+
+
+def _expand(context, t):
+    """Expand the scope's definitions in `t` before comparing.
+
+    A definition is a predicative alias, so it is transparent to verification; an
+    equation is an assumption and is **never** expanded. The lookup goes through
+    the tracked context, so every definition read lands in the step's read
+    dependencies. A missing context means no scope is visible, and definitions
+    are scope entries: there is then nothing to expand.
+    """
+    if context is None or not hasattr(context, "lookup_definition"):
+        return t
+    from cas.math.definitions import expand
+    return expand(context.lookup_definition, t)
+
+
+def _defined(context, symbol) -> bool:
+    """Whether `symbol` is a definition in the visible scope.
+
+    A missing context means no visible scope, so nothing is defined there; the
+    question is answered from the scope, never guessed from the name.
+    """
+    if context is None or not hasattr(context, "lookup_definition"):
+        return False
+    return context.lookup_definition(symbol) is not None
+
+
+def _identity(ctx, content, expected, mismatch):
+    """Re-check a candidate as an identity, three-valued.
+
+    Returns None when the candidate really is that expression, a Rejected result
+    when it demonstrably is not, and an Unknown result when the identity channel
+    does not cover it. "Cannot re-check" is never dressed up as a refutation, and
+    an undecided candidate still does not enter trusted reasoning (it lands as
+    `undecided`, not as a committed conclusion).
+    """
+    v = identity_verdict(ctx, content, expected)
+    if v.is_yes():
+        return None
+    if v.is_no():
+        return Rejected(Reason.FRAGMENT, mismatch)
+    return UnknownResult(v.reason, f"{mismatch} (identity undecided)")
 
 
 def _same_subst(a, b):
@@ -135,6 +180,8 @@ class BothSidesChecker:
         if pred is None or not T.is_eq(pred):
             return Rejected(Reason.FRAGMENT, "predecessor is not an equation")
         d = proposal.evidence.payload
+        pred = _expand(context, pred)
+        content = _expand(context, content)
         lhs, rhs = pred.args
         op = d.op
         if op == "add":
@@ -149,8 +196,10 @@ class BothSidesChecker:
                        T.times(rhs, T.pw(d.operand, T.N(-1))))
         else:
             return Rejected(Reason.FRAGMENT, f"unknown operation: {op}")
-        if not equal(self.ctx, content, exp):
-            return Rejected(Reason.FRAGMENT, "content does not match the operation on the predecessor")
+        bad = _identity(self.ctx, content, exp,
+                        "content does not match the operation on the predecessor")
+        if bad is not None:
+            return bad
         extra = ()
         if op in ("mul", "div"):
             extra = (T.mk(S("Ne"), (d.operand, T.ZERO)),)
@@ -172,9 +221,12 @@ class NormalizeChecker:
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
-        if equal(self.ctx, content, normal_form(self.ctx, pred)):
-            return _ok(self.ctx, proposal, context)
-        return Rejected(Reason.FRAGMENT, "content is not the domain normal form of the predecessor")
+        bad = _identity(self.ctx, _expand(context, content),
+                        normal_form(self.ctx, _expand(context, pred)),
+                        "content is not the domain normal form of the predecessor")
+        if bad is not None:
+            return bad
+        return _ok(self.ctx, proposal, context)
 
 
 class RuleInstanceChecker:
@@ -212,6 +264,10 @@ class RuleInstanceChecker:
         if d.substitution is None:
             return Rejected(Reason.FRAGMENT, "rule instance is missing a substitution")
         path = tuple(d.path)
+        # Both sides are expanded consistently, so aliases are transparent to the
+        # pointer comparison that pins the rewritten instance.
+        pred = _expand(context, pred)
+        content = _expand(context, content)
         try:
             sub_t = T.term_at(pred, path)
         except IndexError:
@@ -219,7 +275,7 @@ class RuleInstanceChecker:
         if not any(_same_subst(s, d.substitution)
                    for s in matches(rule.pattern, sub_t)):
             return Rejected(Reason.FRAGMENT, "the given substitution is not a match at that position")
-        inst = P.instantiate(rule.template, d.substitution)
+        inst = _expand(context, P.instantiate(rule.template, d.substitution))
         if T.replace_at(pred, path, inst) is not content:
             return Rejected(Reason.FRAGMENT, "content is not the result of that instance")
         return _ok(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
@@ -240,12 +296,28 @@ class SubstChecker:
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
+        pred = _expand(context, pred)
+        content = _expand(context, content)
         d = proposal.evidence.payload
+        # The key and the occurrence are part of what the step claims: a compound
+        # key is not a variable, and substituting a variable that does not occur
+        # would commit a step whose name says something that did not happen.
+        if not isinstance(d.var, T.Sym):
+            return Rejected(Reason.FRAGMENT,
+                            "the substitution key must be a single variable")
+        if d.var not in T.free_vars(pred):
+            return Rejected(Reason.FRAGMENT,
+                            f"the substituted variable does not occur in the predecessor: {d.var}")
         substituted = T.subst(pred, {d.var: d.value})
-        if (equal(self.ctx, content, substituted)
-                or equal(self.ctx, content, normal_form(self.ctx, substituted))):
-            return _ok(self.ctx, proposal, context)
-        return Rejected(Reason.FRAGMENT, "content does not match the substitution result")
+        last = None
+        for expected in (substituted, normal_form(self.ctx, substituted)):
+            v = identity_verdict(self.ctx, content, expected)
+            if v.is_yes():
+                return _ok(self.ctx, proposal, context)
+            last = v
+        if last.is_no():
+            return Rejected(Reason.FRAGMENT, "content does not match the substitution result")
+        return UnknownResult(last.reason, "substitution identity undecided")
 
 
 class SplitChecker:
@@ -266,10 +338,10 @@ class SplitChecker:
         d = proposal.evidence.payload
         cond = d.condition
         branch = T.not_(cond) if d.negate else cond
-        expected = T.mk(S("And"), (pred, branch))
+        expected = T.mk(S("And"), (_expand(context, pred), branch))
         if content is expected:
             return _ok(self.ctx, proposal, context)
-        v = context.decide(T.mk(S("Eq"), (content, expected)))
+        v = identity_verdict(self.ctx, _expand(context, content), expected)
         if v.is_yes():
             return _ok(self.ctx, proposal, context)
         if v.is_no():
@@ -394,10 +466,20 @@ class ConstraintSatisfiedChecker:
         if bad is not None:
             return bad
         d = proposal.evidence.payload
-        rel = d.constraint.relation
+        rel = _expand(context, d.constraint.relation)
         inst = T.subst(rel, dict(d.valuation))
-        if content is not inst:
+        if _expand(context, content) is not _expand(context, inst):
             return Rejected(Reason.FRAGMENT, "content is not this constraint's instance under that valuation")
+        # The instance is re-checked as an **identity** in the free symbols that
+        # remain after the valuation: a construction constraint must vanish as a
+        # function, so a demonstrably nonzero difference is evidence of a wrong
+        # valuation, while an uncovered (non-identity) shape stays undecided.
+        if T.is_eq(inst):
+            bad = _identity(self.ctx, inst.args[0], inst.args[1],
+                            "the constraint does not hold under this valuation")
+            if bad is not None:
+                return bad
+            return _ok(self.ctx, proposal, context)
         v = context.decide(inst)
         if v.is_yes():
             return _ok(self.ctx, proposal, context)
@@ -406,10 +488,121 @@ class ConstraintSatisfiedChecker:
         return UnknownResult(v.reason, "constraint instance vanishing undecided")
 
 
+class TransChecker:
+    """Compose two equality premises in the registered equality module."""
+
+    id = "equality.trans"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        if len(proposal.premise_propositions) != 2:
+            return Rejected(Reason.FRAGMENT, "transitivity needs exactly two premises")
+        first, second = (_expand(context, p) for p in proposal.premise_propositions)
+        if not (T.is_eq(first) and T.is_eq(second)):
+            return Rejected(Reason.FRAGMENT, "transitivity premises must be equalities")
+        if first.args[1] is not second.args[0]:
+            return Rejected(Reason.FRAGMENT, "the middle equality terms do not match")
+        expected = T.eq(first.args[0], second.args[1])
+        d = proposal.evidence.payload
+        if d.value is not None and tuple(d.value) != (first.args[0], first.args[1], second.args[1]):
+            return Rejected(Reason.FRAGMENT, "transitivity evidence payload does not match the premises")
+        if _expand(context, content) is not expected:
+            return Rejected(Reason.FRAGMENT, "conclusion is not the transitive equality")
+        return _ok(self.ctx, proposal, context)
+
+
+def _path_requirements(target, path):
+    """Return branch conditions for a replacement inside a Piecewise value."""
+    requirements = []
+    current = target
+    prefix = ()
+    for index in path:
+        if _is_piecewise(current) and index < len(current.args) and index % 2 == 0:
+            requirements.append(current.args[index + 1])
+        current = T.term_at(current, (index,))
+        prefix += (index,)
+    return tuple(requirements)
+
+
+class CongruenceLiftChecker:
+    """Verify one explicitly located equality replacement."""
+
+    id = "congruence.lift"
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def check(self, proposal, context, services):
+        content, bad = _one_conclusion(proposal)
+        if bad is not None:
+            return bad
+        if len(proposal.premise_propositions) != 2:
+            return Rejected(Reason.FRAGMENT, "use needs an equality and a target premise")
+        source, target = (_expand(context, p) for p in proposal.premise_propositions)
+        if not T.is_eq(source):
+            return Rejected(Reason.FRAGMENT, "use source is not an equality")
+        d = proposal.evidence.payload
+        if d.direction == "->":
+            before, after = source.args
+        elif d.direction == "<-":
+            before, after = source.args[1], source.args[0]
+        else:
+            return Rejected(Reason.FRAGMENT, "use direction must be -> or <-")
+        try:
+            subterm = T.term_at(target, tuple(d.path))
+        except (IndexError, TypeError):
+            return Rejected(Reason.FRAGMENT, "use path is outside the target")
+        bad = _identity(self.ctx, subterm, before,
+                        "the target subterm is not the selected side of the equality")
+        if bad is not None:
+            return bad
+        if not d.path:
+            return Rejected(Reason.FRAGMENT, "an empty path cannot select a replacement site")
+        try:
+            parent = T.term_at(target, tuple(d.path[:-1]))
+        except (IndexError, TypeError):
+            return Rejected(Reason.FRAGMENT, "use path is outside the target")
+        extra = []
+        if isinstance(parent, T.Expr):
+            head = parent.head.name
+            if head in ("Derivative", "Quote"):
+                return Rejected(Reason.FRAGMENT, f"{head} does not admit equality lifting")
+            if head == "Power":
+                if d.path[-1] != 0 or not isinstance(parent.args[1], T.Int):
+                    return Rejected(Reason.FRAGMENT,
+                                    "only an integer exponent permits base lifting")
+            if head in ("Integrate", "DefIntegrate"):
+                extra.append(source)
+            if head in ("Plus", "Times", "Eq"):
+                policy = "congruent"
+            elif head in ("Power", "Piecewise", "Integrate", "DefIntegrate"):
+                policy = "conditional"
+            else:
+                policy = self.ctx.lift_policy(head)
+        else:
+            policy = "congruent" if isinstance(parent, T.Bound) else "forbidden"
+        extra.extend(_path_requirements(target, tuple(d.path)))
+        if policy == "forbidden":
+            return Rejected(Reason.FRAGMENT,
+                            f"no lifting policy is declared for {parent.head.name}"
+                            if isinstance(parent, T.Expr) else "only expression subterms are liftable")
+        expected = T.replace_at(target, tuple(d.path), after)
+        bad = _identity(self.ctx, content, expected,
+                        "content is not the selected replacement")
+        if bad is not None:
+            return bad
+        return _ok(self.ctx, proposal, context, tuple(extra))
+
+
 CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,
             RuleInstanceChecker, SubstChecker, SplitChecker,
             BranchCoverageChecker, BranchMergeChecker,
-            ConstraintSatisfiedChecker)
+            ConstraintSatisfiedChecker, TransChecker, CongruenceLiftChecker)
 
 
 def register(builder) -> None:

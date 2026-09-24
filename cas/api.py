@@ -17,7 +17,8 @@ supplies the installed runtime's context, because this module is the application
 frontend boundary, not a math algorithm.
 """
 
-from cas.errors import CadError, DiffError, IntegrateError, TacticsError
+from cas.errors import (BudgetExceeded, CadError, DiffError, IntegrateError,
+                        ScopeError, TacticsError)
 from cas.kernel.verdict import NO, YES
 from cas.math.diff import differentiate as _differentiate
 from cas.math.diff import differentiate_piecewise as _differentiate_piecewise
@@ -29,6 +30,7 @@ from cas.math.piecewise import is_piecewise
 from cas.math.domains.qarith import fold
 from cas.math.rules import apply_rule, declared_ruleset as _declared_ruleset
 from cas.math.tactics import solve_linear as _solve_linear
+from cas.math.tactics import solve_linear_with_condition as _solve_linear_with_condition
 from cas.math.tactics import solve_piecewise as _solve_piecewise
 from cas.runtime.dispatch import domain_normal_form, get_runtime
 
@@ -37,12 +39,13 @@ __all__ = (
     "YES", "NO",
     # refusal exceptions
     "DiffError", "IntegrateError", "CadError", "TacticsError",
+    "ScopeError", "BudgetExceeded",
     # Q literal arithmetic and domain normal form
     "fold", "domain_normal_form",
     # back-substitution judge (verification side; the solver lives in tactics)
     "back_substitute", "guard_report",
     # solving / differentiation / integration / piecewise
-    "solve_linear", "solve_piecewise",
+    "solve_linear", "solve_linear_with_condition", "solve_piecewise",
     "differentiate", "differentiate_piecewise",
     "integrate_term", "definite_integrate",
     "is_piecewise",
@@ -60,14 +63,25 @@ def guard_report(guards, var, value, assumptions=None):
     """Forward to `cas.math.judge.guard_report` with the installed context.
 
     The trailing `assumptions` are the caller's scope assumptions; the math context
-    is the facade's own business and never appears in the public signature.
+    is the facade's own business and never appears in the public signature. A plain
+    sequence is wrapped into the decision layer's immutable assumption set, so a
+    caller holding terms (the frontend) needs no kernel type.
     """
+    if assumptions is not None:
+        from cas.kernel.scope import Assumptions
+        if not isinstance(assumptions, Assumptions):
+            assumptions = Assumptions(tuple(assumptions))
     return _guard_report(get_runtime().math, guards, var, value, assumptions)
 
 
 def solve_linear(content, var):
-    """Forward to `cas.math.tactics.solve_linear` with the installed context."""
+    """Forward to the installed linear solving tactic."""
     return _solve_linear(get_runtime().math, content, var)
+
+
+def solve_linear_with_condition(content, var):
+    """Forward the candidate and its explicit division condition."""
+    return _solve_linear_with_condition(get_runtime().math, content, var)
 
 
 def solve_piecewise(f, x, target):

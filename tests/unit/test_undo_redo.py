@@ -154,14 +154,14 @@ def test_repl_step_listing_and_undo_follow_the_visible_view(capsys):
     r.cmd_undo(None)
     assert r.wf.events.current_revision() == 1
     assert [s.id for s in r.wf.visible_steps()] == [0]
-    assert r.current == 0
+    assert r.focus == 0
     # the listing is the visible view: the undone step is not printed
     capsys.readouterr()
     r.cmd_steps(None)
     shown = capsys.readouterr().out
     assert "# 0" in shown
     assert "# 1" not in shown
-    # the REPL keeps one step visible, so its current-step pointer stays usable
+    # the REPL keeps one step visible, so its focus stays usable
     r.cmd_undo(None)
     assert [s.id for s in r.wf.visible_steps()] == [0]
-    assert r.current == 0
+    assert r.focus == 0

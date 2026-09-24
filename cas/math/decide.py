@@ -7,9 +7,14 @@ blocked by a condition (GUARDED), a genuinely undecidable question (UNDECIDABLE)
 and an exhausted budget (BUDGET) -- four different consequences that must never be
 folded into one "don't know".
 
-Atom channels, in order: pointer/numeric -> direct ledger lookup -> projection zero
-test (domain normal form) -> interval propagation -> order-chain inference -> derived
-rule layer -> declaration lemmas (constant coarse bounds, function range bounds).
+Atom channels, in order: pointer/numeric -> direct ledger lookup -> ledger
+equality closure -> projection zero test (domain normal form) -> interval
+propagation -> order-chain inference -> derived rule layer -> declaration lemmas
+(constant coarse bounds, function range bounds). Reasoning under assumptions
+never rewrites with them: the closure orients every frame equation towards a
+class representative, and the rule layer terminates through a visited-fact guard
+rather than a search-depth cap, so a verdict never depends on how deep a query
+entered the pipeline.
 
 Every entry point takes the math context as its first parameter: the declaration
 surface (constants, functions, domain conditions) and the identity-decision stages
@@ -21,6 +26,7 @@ from collections import deque
 
 from cas.syntax import term as T
 from cas.syntax.term import S
+from cas.math.base.equality import closure_decide, is_closed
 from cas.math.domains.qarith import fold as _qfold
 from cas.kernel.verdict import (Verdict, Reason, YES, NO, unknown,
                           and3, or3, not3)
@@ -476,7 +482,10 @@ def _pos(ctx, t, assumptions):
     return None
 
 
-_MAX_DEPTH = 6
+# There is no search-depth cap. Termination comes from a cycle guard on visited
+# facts (the derived-rule layer) and from the canonical orientation of the
+# equality closure, so the verdict is a mathematical answer rather than a
+# function of the entry depth.
 
 
 def _is_cmp(f):
@@ -798,8 +807,16 @@ _RULES = (
     ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _ctx_free(_rule_eq_num)),
     ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _ctx_free(_rule_cmp_flip)),
 )
-def _derive_layer(ctx, fact, assumptions, depth):
-    q = lambda f: decide(ctx, f, assumptions, depth + 1)
+def _derive_layer(ctx, fact, assumptions, seen):
+    """Apply the derived-rule table under a **cycle guard**, not a depth cap: a
+    fact already being derived in this chain is skipped. The reachable fact set
+    is finite (every rule builds its facts out of the subterms of the original
+    one and a fixed set of heads), so the guard establishes termination while
+    keeping the verdict independent of how deep the query entered the layer."""
+    if fact._h in seen:
+        return None
+    seen = seen | {fact._h}
+    q = lambda f: decide(ctx, f, assumptions, seen)
     for name, applies, fn in _RULES:
         if applies(fact):
             r = fn(ctx, fact, assumptions, q)
@@ -877,7 +894,7 @@ def _axiom_function_bounds(ctx, fact, assumptions):
 # Same as _RULES: explicit data, built after the functions are defined, not a
 # decorator side effect. These are the declaration-bound fallback lemmas.
 _AXIOM_CHECKS = (_axiom_constants, _axiom_function_bounds)
-def _family_cmp(ctx, fact, assumptions, depth):
+def _family_cmp(ctx, fact, assumptions, seen):
     op = fact.head.name
     a, b = fact.args
     if op in ("Eq", "Ne"):
@@ -891,7 +908,14 @@ def _family_cmp(ctx, fact, assumptions, depth):
         if r is not None:
             return r
         if op == "Eq":
+            # A No from the identity channel needs evidence: only when both sides
+            # are closed is "not identically zero" a statement about values. With
+            # open sides the query stays with the frame-relative channels (and is
+            # honestly undecided when none of them answers) instead of being
+            # refuted by a non-identity.
             r = _poly_eq_check(ctx, a, b)
+            if r is NO and not (is_closed(a) and is_closed(b)):
+                r = None
             if r is not None:
                 return r
         r = _cmp_interval(ctx, op, a, b, assumptions)
@@ -913,7 +937,7 @@ def _family_cmp(ctx, fact, assumptions, depth):
         r = _chain_query(ctx, op, a, b, assumptions)
         if r is not None:
             return r
-    r = _derive_layer(ctx, fact, assumptions, depth)
+    r = _derive_layer(ctx, fact, assumptions, seen)
     if r is not None:
         return r
     # The axiom layer (declaration bound data) is a **fallback**, not dead code: it
@@ -931,44 +955,24 @@ def _family_cmp(ctx, fact, assumptions, depth):
     return unknown()
 
 
-def _contains(t, pat):
-    if t is pat:
-        return True
-    if isinstance(t, T.Expr):
-        return any(_contains(a, pat) for a in t.args)
-    return False
+# The ledger-equality substitution that used to live here was removed. Using a
+# frame's equations as a bidirectional rewrite system is not a decision
+# procedure: it has no termination measure (it needed a hardcoded depth cap) and
+# it rewrote values into variables, which produced false refutations and made the
+# verdict depend on the entry depth. Deciding an equation relative to a frame now
+# goes through `closure_decide` in cas/math/base/equality.py, which orients every
+# equation towards a canonical class representative and never uses an assumption
+# as an open-ended rewrite rule.
 
 
-def _eq_subst(ctx, fact, assumptions, depth):
-    """Ledger equality substitution: substitute each Eq(u,v) from the ledger into the
-    queried fact in both directions and decide again.
+def decide(ctx, fact, assumptions, _seen=frozenset()) -> Verdict:
+    """Decide a proposition relative to an assumption frame.
 
-    Not restricted to numeric sides: a symbolic equality (such as the substitution
-    definition t = sin(x)) endorses a query just as well, since deciding relative to
-    the ledger means "decide under the assumptions". _MAX_DEPTH guards against
-    chained cycles.
+    `_seen` is a **cycle guard** — the term ids on the current derivation chain
+    — not a depth budget: a fact met twice on one chain is skipped. There is no
+    search-depth cap, so a verdict cannot depend on the entry depth.
     """
-    a, b = fact.args
-    for f in assumptions:
-        if isinstance(f, T.Expr) and f.head.name == "Eq" and f is not fact:
-            u, v = f.args
-            if not (_contains(a, u) or _contains(a, v) or _contains(b, u) or _contains(b, v)):
-                continue
-            for pat, rep in ((u, v), (v, u)):
-                na = T.subst(a, {pat: rep})
-                nb = T.subst(b, {pat: rep})
-                if na is a and nb is b:
-                    continue
-                r = decide(ctx, T.mk(S("Eq"), (na, nb)), assumptions, depth + 1)
-                if not r.is_unknown():
-                    return r
-    return None
-
-
-def decide(ctx, fact, assumptions, _depth=0) -> Verdict:
     assumptions = _A(assumptions)
-    if _depth > _MAX_DEPTH:
-        return unknown(Reason.BUDGET)
     if fact is T.TRUE:
         return YES
     if fact is T.FALSE:
@@ -984,26 +988,32 @@ def decide(ctx, fact, assumptions, _depth=0) -> Verdict:
                 if _nonreal_constant(ctx, fact) is not None:
                     return unknown(Reason.FRAGMENT)
             if name == "Eq":
-                r = _eq_subst(ctx, fact, assumptions, _depth)
+                # Frame-relative reasoning about an equation goes through the
+                # closure channel: it orients the frame's equalities towards
+                # canonical class representatives instead of rewriting in both
+                # directions. It answers Yes or nothing; a No with evidence is
+                # left to the channels below.
+                a_eq, b_eq = fact.args
+                r = closure_decide(ctx, a_eq, b_eq, assumptions)
                 if r is not None:
                     return r
-            return _family_cmp(ctx, fact, assumptions, _depth)
+            return _family_cmp(ctx, fact, assumptions, _seen)
         if name == "And":
             r = YES
             for a in fact.args:
-                r = and3(r, decide(ctx, a, assumptions, _depth))
+                r = and3(r, decide(ctx, a, assumptions, _seen))
                 if r is NO:
                     return r
             return r
         if name == "Or":
             r = NO
             for a in fact.args:
-                r = or3(r, decide(ctx, a, assumptions, _depth))
+                r = or3(r, decide(ctx, a, assumptions, _seen))
                 if r is YES:
                     return r
             return r
         if name == "Not":
-            return not3(decide(ctx, fact.args[0], assumptions, _depth))
+            return not3(decide(ctx, fact.args[0], assumptions, _seen))
     return unknown()
 
 
@@ -1020,10 +1030,6 @@ def domain_ok(ctx, fact, assumptions) -> Verdict:
     from cas.math.domcond import dom_condition
 
     return satisfiable(ctx, dom_condition(ctx, fact), assumptions)
-
-
-def contradicted(ctx, fact, assumptions) -> bool:
-    return decide(ctx, fact, assumptions) is NO or decide(ctx, negate(ctx, fact), assumptions) is YES
 
 
 # Identity stages: pipeline dispatch is declaration data rather than hardcoding.
@@ -1088,18 +1094,18 @@ def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
 # the kernel Context/Branch, which is a legal math -> kernel dependency.
 # ---------------------------------------------------------------------------
 
-def extend_checked(ctx, assumptions, fact):
-    """Return the **extended assumption set** after the domain check and the
-    contradiction check both pass (immutable, the original object is not modified).
+def extend_frame(ctx, assumptions, fact):
+    """Return the frame with `fact` added, or `(Verdict, None)` when the fact is
+    not even readable in the current declared domains.
 
-    Returns `(Verdict, Assumptions | None)`, with the second element None on failure.
-    This replaces the old in-place mutable-context check-and-assume.
+    Adding a fact to a frame is **not** a consistency check. An inconsistent
+    frame is the user's (or a branch's) hypothesis and the system reasons under
+    it instead of policing it; the only refusal here is a domain violation, i.e.
+    a fact whose own predicates cannot be read over the declared domains.
     """
     from cas.kernel.verdict import NO, YES
     assumptions = _A(assumptions)
     if domain_ok(ctx, fact, assumptions) is NO:
-        return NO, None
-    if contradicted(ctx, fact, assumptions):
         return NO, None
     return YES, assumptions.extended(fact)
 
@@ -1108,14 +1114,16 @@ def branch(ctx, assumptions, *conds):
     """Split one branch per condition:
     `[(condition, that branch's assumption set | None, "open"|"empty")]`.
 
-    The assumption set is immutable, so branching is just a few `extended` calls on
-    the same base point: no cloning and no undoing. The independent sub-scopes of the
-    branch feature are expressed by the kernel ScopeStore, not here.
+    The assumption set is immutable, so branching is a few `extended` calls on
+    the same base point: no cloning and no undoing. A branch is "empty" only when
+    its condition is not readable in the declared domains; **contradictory
+    conditions stay open by design**, because the system has no global
+    consistency notion to police.
     """
     from cas.kernel.verdict import NO
     assumptions = _A(assumptions)
     out = []
     for c in conds:
-        st, ext = extend_checked(ctx, assumptions, c)
+        st, ext = extend_frame(ctx, assumptions, c)
         out.append((c, ext, "empty" if st is NO else "open"))
     return out

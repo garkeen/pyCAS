@@ -11,7 +11,8 @@ Two disciplines meet here:
 from cas.frontend.parser import parse
 from cas.syntax.term import S, N
 from cas.syntax import term as T
-from cas.math.constraints import solve_linear_constraints, is_linear
+from cas.math.constraints import solve_linear_constraints
+from cas.math.linearform import is_linear
 from cas.math.calculus.integration.verify import verify_antideriv
 from cas.runtime import new_workflow, get_runtime
 from cas.workflow.command import Claim, Integrate

@@ -33,5 +33,7 @@ def install(builder) -> None:
         builder.declare_role(role, head)
     for head in decls.binders:
         builder.declare_binder(head)
+    for head, policy in decls.lifts:
+        builder.declare_lift(head, policy)
     for line in decls.rules:
         builder.declare_rule(line)

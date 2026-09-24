@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Stage 4/5 random bench: piecewise differentiation, piecewise equation solving, and
-the REPL channel end to end (fully self-proving).
+"""Random piecewise differentiation, solving, and workflow checks.
+
+The bench is fully self-proving: every result is checked by an independent
+channel rather than an external oracle.
 
   P36 piecewise differentiation  random piecewise polynomials: the per-branch
                                  derivative equals the domain-layer derivative
@@ -20,7 +22,7 @@ the REPL channel end to end (fully self-proving).
                                  spurious solution (a candidate failing its condition) is
                                  refused by the judge
 
-Usage: python tests/random/random_stage45.py [rounds] [seed]
+Usage: python tests/random/random_piecewise_workflow.py [rounds] [seed]
 """
 
 import sys
@@ -257,7 +259,7 @@ def prop_workflow(rounds, rng):
 if __name__ == "__main__":
     rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 500
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 20260828
-    print(f"== stage 4/5 random bench: rounds={rounds} seed={seed} ==")
+    print(f"== piecewise workflow random bench: rounds={rounds} seed={seed} ==")
     rng = random.Random(seed)
     prop_piecewise_diff(rounds, rng)
     print(f"P36 piecewise differentiation two-channel  {rounds} rounds passed")

@@ -13,9 +13,8 @@ from cas.syntax.term import S
 from cas.syntax import term as T
 from cas.math.domains.qarith import fold
 from cas.math.base.checkers import (
-    _is_piecewise, _ok, _one_conclusion, _premise,
+    _expand, _identity, _is_piecewise, _ok, _one_conclusion, _premise,
 )
-from cas.math.base.equality import equal
 
 
 class IntegrateChecker:
@@ -32,7 +31,9 @@ class IntegrateChecker:
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         d = proposal.evidence.payload
-        f, x, G = pred, d.var, d.antideriv
+        pred = _expand(context, pred)
+        content = _expand(context, content)
+        f, x, G = pred, d.var, _expand(context, d.antideriv)
         from cas.math.calculus.integration.verify import verify_antideriv
         ok = verify_antideriv(self.ctx, G, f, x)
         if ok is False:
@@ -44,9 +45,11 @@ class IntegrateChecker:
             return UnknownResult(Reason.FRAGMENT, "the differentiation layer cannot decide (no expansion-to-zero channel)")
         if d.bounds is None:
             want = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, f),)), G)
-            if equal(self.ctx, content, want):
-                return _ok(self.ctx, proposal, context)
-            return Rejected(Reason.FRAGMENT, "content does not match the antiderivative equation")
+            bad = _identity(self.ctx, content, want,
+                            "content does not match the antiderivative equation")
+            if bad is not None:
+                return bad
+            return _ok(self.ctx, proposal, context)
         a_t, b_t = d.bounds
         if _is_piecewise(f) or not (T.is_num(a_t) and T.is_num(b_t)):
             return UnknownResult(Reason.FRAGMENT, "piecewise/algebraic definite integration is not hooked up for independent checking")
@@ -54,9 +57,11 @@ class IntegrateChecker:
         Fb = fold(T.subst(G, {x: b_t}))
         val = fold(T.plus(Fb, T.neg(Fa)))
         want = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(x, f), a_t, b_t)), val)
-        if equal(self.ctx, content, want):
-            return _ok(self.ctx, proposal, context)
-        return Rejected(Reason.FRAGMENT, "definite integral value does not match the endpoint difference")
+        bad = _identity(self.ctx, content, want,
+                        "definite integral value does not match the endpoint difference")
+        if bad is not None:
+            return bad
+        return _ok(self.ctx, proposal, context)
 
 
 CHECKERS = (IntegrateChecker,)

@@ -52,3 +52,14 @@ class Algorithms:
         """
         from cas.math.constraints import solve_linear_constraints
         return solve_linear_constraints(self._math, relations, unknowns)
+
+    def expand_definitions(self, definitions, term):
+        """Expand the scope's definitions in `term`: the only automatic
+        substitution channel.
+
+        `definitions` is a symbol -> body mapping taken from the scope, so the
+        facade receives plain data and holds no kernel type. Ledger equations are
+        assumptions and are never expanded (they are not rewrite rules).
+        """
+        from cas.math.definitions import expand
+        return expand(definitions.get, term)

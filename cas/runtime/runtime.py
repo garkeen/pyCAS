@@ -32,6 +32,7 @@ class Runtime:
         # checkers meet declarations.
         self._checkers = tuple((cid, factory(math))
                                for cid, factory in builder.checkers)
+        self._commands = dict(builder.commands)
 
     @property
     def math(self) -> MathContext:
@@ -123,6 +124,10 @@ class Runtime:
         `new_workflow`, so a new module adds checkers in exactly one place
         (its own install) rather than in a second hardcoded list."""
         return self._checkers
+    @property
+    def commands(self):
+        """Read-only command descriptors registered by math modules."""
+        return dict(self._commands)
 
     def stats(self):
         return {"constants": len(self._math.consts),
@@ -132,13 +137,9 @@ class Runtime:
                 "domain_conds": len(self._math._domain_conds),
                 "eq_stages": len(self._math.eq_stages),
                 "domains": len(self._domains),
-                "checkers": len(self._checkers)}
+                "checkers": len(self._checkers),
+                "commands": len(self._commands)}
 
-
-# ---------------------------------------------------------------------------
-# Session assembly: checkers and decision services are injected by this layer
-# (the workflow does not depend on cas.math)
-# ---------------------------------------------------------------------------
 
 def new_workflow(**kw):
     """Build a workflow session: ledger + kernel checkers + math checkers +

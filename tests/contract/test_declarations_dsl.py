@@ -59,6 +59,20 @@ def test_algorithm_roles_are_declared():
     assert dispatch.role_head("logarithm") == "Log"
 
 
+
+
+def test_lift_policies_are_declared_for_mathematical_heads():
+    d = parse_declarations(_text())
+    policies = dict(d.lifts)
+    assert set(policies) == {f["name"] for f in d.functions}
+    assert set(policies.values()) <= {"congruent", "conditional", "forbidden"}
+    assert "lift Sin = congruent" in _text()
+
+
+def test_lift_parser_rejects_unknown_policy():
+    from cas.errors import ParseError
+    with pytest.raises(ParseError):
+        parse_declarations("lift Sin = sometimes")
 def test_dsl_is_the_only_declaration_source():
     """The DSL file exists and covers every constant and function; what assembly
     registers matches it entry for entry."""

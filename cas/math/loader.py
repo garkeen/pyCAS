@@ -186,15 +186,26 @@ def _bound_val(s):
 
 @dataclass(frozen=True, slots=True)
 class Declarations:
-    """The parsed result of the declaration DSL (neutral data whose field names
-    line up with the runtime declaration objects)."""
-    constants: tuple      # tuple[dict]
-    functions: tuple      # tuple[dict]
-    aliases: tuple        # tuple[(surface name, canonical head)]
-    binders: tuple        # tuple[canonical head] of binder heads
-    roles: tuple          # tuple[(role, canonical head)]
-    rules: tuple          # tuple[str] of rule lines, parsed by parse_rule_line
+    """Neutral declaration data produced from the DSL."""
 
+    constants: tuple
+    functions: tuple
+    aliases: tuple
+    binders: tuple
+    roles: tuple
+    lifts: tuple
+    rules: tuple
+
+
+_LIFT = re.compile(r"^lift\s+([A-Za-z_]\w*)\s*=\s*(congruent|conditional|forbidden)$")
+
+
+def _parse_lift(lineno, line):
+    match = _LIFT.match(line)
+    if not match:
+        raise ParseError(
+            f"line {lineno}: lift must look like 'lift <Head> = congruent|conditional|forbidden'")
+    return match.groups()
 
 _ALIAS = re.compile(r"^alias\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
 
@@ -308,8 +319,8 @@ def parse_declarations(text) -> Declarations:
     declared constant is treated as a symbol (a function head), which is exactly
     what templates like `Sin(@0)` need.
     """
-    const_lines, func_lines, alias_lines, binder_lines, role_lines, rules = \
-        [], [], [], [], [], []
+    const_lines, func_lines, alias_lines, binder_lines, role_lines, lift_lines, rules = \
+        [], [], [], [], [], [], []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = _strip_comment(raw).strip()
         if not line:
@@ -326,6 +337,8 @@ def parse_declarations(text) -> Declarations:
             binder_lines.append((lineno, line))
         elif line.startswith("role "):
             role_lines.append((lineno, line))
+        elif line.startswith("lift "):
+            lift_lines.append((lineno, line))
         else:
             raise ParseError(f"line {lineno}: unknown declaration: {line!r}")
 
@@ -335,7 +348,8 @@ def parse_declarations(text) -> Declarations:
     aliases = tuple(_parse_alias(ln, l) for ln, l in alias_lines)
     binders = tuple(_parse_binder(ln, l) for ln, l in binder_lines)
     roles = tuple(_parse_role(ln, l) for ln, l in role_lines)
-    return Declarations(constants, functions, aliases, binders, roles, tuple(rules))
+    lifts = tuple(_parse_lift(ln, l) for ln, l in lift_lines)
+    return Declarations(constants, functions, aliases, binders, roles, lifts, tuple(rules))
 
 
 def load_declarations(path) -> Declarations:

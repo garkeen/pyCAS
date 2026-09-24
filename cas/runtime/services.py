@@ -1,29 +1,34 @@
-# -*- coding: utf-8 -*-
-"""Decision services: adapts `cas.math.decide` onto the kernel port.
+"""Runtime adapters between kernel decision ports and mathematical services."""
 
-`KernelServices` is a port **defined by the kernel**; its implementation must live
-in a layer that can see both kernel and math -- runtime is that layer, since it is
-the only layer allowed to import every math module. Neither the kernel nor the
-workflow knows about `cas.math.decide`.
-
-Scope assumptions act as the decision context, so condition discharge happens in
-the **correct branch context**: assumptions made inside a branch scope reach the
-decision, rather than being global assumptions.
-
-The decision context arrives explicitly in the constructor (the assembled math
-context), so this adapter holds no ambient state either.
-"""
+from collections import OrderedDict
 
 
 class ScopeServices:
-    """`KernelServices` implementation that decides relative to a scope."""
+    """Decide relative to one scope, with a bounded version-keyed cache."""
+
+    _CACHE_LIMIT = 128
 
     def __init__(self, scopes, math):
         self._scopes = scopes
         self._math = math
+        self._cache = OrderedDict()
 
     def decide(self, proposition, scope_id):
+        """Expand definitions in the scope frame and decide the proposition."""
+        key = (scope_id, proposition)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
         from cas.kernel.scope import Assumptions
         from cas.math.decide import decide
-        return decide(self._math, proposition,
-                      Assumptions.of(self._scopes, scope_id))
+        from cas.math.definitions import expand
+        definitions = self._scopes.definition_map(scope_id)
+        lookup = definitions.get
+        frame = tuple(expand(lookup, assumption.proposition)
+                      for assumption in self._scopes.assumptions(scope_id))
+        verdict = decide(self._math, expand(lookup, proposition), Assumptions(frame))
+        self._cache[key] = verdict
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._CACHE_LIMIT:
+            self._cache.popitem(last=False)
+        return verdict

@@ -60,6 +60,7 @@ def bootstrap() -> Runtime:
         consts=builder.constants,
         funcs=builder.functions,
         roles=builder.roles,
+        lifts=builder.lifts,
         rule_lines=tuple(builder.rule_lines),
         eq_stages=tuple(builder.eq_stages),
         projection_stages=ladder.stages,

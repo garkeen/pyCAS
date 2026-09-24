@@ -157,15 +157,21 @@ class Workflow:
         # committed claim afterwards grows the scope by appending the
         # assumption, and this step keeps the version it was checked in.
         submitted = self.scope
-        pred_id = command.pred
+        # Every referenced step contributes its judgment as a premise; the kernel
+        # records the premises as a tuple, so a command may name several (a
+        # two-premise rule such as transitivity needs exactly that).
+        pred_ids = command.premises
         premises = ()
-        if pred_id is not None:
-            pstep = self._steps.get(pred_id)
-            if pstep is None or pstep.judgment is None:
-                return self._record(content, command, "undecided",
-                                    note or "predecessor has no dependable conclusion",
-                                    target, (), scope=submitted)
-            premises = (pstep.judgment,)
+        if pred_ids:
+            psteps = []
+            for pid in pred_ids:
+                pstep = self._steps.get(pid)
+                if pstep is None or pstep.judgment is None:
+                    return self._record(content, command, "undecided",
+                                        note or f"predecessor #{pid} has no dependable conclusion",
+                                        target, (), scope=submitted)
+                psteps.append(pstep)
+            premises = tuple(p.judgment for p in psteps)
 
         # The proposal is committed first; a claim's proposition becomes a scope
         # assumption only once the commit succeeds. Registering before commit
@@ -234,8 +240,7 @@ class Workflow:
         # 3. operation history: outputs is the only exit connecting an operation
         #    to kernel conclusions
         if inputs is None:
-            pred_id = command.pred
-            inputs = () if pred_id is None else (pred_id,)
+            inputs = tuple(command.premises)
         ev = self._append_event(
             command=command.name,
             inputs=tuple(inputs),
@@ -268,8 +273,8 @@ class Workflow:
         head = command.request
         if not head:
             return None
-        pred_id = command.pred
-        pstep = self._steps.get(pred_id) if pred_id is not None else None
+        pred_ids = command.premises
+        pstep = self._steps.get(pred_ids[0]) if pred_ids else None
         pred = pstep.content if pstep is not None else artifact.value
         var = command.var
         args = (pred, var) if var is not None else (pred,)
@@ -587,6 +592,37 @@ class Workflow:
         self._append_event(command="Define",
                            outputs=(Ref("scope", new.id),))
         return new
+
+    def assumptions_of(self, sid):
+        """The propositions the scope of step `sid` treats as assumptions.
+
+        Returns plain terms: the scope is the kernel's business, and the frontend
+        hands these to the decision pipeline without touching the kernel itself.
+        The frame makes a re-check use exactly the context the step was checked
+        in.
+        """
+        step = self._steps.get(sid)
+        if step is None or step.judgment is None:
+            return ()
+        judgment = self.store.get_judgment(step.judgment)
+        return tuple(a.proposition
+                     for a in self.store.scopes.assumptions(judgment.scope))
+
+    def expand(self, term):
+        """Expand the current scope's definitions in `term`.
+
+        Definitions are predicative aliases, so expansion terminates; ledger
+        equations are assumptions and are never expanded (using them as rewrite
+        rules would not be a decision procedure). The interactive channel calls
+        this before a computation, and every checker expands through its tracked
+        context, so a computation sees through aliases while each stored
+        conclusion keeps the form it was written in.
+        """
+        if self.algorithms is None:
+            raise RuntimeError(
+                "no algorithm facade injected: construct with cas.runtime.new_workflow()")
+        definitions = self.store.scopes.definition_map(self.scope)
+        return self.algorithms.expand_definitions(definitions, term)
 
     def _alias_cycle(self, symbol, body, seen=None) -> bool:
         """Whether `symbol` appears in `body` after alias expansion.

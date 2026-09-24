@@ -11,79 +11,47 @@ degraded into a guess.
 from cas.syntax import term as T
 from cas.syntax.term import Sym
 from cas.errors import TacticsError
-from cas.math.project import project, zero_of, is_zero
+from cas.math.project import zero_of
+from cas.math.linearform import linear_form, nonzero_condition, normalized
 
 
 def _lin_core(ctx, diff, var: Sym):
-    """Classify the difference of an equation on its projection normal form: a
-    semantic criterion, not a shape criterion.
-
-    Whether something involves `var` is not read off the shape of the original
-    term (the difference of x+1 and x contains x syntactically but is constant
-    semantically); it is read off the projected domain element. The projected
-    element is consumed through the domain's polynomial-view capability: the
-    classifier never inspects a Python representation, so a domain either
-    exposes the view or is honestly refused, never half-recognized by type.
-
-    Returns:
-
-    ("zero", None)     the difference vanishes identically (zero polynomial /
-                       zero rational function / rational zero): an identity
-    ("nonzero", None)  the difference is independent of var and provably
-                       nonzero: it can never vanish
-    ("linear", term)   exactly degree one in var: a unique candidate solution
-    ("refuse", reason) anything else: nonlinear / involves other variables /
-                       outside the domain, so completeness cannot be guaranteed
-    """
-    hit = project(ctx, diff)
-    if hit is None:
-        return ("refuse", "difference is outside Q/polynomial/rational-function domains")
-    if hit.element is None:
-        # rational constant cell: identity or contradiction, independent of var
-        return ("zero", None) if is_zero(hit) else ("nonzero", None)
-    ring = hit.domain.ring
-    el = hit.domain.element_poly(hit.element)
-    if el is None:
-        return ("refuse", "the projected domain exposes no polynomial view of its element")
-    if el.is_zero():
-        return ("zero", None)
-    if any(v is not var for v in el.vars):
-        return ("refuse", "involves other variables: only single-variable linear is supported")
-    if var not in el.vars:
-        return ("nonzero", None)             # nonzero constant polynomial in var
-    i = el.vars.index(var)
-    coefs = {k[i]: c for k, c in el.monos}
-    deg = max(coefs)
-    if deg == 0:
-        return ("nonzero", None)
-    if deg != 1:
-        return ("refuse", f"degree {deg} equation: only linear is supported")
-    a = coefs[1]
-    b = coefs.get(0, ring.from_int(0))
-    return ("linear", T.N(-b / a))
+    """Classify a difference and return the slope condition separately."""
+    form = linear_form(ctx, diff, var)
+    if form.kind == "linear":
+        coefficient, constant = form.payload
+        solution = normalized(ctx, T.times(T.neg(constant), T.pw(coefficient, T.MONE)))
+        return ("linear", solution, nonzero_condition(coefficient))
+    if form.kind == "zero":
+        return ("zero", None, ())
+    if form.kind in ("constant", "independent"):
+        return ("nonzero", None, ())
+    if form.kind in ("outside", "no_view"):
+        return ("refuse", form.payload, ())
+    return ("refuse", f"degree {form.payload} equation: only linear is supported", ())
 
 
-def solve_linear(ctx, content, var: Sym):
-    """Linear solving tactic: an equation to a solution term (the certificate).
 
-    The difference is classified by `_lin_core` on its projection normal form: a
-    degree-one equation yields the -b/a certificate; an identity (solution set is
-    everything), a contradiction (no solution) and nonlinear cases are refused
-    semantically. Verification is performed independently by the workflow's
-    back-substitution judge; this function does not repeat it.
-    """
+
+
+def solve_linear_with_condition(ctx, content, var: Sym):
+    """Return a candidate and the condition needed to divide by its slope."""
     if not (isinstance(content, T.Expr) and content.head.name == "Eq"):
         raise TacticsError("solve needs an equation")
     lhs, rhs = content.args
-    kind, payload = _lin_core(ctx, T.plus(lhs, T.neg(rhs)), var)
+    kind, payload, condition = _lin_core(ctx, T.plus(lhs, T.neg(rhs)), var)
     if kind == "linear":
-        return payload
+        return payload, condition
     if kind == "zero":
         raise TacticsError("identity: the solution set is everything, no unique solution")
     if kind == "nonzero":
-        raise TacticsError("contradictory equation: independent of the variable and "
-                           "never zero, no solution")
+        raise TacticsError("contradictory equation: independent of the variable and never zero")
     raise TacticsError(payload)
+
+
+def solve_linear(ctx, content, var: Sym):
+    """Return the linear candidate; conditions are available separately."""
+    return solve_linear_with_condition(ctx, content, var)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +180,7 @@ def solve_piecewise(ctx, f, x: Sym, target):
             elif z is None:
                 conditional.append((None, c))     # identity undecided
             continue
-        kind, payload = _lin_core(ctx, d, x)
+        kind, payload, _condition = _lin_core(ctx, d, x)
         if kind == "zero":
             regions.append(c)                     # projects to zero (v == target)
             continue

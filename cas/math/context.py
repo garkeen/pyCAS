@@ -52,20 +52,23 @@ class MathContext:
     `bootstrap()`.
     """
 
-    consts: Mapping = field(default_factory=dict)      # name -> ConstantDecl
-    funcs: Mapping = field(default_factory=dict)       # name -> FunctionDecl
-    roles: Mapping = field(default_factory=dict)       # role -> canonical head
-    rule_lines: tuple = ()                             # declaration DSL texts
-    eq_stages: tuple = ()                              # (name, run) identity-decision stages
-    projection_stages: tuple = ()                      # ProjectionStage rungs, in order
-    coeff_ring: object = None                          # K of K[x] / K(x)
+    consts: Mapping = field(default_factory=dict)
+    funcs: Mapping = field(default_factory=dict)
+    roles: Mapping = field(default_factory=dict)
+    lifts: Mapping = field(default_factory=dict)
+    rule_lines: tuple = ()
+    eq_stages: tuple = ()
+    projection_stages: tuple = ()
+    coeff_ring: object = None
     _by_atom: Mapping = field(default=None, repr=False, compare=False)
     _domain_conds: Mapping = field(default=None, repr=False, compare=False)
+    _lift_policies: Mapping = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "consts", MappingProxyType(dict(self.consts)))
         object.__setattr__(self, "funcs", MappingProxyType(dict(self.funcs)))
         object.__setattr__(self, "roles", MappingProxyType(dict(self.roles)))
+        object.__setattr__(self, "lifts", MappingProxyType(dict(self.lifts)))
         object.__setattr__(self, "rule_lines", tuple(self.rule_lines))
         object.__setattr__(self, "eq_stages", tuple(self.eq_stages))
         object.__setattr__(self, "projection_stages", tuple(self.projection_stages))
@@ -76,8 +79,13 @@ class MathContext:
             object.__setattr__(self, "_domain_conds", MappingProxyType({
                 name: _domain_condition_callable(d.domain)
                 for name, d in self.funcs.items() if d.domain is not None}))
-
-    # --- constants ---
+        if self._lift_policies is None:
+            policies = dict(self.lifts)
+        if self._lift_policies is None:
+            policies = dict(self.lifts)
+            for declaration in self.funcs.values():
+                policies.setdefault(declaration.name, declaration.lift)
+            object.__setattr__(self, "_lift_policies", MappingProxyType(policies))
 
     def const_by_atom(self, atom):
         return self._by_atom.get(id(atom))
@@ -112,18 +120,20 @@ class MathContext:
     def all_functions(self) -> tuple:
         return tuple(self.funcs.values())
 
-    # --- roles / domain conditions / rules ---
+    # --- roles / lift policies / domain conditions / rules ---
 
     def role_head(self, role: str):
-        """Role -> canonical head (None when absent). Algorithms fetch by role and
-        never hardcode a function name."""
+        """Role -> canonical head (None when absent)."""
         return self.roles.get(role)
+
+    def lift_policy(self, head: str):
+        """Return the registered policy, defaulting to forbidden."""
+        return self._lift_policies.get(head, "forbidden")
 
     def lookup_domain_cond(self, name: str):
         return self._domain_conds.get(name)
 
     @property
     def rules(self) -> tuple:
-        """Rule DSL line texts (parsed at the consumption point in math/rules.py).
-        Rules are data."""
+        """Rule DSL line texts (parsed at the consumption point in math/rules.py)."""
         return self.rule_lines

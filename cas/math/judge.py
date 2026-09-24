@@ -64,24 +64,19 @@ def has_undef(t) -> bool:
 # Vanishing
 # ---------------------------------------------------------------------------
 
-def is_zero(ctx, t) -> bool | None:
-    """Piecewise-aware vanishing test: an ordinary term is decided by the domain
-    normal form, a term with piecewise subterms is point-collapsed first.
-
-    Returns True / False / None, where None means undecidable and the caller
-    must honestly report undecided. A point that collapses to Undefined is
-    outside the domain, so the equation has no value there: not a solution,
-    hence False.
-    """
+def is_zero(ctx, t, assumptions=None) -> bool | None:
+    """Return the vanishing verdict under the caller's assumption frame."""
     if not has_piecewise(t):
         return zero_of(ctx, t)
-    from cas.math.piecewise import collapse        # deferred: piecewise consumes the decision layer
+    from cas.math.piecewise import collapse
     from cas.kernel.scope import Assumptions
-    c = collapse(ctx, t, Assumptions())
+    if assumptions is None:
+        assumptions = Assumptions()
+    c = collapse(ctx, t, assumptions)
     if c is None:
-        return None                           # branch selection undecided
+        return None
     if has_undef(c):
-        return False                          # outside the domain: no value, not a solution
+        return False
     return zero_of(ctx, fold(c))
 
 
@@ -103,15 +98,8 @@ class BackSub:
     exact: object | None
 
 
-def back_substitute(ctx, eq, var, value) -> BackSub:
-    """Substitute var := value into the equation and return the difference and
-    the vanishing verdict.
-
-    Only the difference of the two sides is used; no solution formula is
-    re-run. The vanishing authority is is_zero (the domain normal form) and
-    `exact` is for display only. Both are exact arithmetic, so no floats are
-    involved.
-    """
+def back_substitute(ctx, eq, var, value, assumptions=None) -> BackSub:
+    """Back-substitute and decide the difference in the caller's frame."""
     lhs, rhs = eq.args
     diff = fold(T.plus(T.subst(lhs, {var: value}),
                        T.neg(T.subst(rhs, {var: value}))))
@@ -119,7 +107,7 @@ def back_substitute(ctx, eq, var, value) -> BackSub:
         v = eval_exact(diff, {})
     except EvalNumError:
         v = None
-    return BackSub(diff=diff, zero=is_zero(ctx, diff), exact=v)
+    return BackSub(diff=diff, zero=is_zero(ctx, diff, assumptions), exact=v)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +151,7 @@ def verify_solution(ctx, eq, var, value, guards=(), assumptions=None) -> Verdict
     · vanishing is None, or any guard is undecided   -> Unknown
     · vanishing is True and every guard is Yes       -> YES
     """
-    bs = back_substitute(ctx, eq, var, value)
+    bs = back_substitute(ctx, eq, var, value, assumptions)
     if bs.zero is False:
         return NO
     checks = guard_report(ctx, guards, var, value, assumptions)

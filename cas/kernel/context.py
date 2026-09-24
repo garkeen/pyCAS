@@ -62,6 +62,12 @@ class TrackedContext:
         return self._scopes.declarations(self._sid)
 
     def decide(self, proposition):
+        # The runtime service performs mathematical expansion.  The kernel only
+        # records the scope reads that boundary will consume; it does not import
+        # math or decide which definitions apply.
+        for symbol in self._scopes.definition_map(self._sid):
+            self.lookup_definition(symbol)
+        self.assumptions()
         v = self._services.decide(proposition, self._sid)
         self._record("decide", repr(proposition))
         return v

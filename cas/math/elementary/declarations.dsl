@@ -46,6 +46,22 @@ function Sqrt print "sqrt" arity 1 deriv "(1/2)*@0^(-1/2)" domain "@0 >= 0" note
 function Abs  print "abs" arity 1 real_on_real bounds 0 none zero_iff_arg_zero deriv "Piecewise(1, @0 > 0, -1, @0 < 0)" note "D|x| = piecewise(1 if x>0, -1 if x<0); no branch at x=0 (not differentiable)"
 function Atan print "atan" arity 1 real_on_real deriv "(1+@0^2)^(-1)" note "range (-pi/2, pi/2): the exact pi-bearing bounds await a constant-lemma combination"
 
+# --- equality lifting policies for mathematical function heads ---
+# Signature heads use the structural defaults in the lifting checker; every
+# mathematical function head is declared here and defaults to forbidden when
+# absent from a future declaration set.
+lift Sin = congruent
+lift Cos = congruent
+lift Tan = conditional
+lift Sinh = congruent
+lift Cosh = congruent
+lift Tanh = congruent
+lift Exp = congruent
+lift Log = conditional
+lift Sqrt = conditional
+lift Abs = congruent
+lift Atan = congruent
+
 # --- surface aliases (parser notation -> canonical head) ---
 # The parser holds no case convention and no notation of its own: every lowercase
 # surface word is an explicit entry here, so the notation of a function is declared

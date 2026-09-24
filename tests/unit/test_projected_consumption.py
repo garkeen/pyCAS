@@ -355,7 +355,7 @@ def test_new_representation_is_consumed_through_the_polynomial_view():
 
     ctx = _ladder(projection.ProjectionStage("c8-view", try_fn))
     with domain_scope(view):
-        kind, payload = _lin_core(ctx, _marker("C8ViewMarker", 0), X)
+        kind, payload, _condition = _lin_core(ctx, _marker("C8ViewMarker", 0), X)
 
     assert kind == "linear"
     assert payload is T.N(2)                 # x - 2 = 0 -> x = 2
@@ -384,7 +384,7 @@ def test_domain_without_the_polynomial_view_refuses_honestly():
 
     ctx = _ladder(projection.ProjectionStage("c8-no-view", try_fn))
     with domain_scope(no_view):
-        kind, reason = _lin_core(ctx, _marker("C8NoViewMarker", 1), X)
+        kind, reason, _condition = _lin_core(ctx, _marker("C8NoViewMarker", 1), X)
 
     assert no_view.element_poly(object()) is None    # the protocol default: no view
     assert kind == "refuse"

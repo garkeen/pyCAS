@@ -32,7 +32,7 @@
 | 内核 | 追加式账本；作用域**版本链**（Γ 冻结、谱系与版本分离）；条件生命周期（清偿与否证）；十步 `commit` 及其可证明的四步特化；真 undo/redo（只移指针、不删历史） |
 | 符号计算 | 声明化规则引擎（行式 DSL，auto 规则无守卫并按成本严格下降终止）；微分（含分段谨慎通道，分段点显式标注未验证）；多项式片段积分与三值独立验证；一维 CAD（Sturm 实根隔离）；线性方程组/线性代数（行阶梯、秩、核、Bareiss 行列式）；结式与 Yun 无平方分解；线性丢番图碎片与整数根 |
 | 分段 | 有序首中语义的分段容器、逐支投影、提升（带预算与相邻同值支合并）、覆盖/冲突检查、分段方程求解、定义域条件 |
-| 交互 | REPL：断言/化简/求解/代入/分支/diff/integrate/check/steps/undo |
+| 交互 | REPL：断言/化简/求解/代入/手动等式代换（`use`/`trans`）/分支（`split`/`enter`/`merge`）/diff/integrate/check/steps/undo |
 
 **尚未实现（遇到就诚实拒答，不是 bug）**
 
@@ -61,15 +61,21 @@ Gröbner 基方法、三角/指数展开与同类项收集、部分分式与 Her
 $ python repl.py
 pyCAS REPL. Type 'help' for commands.
 > x^2 - 1 == 0        # 直接输入表达式/方程 = 断言进账本（Claim）
-> solve x             # 线性求解：战术层给候选，checker 独立回代判定后才 commit
-> check               # 对当前解做回代验证
+> u := x^2           # 定义：只展开定义，不把方程当定义
+> A : Real           # 声明符号的类
+> solve x             # 参数线性求解；其它符号显式作为参数，斜率条件会保留
+> use #2 -> at (0) #0  # 用 #2 的等式在 #0 的指定路径做一次显式代换
+> trans #2 #3        # 用两个等式前提做传递
+> split x > 0        # 建立真实分支作用域
+> enter +             # 进入正分支；merge #a #b 合并两个分支结果
+> check #1            # 对当前解做回代验证
 > diff x              # 求导（域层导数交叉验证）
 > integrate x         # 多项式片段不定积分（独立验证 d/dx F = f）
 > int x 0 1           # 定积分（端点差 + 独立复核）
-> norm                # 域标准形
+> norm #1             # 域标准形
 > steps               # 列出当前视图中的步骤
 > undo                # 真 undo：回退一步事件指针（记录不删）
-> rules / apply <id>  # 列出、应用声明规则
+> rules / apply <id>  # 列出声明规则；无路径时列出全部匹配位置
 > help / quit
 ```
 
@@ -78,7 +84,7 @@ pyCAS REPL. Type 'help' for commands.
 - 每一步都会显示状态（`committed` / `refused` / `undecided`）与步骤号；`refused`
   表示被独立验证器否证，`undecided` 表示验证通道覆盖不到（**不是**「错」）。
 - 除上面的命令外还有：`both add|sub|mul|div <expr>`（两边同时操作）、
-  `subst <var> = <expr>`、`split <cond>`（分支，前置 `!` 取否定支）。
+  `subst <var> = <expr>`、`use #S (->|<-) at (0,1) [#T]`、`trans #A #B`。
 
 ### 程序化使用
 
@@ -92,7 +98,8 @@ import cas.api as api
 from cas.frontend.parser import parse
 
 api.differentiate(parse("x^2"), parse("x"))          # 求导
-api.solve_linear(parse("2*x + 3 == 7"), parse("x"))  # 线性求解
+api.solve_linear(parse("2*x + 3 == 7"), parse("x"))  # 返回线性候选
+api.solve_linear_with_condition(parse("a*x + b == 0"), parse("x"))  # 候选 + a != 0
 api.integrate_term(parse("x^2"), parse("x"))         # 不定积分
 api.guard_report([parse("x > 0")], parse("x"), parse("2"))   # 逐条守卫判定
 ```
@@ -134,7 +141,7 @@ api.guard_report([parse("x > 0")], parse("x"), parse("2"))   # 逐条守卫判�
 ## 四、测试
 
 ```console
-pytest tests                 # 全部：确定性钉子 + 10 个随机自证台架
+pytest tests                 # 全部：确定性钉子 + 随机自证台架
 pytest -m random             # 只跑随机台架（数学性质是否出错）
 pytest -m "not random"       # 只跑确定性钉子（结构与契约是否退化）
 pytest tests/contract        # 架构门禁：依赖方向、不变量、DSL 准入、语言纪律

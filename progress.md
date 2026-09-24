@@ -93,8 +93,21 @@
   求解、多项式片段积分与三值独立验证器、线性代数（行阶梯、秩、核、求解、Bareiss
   行列式）、结式与 Yun 无平方分解、线性丢番图碎片与整数根、项上约束求解、分支
   分裂/合并、带卫生检查的声明/定义。
-- REPL 覆盖 claim/norm/solve/subst/split/diff/rules/apply/integrate/check/steps/undo，
-  一律经前端门面。
+- REPL 覆盖 claim/norm/solve/subst/split/diff/rules/apply/integrate/check/steps/show/
+  focus/undo，以及两种非项行形式 `u := x^2`（定义）与 `A : Real`（声明），
+  一律经前端门面；命令接受 `#N` 步骤引用，未给引用时作用于焦点。
+
+- 定义展开是**唯一的自动代换通道**（`math/definitions.py`）：别名图无环（定义期检查）
+  ⇒ 展开必停机，超预算 `BudgetExceeded`；计算入口与所有 checker 在比较前展开，`Quote`
+  内容不展开（held 数据），`d/d(定义)` 与 `solve 定义` 拒答。等式永不自动展开。
+- 判定层：账本等式的**闭包通道**（`math/base/equality.py::closure_decide`，并查集 +
+  同余 + 类代表定向重写）取代了双向盲目代换；`decide` 没有搜索深度参数（改用已访问
+  事实环保护），`No` 只在有证据时给出（闭合值不同 / 匹配 `Ne` 事实）；三值恒等
+  `identity_verdict` 取代 `equal()`，使"不可复核"不再被报成"被否证"。
+- 步骤引用：`Command.premises` 是元组（内核 Step 本就多前驱）；REPL 支持 `#N`、
+  `show #N`、`focus [#N]`；`check` 由前驱图回溯定位原始方程（缓存指针 `self.original`
+  已删除），守卫按该步所在作用域的假设帧判定（`wf.assumptions_of`）。
+- 焦点与会话光标分离：`focus` 只是默认引用，每条步骤记录自己实际用过的前驱。
 
 - 作用域为**版本链**：`extend` 产新 id（Γ 对每个 id 冻结，分支从固定版本父分叉），
   `lineage_of`/`head_of` 区分谱系与版本；引入者反向索引与否证反向索引消除每 commit 全扫。
@@ -107,8 +120,21 @@
   同为能力查询（`element_poly` 消失视图 / `element_as_poly` 元素本身），消费方不按类型
   识别表示；序比较按值域证据分派（非实常数上诚实拒答）。
 
-验证：`pytest tests` 285 项全绿（275 项确定性钉子 + 10 个随机台架，各台架自证
-若干条数学性质）。测试按种类分目录、按 marker 可筛（`pytest -m <kind>`）。
+阶段 0–3 的判定、定义、步骤引用和回归钉子已完成；阶段 4–7 已落地：
+
+- 手动等式代换：`equality.trans` 与 `congruence.lift` 独立 checker，声明驱动
+  `lift` 策略，Piecewise 分支条件、Power 整数指数、Derivative/Quote 禁止、绑定体
+  再抽象和积分边界条件均进入证据/Requirement 通道。
+- 参数化线性求解：`cas/math/linearform.py` 成为唯一线性形式实现；`solve_linear`
+  允许其它符号作为系数，`solve_linear_with_condition` 显式返回斜率非零条件。
+- 前端命令注册面：builder/runtime 注册 command descriptor，REPL 通用分派；`apply`
+  无路径时列出全部匹配位置；`split` 接真实分支作用域并提供 `enter`/`merge`。
+- 判定和维护：`is_zero`/`back_substitute` 传播假设帧，定义展开读依赖进入
+  `TrackedContext`，`ScopeServices` 使用按 scope 版本键控的有界缓存。
+- 文档、DSL 准入门禁、随机同余/参数求解台架和 REPL 冒烟测试已同步。
+
+验证：`python -m pytest tests` 326 项全绿（含 12 个随机台架）；
+`python -m pytest -m random` 为 12 passed、314 deselected。
 
 ## 未实现（下一步）
 
@@ -124,12 +150,11 @@
 - 未决设计：分支合并在不引入蕴含引入规则（Γ, C ⊢ P 推出 Γ ⊢ C → P）的前提下，
   无法独立复核「各支都回答了 P」。这是一条尚未采纳的新内核规则。
 
-
 ## 已知缺陷（已定位，未修）
 
-无。曾记录的两条均已修复并有钉子：打印机的 `Times` 数值因子按精确有理数收敛后再
-渲染（`src` 往返清单测试覆盖），`tactics._lin_core` 改为消费域能力查询
-（`element_poly` / `element_as_poly`），不再按 Python 表示分派。
+阶段 0–3 的旧缺陷均已有回归钉子；阶段 4–7 已消除工作单列出的七项缺口。仍待
+处理的是上述长期能力缺口与工作流序列化、分支蕴含引入规则，而不是阶段 4–7 的
+临时接口。源码与测试不保留旧命令/旧分类兼容包装。
 
 ## 语言与引用纪律
 

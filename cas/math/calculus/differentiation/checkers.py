@@ -15,7 +15,7 @@ from cas.math.domains.ratfunc import rf_deriv, rf_from_term, rf_to_term
 from cas.math.domains.qarith import fold
 from cas.math.project import project
 from cas.math.base.checkers import (
-    _is_piecewise, _ok, _one_conclusion, _premise,
+    _defined, _expand, _is_piecewise, _ok, _one_conclusion, _premise,
 )
 from cas.syntax import term as T
 
@@ -103,8 +103,15 @@ class DiffChecker:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         if T.is_eq(pred):
             return Rejected(Reason.FRAGMENT, "an equation predecessor cannot be differentiated")
+        pred = _expand(context, pred)
+        content = _expand(context, content)
         d = proposal.evidence.payload
         x = d.var
+        if _defined(context, x):
+            # A definition is an alias, not a variable: differentiating with
+            # respect to it is not defined (the expansion has no such symbol).
+            return Rejected(Reason.FRAGMENT,
+                            f"cannot differentiate with respect to a defined symbol: {x}")
         if _is_piecewise(pred):
             from cas.math.piecewise import fold_nested, branches
             if not _is_piecewise(content):

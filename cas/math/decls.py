@@ -31,18 +31,8 @@ class ConstantDecl:
 
 @dataclass(frozen=True, slots=True)
 class FunctionDecl:
-    """Mathematical function: head name, print name, properties, derivative
-    template, and domain-condition template.
+    """A declared mathematical function and its registered properties."""
 
-    Every field comes from the declaration DSL
-    (`math/elementary/declarations.dsl`); this layer holds pure data only.
-    `deriv` is a derivative template containing the `DB(0)` placeholder, meaning
-    `f'(u) = template[DB(0) := u]`, with the chain-rule factor multiplied in by the
-    differentiation layer; a template whose branch splits is None and carries a
-    `deriv_note`, since derivative templates are only admitted when unconditionally
-    provable. `domain` is a domain-condition template using the same `DB(0)`
-    placeholder (None when absent).
-    """
     name: str
     print_name: str
     arity: int | None
@@ -53,3 +43,4 @@ class FunctionDecl:
     domain: object = None
     deriv_note: str = ""
     note: str = ""
+    lift: str = "forbidden"

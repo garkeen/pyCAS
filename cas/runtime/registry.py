@@ -31,15 +31,15 @@ class RuntimeBuilder:
     def __init__(self):
         self.constants: dict[str, ConstantDecl] = {}
         self.functions: dict[str, FunctionDecl] = {}
-        self.aliases: dict[str, str] = {}  # surface name -> canonical head (parser notation)
+        self.aliases: dict[str, str] = {}  # surface name -> canonical head
         self.binders: list[str] = []       # canonical heads whose surface word binds a variable
-        self.roles: dict[str, str] = {}    # role -> canonical head (algorithms fetch by role)
+        self.roles: dict[str, str] = {}    # role -> canonical head
+        self.lifts: dict[str, str] = {}    # mathematical head -> lift policy
         self.rule_lines: list[str] = []    # rule lines (DSL text; math/rules.py parses)
         self.eq_stages: list = []          # (name, run)
         self.domains: list = []            # resident base field builders (ladder order)
         self.checkers: list = []           # (checker_id, factory) registered by math modules
-
-    # --- checkers (a math module's install registers its own checkers here,
+        self.commands: dict[str, tuple] = {}  # name -> (help, argument kind, checker id)
     #     so adding a module never requires editing a second hardcoded list) ---
 
     def register_checker(self, checker_id: str, factory) -> None:
@@ -104,15 +104,17 @@ class RuntimeBuilder:
         self.aliases[surface] = head
 
     def declare_role(self, role: str, head: str) -> None:
-        """Canonical function an algorithm refers to by role (e.g. `logarithm` -> Log).
-
-        The general power rule of differentiation needs "the logarithm function" but
-        must not hardcode `Log`; it fetches by **declared role**, so renaming the
-        function needs no algorithm change.
-        """
+        """Register a role used by an algorithm to fetch a canonical head."""
         if role in self.roles:
             raise ValueError(f"role redeclared: {role}")
         self.roles[role] = head
+
+    def declare_lift(self, head: str, policy: str) -> None:
+        if policy not in {"congruent", "conditional", "forbidden"}:
+            raise ValueError(f"unknown lift policy: {policy}")
+        if head in self.lifts:
+            raise ValueError(f"lift policy redeclared: {head}")
+        self.lifts[head] = policy
 
     def declare_binder(self, head: str) -> None:
         """Declare a canonical head as a binder head: its surface word takes the bound
@@ -126,14 +128,13 @@ class RuntimeBuilder:
         self.binders.append(head)
 
     def declare_rule(self, line: str) -> None:
-        """Register the **text** of one rule DSL line (parsing happens at the
-        consumption point in math/rules.py).
-
-        A rule is data, not a Python registration call, so the admission discipline
-        (unconditional identity, no guard on auto) can be checked mechanically
-        against the text.
-        """
+        """Register the text of one rule DSL line."""
         self.rule_lines.append(line)
+
+    def register_command(self, name: str, help: str, args: str, checker_id: str) -> None:
+        if name in self.commands:
+            raise ValueError(f"command redeclared: {name}")
+        self.commands[name] = (help, args, checker_id)
 
     def register_eq_stage(self, name, run, prepend=False) -> None:
         entry = (name, run)
