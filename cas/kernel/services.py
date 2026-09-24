@@ -1,64 +1,67 @@
-"""Kernel service interface.
+"""Kernel-visible decision service ports and core checker."""
 
-The kernel does not import concrete mathematical modules. Decision and context
-queries are injected through this interface, implemented by the runtime layer.
+from __future__ import annotations
 
-`NullServices` is the honest default: every decision returns Unknown. It lets
-the kernel be constructed and tested without any mathematical module, and it
-guarantees that "no decider is wired up" is never mistaken for "decided true".
-"""
+from typing import TYPE_CHECKING, Protocol
 
-from typing import Protocol
+from cas.kernel.evidence import (
+    Accepted,
+    CheckResult,
+    RefutationRejected,
+    Rejected,
+    UnknownResult,
+)
+from cas.kernel.ids import ScopeId
+from cas.kernel.verdict import No, Reason, Unknown, Verdict, unknown
+from cas.syntax.term import Term
 
-from cas.kernel.evidence import Accepted, Rejected, UnknownResult
-from cas.kernel.verdict import Reason, Verdict, unknown
+if TYPE_CHECKING:
+    from cas.kernel.commit import ResolvedProposal
+    from cas.kernel.context import TrackedContext
+    from cas.kernel.store import KernelStore
 
 
 class KernelServices(Protocol):
-    """The capability surface visible to a checker and to commit."""
+    """Capability surface visible to a checker and to commit."""
 
-    def decide(self, proposition, scope_id) -> Verdict:
-        """Decide a proposition in the given scope. Returns a Verdict, never a
-        bare boolean."""
+    def decide(self, proposition: Term, scope_id: ScopeId) -> Verdict:
         ...
 
 
 class NullServices:
-    """Default services: decide nothing (Unknown / FRAGMENT)."""
+    """No mathematics is wired; every query is honestly unknown."""
 
-    def decide(self, proposition, scope_id) -> Verdict:
+    def decide(self, proposition: Term, scope_id: ScopeId) -> Verdict:
         return unknown()
 
-    def lookup_definition(self, scope_id, symbol):
+    def lookup_definition(self, scope_id: ScopeId, symbol: Term) -> Term | None:
         return None
 
-    def assumptions(self, scope_id):
+    def assumptions(self, scope_id: ScopeId) -> tuple[Term, ...]:
         return ()
 
 
 class DecideChecker:
-    """Wrap the injected decider as a checker: a kernel-provided verifier that
-    decides no mathematics itself, it only forwards.
+    """Context-bound checker that forwards exactly one proposition."""
 
-    With it, condition discharge can run on the same commit protocol even
-    without concrete mathematical modules: only a Yes is accepted, and it
-    accepts no direct conditions, which keeps it recursion-safe.
-    """
-
-    def check(self, proposal, context, services):
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
         if len(proposal.conclusions) != 1:
             return Rejected(Reason.FRAGMENT, "decide checker handles one conclusion only")
-        v = services.decide(proposal.conclusions[0], proposal.scope)
-        if v.is_yes():
+        verdict = services.decide(proposal.conclusions[0], proposal.scope)
+        if verdict.is_yes():
             return Accepted(reads=context.read_set())
-        if v.is_no():
-            return Rejected(Reason.GUARDED, "decided false")
-        return UnknownResult(v.reason, "decision undecided")
+        if isinstance(verdict, No):
+            return RefutationRejected(verdict.evidence)
+        if not isinstance(verdict, Unknown):
+            raise TypeError("decision service returned an unsupported verdict")
+        return UnknownResult(verdict.reason, "decision undecided")
 
 
-def register_core_checkers(store) -> None:
-    """Install the kernel-provided checker. Called explicitly; import never
-    mutates global state. A duplicate raises, matching the builder's policy: a
-    checker-id collision is a decision that must surface, not one to resolve
-    silently by registration order."""
+def register_core_checkers(store: KernelStore) -> None:
+    """Register the kernel decision checker during explicit assembly."""
     store.checkers.register("kernel.decide", DecideChecker())

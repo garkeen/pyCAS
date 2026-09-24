@@ -7,8 +7,10 @@ so adding a calculus checker is a one-place change (its checkers.py plus this
 install).
 """
 
+from cas.math.builder import MathBuilder
 
-def install(builder) -> None:
+
+def install(builder: MathBuilder) -> None:
     from cas.math.calculus.differentiation import checkers as diff_c
     from cas.math.calculus.integration import checkers as int_c
     diff_c.register(builder)

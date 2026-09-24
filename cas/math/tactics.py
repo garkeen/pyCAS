@@ -1,200 +1,299 @@
-"""Tactics layer: concrete solving/simplification moves, fully independent of
-the verifiers.
+"""Independent solving tactics for admitted exact fragments."""
 
-The verifier never re-runs the solver. The tactics layer hands over a
-certificate (a solution, a normal form) and the workflow verifier only performs
-an independent check for the derivation kind (back-substitution, domain
-equality). A tactic failure raises TacticsError: refused honestly, never
-degraded into a guess.
-"""
+from __future__ import annotations
 
-from cas.syntax import term as T
-from cas.syntax.term import Sym
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from cas.errors import TacticsError
-from cas.math.project import zero_of
+from cas.kernel.verdict import (
+    No,
+    Refutation,
+    RefutationChannel,
+    refute,
+)
+from cas.math.domains.base import Ring, RingError
+from cas.math.domains.poly import Poly
 from cas.math.linearform import linear_form, nonzero_condition, normalized
+from cas.math.project import zero_of
+from cas.syntax import term as T
+from cas.syntax.term import Sym, Term
+from cas.syntax.termpath import free_vars, subst
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
 
 
-def _lin_core(ctx, diff, var: Sym):
-    """Classify a difference and return the slope condition separately."""
-    form = linear_form(ctx, diff, var)
+@dataclass(frozen=True, slots=True)
+class LinearSolution:
+    solution: Term
+    condition: Term
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityEquation:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class NonzeroEquation:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LinearRefusal:
+    detail: str
+
+
+LinearCoreResult = LinearSolution | IdentityEquation | NonzeroEquation | LinearRefusal
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionalSolution:
+    solution: Term | None
+    condition: Term
+
+
+@dataclass(frozen=True, slots=True)
+class PiecewiseSolutions:
+    points: list[Term]
+    regions: list[Term]
+    conditional: list[ConditionalSolution]
+    refutations: tuple[Refutation, ...] = ()
+
+
+def _nonzero_difference(difference: Term, detail: str) -> No:
+    return refute(
+        RefutationChannel.NORMAL_FORM,
+        T.eq(difference, T.ZERO),
+        difference,
+        T.ZERO,
+        detail=detail,
+    )
+
+def _lin_core(
+    ctx: MathContext,
+    difference: Term,
+    variable: Sym,
+) -> LinearCoreResult:
+    form = linear_form(ctx, difference, variable)
     if form.kind == "linear":
-        coefficient, constant = form.payload
-        solution = normalized(ctx, T.times(T.neg(constant), T.pw(coefficient, T.MONE)))
-        return ("linear", solution, nonzero_condition(coefficient))
+        payload = form.payload
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            raise TacticsError("linear-form payload is malformed")
+        coefficient, constant = payload
+        normalized_coefficient = normalized(ctx, coefficient)
+        solution = normalized(
+            ctx,
+            T.times(T.neg(constant), T.pw(normalized_coefficient, T.MONE)),
+        )
+        return LinearSolution(
+            solution,
+            nonzero_condition(normalized_coefficient),
+        )
     if form.kind == "zero":
-        return ("zero", None, ())
+        return IdentityEquation()
     if form.kind in ("constant", "independent"):
-        return ("nonzero", None, ())
+        return NonzeroEquation()
     if form.kind in ("outside", "no_view"):
-        return ("refuse", form.payload, ())
-    return ("refuse", f"degree {form.payload} equation: only linear is supported", ())
+        return LinearRefusal(str(form.payload))
+    return LinearRefusal(
+        f"degree {form.payload} equation: only linear is supported"
+    )
 
 
-
-
-
-def solve_linear_with_condition(ctx, content, var: Sym):
-    """Return a candidate and the condition needed to divide by its slope."""
+def solve_linear_with_condition(
+    ctx: MathContext,
+    content: Term,
+    variable: Sym,
+) -> tuple[Term, Term]:
+    """Return a linear candidate and its required nonzero slope condition."""
     if not (isinstance(content, T.Expr) and content.head.name == "Eq"):
         raise TacticsError("solve needs an equation")
-    lhs, rhs = content.args
-    kind, payload, condition = _lin_core(ctx, T.plus(lhs, T.neg(rhs)), var)
-    if kind == "linear":
-        return payload, condition
-    if kind == "zero":
-        raise TacticsError("identity: the solution set is everything, no unique solution")
-    if kind == "nonzero":
-        raise TacticsError("contradictory equation: independent of the variable and never zero")
-    raise TacticsError(payload)
-
-
-def solve_linear(ctx, content, var: Sym):
-    """Return the linear candidate; conditions are available separately."""
-    return solve_linear_with_condition(ctx, content, var)[0]
-
-
-# ---------------------------------------------------------------------------
-# Diophantine fragment: Z is the host of the decidable fragment; the general
-# case is a theorem-level refusal.
-# ---------------------------------------------------------------------------
-
-def _integer_ring():
-    """The host ring of the Diophantine fragment: a **Euclidean integral domain**
-    (Z).
-
-    Taken by capability rather than by hardcoding `Z_RING`: the algorithm
-    declares that it needs a Euclidean non-field structure and the query matches
-    it. If another structure with the same capabilities (such as the Gaussian
-    integers) is added, this query fails loudly on an ambiguous match, forcing an
-    explicit decision about which integral domain hosts the Diophantine
-    fragment instead of letting import order or dict order choose.
-    """
-    from cas.math.domains.base import find_domain
-    hits = find_domain(lambda d: d.is_euclidean and not d.is_field
-                       and d.ring is not None)
-    if len(hits) != 1:
+    left, right = content.args
+    result = _lin_core(ctx, T.plus(left, T.neg(right)), variable)
+    if isinstance(result, LinearSolution):
+        return result.solution, result.condition
+    if isinstance(result, IdentityEquation):
         raise TacticsError(
-            f"need a unique Euclidean integral domain, matched {[d.name for d in hits]}")
-    return hits[0].ring
+            "identity: the solution set is everything, no unique solution"
+        )
+    if isinstance(result, NonzeroEquation):
+        raise TacticsError(
+            "contradictory equation: independent of the variable and never zero"
+        )
+    raise TacticsError(result.detail)
 
 
-def solve_diophantine_linear(a: int, b: int, c: int):
-    """Integer solutions of ax + by = c, by the extended Euclidean algorithm.
+def solve_linear(
+    ctx: MathContext,
+    content: Term,
+    variable: Sym,
+) -> Term:
+    """Return the linear candidate; its condition is available separately."""
+    return solve_linear_with_condition(ctx, content, variable)[0]
 
-    Returns ((x0, y0), (dx, dy)): a particular solution and the period, so all
-    solutions are (x0 + dx*t, y0 + dy*t) with t an integer. When gcd(a, b) does
-    not divide c there is no solution and the call refuses.
-    """
-    g, s, t = _integer_ring().xgcd(a, b)
+
+def _integer_ring(ctx: MathContext) -> Ring:
+    """Select the unique Euclidean non-field coefficient ring."""
+    try:
+        domain = ctx.domains.require_unique(
+            lambda candidate: (
+                candidate.is_euclidean
+                and not candidate.is_field
+                and candidate.ring is not None
+            ),
+            "Diophantine host ring",
+        )
+    except RingError as error:
+        raise TacticsError(str(error)) from error
+    if domain.ring is None:
+        raise TacticsError("selected Diophantine domain has no ring")
+    return domain.ring
+
+
+def solve_diophantine_linear(
+    ctx: MathContext,
+    a: int,
+    b: int,
+    c: int,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return a point and direction for ``a*x + b*y = c``."""
+    ring = _integer_ring(ctx)
+    raw_g, raw_s, raw_t = ring.xgcd(ring.from_int(a), ring.from_int(b))
+    g = ring.integer_value(raw_g)
+    s = ring.integer_value(raw_s)
+    t = ring.integer_value(raw_t)
+    if g is None or s is None or t is None:
+        raise TacticsError("extended gcd returned a non-integral coefficient")
     if g == 0:
         if c != 0:
-            raise TacticsError("0 = c != 0: no solution")
-        return ((0, 0), (1, 0))            # 0 = 0: the whole plane, a trivial parametrization
+            raise TacticsError(f"0 = {c} != 0: no solution")
+        return (0, 0), (1, 0)
     if c % g != 0:
-        raise TacticsError(f"no integer solution: gcd({a},{b})={g} does not divide {c}")
-    m = c // g
-    return ((s * m, t * m), (b // g, -a // g))
+        raise TacticsError(
+            f"no integer solution: gcd({a},{b})={g} does not divide {c}"
+        )
+    multiple = c // g
+    return (s * multiple, t * multiple), (b // g, -a // g)
 
 
-def integer_roots(p, var):
-    """All integer roots of a univariate polynomial with integer coefficients,
-    by the rational root theorem.
-
-    An integer root must divide the constant term, giving a complete finite
-    candidate set verified exactly with Horner. Returns an ascending list.
-    Non-integer coefficients are refused as outside the fragment.
-    """
-    if var not in p.vars:
+def integer_roots(polynomial: Poly, variable: Sym, ring: Ring) -> list[int]:
+    """Return all roots in the one-variable integer fragment."""
+    if variable not in polynomial.vars:
         return []
-    i = p.vars.index(var)
-    others = [j for j in range(len(p.vars)) if j != i]
-    coefs = {}
-    for k, c in p.monos:
-        if any(k[j] for j in others):
-            raise TacticsError("involves other variables: only single-variable is supported")
-        if getattr(c, "denominator", 1) != 1:
-            raise TacticsError("non-integer coefficients: outside the integer-root fragment")
-        coefs[k[i]] = int(c)
-    if not coefs:
+    variable_index = polynomial.vars.index(variable)
+    other_indices = [
+        index
+        for index in range(len(polynomial.vars))
+        if index != variable_index
+    ]
+    coefficients: dict[int, int] = {}
+    for monomial, coefficient in polynomial.monos:
+        if any(monomial[index] for index in other_indices):
+            raise TacticsError(
+                "involves other variables: only single-variable is supported"
+            )
+        integer = ring.integer_value(coefficient)
+        if integer is None:
+            raise TacticsError(
+                "non-integer coefficients: outside the integer-root fragment"
+            )
+        coefficients[monomial[variable_index]] = integer
+    if not coefficients:
         return []
-    roots = []
-    while coefs.get(0, 0) == 0:            # x divides p: 0 is a root, reduce the degree
+    roots: list[int] = []
+    while coefficients.get(0, 0) == 0:
         roots.append(0)
-        coefs = {e - 1: c for e, c in coefs.items() if e > 0}
-        if not coefs:
+        coefficients = {
+            exponent - 1: coefficient
+            for exponent, coefficient in coefficients.items()
+            if exponent > 0
+        }
+        if not coefficients:
             return roots
-    deg = max(coefs)
-    a0 = coefs[0]
+    degree = max(coefficients)
+    constant = coefficients[0]
     from cas.math.realroot import divisors
-    cands = set()
-    for d in divisors(a0):                 # integer root implies d | a0, O(sqrt|a0|)
-        cands.update((d, -d))
-    for r in sorted(cands):
-        acc = coefs[deg]
-        for e in range(deg - 1, -1, -1):   # Horner
-            acc = acc * r + coefs.get(e, 0)
-        if acc == 0:
-            roots.append(r)
+
+    candidates: set[int] = set()
+    for divisor in divisors(constant):
+        candidates.update((divisor, -divisor))
+    for root in sorted(candidates):
+        accumulator = coefficients[degree]
+        for exponent in range(degree - 1, -1, -1):
+            accumulator = accumulator * root + coefficients.get(exponent, 0)
+        if accumulator == 0:
+            roots.append(root)
     return sorted(set(roots))
 
 
-def solve_piecewise(ctx, f, x: Sym, target):
-    """Solve the piecewise equation pw(...) = target: solve branch by branch and
-    check membership in the branch condition.
-
-    Each branch takes the branch-equation difference d = v - target (folded) and
-    classifies it in two steps:
-    · d contains no free variable x (closed form): decided by the vanishing
-      channel -- identically zero means the whole branch region is a solution,
-      provably nonzero means no contribution, undecided is recorded as a
-      conditional solution;
-    · d contains x: classified by `_lin_core` on the projection normal form (the
-      difference of x+1 and x+1 contains x syntactically but projects to zero and
-      still yields a region solution; the difference of x+1 and x projects to a
-      constant and still contributes nothing) -- a linear case yields a
-      candidate which is substituted into the branch condition and decided by the
-      pipeline: accepted when it holds, discarded when it fails, recorded as
-      conditional when undecided.
-
-    Any branch outside the linear fragment causes a refusal: missing it could
-    lose solutions, so completeness cannot be guaranteed.
-
-    Returns {"points": [...], "regions": [...], "conditional": [(sol, cond)]}.
-    """
-    from cas.math.piecewise import fold_nested, branches, is_piecewise
-    from cas.math.decide import decide
+def solve_piecewise(
+    ctx: MathContext,
+    function: Term,
+    variable: Sym,
+    target: Term,
+) -> PiecewiseSolutions:
+    """Solve a piecewise equation completely inside the linear fragment."""
     from cas.kernel.scope import Assumptions
-    from cas.kernel.verdict import YES, NO
+    from cas.math.decide import decide
     from cas.math.domains.qarith import fold
-    if not is_piecewise(f):
+    from cas.math.piecewise import branches, fold_nested, is_piecewise
+
+    if not is_piecewise(function):
         raise TacticsError("solve_piecewise needs a piecewise function")
-    f = fold_nested(f)
-    points, regions, conditional = [], [], []
-    for v, c in branches(f):
-        d = fold(T.plus(v, T.neg(target)))
-        if x not in T.free_vars(d):
-            z = zero_of(ctx, d)
-            if z is True:
-                regions.append(c)                 # branch equation holds identically
-            elif z is None:
-                conditional.append((None, c))     # identity undecided
+    flattened = fold_nested(function)
+    points: list[Term] = []
+    regions: list[Term] = []
+    conditional: list[ConditionalSolution] = []
+    refutations: list[Refutation] = []
+    for value, condition in branches(flattened):
+        difference = fold(T.plus(value, T.neg(target)))
+        if variable not in free_vars(difference):
+            zero = zero_of(ctx, difference)
+            if zero is True:
+                regions.append(condition)
+            elif zero is False:
+                refutations.append(
+                    _nonzero_difference(
+                        difference,
+                        "the branch difference has a nonzero normal form",
+                    ).evidence
+                )
+            else:
+                conditional.append(ConditionalSolution(None, condition))
             continue
-        kind, payload, _condition = _lin_core(ctx, d, x)
-        if kind == "zero":
-            regions.append(c)                     # projects to zero (v == target)
+        result = _lin_core(ctx, difference, variable)
+        if isinstance(result, IdentityEquation):
+            regions.append(condition)
             continue
-        if kind == "nonzero":
-            continue                              # branch equation never vanishes
-        if kind == "refuse":
+        if isinstance(result, NonzeroEquation):
+            refutations.append(
+                _nonzero_difference(
+                    difference,
+                    "the branch equation is independent and nonzero",
+                ).evidence
+            )
+            continue
+        if isinstance(result, LinearRefusal):
             raise TacticsError(
-                f"branch equation is outside the linear fragment, completeness "
-                f"cannot be guaranteed: {payload}")
-        verdict = decide(ctx, fold(T.subst(c, {x: payload})), Assumptions())
-        if verdict is YES:
-            points.append(payload)
-        elif verdict is NO:
-            continue
+                "branch equation is outside the linear fragment, completeness "
+                f"cannot be guaranteed: {result.detail}"
+            )
+        substituted_condition = fold(
+            subst(condition, {variable: result.solution})
+        )
+        verdict = decide(
+            ctx,
+            substituted_condition,
+            Assumptions(),
+        )
+        if verdict.is_yes():
+            points.append(result.solution)
+        elif isinstance(verdict, No):
+            refutations.append(verdict.evidence)
         else:
-            conditional.append((payload, c))
-    return {"points": points, "regions": regions, "conditional": conditional}
+            conditional.append(
+                ConditionalSolution(result.solution, condition)
+            )
+    return PiecewiseSolutions(points, regions, conditional, tuple(refutations))

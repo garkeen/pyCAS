@@ -11,27 +11,30 @@ Five properties, all self-proving:
 Usage: python tests/random/random_domains.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.syntax.term import S, N, mk, plus, times, pw
-from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.domains.poly import (Poly, p_add, p_mul, p_neg, p_pow, p_scale,
-                              p_const, p_zero, p_gcd_univar,
-                              p_divmod_field, from_term, to_term,
-                              _norm)
-from cas.math.domains.ratfunc import rf_from_term, rf_equal, RatFunc
-from cas.math.domains.q import Q_RING
 from cas.math.domains import poly_domain, ratfunc_domain
-
+from cas.math.domains.poly import (
+    _norm,
+    from_term,
+    p_add,
+    p_const,
+    p_divmod_field,
+    p_gcd_univar,
+    p_mul,
+    to_term,
+)
+from cas.math.domains.q import Q_RING
+from cas.math.domains.ratfunc import RatFunc, rf_equal
 from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
+from cas.syntax.term import S, times
 
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
+RUNTIME = bootstrap()
 
 X, Y = S("x"), S("y")
 
@@ -104,14 +107,14 @@ def prop_equal(rounds, rng):
         t2 = to_term(Q_RING, p_mul(Q_RING, a, b))
         r = P.equal(t1, t2)
         if r is not True:
-            fail("P6 factored vs expanded failed", i, to_str(t1), to_str(t2))
+            fail("P6 factored vs expanded failed", i, to_str(RUNTIME, t1), to_str(RUNTIME, t2))
         # inequality refutation: p vs p + constant
         p = a if not a.is_zero() else p_const(Q_RING, (X,), Fr(1))
         q = p_add(Q_RING, p, p_const(Q_RING, p.vars, Fr(rng.randint(1, 9))))
         r = P.equal(to_term(Q_RING, p), to_term(Q_RING, q))
         if r is not False:
-            fail("P7 inequality refutation failed", i, to_str(to_term(Q_RING, p)),
-                 to_str(to_term(Q_RING, q)))
+            fail("P7 inequality refutation failed", i, to_str(RUNTIME, to_term(Q_RING, p)),
+                 to_str(RUNTIME, to_term(Q_RING, q)))
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +122,7 @@ def prop_equal(rounds, rng):
 # ---------------------------------------------------------------------------
 
 def prop_ratfunc(rounds, rng):
-    RF = ratfunc_domain(X, ring=Q_RING)
+    ratfunc_domain(X, ring=Q_RING)
     for i in range(rounds):
         a = rand_poly_uni(rng)
         b = rand_poly_uni(rng)

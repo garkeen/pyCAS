@@ -1,97 +1,107 @@
-"""Shared polynomial parts: resultants and squarefree decomposition.
+"""Shared polynomial resultant and squarefree-decomposition operations."""
 
-A resultant is the shared tool of the residue method and CAD projection;
-squarefree decomposition (Yun) precedes factorization and Hermite reduction.
-Both are implemented only for field coefficients in one variable; the
-subresultant chain and the multivariate generalization upgrade through the same
-interface once a multivariate gcd is in place.
-"""
+from __future__ import annotations
 
-from cas.math.domains.poly import (Poly, p_scale, p_sub,
-                              p_divmod_field, p_gcd_univar, p_deriv)
-
-
-def p_deg(p: Poly, var_i: int = 0) -> int:
-    return p.deg_in(var_i)
+from cas.math.domains.base import DomainElement, Ring
+from cas.math.domains.poly import (
+    Poly,
+    p_deriv,
+    p_divmod_field,
+    p_gcd_univar,
+    p_scale,
+    p_sub,
+)
 
 
-def p_lc(p: Poly, var_i: int = 0):
-    """The leading coefficient with respect to var_i. A zero polynomial has no
-    leading term, so the caller must guard against it."""
-    top = max(p.monos, key=lambda kc: kc[0][var_i])
+def p_deg(polynomial: Poly, variable_index: int = 0) -> int:
+    return polynomial.deg_in(variable_index)
+
+
+def p_lc(polynomial: Poly, variable_index: int = 0) -> DomainElement:
+    """Return the leading coefficient of a nonzero polynomial."""
+    top = max(polynomial.monos, key=lambda item: item[0][variable_index])
     return top[1]
 
 
-def p_monic(ring, p: Poly, var_i: int = 0) -> Poly:
-    if p.is_zero():
-        return p
-    return p_scale(ring, p, ring.div_exact(ring.from_int(1), p_lc(p, var_i)))
+def p_monic(ring: Ring, polynomial: Poly, variable_index: int = 0) -> Poly:
+    if polynomial.is_zero():
+        return polynomial
+    return p_scale(
+        ring,
+        polynomial,
+        ring.div_exact(ring.from_int(1), p_lc(polynomial, variable_index)),
+    )
 
 
-def p_div_exact(ring, a: Poly, b: Poly, var_i: int = 0) -> Poly:
-    """Exact division: the remainder must be zero, otherwise the caller broke
-    the contract."""
-    q, r = p_divmod_field(ring, a, b, var_i)
-    if not r.is_zero():
+def p_div_exact(
+    ring: Ring,
+    numerator: Poly,
+    denominator: Poly,
+    variable_index: int = 0,
+) -> Poly:
+    quotient, remainder = p_divmod_field(
+        ring, numerator, denominator, variable_index
+    )
+    if not remainder.is_zero():
         raise ValueError("inexact division")
-    return q
+    return quotient
 
 
-def resultant(ring, a: Poly, b: Poly, var_i: int = 0):
-    """The resultant res(a, b) with field coefficients, by the remainder
-    sequence recursion.
-
-    Properties: res = 0 iff a and b share a root (a non-constant common factor);
-    res(x - r, f) = f(r), which anchors the sign convention. Returns a ring
-    element.
-    """
-    if a.is_zero() or b.is_zero():
+def resultant(
+    ring: Ring,
+    left: Poly,
+    right: Poly,
+    variable_index: int = 0,
+) -> DomainElement:
+    """Compute a resultant by the remainder sequence recursion."""
+    if left.is_zero() or right.is_zero():
         return ring.from_int(0)
-    s = ring.from_int(1)
+    sign = ring.from_int(1)
     while True:
-        m, n = p_deg(a, var_i), p_deg(b, var_i)
-        if m < n:
-            a, b = b, a
-            m, n = n, m
-            if (m * n) % 2:
-                s = ring.neg(s)
-        if n == 0:
-            # res(a, c) = c^deg(a)
-            c = b.monos[0][1] if not b.is_zero() else ring.from_int(0)
-            return ring.mul(s, ring.pow_pos(c, m))
-        _, r = p_divmod_field(ring, a, b, var_i)
-        if r.is_zero():
-            return ring.from_int(0)        # a common factor
-        if (m * n) % 2:
-            s = ring.neg(s)
-        lc = p_lc(b, var_i)
-        s = ring.mul(s, ring.pow_pos(lc, m - p_deg(r, var_i)))
-        a, b = b, r
+        left_degree = p_deg(left, variable_index)
+        right_degree = p_deg(right, variable_index)
+        if left_degree < right_degree:
+            left, right = right, left
+            left_degree, right_degree = right_degree, left_degree
+            if (left_degree * right_degree) % 2:
+                sign = ring.neg(sign)
+        if right_degree == 0:
+            constant = right.monos[0][1] if not right.is_zero() else ring.from_int(0)
+            return ring.mul(sign, ring.pow_pos(constant, left_degree))
+        _, remainder = p_divmod_field(ring, left, right, variable_index)
+        if remainder.is_zero():
+            return ring.from_int(0)
+        if (left_degree * right_degree) % 2:
+            sign = ring.neg(sign)
+        leading = p_lc(right, variable_index)
+        sign = ring.mul(
+            sign,
+            ring.pow_pos(leading, left_degree - p_deg(remainder, variable_index)),
+        )
+        left, right = right, remainder
 
 
-def squarefree(ring, f: Poly):
-    """Yun squarefree decomposition over a characteristic-zero field: returns
-    [(factor, multiplicity), ...] with monic factors.
-
-    The product of factor_i^multiplicity_i equals monic(f). A constant or zero
-    polynomial returns an empty list.
-    """
-    if f.is_zero() or p_deg(f) == 0:
+def squarefree(ring: Ring, polynomial: Poly) -> list[tuple[Poly, int]]:
+    """Return Yun squarefree decomposition over a characteristic-zero field."""
+    if polynomial.is_zero() or p_deg(polynomial) == 0:
         return []
-    f = p_monic(ring, f)
-    df = p_deriv(ring, f, 0)
-    g = p_gcd_univar(ring, f, df)
-    w = p_div_exact(ring, f, g)
-    y = p_div_exact(ring, df, g)
-    z = p_sub(ring, y, p_deriv(ring, w, 0))
-    out = []
-    i = 1
-    while p_deg(w) > 0:
-        h = p_gcd_univar(ring, w, z)
-        if p_deg(h) > 0:
-            out.append((h, i))
-            w = p_div_exact(ring, w, h)
-        y = p_div_exact(ring, z, h) if p_deg(h) > 0 else z
-        z = p_sub(ring, y, p_deriv(ring, w, 0))
-        i += 1
-    return out
+    current = p_monic(ring, polynomial)
+    derivative = p_deriv(ring, current, 0)
+    gcd = p_gcd_univar(ring, current, derivative)
+    reduced = p_div_exact(ring, current, gcd)
+    next_reduced = p_div_exact(ring, derivative, gcd)
+    next_value = p_sub(ring, next_reduced, p_deriv(ring, reduced, 0))
+    result: list[tuple[Poly, int]] = []
+    multiplicity = 1
+    while p_deg(reduced) > 0:
+        factor = p_gcd_univar(ring, reduced, next_value)
+        if p_deg(factor) > 0:
+            result.append((factor, multiplicity))
+            reduced = p_div_exact(ring, reduced, factor)
+        if p_deg(factor) > 0:
+            next_reduced = p_div_exact(ring, next_value, factor)
+        else:
+            next_reduced = next_value
+        next_value = p_sub(ring, next_reduced, p_deriv(ring, reduced, 0))
+        multiplicity += 1
+    return result

@@ -13,7 +13,6 @@ from cas.errors import ParseError
 from cas.math.loader import parse_rule_line
 from cas.syntax import term as T
 
-
 # ---------------------------------------------------------------------------
 # Keywords are depth-0 whole tokens
 # ---------------------------------------------------------------------------
@@ -39,9 +38,14 @@ def test_trailing_keyword_sections_parse():
 
 
 def test_guard_value_may_span_many_tokens():
-    r = parse_rule_line("rule r = ?x -> f(?x) guard a > 0 && b < 1 prio 7 auto")
-    assert r.auto and r.priority == 7
+    r = parse_rule_line("rule r = ?x -> f(?x) guard a > 0 && b < 1 prio 7")
+    assert not r.auto and r.priority == 7
     assert r.guard is not None and r.guard.head.name == "And"
+
+
+def test_auto_rule_cannot_carry_a_guard():
+    with pytest.raises(ParseError):
+        parse_rule_line("rule r = ?x -> f(?x) guard ?x > 0 auto")
 
 
 # ---------------------------------------------------------------------------

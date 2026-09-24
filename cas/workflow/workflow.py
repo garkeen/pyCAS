@@ -37,22 +37,45 @@ Domain membership: a step's domain is recorded through the projection layer's
 membership test, never by leaf sniffing.
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
-from cas.syntax import term as T
-from cas.syntax.term import S
 from cas.errors import BranchError, ScopeError
-from cas.kernel.commit import GuardPolicy, StepProposal, commit
+from cas.kernel.commit import (
+    Committed,
+    GuardPolicy,
+    NeedsSplit,
+    Refused,
+    StepProposal,
+    Undecided,
+    commit,
+)
 from cas.kernel.evidence import Evidence
-from cas.kernel.model import (Assumption, ContextReadSet, Declaration,
-                              Definition)
-from cas.workflow.artifact import ArtifactStore
-from cas.workflow.branch import BranchCase, BranchStore, promote_guard
-from cas.workflow.command import Command, ValuationCheck
-from cas.workflow.constraint import ConstraintStore
-from cas.workflow.event import EventLog, Ref
-from cas.workflow.ids import RevisionId
-from cas.workflow.task import TaskStore
+from cas.kernel.ids import JudgmentId, ScopeId
+from cas.kernel.mode import ExecutionMode
+from cas.kernel.model import (
+    Applicability,
+    Assumption,
+    ContextReadSet,
+    Declaration,
+    Definition,
+)
+from cas.kernel.scope import Scope
+from cas.kernel.services import KernelServices
+from cas.kernel.store import KernelStore
+from cas.kernel.verdict import Refutation
+from cas.syntax import term as T
+from cas.syntax.term import Expr, S, Sym, Term
+from cas.syntax.termpath import free_vars, subst
+from cas.workflow.artifact import Artifact, ArtifactStore
+from cas.workflow.branch import BranchCase, BranchGroup, BranchStore, promote_guard
+from cas.workflow.command import Command, MergeBranches, ValuationCheck
+from cas.workflow.constraint import Constraint, ConstraintSource, ConstraintStore
+from cas.workflow.event import Event, EventLog, Ref, RefKind
+from cas.workflow.ids import ArtifactId, EventId, RevisionId, TaskId
+from cas.workflow.states import StepStatus
+from cas.workflow.task import Task, TaskStore
 
 # ---------------------------------------------------------------------------
 # Command shapes live in cas/workflow/command.py: a command is a pure data
@@ -76,16 +99,17 @@ class WorkflowStep:
     two used to share a name, hence the explicit naming here.
     """
     id: int
-    content: object                 # Term
-    command: Command                # command; the claim kind is in its checker_id
-    guards: tuple = ()              # undischarged conditions (projection of kernel Requirements)
-    status: str = "undecided"       # "committed"|"refused"|"undecided"|"needs_split"
+    content: T.Term
+    command: Command
+    guards: tuple[T.Term, ...] = ()
+    status: StepStatus = StepStatus.UNDECIDED
     note: str = ""
-    target: tuple = ()
+    refutation: Refutation | None = None
+    target: tuple[int, ...] = ()
     domain: str = ""                # domain of the content, assigned by projection
-    judgment: object = None         # kernel JudgmentId; None when not committed
-    artifact: object = None         # artifact id
-    task: object = None             # TaskId of the computation problem, if any
+    judgment: JudgmentId | None = None
+    artifact: ArtifactId | None = None
+    task: TaskId | None = None
 
 
 # The manual/interactive channel: explicit rule application may produce
@@ -94,10 +118,38 @@ class WorkflowStep:
 _POLICY = GuardPolicy.ALLOW_CONDITIONAL
 
 
+class WorkflowAlgorithms(Protocol):
+    """Narrow mathematical algorithm port owned by the workflow consumer."""
+
+    def domain_of(self, term: Term) -> str:
+        """Return the projected domain name, or an empty string on a miss."""
+
+    def solve_linear_constraints(
+        self,
+        relations: tuple[Term, ...],
+        unknowns: tuple[Sym, ...],
+    ) -> tuple[dict[Sym, Term], bool] | None:
+        """Return a candidate valuation and completeness flag."""
+
+    def expand_definitions(
+        self,
+        definitions: Mapping[Term, Term],
+        term: Term,
+    ) -> Term:
+        """Expand definitions through the automatic channel."""
+
+
 class Workflow:
     """Submission boundary plus presentation records."""
 
-    def __init__(self, store, services, algorithms=None, mode=None, policy=None):
+    def __init__(
+        self,
+        store: KernelStore | None,
+        services: KernelServices | None,
+        algorithms: WorkflowAlgorithms | None = None,
+        mode: ExecutionMode | None = None,
+        policy: GuardPolicy | None = None,
+    ) -> None:
         """The ledger and the decision services are injected by the runtime.
 
         The workflow does not know `cas.math`, so the mathematical checkers, the
@@ -124,35 +176,38 @@ class Workflow:
         self.events = EventLog()
         self.branches = BranchStore()
         self.constraints = ConstraintStore()
-        self._steps: dict = {}
+        self._steps: dict[int, WorkflowStep] = {}
         self._next_id = 0
         # Undo/redo state: which scope version was current at each revision in
         # view, and which event produced each step record. Both are written at
         # the single site that appends an event / creates a step and are never
         # removed: moving the pointer back never deletes history.
         self._scope_at = {RevisionId(0): self.scope}
-        self._event_of_step: dict = {}
+        self._event_of_step: dict[int, EventId] = {}
 
-    def get(self, sid) -> WorkflowStep:
+    def get(self, sid: int) -> WorkflowStep:
         return self._steps[sid]
 
-    def all_steps(self):
-        """Every step ever recorded, in recording order: the audit/history view
-        (`visible_steps` is what the current revision shows)."""
-        return [self._steps[i] for i in range(self._next_id)]
+    def all_steps(self) -> list[WorkflowStep]:
+        """Return every step ever recorded, in recording order."""
+        return [self._steps[index] for index in range(self._next_id)]
 
-    def visible_steps(self):
-        """The steps whose operation is in the current event view, in view order.
+    def visible_steps(self) -> list[WorkflowStep]:
+        """Return steps whose operation is in the current event view."""
+        view = {event.id for event in self.events.visible()}
+        return [
+            self._steps[index]
+            for index in range(self._next_id)
+            if self._event_of_step.get(index) in view
+        ]
 
-        A step stays in `_steps` after an undo; it drops out of this list
-        because its event is no longer visible, while `all_steps()` still holds
-        it for history.
-        """
-        view = {ev.id for ev in self.events.visible()}
-        return [self._steps[i] for i in range(self._next_id)
-                if self._event_of_step.get(i) in view]
-
-    def add(self, content, command, note="", target=()) -> WorkflowStep:
+    def add(
+        self,
+        content: Term,
+        command: Command,
+        note: str = "",
+        target: Sequence[int] = (),
+    ) -> WorkflowStep:
         # The context a step is submitted in is the current scope version. A
         # committed claim afterwards grows the scope by appending the
         # assumption, and this step keeps the version it was checked in.
@@ -161,17 +216,23 @@ class Workflow:
         # records the premises as a tuple, so a command may name several (a
         # two-premise rule such as transitivity needs exactly that).
         pred_ids = command.premises
-        premises = ()
+        premises: tuple[JudgmentId, ...] = ()
         if pred_ids:
-            psteps = []
+            premise_ids: list[JudgmentId] = []
             for pid in pred_ids:
                 pstep = self._steps.get(pid)
                 if pstep is None or pstep.judgment is None:
-                    return self._record(content, command, "undecided",
-                                        note or f"predecessor #{pid} has no dependable conclusion",
-                                        target, (), scope=submitted)
-                psteps.append(pstep)
-            premises = tuple(p.judgment for p in psteps)
+                    return self._record(
+                        content,
+                        command,
+                        StepStatus.UNDECIDED,
+                        note or f"predecessor #{pid} has no dependable conclusion",
+                        target,
+                        (),
+                        scope=submitted,
+                    )
+                premise_ids.append(pstep.judgment)
+            premises = tuple(premise_ids)
 
         # The proposal is committed first; a claim's proposition becomes a scope
         # assumption only once the commit succeeds. Registering before commit
@@ -186,7 +247,7 @@ class Workflow:
         res = commit(self.store, proposal, services=self.services,
                      mode=self.mode)
 
-        if res.is_committed():
+        if isinstance(res, Committed):
             if command.registers_assumption:
                 # The conclusion keeps the context it was checked in; later
                 # submissions see the assumption because the scope grows into a
@@ -196,22 +257,36 @@ class Workflow:
             j = self.store.get_judgment(res.judgments[0])
             guards = tuple(self.store.get_requirement(r).proposition
                            for r in j.requirements)
-            return self._record(content, command, "committed", note, target,
+            return self._record(content, command, StepStatus.COMMITTED, note, target,
                                 guards, j.id, scope=submitted)
-        if res.is_refused():
-            return self._record(content, command, "refused",
-                                res.detail or note, target, (), scope=submitted)
-        if res.is_needs_split():
+        if isinstance(res, Refused):
+            return self._record(
+                content,
+                command,
+                StepStatus.REFUSED,
+                res.detail or note,
+                target,
+                (),
+                scope=submitted,
+                refutation=res.refutation,
+            )
+        if isinstance(res, NeedsSplit):
             # The policy requests a case split: hand the pending condition back
             # to the caller, which opens branches via split_on.
-            return self._record(content, command, "needs_split",
+            return self._record(content, command, StepStatus.NEEDS_SPLIT,
                                 "case split required", target,
                                 tuple(res.conditions), scope=submitted)
-        return self._record(content, command, "undecided",
-                            getattr(res, "detail", "") or "not re-checked",
-                            target, (), scope=submitted)
+        if isinstance(res, Undecided):
+            return self._record(content, command, StepStatus.UNDECIDED,
+                                res.detail or "not re-checked", target, (), scope=submitted)
+        raise RuntimeError(f"unknown commit result: {type(res).__name__}")
 
-    def _append_event(self, command, inputs=(), outputs=()):
+    def _append_event(
+        self,
+        command: str,
+        inputs: Sequence[int] = (),
+        outputs: Sequence[Ref] = (),
+    ) -> Event:
         """Record one operation and note the scope version the new revision
         starts from.
 
@@ -226,17 +301,26 @@ class Workflow:
         self._scope_at[self.events.current_revision()] = self.scope
         return ev
 
-    def _record(self, content, command, status, note, target, guards,
-                judgment=None, inputs=None, scope=None) -> WorkflowStep:
+    def _record(
+        self,
+        content: Term,
+        command: Command,
+        status: StepStatus,
+        note: str,
+        target: Sequence[int],
+        guards: Sequence[Term],
+        judgment: JudgmentId | None = None,
+        inputs: Sequence[int] | None = None,
+        scope: ScopeId | None = None,
+        refutation: Refutation | None = None,
+    ) -> WorkflowStep:
         # The records below belong to the version the step was submitted in; the
-        # workflow's current scope may already be a later version (a claim grew
-        # it), so the caller passes the version explicitly.
-        scope = self.scope if scope is None else scope
+        # workflow's current scope may already be a later version.
+        record_scope = self.scope if scope is None else scope
         # 1. computation product (no truth value)
-        artifact = self.artifacts.create(scope, content)
-        # 2. computation problem plus candidate (commands with no request head
-        #    open no task)
-        task = self._open_task(command, artifact, judgment, scope)
+        artifact = self.artifacts.create(record_scope, content)
+        # Commands with no request head open no task.
+        task = self._open_task(command, artifact, judgment, record_scope)
         # 3. operation history: outputs is the only exit connecting an operation
         #    to kernel conclusions
         if inputs is None:
@@ -245,24 +329,40 @@ class Workflow:
             command=command.name,
             inputs=tuple(inputs),
             outputs=tuple(
-                Ref(kind, ident)
-                for kind, ident in (("artifact", artifact.id),
-                                    ("task", task and task.id),
-                                    ("judgment", judgment))
-                if ident is not None))
+                ref for ref in (
+                    Ref(RefKind.ARTIFACT, artifact.id),
+                    Ref(RefKind.TASK, task.id) if task is not None else None,
+                    Ref(RefKind.JUDGMENT, judgment) if judgment is not None else None,
+                ) if ref is not None
+            ))
         self.artifacts.attach(artifact.id, ev.id)
 
-        s = WorkflowStep(id=self._next_id, content=content, command=command,
-                         guards=tuple(guards), status=status, note=note,
-                         target=tuple(target), domain=self._domain_of(content),
-                         judgment=judgment, artifact=artifact.id,
-                         task=None if task is None else task.id)
-        self._steps[self._next_id] = s
+        step = WorkflowStep(
+            id=self._next_id,
+            content=content,
+            command=command,
+            guards=tuple(guards),
+            status=status,
+            note=note,
+            refutation=refutation,
+            target=tuple(target),
+            domain=self._domain_of(content),
+            judgment=judgment,
+            artifact=artifact.id,
+            task=None if task is None else task.id,
+        )
+        self._steps[self._next_id] = step
         self._event_of_step[self._next_id] = ev.id
         self._next_id += 1
-        return s
+        return step
 
-    def _open_task(self, command, artifact, judgment, scope):
+    def _open_task(
+        self,
+        command: Command,
+        artifact: Artifact,
+        judgment: JudgmentId | None,
+        scope: ScopeId,
+    ) -> Task | None:
         """Open a task by the request head the command declares and register the
         candidate. Returns None for commands with no request head.
 
@@ -285,17 +385,25 @@ class Workflow:
     # --- constraints (equations constructed by computation; the cycle lives in
     #     the candidate <-> constraint subgraph) ---
 
-    def add_constraint(self, relation, sources=(), proposed_evidence=None):
+    def add_constraint(
+        self,
+        relation: Term,
+        sources: Sequence[ConstraintSource] = (),
+        proposed_evidence: Evidence | None = None,
+    ) -> Constraint:
         """Register a construction relation. This produces no Judgment: a
         constraint is an artifact-level construction, and becoming a conclusion
         still requires commit and an accepting checker."""
         c = self.constraints.add(self.scope, relation, sources,
                                  proposed_evidence)
         self._append_event(command="AddConstraint", inputs=(),
-                           outputs=(Ref("constraint", c.id),))
+                           outputs=(Ref(RefKind.CONSTRAINT, c.id),))
         return c
 
-    def solve_constraints(self, unknowns):
+    def solve_constraints(
+        self,
+        unknowns: tuple[Sym, ...],
+    ) -> tuple[dict[Sym, Term] | None, tuple[WorkflowStep, ...], bool]:
         """Solve the constraint system and re-check it. The solver is
         untrusted and may hand over a wrong candidate; re-checking belongs to a
         checker.
@@ -312,9 +420,15 @@ class Workflow:
         if res is None:
             return None, (), False
         valuation, complete = res
-        return valuation, self.verify_valuation(valuation), complete
+        valuation_terms: dict[Term, Term] = {}
+        for symbol, value in valuation.items():
+            valuation_terms[symbol] = value
+        return valuation, self.verify_valuation(valuation_terms), complete
 
-    def verify_valuation(self, valuation):
+    def verify_valuation(
+        self,
+        valuation: Mapping[Term, Term],
+    ) -> tuple[WorkflowStep, ...]:
         """Re-check "this assignment satisfies the constraint system" item by
         item.
 
@@ -323,16 +437,18 @@ class Workflow:
         re-checked by the `constraint.satisfied` checker for its instance and
         vanishing; the solver's own report does not count.
         """
-        out = []
-        for c in self.constraints.all():
-            inst = T.subst(c.relation, dict(valuation))
-            out.append(self.add(inst, ValuationCheck(constraint=c,
-                                                     valuation=valuation)))
-        return tuple(out)
+        output: list[WorkflowStep] = []
+        for constraint in self.constraints.all():
+            substituted = subst(constraint.relation, dict(valuation))
+            output.append(self.add(
+                substituted,
+                ValuationCheck(constraint=constraint, valuation=valuation),
+            ))
+        return tuple(output)
 
     # --- branching ---
 
-    def split_on(self, condition):
+    def split_on(self, condition: Term) -> BranchGroup:
         """Build a pair of branch scopes for `condition` and `not condition` and
         try to prove coverage.
 
@@ -343,7 +459,7 @@ class Workflow:
         """
         scopes = self.store.scopes
         parent = scopes.get(self.scope)
-        cases = []
+        cases: list[BranchCase] = []
         for cond, label in ((condition, "+"), (T.not_(condition), "-")):
             child = scopes.child(parent, assumptions=(Assumption(cond),))
             cases.append(BranchCase(condition=cond, scope=child.id, label=label))
@@ -362,13 +478,13 @@ class Workflow:
                                 evidence=Evidence("branch.coverage", group.id),
                                 guard_policy=GuardPolicy.REQUIRE_PROVED),
                    services=self.services, mode=self.mode)
-        self.branches.set_coverage(group.id, r.judgments[0] if r.is_committed()
-                                   else None)
+        if isinstance(r, Committed):
+            self.branches.set_coverage(group.id, r.judgments[0])
         self._append_event(command="Split", inputs=(),
-                           outputs=(Ref("branch", group.id),))
+                           outputs=(Ref(RefKind.BRANCH, group.id),))
         return self.branches.get(group.id)
 
-    def enter(self, scope):
+    def enter(self, scope: int) -> ScopeId:
         """Enter a scope lineage at its current version: later submissions
         happen in that context.
 
@@ -379,16 +495,20 @@ class Workflow:
         submissions use. Undo and redo therefore move through it like through
         any other operation.
         """
-        self.scope = self.store.scopes.head_of(scope)
+        self.scope = self.store.scopes.head_of(ScopeId(scope))
         self._append_event(command="Enter")
         return self.scope
 
-    def promote_guard(self, case, guard):
-        """Promote an undischarged guard from inside a branch to the parent as
-        `C_i => G_i`."""
+    def promote_guard(self, case: BranchCase, guard: Term) -> Expr:
+        """Promote an undischarged guard from inside a branch to the parent."""
         return promote_guard(case.condition, guard)
 
-    def merge_branches(self, group, proposition, results):
+    def merge_branches(
+        self,
+        group: BranchGroup,
+        proposition: Term,
+        results: Sequence[WorkflowStep],
+    ) -> WorkflowStep:
         """Merge branches: reason by cases.
 
         `results` is ordered like `group.cases` and holds the step that answers
@@ -407,7 +527,7 @@ class Workflow:
 
         Five checks: (1) coverage holds; (2) every branch answers the same task
         (compared by request term: each branch opens its own task, so ids differ
-        but the request must match); (3) each branch result holds in its own
+        scope; (4) no helper symbol escaped; (5) open conditions were promoted
         scope; (4) no helper symbol escaped; (5) open conditions were promoted
         correctly (the checker recomputes, the kernel decides and discharges).
         Failure raises BranchError rather than guessing or degrading.
@@ -430,24 +550,31 @@ class Workflow:
             raise BranchError("merge must not be performed inside one of the "
                               "branches being merged")
         if len(results) != len(group.cases):
-            raise BranchError("number of branch results does not match the "
-                              "number of cases")
+            raise BranchError("number of branch results does not match "
+                              "the number of cases")
         if group.coverage is None:                       # (1) coverage
             raise BranchError("branch coverage was not proved; cannot merge")
-        answers = []                                     # (3) each holds in its scope
-        for case, st in zip(group.cases, results):
-            if st.judgment is None:
-                raise BranchError(f"branch result has no dependable conclusion: #{st.id}")
-            j = self.store.get_judgment(st.judgment)
-            if scopes.lineage_of(j.scope) != scopes.lineage_of(case.scope):
-                raise BranchError(f"branch result #{st.id} is not in its branch scope")
-            answers.append(j.proposition)
-        requests = []                                    # (2) the same task
-        for st in results:
-            if st.task is None:
-                raise BranchError(f"branch result #{st.id} answered no request-shaped task")
-            requests.append(self.tasks.get_task(st.task).request)
-        if any(r is not requests[0] for r in requests):
+        answers: list[Term] = []
+        answer_judgments: list[JudgmentId] = []
+        for case, step in zip(group.cases, results):
+            judgment_id = step.judgment
+            if judgment_id is None:
+                raise BranchError(
+                    f"branch result has no dependable conclusion: #{step.id}"
+                )
+            judgment = self.store.get_judgment(judgment_id)
+            if scopes.lineage_of(judgment.scope) != scopes.lineage_of(case.scope):
+                raise BranchError(f"branch result #{step.id} is not in its branch scope")
+            answers.append(judgment.proposition)
+            answer_judgments.append(judgment_id)
+        requests: list[Term] = []
+        for step in results:
+            if step.task is None:
+                raise BranchError(
+                    f"branch result #{step.id} answered no request-shaped task"
+                )
+            requests.append(self.tasks.get_task(step.task).request)
+        if any(request is not requests[0] for request in requests):
             raise BranchError("the branches did not answer the same task")
         escaped = scopes.escapes(                         # (4) no symbol escapes
             parent, proposition)
@@ -460,14 +587,13 @@ class Workflow:
             if esc:
                 raise BranchError(f"promoted guard contains an escaped local symbol: {esc!r}")
 
-        merged_reads = ContextReadSet()                  # read deps: union over branches
-        for st in results:
-            producer = self.store.get_judgment(st.judgment).producer
+        merged_reads = ContextReadSet()
+        for step, judgment_id in zip(results, answer_judgments):
+            producer = self.store.get_judgment(judgment_id).producer
             merged_reads = merged_reads.merge(self.store.get_step(producer).reads)
 
-        cmd = Command(name="MergeBranches", checker_id="branch.merge",
-                      conditions=conditions, guards=guards,
-                      answers=tuple(answers))
+        cmd = MergeBranches(
+            conditions=conditions, guards=guards, answers=tuple(answers))
         proposal = StepProposal(
             scope=parent,
             premises=(group.coverage,),                  # the only parent-visible premise
@@ -477,26 +603,56 @@ class Workflow:
         res = commit(self.store, proposal, services=self.services,
                      mode=self.mode, inherited_reads=merged_reads)
         inputs = tuple(st.id for st in results)
-        if res.is_committed():                           # (5) promoted conditions recorded by the kernel
+        if isinstance(res, Committed):                    # (5) conditions recorded by the kernel
             j = self.store.get_judgment(res.judgments[0])
             out = tuple(self.store.get_requirement(r).proposition
                         for r in j.requirements)
-            return self._record(proposition, cmd, "committed", "", (), out, j.id,
-                                inputs=inputs)
-        if res.is_refused():
-            return self._record(proposition, cmd, "refused", res.detail, (), (),
-                                inputs=inputs)
-        if res.is_needs_split():
-            return self._record(proposition, cmd, "needs_split",
-                                "case split required", (),
-                                tuple(res.conditions), inputs=inputs)
-        return self._record(proposition, cmd, "undecided",
-                            getattr(res, "detail", "") or "not re-checked", (), (),
-                            inputs=inputs)
+            return self._record(
+                proposition,
+                cmd,
+                StepStatus.COMMITTED,
+                "",
+                (),
+                out,
+                j.id,
+                inputs=inputs,
+            )
+        if isinstance(res, Refused):
+            return self._record(
+                proposition,
+                cmd,
+                StepStatus.REFUSED,
+                res.detail,
+                (),
+                (),
+                inputs=inputs,
+                refutation=res.refutation,
+            )
+        if isinstance(res, NeedsSplit):
+            return self._record(
+                proposition,
+                cmd,
+                StepStatus.NEEDS_SPLIT,
+                "case split required",
+                (),
+                tuple(res.conditions),
+                inputs=inputs,
+            )
+        if isinstance(res, Undecided):
+            return self._record(
+                proposition,
+                cmd,
+                StepStatus.UNDECIDED,
+                res.detail or "not re-checked",
+                (),
+                (),
+                inputs=inputs,
+            )
+        raise RuntimeError(f"unknown commit result: {type(res).__name__}")
 
     # --- applicability query (the kernel computes, the workflow asks) ---
 
-    def applicability_of(self, step):
+    def applicability_of(self, step: WorkflowStep) -> Applicability | None:
         """Applicability of this step's conclusion in the current scope, or None
         when it has no conclusion."""
         if step.judgment is None:
@@ -505,8 +661,14 @@ class Workflow:
 
     # --- declare / define ---
 
-    def _grow_scope(self, parent_id, *, declarations=(), definitions=(),
-                    assumptions=()):
+    def _grow_scope(
+        self,
+        parent_id: ScopeId,
+        *,
+        declarations: Sequence[Declaration] = (),
+        definitions: Sequence[Definition] = (),
+        assumptions: Sequence[Assumption] = (),
+    ) -> Scope:
         """Append entries on top of `parent_id` and return the new version.
 
         The scope store only extends the head of a version chain, because
@@ -526,7 +688,7 @@ class Workflow:
         return scopes.child(parent, declarations=declarations,
                             definitions=definitions, assumptions=assumptions)
 
-    def declare(self, symbol, sort):
+    def declare(self, symbol: Term, sort: Term) -> Scope:
         """Declare `symbol : sort`.
 
         The symbol must be fresh: neither declared nor defined along the chain.
@@ -544,17 +706,17 @@ class Workflow:
                                declarations=(Declaration(symbol, sort),))
         self.scope = new.id
         self._append_event(command="Declare",
-                           outputs=(Ref("scope", new.id),))
+                           outputs=(Ref(RefKind.SCOPE, new.id),))
         return new
 
-    def define(self, symbol, body):
+    def define(self, symbol: Term, body: Term) -> Scope:
         """Define `symbol := body`: a local alias, not an equation to prove.
 
         The kernel checks four things; the first three are checked here at
         definition time and the fourth is enforced at the scope boundary:
 
-        1. the left-hand symbol is fresh: neither declared nor defined along
-           the chain;
+        1. the left-hand symbol is fresh: neither declared nor defined along the
+           chain;
         2. no illegal recursion: after alias expansion `body` must not contain
            `symbol` (mutual recursion included);
         3. the right-hand side is well bound in scope: it may use earlier
@@ -565,7 +727,7 @@ class Workflow:
 
         Point 3 is "sequentially visible": a later definition in the same scope
         may reference an earlier alias. Reference implementations agree -- for
-        example Maxima's `block([expr, W_subst], expr: ..., W_subst: ..., ...)`,
+        example Maxima's `block([expr, W_subst], expr: ..., W_subst: ...)`,
         FriCAS function bodies `delta := p2-p1; len := arrowScale * length
         delta`, Reduce and yacas. Their hygiene discipline targets escaping
         (Maxima restores on block exit, Mathematica renames in Module), not
@@ -581,7 +743,7 @@ class Workflow:
         self._require_fresh(symbol, "definition")
         if self._alias_cycle(symbol, body):
             raise ScopeError(f"illegal recursive definition: {symbol!r} appears "
-                             "in its own right-hand side after alias expansion")
+                             f"in its own right-hand side after alias expansion")
         bad = self.store.scopes.escapes(self.scope, body)
         if bad:
             raise ScopeError(f"definition right-hand side references a local "
@@ -590,10 +752,10 @@ class Workflow:
                                definitions=(Definition(symbol, body),))
         self.scope = new.id
         self._append_event(command="Define",
-                           outputs=(Ref("scope", new.id),))
+                           outputs=(Ref(RefKind.SCOPE, new.id),))
         return new
 
-    def assumptions_of(self, sid):
+    def assumptions_of(self, sid: int) -> tuple[Term, ...]:
         """The propositions the scope of step `sid` treats as assumptions.
 
         Returns plain terms: the scope is the kernel's business, and the frontend
@@ -608,7 +770,7 @@ class Workflow:
         return tuple(a.proposition
                      for a in self.store.scopes.assumptions(judgment.scope))
 
-    def expand(self, term):
+    def expand(self, term: Term) -> Term:
         """Expand the current scope's definitions in `term`.
 
         Definitions are predicative aliases, so expansion terminates; ledger
@@ -624,16 +786,21 @@ class Workflow:
         definitions = self.store.scopes.definition_map(self.scope)
         return self.algorithms.expand_definitions(definitions, term)
 
-    def _alias_cycle(self, symbol, body, seen=None) -> bool:
+    def _alias_cycle(
+        self,
+        symbol: Term,
+        body: Term,
+        seen: set[Term] | None = None,
+    ) -> bool:
         """Whether `symbol` appears in `body` after alias expansion.
 
         Checking direct self-reference is not enough: `u := v` (where v is free
         at that point) followed by `v := u` creates an alias cycle that no one
-        can expand, which is infinite expansion semantically. Expansion uses the
-        definition table along the current scope chain, and `seen` stops
+        can expand, which is infinite expansion semantically. Expansion uses
+        the definition table along the current scope chain, and `seen` stops
         existing cycles, so termination is guaranteed.
         """
-        fv = T.free_vars(body)
+        fv = free_vars(body)
         if symbol in fv:
             return True
         seen = set() if seen is None else seen
@@ -648,7 +815,7 @@ class Workflow:
                 return True
         return False
 
-    def _require_fresh(self, symbol, what):
+    def _require_fresh(self, symbol: Term, what: str) -> None:
         """The symbol must be fresh: neither defined nor declared along the
         chain."""
         scopes = self.store.scopes
@@ -660,7 +827,7 @@ class Workflow:
     # --- undo / redo: the view, the visible steps and the scope version move
     #     together ---
 
-    def undo(self):
+    def undo(self) -> RevisionId:
         """Move the revision pointer one step back and restore the scope pointer
         to the version that was current at the resulting revision.
 
@@ -675,7 +842,7 @@ class Workflow:
             self.scope = self._scope_at[rev]
         return rev
 
-    def redo(self):
+    def redo(self) -> RevisionId:
         """Move the revision pointer one step forward, if an operation is on the
         redo stack, restoring the scope pointer the same way `undo` does."""
         before = self.events.current_revision()
@@ -684,7 +851,7 @@ class Workflow:
             self.scope = self._scope_at[rev]
         return rev
 
-    def _domain_of(self, content) -> str:
+    def _domain_of(self, content: Term) -> str:
         """The domain of a step, assigned by the projection layer through the
         injected facade, never by leaf sniffing."""
         if self.algorithms is None:

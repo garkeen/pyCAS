@@ -1,174 +1,157 @@
-# -*- coding: utf-8 -*-
-"""Q(i), the Gaussian field: the first algebraic extension.
+"""Q(i), the Gaussian rational field."""
 
-Element representation is the normal-form pair (re, im) with re, im in Q. The
-quotient-ring view makes the structure plain: Q(i) = Q[z]/(z^2+1), the normal form
-is unique so equality is structural equality, multiplication is the direct dual
-operation (ac-bd, ad+bc) -- the d=2 instance of polynomial arithmetic modulo
-x^2+1 -- and division goes through the conjugate times the norm.
+from __future__ import annotations
 
-Membership channel: in a closed term, replace the constant i by a fresh variable z,
-project to the rational function field Q(z) (reusing the existing rf machinery),
-reduce numerator and denominator modulo z^2+1 separately, and multiply the
-numerator by the inverse of the denominator. Since x^2+1 is irreducible over Q, a
-nonzero denominator has nonzero norm after reduction and is always invertible --
-which is exactly why Q(i) is a field; a denominator reducing to zero means the
-original term divided by zero, i.e. not a member.
+from fractions import Fraction
+from typing import TypeAlias
 
-Layer discipline: this module depends only on cas.syntax.term and the base of this
-package (plus the poly/ratfunc machinery shared with q/qarith). The identity of the
-constant i is injected by the constructor -- the declaration layer owns constant
-declarations and the projection layer wires them -- never by name sniffing.
-
-Capabilities (algorithms dispatch on capabilities, never on type):
-* is_field = True: Q(i) is a field. Irreducibility of x^2+1 is a construction
-  premise carried by the declaration, not checked at runtime.
-* is_ordered = False: the complex field is unordered, so every order test must be
-  refused by capability lookup.
-* is_euclidean = False: the division with remainder / Euclidean structure belongs to
-  Z[i] via the norm function; Q(i) as a field needs no such declaration.
-"""
-
-from fractions import Fraction as Fr
-
-from cas.syntax import term as T
-from cas.syntax.term import Sym
-from cas.math.domains.qarith import fold
-from cas.math.domains.base import Domain, Ring
-from cas.math.domains.q import Q_RING
+from cas.math.domains.base import Domain, DomainCapabilities, DomainElement, Ring
 from cas.math.domains.poly import Poly
+from cas.math.domains.q import Q_RING
+from cas.math.domains.qarith import fold
 from cas.math.domains.ratfunc import rf_from_term
+from cas.syntax import term as T
+from cas.syntax.term import Expr, Sym, Term
+from cas.syntax.termpath import free_vars
 
+GaussianElement: TypeAlias = tuple[Fraction, Fraction]
 
-# ---------------------------------------------------------------------------
-# Coefficient ring: arithmetic on normal-form pairs
-# ---------------------------------------------------------------------------
 
 class QIRing(Ring):
-    """Q(i) coefficient ring: elements are (re, im) pairs, and the normal form is
-    the representation itself (equality is structural equality)."""
+    """Gaussian coefficients represented by normalized rational pairs."""
 
     is_field = True
 
-    def from_int(self, n):
-        return (Fr(n), Fr(0))
+    def from_int(self, value: int) -> DomainElement:
+        return (Fraction(value), Fraction(0))
 
-    def from_frac(self, f):
-        return (Fr(f), Fr(0))
+    def from_frac(self, value: Fraction) -> DomainElement:
+        return (value, Fraction(0))
 
-    def add(self, a, b):
-        return (a[0] + b[0], a[1] + b[1])
+    def add(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        left_pair = self._pair(left)
+        right_pair = self._pair(right)
+        return (left_pair[0] + right_pair[0], left_pair[1] + right_pair[1])
 
-    def neg(self, a):
-        return (-a[0], -a[1])
+    def neg(self, value: DomainElement) -> DomainElement:
+        real, imaginary = self._pair(value)
+        return (-real, -imaginary)
 
-    def mul(self, a, b):
-        return (a[0] * b[0] - a[1] * b[1],
-                a[0] * b[1] + a[1] * b[0])
+    def mul(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        left_real, left_imaginary = self._pair(left)
+        right_real, right_imaginary = self._pair(right)
+        return (
+            left_real * right_real - left_imaginary * right_imaginary,
+            left_real * right_imaginary + left_imaginary * right_real,
+        )
 
-    def equal(self, a, b) -> bool:
-        return a == b
+    def equal(self, left: DomainElement, right: DomainElement) -> bool:
+        return self._pair(left) == self._pair(right)
 
-    def div_exact(self, a, b):
-        """a/b = a*conj(b)/norm(b), the conjugate-times-norm channel.
-
-        b nonzero implies norm(b) = re^2+im^2 > 0 (positive definite over Q), so it
-        is always invertible."""
-        n = b[0] * b[0] + b[1] * b[1]
-        if n == 0:
+    def div_exact(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        left_real, left_imaginary = self._pair(left)
+        right_real, right_imaginary = self._pair(right)
+        norm = right_real * right_real + right_imaginary * right_imaginary
+        if norm == 0:
             raise ZeroDivisionError("division by zero")
-        return self.mul(a, (b[0] / n, -b[1] / n))
+        return (
+            (left_real * right_real + left_imaginary * right_imaginary) / norm,
+            (left_imaginary * right_real - left_real * right_imaginary) / norm,
+        )
+
+    @staticmethod
+    def _pair(value: DomainElement) -> GaussianElement:
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or not isinstance(value[0], Fraction)
+            or not isinstance(value[1], Fraction)
+        ):
+            raise TypeError("Q(i) ring elements must be rational pairs")
+        return value[0], value[1]
 
 
 QI_RING = QIRing()
 
 
-# ---------------------------------------------------------------------------
-# Membership channel: closed term -> Q(z) -> reduction modulo z^2+1
-# ---------------------------------------------------------------------------
-
-def _lift_const(t, const, z: Sym):
-    """Replace the constant atom `const` (pointer equality, no name sniffing) by
-    the variable z wherever it occurs in t."""
-    if t is const:
-        return z
-    if isinstance(t, T.Expr) and t.args:
-        return T.mk(t.head, tuple(_lift_const(a, const, z) for a in t.args))
-    return t
+def _lift_const(term: Term, constant: Term, variable: Sym) -> Term:
+    """Replace the injected constant atom by a fresh variable."""
+    if term is constant:
+        return variable
+    if isinstance(term, Expr) and term.args:
+        return T.mk(
+            term.head,
+            tuple(_lift_const(argument, constant, variable) for argument in term.args),
+        )
+    return term
 
 
-def _pair_mod(p: Poly):
-    """Reduce a univariate polynomial modulo z^2+1 to (re, im):
-    z^k = (-1)^(k//2) * z^(k mod 2)."""
-    re, im = Fr(0), Fr(0)
-    for k, c in p.monos:
-        v = -c if (k[0] // 2) % 2 else c
-        if k[0] % 2:
-            im += v
+def _pair_mod(polynomial: Poly) -> GaussianElement:
+    """Reduce a univariate polynomial modulo z^2 + 1."""
+    real = Fraction(0)
+    imaginary = Fraction(0)
+    for exponents, coefficient in polynomial.monos:
+        if not isinstance(coefficient, Fraction):
+            raise TypeError("Q(i) reduction requires rational coefficients")
+        value = -coefficient if (exponents[0] // 2) % 2 else coefficient
+        if exponents[0] % 2:
+            imaginary += value
         else:
-            re += v
-    return (re, im)
+            real += value
+    return real, imaginary
 
 
-def qi_of_term(i_const, t):
-    """Closed term -> Q(i) normal-form pair; None when not a member.
-
-    Free variables, other constants or functions (pi, sin, ...), non-integer powers,
-    and division by zero all fail the Q(z) projection or make the denominator
-    non-invertible, and are reported as None without guessing."""
-    if T.free_vars(t):
-        return None                     # not closed: Q(i) is a constant field
-    z = Sym("z")                        # a closed term has no free variable, so z cannot collide
-    rf = rf_from_term(Q_RING, _lift_const(t, i_const, z), (z,))
-    if rf is None:
+def qi_of_term(i_constant: Term, term: Term) -> GaussianElement | None:
+    """Project a closed term into Q(i), or return ``None``."""
+    if free_vars(term):
         return None
-    num = _pair_mod(rf.num)
-    den = _pair_mod(rf.den)
-    if den[0] == 0 and den[1] == 0:
-        return None                     # denominator = 0 (mod z^2+1): a division-by-zero term
-    return QI_RING.div_exact(num, den)
+    variable = T.S("z")
+    rational_function = rf_from_term(
+        Q_RING,
+        _lift_const(term, i_constant, variable),
+        (variable,),
+    )
+    if rational_function is None:
+        return None
+    numerator = _pair_mod(rational_function.num)
+    denominator = _pair_mod(rational_function.den)
+    if denominator == (Fraction(0), Fraction(0)):
+        return None
+    pair = QI_RING.div_exact(numerator, denominator)
+    return QI_RING._pair(pair)
 
-
-# ---------------------------------------------------------------------------
-# The domain
-# ---------------------------------------------------------------------------
 
 class QIDomain(Domain):
-    """Q(i) = {a + b*i}. The identity of the constant i is injected by the
-    constructor (declaration-based, never sniffed)."""
+    """Q(i) with its constant identity injected by the assembly layer."""
 
     name = "Q(i)"
-    is_field = True
-    is_ordered = False
-    is_euclidean = False
+    capabilities = DomainCapabilities(field=True)
     ring = QI_RING
 
-    def __init__(self, i_const):
-        self.i = i_const
+    def __init__(self, i_constant: Term) -> None:
+        self.i = i_constant
 
-    def member(self, t) -> bool:
-        return qi_of_term(self.i, t) is not None
+    def member(self, term: Term) -> bool:
+        return qi_of_term(self.i, term) is not None
 
-    def to_term(self, pair):
-        """Normal-form pair -> canonical interned term (same value, same shape, same
-        pointer)."""
-        re, im = pair
-        if im == 0:
-            return T.N(re)
-        im_part = T.times(T.N(im), self.i)
-        if re == 0:
-            return fold(im_part)
-        return fold(T.plus(T.N(re), im_part))
+    def to_term(self, pair: GaussianElement) -> Term:
+        real, imaginary = pair
+        if imaginary == 0:
+            return T.N(real)
+        imaginary_part = T.times(T.N(imaginary), self.i)
+        if real == 0:
+            return fold(imaginary_part)
+        return fold(T.plus(T.N(real), imaginary_part))
 
-    def normalize(self, t):
-        pair = qi_of_term(self.i, t)
+    def normalize(self, term: Term) -> Term | None:
+        pair = qi_of_term(self.i, term)
         if pair is None:
             return None
         return self.to_term(pair)
 
-    def equal(self, a, b):
-        pa = qi_of_term(self.i, a)
-        pb = qi_of_term(self.i, b)
-        if pa is None or pb is None:
-            return None                  # not a member: caller out of bounds
-        return pa == pb
+    def equal(self, left: Term, right: Term) -> bool | None:
+        left_pair = qi_of_term(self.i, left)
+        right_pair = qi_of_term(self.i, right)
+        if left_pair is None or right_pair is None:
+            return None
+        return left_pair == right_pair

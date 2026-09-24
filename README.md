@@ -49,7 +49,7 @@ Gröbner 基方法、三角/指数展开与同类项收集、部分分式与 Her
 
 ### 环境
 
-- **Python ≥ 3.10**（开发用 3.12）；
+- **Python ≥ 3.11**（开发用 3.12）；
 - **运行时零第三方依赖**（只用标准库）；
 - 跑测试需要 `pytest`（`pytest.ini` 里配置了 `timeout`，因此还需 `pytest-timeout`）。
 
@@ -90,18 +90,17 @@ pyCAS REPL. Type 'help' for commands.
 
 ```python
 from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
 
-install(bootstrap())          # 显式装配：import 期不修改任何全局状态
+runtime = bootstrap()         # 显式装配：import 期不修改任何全局状态
 
 import cas.api as api
 from cas.frontend.parser import parse
 
-api.differentiate(parse("x^2"), parse("x"))          # 求导
-api.solve_linear(parse("2*x + 3 == 7"), parse("x"))  # 返回线性候选
-api.solve_linear_with_condition(parse("a*x + b == 0"), parse("x"))  # 候选 + a != 0
-api.integrate_term(parse("x^2"), parse("x"))         # 不定积分
-api.guard_report([parse("x > 0")], parse("x"), parse("2"))   # 逐条守卫判定
+api.differentiate(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
+api.solve_linear(runtime, parse(runtime, "2*x + 3 == 7"), parse(runtime, "x"))
+api.solve_linear_with_condition(runtime, parse(runtime, "a*x + b == 0"), parse(runtime, "x"))
+api.integrate_term(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
+api.guard_report(runtime, [parse(runtime, "x > 0")], parse(runtime, "x"), parse(runtime, "2"))
 ```
 
 三点约定：
@@ -111,14 +110,14 @@ api.guard_report([parse("x > 0")], parse("x"), parse("2"))   # 逐条守卫判�
 2. **算法层一律以数学上下文为第一参数**（`MathContext`，含声明查询面与装配期配置）。
    门面会替你注入；直接调 math 层时显式传：
    ```python
-   from cas.runtime import get_runtime
    from cas.kernel.scope import Assumptions
    from cas.math.decide import decide
 
-   decide(get_runtime().math, parse("x > 0"), Assumptions())
+   decide(runtime.math, parse(runtime, "x > 0"), Assumptions())
    ```
-   这样「忘了装配」不会变成深层算法里的运行时惊喜，而是调用点就写不出来。
-3. **未装配就读语义会报错**：必须先 `install(bootstrap())`（REPL 入口已自动完成）。
+   这样调用点就写出装配来源，不会把“忘了装配”变成深层算法里的运行时惊喜。
+3. **Runtime / Session 都显式传递**：`bootstrap()` 返回不可变 Runtime；REPL 构造
+   Session 时绑定完整 command handler 表，缺项会在启动阶段拒绝。
 
 ---
 
@@ -131,8 +130,8 @@ api.guard_report([parse("x > 0")], parse("x"), parse("2"))   # 逐条守卫判�
 | `cas/workflow/` | 工作流、命令、Artifact/Task/Event 三图、分支 | 依赖 `syntax` + `kernel` |
 | `cas/math/domains/` | ℤ、ℚ、ℚ(i)、K[x]、K(x) 与域协议、线性代数 | 依赖 `syntax` |
 | `cas/math/` | `context`、`project`、`decide`、`diff`、`integrate`、`cad`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader` 与 `base/` `elementary/` `calculus/` `solving/` | 依赖 `syntax`+`kernel`+`workflow`+`math.domains`；**永不**导入 runtime |
-| `cas/runtime/` | 装配：`registry`（Builder）→ `runtime`（只读 Runtime）→ `bootstrap` → `dispatch` | 唯一装配者 |
-| `cas/frontend/` + `cas/api.py` | 解析器、打印器、REPL；计算门面 | 只经 `api` / `dispatch` |
+| `cas/runtime/` | 装配：`registry`（Builder）→ `runtime`（只读 Runtime）→ `bootstrap`；无全局 dispatch | 唯一装配者 |
+| `cas/frontend/` + `cas/api.py` | 解析器、打印器、Session、REPL；计算门面 | 只经 `api` / `runtime` / `workflow` |
 
 依赖方向由 CI 门禁机械检查（`tests/contract/test_v4_invariants.py`），不靠人工审查。
 

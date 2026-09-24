@@ -7,22 +7,22 @@ not land, a refuted condition refuses, discharge only records and never touches 
 original conclusion, and a scope cannot overreach.
 """
 
-import pytest
 
-from cas.syntax.term import S, N, not_, mk
-from cas.syntax import term as T
 from cas.kernel.commit import (
-    Committed, GuardPolicy, NeedsSplit, Refused, StepProposal, Undecided, commit,
+    GuardPolicy,
+    StepProposal,
+    commit,
 )
 from cas.kernel.evidence import Accepted, Evidence, UnknownResult
-from cas.kernel.model import (
-    Applicable, Conditional, ContextReadSet, Inapplicable, RequirementReason,
-)
 from cas.kernel.mode import ExecutionMode
+from cas.kernel.model import (
+    ContextReadSet,
+    RequirementReason,
+)
 from cas.kernel.services import NullServices, register_core_checkers
 from cas.kernel.store import KernelStore
-from cas.kernel.verdict import NO, YES, Reason, unknown
-
+from cas.kernel.verdict import YES, Reason, RefutationChannel, refute, unknown
+from cas.syntax.term import N, S, mk, not_
 
 # --- test checkers / services ---
 
@@ -58,7 +58,9 @@ class StubServices:
         if proposition in self.true:
             return YES
         if proposition in self.false:
-            return NO
+            return refute(
+                RefutationChannel.EXACT_COMPARISON, proposition, proposition,
+                detail="test false-table entry")
         return unknown(Reason.GUARDED)
 
 

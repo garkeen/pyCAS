@@ -247,7 +247,8 @@ pyCAS/
 │       │   ├── __init__.py
 │       │   ├── registry.py
 │       │   ├── runtime.py
-│       │   ├── dispatch.py
+│       │   ├── algorithms.py
+│       │   ├── services.py
 │       │   └── bootstrap.py
 │       │
 │       ├── math/
@@ -300,12 +301,10 @@ pyCAS/
 │       │   │   │   ├── algorithm.py
 │       │   │   │   ├── checkers.py
 │       │   │   │   └── commands.py
-│       │   │   │
 │       │   │   └── integration/
 │       │   │       ├── module.py
 │       │   │       ├── rules.py
 │       │   │       ├── manual.py
-│       │   │       ├── dispatch.py
 │       │   │       ├── rational.py
 │       │   │       ├── risch.py
 │       │   │       ├── checkers.py
@@ -340,9 +339,8 @@ pyCAS/
 │       │
 │       └── frontend/
 │           ├── parser.py
-│           ├── pretty.py
-│           ├── latex.py
-│           ├── serialization.py
+│           ├── pprint.py
+│           ├── session.py
 │           └── repl.py
 │
 └── tests/
@@ -682,7 +680,7 @@ BUDGET
 | `UNDECIDABLE` | 可证不可判定 | 不可消解。每一格都必须引用数学定理（希尔伯特第十问题、Richardson 定理等），不是能力占位符 |
 | `BUDGET` | 可判定但资源超限 | 放宽预算可能翻转——「没找到」不等于「不存在」 |
 
-判定结果是代数数据类型而非字符串：`Yes(证据)`、`No`、`Unknown(理由)`，匹配必须穷尽，漏分支是错误。失败是返回值的一部分，禁止用异常吞掉错误；空缺用 `None`/`Option` 表达。
+判定结果是代数数据类型而非字符串：`Yes`、`No(Refutation)`、`Unknown(Reason)`，匹配必须穷尽，漏分支是错误。`Refutation` 是不可变记录，至少包含判定 channel、被否定命题以及该项判定的见证项；不同数学通道使用不同 channel（例如数值比较、域标准形不同、假设事实冲突、序关系矛盾、分支不相交），不能用空 detail 代替证据。命题复合必须传播原子证据：`and3` / `or3` 返回已有子证据或明确的组合证据，`not3(Yes)` 生成“被取反命题已成立”的逻辑证据。不存在无证据 `No` 单例。失败是返回值的一部分，禁止用异常吞掉错误；空缺用 `None` / `Option` 表达。
 
 ---
 
@@ -1008,8 +1006,9 @@ def install(builder):
     builder.commands.register(...)
 ```
 
-命令注册面同样是显式装配数据：math 模块注册命令名、帮助、参数种类和 checker id，
-runtime 冻结为只读查询面，REPL 只按注册名通用分派并生成帮助，不维护逐命令语义表。
+命令注册面同样是显式装配数据：math 模块注册 `CommandSpec`（命令名、帮助、参数种类和 checker id），
+frontend 的 `Session` 在构造时把每个 spec 与 callable handler 绑定成不可变 `CommandDescriptor`；
+缺 handler 立即拒绝启动。runtime 冻结为只读查询面，REPL 只按 descriptor 的注册名通用分派并生成帮助，不维护逐命令语义表。
 
 禁止通过 import 自动修改全局状态。
 
@@ -1352,7 +1351,7 @@ CAS 依赖的三种语义各有来源：
 **`Unknown` 只能沿三条显式出口离开系统，绝不静默消解。**
 
 1. **条件化传播**：未决比较提升为答案中的显式条件（条件分支容器承载），答案同时携带完备性声明——`complete`，或 `partial`（附逐条未决清单）。枚举型通道（契约是「全部解」）任一支未决时，要么整体拒答，要么显式降级为 `partial` 并列出未决项；已知解与未决项不允许无标注地混在一起
-2. **开放步骤**：验证未决 → 步骤 `open`，永不 `dead`。`No` 必须携带证据（7.3），无证据不得声称否证
+2. **开放步骤**：验证未决 → 步骤 `open`，永不 `dead`。`No` 必须携带 `Refutation`（§6.3），无证据不得声称否证
 3. **带理由拒答**：按 6.3 四理由分派；定理级边界逐行对照 7.8 表
 
 禁止的消解方式（一律视为作弊）：静默选支（把 `Unknown` 当真/假使用）、静默丢支（部分解冒充全解）、generic 答案（稠密开集上正确冒充全域正确）、无误差界的数值定序混入符号通道。

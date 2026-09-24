@@ -7,13 +7,15 @@ representative rule set, that index maintenance on add/remove stays consistent,
 and that autosimplify's narrowed run reaches the same normal form as a
 full-scan reference loop.
 """
+import dataclasses
+from cas.runtime import Runtime
 
 from cas.math.loader import parse_rule_line
-from cas.math.rules import RuleSet, apply_rule
+from cas.math.rules import RuleCatalog, RuleSet, apply_rule
 from cas.math.simplify import autosimplify, cost, rebuild
-from cas.syntax import term as T
 from cas.syntax.match import matches
 from cas.syntax.parse import parse
+from cas.syntax.termpath import all_paths, term_at
 
 _LINES = (
     "rule h = ?x -> ?x auto",              # hole root: matches any term
@@ -27,10 +29,6 @@ _LINES = (
 _TERMS = ("f(x)", "x + 1", "x", "0", "h(x)", "f(f(x))", "x*f(x)",
           "g(x, y)", "x + f(x)", "k(x)")
 
-
-def _ctx():
-    from cas.runtime import get_runtime
-    return get_runtime().math
 
 
 def _ruleset():
@@ -50,8 +48,8 @@ def test_candidates_equal_a_full_scan_for_every_term_and_path():
     rs = _ruleset()
     for src in _TERMS:
         t = parse(src)
-        for path in T.all_paths(t):
-            sub = T.term_at(t, path)
+        for path in all_paths(t):
+            sub = term_at(t, path)
             full = [r.id for r in rs.rules.values() if _matchable(r, sub)]
             narrow = [r.id for r in rs.candidates(sub)]
             assert narrow == full, (src, path, full, narrow)
@@ -84,7 +82,7 @@ def _full_scan_autosimplify(t, rs, budget=100000):
     while True:
         base = cost(cur)
         nxt = None
-        for path in T.all_paths(cur):
+        for path in all_paths(cur):
             for rule in sorted(auto, key=lambda r: r.priority):
                 res = apply_rule(rule, cur, path, budget=budget)
                 if res.ok and cost(res.term) < base:
@@ -97,9 +95,15 @@ def _full_scan_autosimplify(t, rs, budget=100000):
         cur = rebuild(nxt, budget)
 
 
-def test_autosimplify_matches_the_full_scan_reference(monkeypatch):
-    rs = _ruleset()
-    monkeypatch.setattr("cas.math.rules.declared_ruleset", lambda ctx: rs)
+def test_autosimplify_matches_the_full_scan_reference(runtime: Runtime):
+    rule_set = _ruleset()
+    context = dataclasses.replace(
+        runtime.math,
+        rule_catalog=RuleCatalog.from_set(rule_set),
+    )
     for src in _TERMS:
-        t = parse(src)
-        assert autosimplify(_ctx(), t) is _full_scan_autosimplify(t, rs), src
+        term = parse(src)
+        assert autosimplify(context, term) is _full_scan_autosimplify(
+            term,
+            rule_set,
+        ), src

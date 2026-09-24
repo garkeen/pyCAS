@@ -1,336 +1,360 @@
-"""Declaration DSL parsing: the single DSL parsing responsibility.
+"""Strict parsers for rule and mathematical declaration DSL text."""
 
-Two kinds of DSL text are parsed here:
-
-· **rule lines**: `rule <id> = <pattern> -> <template> [guard <expr>] [prio N] [auto]`
-  (see `parse_rule_line`).
-· **declaration lines** (constants, functions, derivative templates and domain
-  conditions must be declared in the DSL rather than registered from Python):
-
-      constant <Name> print "<name>" [real [true|false]] [positive]
-                     [bounds <lo> <hi>]
-
-      function <Head> print "<name>" arity <n> [real_on_real]
-                     [bounds <lo> <hi>] [zero_iff_arg_zero]
-                     [deriv "<template>"] [domain "<condition>"] [note "<text>"]
-
-      alias <surface> = <Head>         # a parse-level token (ln, sqrt) to a canonical head
-      binder <Head>                    # a canonical head whose surface word binds a variable
-      role <role> = <Head>             # a canonical function an algorithm refers to
-
-  `<lo>` / `<hi>` are integers or `none` for unbounded. Inside `<template>` and
-  `<condition>`, `@0` is a de Bruijn placeholder for the function's argument,
-  instantiated by the differentiation layer or the domain-condition layer.
-
-**Why it must be text**: the admission discipline (only unconditional identities,
-branch-breaking templates set to null with a recorded reason) must be checkable
-mechanically against text, not by inspecting Python registration calls.
-
-**This module returns neutral data** (dicts, tuples, raw rule lines); it neither
-builds the runtime declaration objects nor imports the runtime, because the
-dependency direction is runtime -> math. The assembler (the elementary module)
-hands the dicts to the injected builder.
-"""
+from __future__ import annotations
 
 import re
-
-from dataclasses import dataclass
-from fractions import Fraction as Fr
+from fractions import Fraction
+from pathlib import Path
 
 from cas.errors import ParseError
-from cas.syntax.parse import parse
-from cas.syntax.term import C
+from cas.math.decls import (
+    AliasDecl,
+    BinderDecl,
+    ConstantDecl,
+    DeclarationSet,
+    FunctionDecl,
+    LiftDecl,
+    LiftPolicy,
+    RoleDecl,
+)
 from cas.math.domains.qarith import fold
-from cas.math.rules import Rule
+from cas.math.rules import AutoRule, GuardedRule, ManualRule, Rule
+from cas.syntax.parse import parse
+from cas.syntax.term import C, Term
 
-_HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")
+_RULE_HEAD = re.compile(r"^\s*rule\s+([A-Za-z_]\w*)\s*=\s*(.+)$")
+_DECL_TOKEN = re.compile(r'"[^"]*"|\S+')
 _OPEN = "(["
 _CLOSE = ")]"
 
 
-def _tokens_at_depth_zero(body):
-    """Whitespace-delimited tokens at bracket depth 0, as (text, start, end).
+def _tokens_at_depth_zero(body: str) -> list[tuple[str, int, int]]:
+    """Return whitespace tokens outside brackets as ``(text, start, end)``."""
 
-    Whitespace inside `(...)` / `[...]` does not split a token, so a bracketed
-    call is one token and an identifier in argument position (as in
-    `f(?x, auto)`) is never seen as a keyword.
-    """
-    toks = []
+    tokens: list[tuple[str, int, int]] = []
     depth = 0
-    start = None
-    for i, ch in enumerate(body):
-        if ch in _OPEN:
+    start: int | None = None
+    for index, char in enumerate(body):
+        if char in _OPEN:
             depth += 1
-        elif ch in _CLOSE and depth > 0:
+        elif char in _CLOSE and depth > 0:
             depth -= 1
-        if ch.isspace() and depth == 0:
+        if char.isspace() and depth == 0:
             if start is not None:
-                toks.append((body[start:i], start, i))
+                tokens.append((body[start:index], start, index))
                 start = None
         elif start is None:
-            start = i
+            start = index
     if start is not None:
-        toks.append((body[start:], start, len(body)))
-    return toks
+        tokens.append((body[start:len(body)], start, len(body)))
+    return tokens
 
 
-def _split_keywords(body):
-    """Split a rule body into the `pattern -> template` text and its keyword
-    sections.
+def _split_keywords(body: str) -> tuple[str, str | None, str | None, bool]:
+    """Split a rule body into its main text and optional suffix fields."""
 
-    Grammar: `<pattern> -> <template> [guard <pattern...>] [prio <int>] [auto]`.
-    The optional suffix is consumed right to left (auto, then prio, then guard),
-    because a guard value may run over many whitespace-separated tokens; what is
-    left of the first consumed keyword is the head. Only a whole token at bracket
-    depth 0 is a keyword.
-
-    Returns (head, guard_text, prio_text, auto); an absent section is None.
-    """
-    toks = _tokens_at_depth_zero(body)
-    i = len(toks)
+    tokens = _tokens_at_depth_zero(body)
+    index = len(tokens)
     auto = False
-    prio_text = None
-    guard_text = None
+    priority_text: str | None = None
+    guard_text: str | None = None
 
-    if i and toks[i - 1][0] == "auto":
+    if index and tokens[index - 1][0] == "auto":
         auto = True
-        i -= 1
-    if i > 1 and toks[i - 2][0] == "prio":
-        prio_text = toks[i - 1][0]
-        i -= 2
-    elif i and toks[i - 1][0] == "prio":
+        index -= 1
+    if index > 1 and tokens[index - 2][0] == "prio":
+        priority_text = tokens[index - 1][0]
+        index -= 2
+    elif index and tokens[index - 1][0] == "prio":
         raise ParseError(f"prio needs an integer value: {body!r}")
 
-    guard_at = None
-    for k in range(i):
-        if toks[k][0] == "guard":
-            guard_at = k
+    guard_at: int | None = None
+    for token_index in range(index):
+        if tokens[token_index][0] == "guard":
+            guard_at = token_index
             break
     if guard_at is not None:
-        if guard_at + 1 == i:
+        if guard_at + 1 == index:
             raise ParseError(f"guard needs a value: {body!r}")
-        guard_text = body[toks[guard_at][2] : toks[i - 1][2]].strip()
-        i = guard_at
+        guard_text = body[tokens[guard_at][2]:tokens[index - 1][2]].strip()
+        index = guard_at
 
-    head = body[: toks[i - 1][2]].strip() if i else ""
-    # A bare keyword where the template must stand would otherwise surface only
-    # as an empty right hand side of the arrow, which names no cause.
-    kw = ("guard" if guard_text is not None else
-          "prio" if prio_text is not None else
-          "auto" if auto else None)
-    if kw is not None and not head.rpartition("->")[2].strip():
+    head = body[:tokens[index - 1][2]].strip() if index else ""
+    keyword = (
+        "guard" if guard_text is not None
+        else "prio" if priority_text is not None
+        else "auto" if auto
+        else None
+    )
+    if keyword is not None and not head.rpartition("->")[2].strip():
         raise ParseError(
-            f"keyword {kw!r} found where a template is required: {body!r}")
-    return head, guard_text, prio_text, auto
+            f"keyword {keyword!r} found where a template is required: {body!r}")
+    return head, guard_text, priority_text, auto
 
 
-def _split_arrow(s):
-    idx = s.find("->")
-    if idx < 0:
-        raise ParseError(f"rule needs '->': {s}")
-    return s[:idx].strip(), s[idx + 2 :].strip()
+def _split_arrow(source: str) -> tuple[str, str]:
+    index = source.find("->")
+    if index < 0:
+        raise ParseError(f"rule needs '->': {source}")
+    return source[:index].strip(), source[index + 2:].strip()
 
 
-def parse_rule_line(line):
-    m = _HEAD.match(line)
-    if not m:
+def parse_rule_line(line: str) -> Rule:
+    """Parse one rule line into its closed rule variant."""
+
+    match = _RULE_HEAD.match(line)
+    if match is None:
         raise ParseError(f"bad rule line: {line}")
-    rid = m.group(1)
-    head, guard_text, prio_text, auto = _split_keywords(m.group(2))
-    pat_s, tpl_s = _split_arrow(head)
-    # LHS/RHS/guard are all parsed through the pattern channel, so the products
-    # are Patterns rather than Terms.
-    pat = parse(pat_s, pattern=True)
-    tpl = parse(tpl_s, pattern=True)
-    guard = parse(guard_text, pattern=True) if guard_text is not None else None
+    rule_id = match.group(1)
+    head, guard_text, priority_text, auto = _split_keywords(match.group(2))
+    pattern_text, template_text = _split_arrow(head)
+    pattern = parse(pattern_text, pattern=True)
+    template = parse(template_text, pattern=True)
+    condition = parse(guard_text, pattern=True) if guard_text is not None else None
     priority = 100
-    if prio_text is not None:
+    if priority_text is not None:
         try:
-            priority = int(prio_text)
+            priority = int(priority_text)
         except ValueError:
             raise ParseError(
-                f"prio value {prio_text!r} is not an integer: {line!r}") from None
-    return Rule(id=rid, pattern=pat, template=tpl, guard=guard,
-                auto=auto, priority=priority)
+                f"prio value {priority_text!r} is not an integer: {line!r}") from None
+    if auto:
+        if condition is not None:
+            raise ParseError(f"auto rule must not carry a guard: {line!r}")
+        return AutoRule(id=rule_id, pattern=pattern, template=template, priority=priority)
+    if condition is None:
+        return ManualRule(id=rule_id, pattern=pattern, template=template, priority=priority)
+    return GuardedRule(
+        id=rule_id,
+        pattern=pattern,
+        template=template,
+        condition=condition,
+        priority=priority,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Declaration DSL
-# ---------------------------------------------------------------------------
+def _strip_comment(line: str) -> str:
+    """Remove a comment outside a quoted string."""
 
-_DECL_TOK = re.compile(r'"[^"]*"|\S+')
-
-
-def _strip_comment(line):
-    """Remove a `#` comment outside quoted strings, since note text may contain
-    `#`."""
-    out, in_str = [], False
-    for ch in line:
-        if ch == '"':
-            in_str = not in_str
-        elif ch == "#" and not in_str:
+    output: list[str] = []
+    in_string = False
+    for char in line:
+        if char == '"':
+            in_string = not in_string
+        elif char == "#" and not in_string:
             break
-        out.append(ch)
-    return "".join(out)
+        output.append(char)
+    return "".join(output)
 
 
-def _tokens(line):
-    toks = _DECL_TOK.findall(line)
-    return [t[1:-1] if t.startswith('"') and t.endswith('"') else t
-            for t in toks]
+def _tokens(line: str) -> list[str]:
+    """Tokenize a declaration statement, preserving quoted text as one token."""
+
+    return [
+        token[1:-1] if token.startswith('"') and token.endswith('"') else token
+        for token in _DECL_TOKEN.findall(line)
+    ]
 
 
-def _bound_val(s):
-    return None if s == "none" else Fr(s)
+def _bound_value(source: str) -> Fraction | None:
+    if source == "none":
+        return None
+    try:
+        return Fraction(source)
+    except ValueError:
+        raise ParseError(f"invalid bound value: {source!r}") from None
 
 
-@dataclass(frozen=True, slots=True)
-class Declarations:
-    """Neutral declaration data produced from the DSL."""
-
-    constants: tuple
-    functions: tuple
-    aliases: tuple
-    binders: tuple
-    roles: tuple
-    lifts: tuple
-    rules: tuple
-
-
-_LIFT = re.compile(r"^lift\s+([A-Za-z_]\w*)\s*=\s*(congruent|conditional|forbidden)$")
-
-
-def _parse_lift(lineno, line):
-    match = _LIFT.match(line)
-    if not match:
+def _integer(tokens: list[str], index: int, statement: str, lineno: int) -> int:
+    if index >= len(tokens):
+        raise ParseError(f"line {lineno}: {statement} needs an integer value")
+    try:
+        return int(tokens[index])
+    except ValueError:
         raise ParseError(
-            f"line {lineno}: lift must look like 'lift <Head> = congruent|conditional|forbidden'")
-    return match.groups()
+            f"line {lineno}: invalid integer for {statement}: {tokens[index]!r}") from None
 
+
+_LIFT = re.compile(r"^lift\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z]+)$")
 _ALIAS = re.compile(r"^alias\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
-
-
-def _parse_alias(lineno, line):
-    m = _ALIAS.match(line)
-    if not m:
-        raise ParseError(f"line {lineno}: alias must look like 'alias <name> = <Head>'")
-    return (m.group(1), m.group(2))
-
-
 _BINDER = re.compile(r"^binder\s+([A-Za-z_]\w*)$")
-
-
-def _parse_binder(lineno, line):
-    """`binder <Head>`: one canonical head whose surface word binds a variable.
-
-    The statement carries the canonical head only; the surface word that reaches
-    it is an ordinary alias declaration, so the parser resolves the word through
-    the alias table and then asks whether the resulting head is a declared binder.
-    """
-    m = _BINDER.match(line)
-    if not m:
-        raise ParseError(f"line {lineno}: binder must look like 'binder <Head>'")
-    return m.group(1)
-
-
 _ROLE = re.compile(r"^role\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
 
 
-def _parse_role(lineno, line):
-    m = _ROLE.match(line)
-    if not m:
+def _parse_lift(lineno: int, line: str) -> LiftDecl:
+    match = _LIFT.match(line)
+    if match is None:
+        raise ParseError(
+            f"line {lineno}: lift must look like 'lift <Head> = congruent|conditional|forbidden'")
+    try:
+        policy = LiftPolicy(match.group(2))
+    except ValueError:
+        raise ParseError(
+            f"line {lineno}: unknown lift policy {match.group(2)!r}") from None
+    return LiftDecl(match.group(1), policy)
+
+
+def _parse_alias(lineno: int, line: str) -> AliasDecl:
+    match = _ALIAS.match(line)
+    if match is None:
+        raise ParseError(f"line {lineno}: alias must look like 'alias <name> = <Head>'")
+    return AliasDecl(match.group(1), match.group(2))
+
+
+def _parse_binder(lineno: int, line: str) -> BinderDecl:
+    match = _BINDER.match(line)
+    if match is None:
+        raise ParseError(
+            f"line {lineno}: binder must look like 'binder <Head>'")
+    return BinderDecl(match.group(1))
+
+
+def _parse_role(lineno: int, line: str) -> RoleDecl:
+    match = _ROLE.match(line)
+    if match is None:
         raise ParseError(f"line {lineno}: role must look like 'role <role> = <Head>'")
-    return (m.group(1), m.group(2))
+    return RoleDecl(match.group(1), match.group(2))
 
 
-def _parse_constant(lineno, line):
-    t = _tokens(line)
-    if len(t) < 2:
+def _parse_constant(lineno: int, line: str) -> ConstantDecl:
+    tokens = _tokens(line)
+    if len(tokens) < 2:
         raise ParseError(f"line {lineno}: constant is missing a name")
-    d = {"name": t[1], "print_name": t[1]}
-    i = 2
-    while i < len(t):
-        k = t[i]
-        if k == "print":
-            d["print_name"] = t[i + 1]
-            i += 2
-        elif k == "real":
-            if i + 1 < len(t) and t[i + 1] in ("true", "false"):
-                d["real"] = t[i + 1] == "true"
-                i += 2
+    name = tokens[1]
+    print_name = name
+    real: bool | None = None
+    positive: bool | None = None
+    bounds: tuple[int, int] | None = None
+    index = 2
+    while index < len(tokens):
+        key = tokens[index]
+        if key == "print":
+            if index + 1 >= len(tokens):
+                raise ParseError(f"line {lineno}: print needs a value")
+            print_name = tokens[index + 1]
+            index += 2
+        elif key == "real":
+            if index + 1 < len(tokens) and tokens[index + 1] in ("true", "false"):
+                real = tokens[index + 1] == "true"
+                index += 2
             else:
-                d["real"] = True
-                i += 1
-        elif k == "positive":
-            d["positive"] = True
-            i += 1
-        elif k == "bounds":
-            d["bounds"] = (int(t[i + 1]), int(t[i + 2]))
-            i += 3
+                real = True
+                index += 1
+        elif key == "positive":
+            positive = True
+            index += 1
+        elif key == "bounds":
+            low = _integer(tokens, index + 1, "bounds", lineno)
+            high = _integer(tokens, index + 2, "bounds", lineno)
+            bounds = (low, high)
+            index += 3
         else:
-            raise ParseError(f"line {lineno}: unknown constant key {k!r}")
-    return d
+            raise ParseError(f"line {lineno}: unknown constant key {key!r}")
+    return ConstantDecl(C(name), name, print_name, real, positive, bounds)
 
 
-def _parse_function(lineno, line, const_map):
-    t = _tokens(line)
-    if len(t) < 2:
+def _parse_function(
+    lineno: int,
+    line: str,
+    constants: dict[str, Term],
+) -> FunctionDecl:
+    tokens = _tokens(line)
+    if len(tokens) < 2:
         raise ParseError(f"line {lineno}: function is missing a head name")
-    d = {"name": t[1], "print_name": t[1], "arity": None}
-    i = 2
-    while i < len(t):
-        k = t[i]
-        if k == "print":
-            d["print_name"] = t[i + 1]
-            i += 2
-        elif k == "arity":
-            d["arity"] = int(t[i + 1])
-            i += 2
-        elif k == "real_on_real":
-            d["real_on_real"] = True
-            i += 1
-        elif k == "zero_iff_arg_zero":
-            d["zero_iff_arg_zero"] = True
-            i += 1
-        elif k == "bounds":
-            d["bound"] = (_bound_val(t[i + 1]), _bound_val(t[i + 2]))
-            i += 3
-        elif k == "deriv":
-            d["deriv"] = fold(parse(t[i + 1], constants=const_map))
-            i += 2
-        elif k == "domain":
-            d["domain"] = fold(parse(t[i + 1], constants=const_map))
-            i += 2
-        elif k == "note":
-            d["note"] = t[i + 1]
-            i += 2
+    name = tokens[1]
+    print_name = name
+    arity: int | None = None
+    real_on_real: bool | None = None
+    bound: tuple[Fraction | None, Fraction | None] | None = None
+    zero_iff_arg_zero = False
+    deriv: Term | None = None
+    domain: Term | None = None
+    note = ""
+    index = 2
+    while index < len(tokens):
+        key = tokens[index]
+        if key == "print":
+            if index + 1 >= len(tokens):
+                raise ParseError(f"line {lineno}: print needs a value")
+            print_name = tokens[index + 1]
+            index += 2
+        elif key == "arity":
+            arity = _integer(tokens, index + 1, "arity", lineno)
+            index += 2
+        elif key == "real_on_real":
+            real_on_real = True
+            index += 1
+        elif key == "zero_iff_arg_zero":
+            zero_iff_arg_zero = True
+            index += 1
+        elif key == "bounds":
+            if index + 2 >= len(tokens):
+                raise ParseError(f"line {lineno}: bounds needs two values")
+            bound = (
+                _bound_value(tokens[index + 1]),
+                _bound_value(tokens[index + 2]),
+            )
+            index += 3
+        elif key == "deriv":
+            if index + 1 >= len(tokens):
+                raise ParseError(f"line {lineno}: deriv needs a template")
+            deriv = fold(parse(tokens[index + 1], constants=constants))
+            index += 2
+        elif key == "domain":
+            if index + 1 >= len(tokens):
+                raise ParseError(f"line {lineno}: domain needs a condition")
+            domain = fold(parse(tokens[index + 1], constants=constants))
+            index += 2
+        elif key == "note":
+            if index + 1 >= len(tokens):
+                raise ParseError(f"line {lineno}: note needs text")
+            note = tokens[index + 1]
+            index += 2
         else:
-            raise ParseError(f"line {lineno}: unknown function key {k!r}")
-    return d
+            raise ParseError(f"line {lineno}: unknown function key {key!r}")
+    if arity is None:
+        raise ParseError(f"line {lineno}: function {name} is missing arity")
+    return FunctionDecl(
+        name=name,
+        print_name=print_name,
+        arity=arity,
+        real_on_real=real_on_real,
+        bound=bound,
+        zero_iff_arg_zero=zero_iff_arg_zero,
+        deriv=deriv,
+        domain=domain,
+        note=note,
+    )
 
 
-def parse_declarations(text) -> Declarations:
-    """Parse declaration DSL text. Constants are collected first to build the
-    atom table, which is then used to parse function templates.
+def _ensure_unique(identities: tuple[str, ...], kind: str) -> None:
+    seen: set[str] = set()
+    for identity in identities:
+        if identity in seen:
+            raise ParseError(f"duplicate {kind} declaration {identity!r}")
+        seen.add(identity)
 
-    Template parsing does **not** call back into the runtime: the atom table is
-    injected through `constants=`, because calling dispatch during bootstrap would
-    trigger lazy assembly and recurse. An identifier in a template that is not a
-    declared constant is treated as a symbol (a function head), which is exactly
-    what templates like `Sin(@0)` need.
-    """
-    const_lines, func_lines, alias_lines, binder_lines, role_lines, lift_lines, rules = \
-        [], [], [], [], [], [], []
+
+def parse_declarations(text: str) -> DeclarationSet:
+    """Parse declaration DSL text into immutable, fully typed records."""
+
+    constant_lines: list[tuple[int, str]] = []
+    function_lines: list[tuple[int, str]] = []
+    alias_lines: list[tuple[int, str]] = []
+    binder_lines: list[tuple[int, str]] = []
+    role_lines: list[tuple[int, str]] = []
+    lift_lines: list[tuple[int, str]] = []
+    rule_lines: list[tuple[int, str]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = _strip_comment(raw).strip()
         if not line:
             continue
         if line.startswith("rule "):
-            rules.append(line)
+            rule_lines.append((lineno, line))
         elif line.startswith("constant "):
-            const_lines.append((lineno, line))
+            constant_lines.append((lineno, line))
         elif line.startswith("function "):
-            func_lines.append((lineno, line))
+            function_lines.append((lineno, line))
         elif line.startswith("alias "):
             alias_lines.append((lineno, line))
         elif line.startswith("binder "):
@@ -342,17 +366,38 @@ def parse_declarations(text) -> Declarations:
         else:
             raise ParseError(f"line {lineno}: unknown declaration: {line!r}")
 
-    constants = tuple(_parse_constant(ln, l) for ln, l in const_lines)
-    const_map = {c["name"]: C(c["name"]) for c in constants}
-    functions = tuple(_parse_function(ln, l, const_map) for ln, l in func_lines)
-    aliases = tuple(_parse_alias(ln, l) for ln, l in alias_lines)
-    binders = tuple(_parse_binder(ln, l) for ln, l in binder_lines)
-    roles = tuple(_parse_role(ln, l) for ln, l in role_lines)
-    lifts = tuple(_parse_lift(ln, l) for ln, l in lift_lines)
-    return Declarations(constants, functions, aliases, binders, roles, lifts, tuple(rules))
+    constants = tuple(_parse_constant(lineno, line) for lineno, line in constant_lines)
+    _ensure_unique(tuple(declaration.name for declaration in constants), "constant")
+    constant_map: dict[str, Term] = {
+        declaration.name: declaration.atom for declaration in constants
+    }
+    functions = tuple(
+        _parse_function(lineno, line, constant_map)
+        for lineno, line in function_lines
+    )
+    _ensure_unique(tuple(declaration.name for declaration in functions), "function")
+    aliases = tuple(_parse_alias(lineno, line) for lineno, line in alias_lines)
+    _ensure_unique(tuple(declaration.surface for declaration in aliases), "alias")
+    binders = tuple(_parse_binder(lineno, line) for lineno, line in binder_lines)
+    _ensure_unique(tuple(declaration.head for declaration in binders), "binder")
+    roles = tuple(_parse_role(lineno, line) for lineno, line in role_lines)
+    _ensure_unique(tuple(declaration.role for declaration in roles), "role")
+    lifts = tuple(_parse_lift(lineno, line) for lineno, line in lift_lines)
+    _ensure_unique(tuple(declaration.head for declaration in lifts), "lift")
+    rules = tuple(parse_rule_line(line) for _lineno, line in rule_lines)
+    _ensure_unique(tuple(rule.id for rule in rules), "rule")
+    return DeclarationSet(
+        constants=constants,
+        functions=functions,
+        aliases=aliases,
+        binders=binders,
+        roles=roles,
+        lifts=lifts,
+        rules=rules,
+    )
 
 
-def load_declarations(path) -> Declarations:
-    """Read a declaration DSL file (UTF-8) and parse it."""
-    with open(path, encoding="utf-8") as f:
-        return parse_declarations(f.read())
+def load_declarations(path: str | Path) -> DeclarationSet:
+    """Read and parse one UTF-8 declaration DSL file."""
+
+    return parse_declarations(Path(path).read_text(encoding="utf-8"))

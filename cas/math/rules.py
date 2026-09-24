@@ -13,46 +13,126 @@ Both share `apply_rule`, and verification goes through the workflow's Rewrite
 step.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Callable, Mapping, TypeAlias
 
-from cas.syntax import term as T
 from cas.syntax import pattern as P
+from cas.syntax import term as T
 from cas.syntax.match import identity_element, matches
-from cas.kernel.verdict import YES, NO, unknown
+from cas.syntax.termpath import replace_at, term_at
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
+from cas.kernel.verdict import YES, No, Refutation, Verdict, unknown
+
+PatternLike: TypeAlias = T.Term | P.Pattern
+SubstitutionValue: TypeAlias = T.Term | tuple[T.Term, ...]
+Substitution: TypeAlias = Mapping[str, SubstitutionValue]
 
 
-@dataclass(frozen=True)
-class Rule:
+@dataclass(frozen=True, slots=True)
+class AutoRule:
+    """A rule admitted to the automatic channel; it cannot carry a guard."""
+
     id: str
-    pattern: object               # a Pattern; a pattern is not a term
-    template: object              # a Pattern; instantiation yields a Term
-    guard: object = None          # Pattern | None (a condition is also a pattern, with holes)
-    auto: bool = False
-    priority: int = 100           # try order among rules at the same position (lower first)
+    pattern: PatternLike
+    template: PatternLike
+    priority: int = 100
+
+    @property
+    def auto(self) -> bool:
+        return True
+
+    @property
+    def guard(self) -> None:
+        return None
 
 
-@dataclass
+
+@dataclass(frozen=True, slots=True)
+class ManualRule:
+    """An unconditional rule reserved for the explicit interactive channel."""
+
+    id: str
+    pattern: PatternLike
+    template: PatternLike
+    priority: int = 100
+
+    @property
+    def auto(self) -> bool:
+        return False
+
+    @property
+    def guard(self) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedRule:
+    """An interactive rule with one mandatory condition pattern."""
+
+    id: str
+    pattern: PatternLike
+    template: PatternLike
+    condition: PatternLike
+    priority: int = 100
+
+    @property
+    def auto(self) -> bool:
+        return False
+
+    @property
+    def guard(self) -> PatternLike:
+        return self.condition
+
+
+Rule: TypeAlias = AutoRule | ManualRule | GuardedRule
+
+
 class ApplyResult:
-    ok: bool
-    guard: object                 # Verdict; only YES may land
-    term: T.Term = None
-    subst: dict = None
-    rule_id: str = ""
+    """Closed result base; callers inspect variants, not arbitrary fields."""
+
+    __slots__ = ()
+
+    @property
+    def ok(self) -> bool:
+        return isinstance(self, Applied)
 
 
-def root_key(p):
+@dataclass(frozen=True, slots=True)
+class Applied(ApplyResult):
+    term: T.Term
+    substitution: Substitution
+    guard: Verdict
+    rule_id: str
+
+    @property
+    def subst(self) -> Substitution:
+        return self.substitution
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyFailed(ApplyResult):
+    term: T.Term
+    substitution: Substitution | None
+    guard: Verdict
+    rule_id: str
+    refutations: tuple[Refutation, ...] = ()
+
+    @property
+    def subst(self) -> Substitution | None:
+        return self.substitution
+
+def root_key(p: PatternLike) -> str:
     """Rule index key (pattern-level; holes map to '*')."""
     return P.root_key(p)
 
 
-def _matches_any_root(p):
-    """Whether a pattern can match a subterm whose root is any head.
-
-    A hole matches anything; a call of a head with an identity element reaches
-    through the OneIdentity channel even when the target's root is a different
-    head. Only a literal and a call of an identity-free head are confined to
-    their own root key.
-    """
+def _matches_any_root(p: PatternLike) -> bool:
+    """Whether a pattern can match a subterm rooted at any head."""
     if isinstance(p, T.Term):
         return False
     if p.__class__ is P.PatternCall:
@@ -61,35 +141,28 @@ def _matches_any_root(p):
 
 
 class RuleSet:
-    """Rule storage plus a root-key index that narrows match candidates.
+    """Rule storage plus a root-key index that narrows match candidates."""
 
-    `index` maps a pattern's root key to the rules whose pattern can only match
-    at that root; `_universal` holds the rules whose pattern can match under any
-    root. `candidates` returns the union in insertion order, so narrowing proves
-    a rule cannot match instead of guessing, and the set and order of match
-    attempts are unchanged.
-    """
-
-    def __init__(self):
-        self.rules = {}
-        self.index = {}
-        self._universal = []
-        self._seq = {}
+    def __init__(self) -> None:
+        self.rules: dict[str, Rule] = {}
+        self.index: dict[str, list[Rule]] = {}
+        self._universal: list[Rule] = []
+        self._seq: dict[str, int] = {}
         self._next_seq = 0
 
-    def _detach(self, rule):
+    def _detach(self, rule: Rule) -> None:
         if _matches_any_root(rule.pattern):
             if rule in self._universal:
                 self._universal.remove(rule)
             return
         key = root_key(rule.pattern)
-        lst = self.index.get(key)
-        if lst and rule in lst:
-            lst.remove(rule)
-            if not lst:
+        bucket = self.index.get(key)
+        if bucket and rule in bucket:
+            bucket.remove(rule)
+            if not bucket:
                 del self.index[key]
 
-    def add(self, rule):
+    def add(self, rule: Rule) -> None:
         old = self.rules.pop(rule.id, None)
         if old is not None:
             self._detach(old)
@@ -101,83 +174,106 @@ class RuleSet:
         else:
             self.index.setdefault(root_key(rule.pattern), []).append(rule)
 
-    def remove(self, rid):
-        r = self.rules.pop(rid, None)
-        if r is not None:
-            self._detach(r)
+
+    def remove(self, rid: str) -> None:
+        rule = self.rules.pop(rid, None)
+        if rule is not None:
+            self._detach(rule)
             self._seq.pop(rid, None)
 
-    def ids(self):
+    def ids(self) -> list[str]:
         return list(self.rules)
 
-    def candidates(self, tgt):
-        """The rules whose pattern can match `tgt` at a root position, in
-        insertion order.
-
-        Soundness: a match at a root position requires the pattern's root key
-        to equal the target's (a literal matches only an identical term, an
-        identity-free call only an Expr with the same interned head), or the
-        pattern to be a hole or an identity-element call, which matches every
-        term. Everything else is left out, and no matchable rule is lost.
-        """
+    def candidates(self, tgt: PatternLike) -> tuple[Rule, ...]:
+        """Return rules that can match `tgt` at its root, in insertion order."""
         bucket = self.index.get(root_key(tgt), ())
         if not self._universal:
             return tuple(bucket)
         if not bucket:
             return tuple(self._universal)
         merged = list(bucket) + list(self._universal)
-        merged.sort(key=lambda r: self._seq[r.id])
+        merged.sort(key=lambda rule: self._seq[rule.id])
         return tuple(merged)
 
 
-def apply_rule(rule, expr, path, guard_eval=None, budget=10000):
+@dataclass(frozen=True, slots=True)
+class RuleCatalog:
+    """Immutable rule lookup and root index owned by one MathContext."""
+
+    rules: Mapping[str, Rule]
+    _index: Mapping[str, tuple[Rule, ...]]
+    _universal: tuple[Rule, ...]
+    _sequence: Mapping[str, int]
+
+    @classmethod
+    def from_set(cls, source: RuleSet) -> RuleCatalog:
+        return cls(
+            rules=MappingProxyType(dict(source.rules)),
+            _index=MappingProxyType({
+                key: tuple(bucket) for key, bucket in source.index.items()
+            }),
+            _universal=tuple(source._universal),
+            _sequence=MappingProxyType(dict(source._seq)),
+        )
+
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self.rules)
+
+    def candidates(self, target: PatternLike) -> tuple[Rule, ...]:
+        bucket = self._index.get(root_key(target), ())
+        if not self._universal:
+            return bucket
+        if not bucket:
+            return self._universal
+        merged = [*bucket, *self._universal]
+        merged.sort(key=lambda rule: self._sequence[rule.id])
+        return tuple(merged)
+
+
+def apply_rule(
+    rule: Rule,
+    expr: T.Term,
+    path: tuple[int, ...],
+    guard_eval: Callable[[PatternLike, Substitution], Verdict] | None = None,
+    budget: int = 10000,
+) -> ApplyResult:
     """Try to apply a rule at `path` in `expr`.
 
-    guard_eval: (guard_term, subst) -> Verdict. The default (no guard) counts as
-    YES; a guarded rule with no evaluator counts as UNKNOWN and honestly does not
-    land.
+    `guard_eval` has shape `(condition, substitution) -> Verdict`. An automatic
+    rule is always evaluated as YES; a guarded rule without an evaluator is
+    honestly UNKNOWN and cannot land.
     """
-    sub_t = T.term_at(expr, path)
-    for sub in matches(rule.pattern, sub_t, budget=budget):
-        if rule.guard is None:
-            g = YES
+    sub_t = term_at(expr, path)
+    refutations: list[Refutation] = []
+    for substitution in matches(rule.pattern, sub_t, budget=budget):
+        verdict: Verdict
+        if rule.auto or rule.guard is None:
+            verdict = YES
         else:
-            g = guard_eval(rule.guard, sub) if guard_eval else unknown()
-        if g is YES:
-            inst = P.instantiate(rule.template, sub)
-            after = T.replace_at(expr, path, inst)
-            return ApplyResult(True, YES, after, sub, rule.id)
-        if g is NO:
+            verdict = guard_eval(rule.guard, substitution) if guard_eval else unknown()
+        if verdict is YES:
+            instance = P.instantiate(rule.template, substitution)
+            after = replace_at(expr, path, instance)
+            return Applied(after, substitution, verdict, rule.id)
+        if isinstance(verdict, No):
+            refutations.append(verdict.evidence)
             continue
-        return ApplyResult(False, g, expr, sub, rule.id)
-    return ApplyResult(False, None, expr, None, rule.id)
+        return ApplyFailed(
+            expr,
+            substitution,
+            verdict,
+            rule.id,
+            tuple(refutations),
+        )
+    return ApplyFailed(
+        expr,
+        None,
+        unknown(),
+        rule.id,
+        tuple(refutations),
+    )
 
 
-# Memoization of the parsed rule set, keyed by the identity of the context it was
-# parsed from. A cache, not configuration: it holds nothing assembly wrote into it.
-_LIB_RULESETS = {}
-
-
-def declared_ruleset(ctx) -> RuleSet:
-    """Build the rule set from the given declarations, cached per context.
-
-    The cache is keyed by the identity of the context, so a re-assembly that changes
-    the rule text (a second bootstrap with different declarations) reparses rather
-    than serving a stale ruleset. The declarations carry rule-line strings as pure
-    data and DSL parsing happens at this consumption point, so a math module never
-    imports this module back. A corrupt rule line is a declaration defect: the parse
-    error propagates and is never swallowed.
-    """
-    rs = _LIB_RULESETS.get(id(ctx))
-    if rs is None:
-        # Deferred import: this is the back edge of the
-        # cas.math.rules <-> cas.math.loader cycle. loader imports Rule at its
-        # top, so importing loader at the top here would have both sides hit a
-        # half-initialized module. The cycle exists because the parsed product of
-        # the rule-line DSL is a Rule and the assembly point is this module.
-        from cas.math.loader import parse_rule_line
-        rs = RuleSet()
-        for line in ctx.rules:
-            rs.add(parse_rule_line(line))
-        _LIB_RULESETS[id(ctx)] = rs
-    return rs
+def declared_ruleset(ctx: MathContext) -> RuleCatalog:
+    """Return the immutable rule catalog carried by ``ctx``."""
+    return ctx.rule_catalog

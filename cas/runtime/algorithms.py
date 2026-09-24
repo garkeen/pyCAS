@@ -1,65 +1,55 @@
-# -*- coding: utf-8 -*-
-"""Math algorithm facade: algorithms the workflow needs but may not import itself.
+"""The typed math algorithm facade injected into the workflow."""
 
-The workflow layer organises computation and records boundaries, and now and then
-it needs two **math** capabilities:
+from __future__ import annotations
 
-    domain_of(term)                 project the domain the term belongs to (for step display)
-    solve_linear_constraints(...)   linear solving of a constraint system (untrusted side)
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-Both live in `cas.math`, and the workflow is forbidden to import `cas.math`. They
-are wrapped into a facade here and injected into the workflow by runtime, so the
-workflow only knows "an algorithms object can answer these two questions" and not
-how they are implemented.
+from cas.syntax import term as T
+from cas.syntax.term import Sym, Term
 
-**Note where the solver sits**: on the untrusted side (it may return a wrong
-candidate), its output still has to pass the `constraint.satisfied` checker; the
-facade only forwards the call.
-"""
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
 
 
 class Algorithms:
-    """Math algorithm facade visible to the workflow.
+    """Math capabilities exposed to the workflow without a math import."""
 
-    The math context arrives in the constructor (runtime builds this facade from
-    the assembled runtime), so the workflow still knows only "an algorithms object
-    can answer these two questions" and nothing about declarations.
-    """
-
-    def __init__(self, math):
+    def __init__(self, math: MathContext) -> None:
         self._math = math
 
-    def domain_of(self, term) -> str:
-        """Domain name the term belongs to (given by projection, never by leaf
-        sniffing); empty string when the projection misses."""
+    def domain_of(self, term: Term) -> str:
+        """Return the projected domain name, or an empty string on a miss."""
         from cas.math.project import project
-        from cas.syntax.term import Expr, Sym
-        t = term
-        if (isinstance(term, Expr) and isinstance(term.head, Sym)
-                and term.head.name == "Eq"):
-            la, ra = term.args
-            from cas.syntax import term as T
-            t = T.plus(la, T.neg(ra))
-        hit = project(self._math, t)
+        from cas.syntax.term import Expr
+
+        candidate = term
+        if (
+            isinstance(term, Expr)
+            and isinstance(term.head, Sym)
+            and term.head.name == "Eq"
+        ):
+            left, right = term.args
+            candidate = T.plus(left, T.neg(right))
+        hit = project(self._math, candidate)
         return hit.name if hit is not None else ""
 
-    def solve_linear_constraints(self, relations, unknowns):
-        """Extract a linear system in the unknowns from equality constraints and
-        solve it.
-
-        Returns `(valuation, complete)`; a solver refusal (nonlinear /
-        inconsistent) returns None.
-        """
+    def solve_linear_constraints(
+        self,
+        relations: tuple[Term, ...],
+        unknowns: tuple[Sym, ...],
+    ) -> tuple[dict[Sym, Term], bool] | None:
+        """Return a linear valuation and completeness flag, or ``None``."""
         from cas.math.constraints import solve_linear_constraints
+
         return solve_linear_constraints(self._math, relations, unknowns)
 
-    def expand_definitions(self, definitions, term):
-        """Expand the scope's definitions in `term`: the only automatic
-        substitution channel.
-
-        `definitions` is a symbol -> body mapping taken from the scope, so the
-        facade receives plain data and holds no kernel type. Ledger equations are
-        assumptions and are never expanded (they are not rewrite rules).
-        """
+    def expand_definitions(
+        self,
+        definitions: Mapping[Term, Term],
+        term: Term,
+    ) -> Term:
+        """Expand the scope's definitions through the automatic channel."""
         from cas.math.definitions import expand
+
         return expand(definitions.get, term)

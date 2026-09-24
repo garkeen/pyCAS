@@ -1,330 +1,346 @@
-from fractions import Fraction as Fr
+"""Typed pretty-printing for terms and pattern-language values."""
 
-from cas.runtime import dispatch as rt
+from __future__ import annotations
 
-from cas.syntax import term as T
+from collections.abc import Mapping, Sequence
+from fractions import Fraction
+from typing import TypeAlias
+
+from cas.runtime.runtime import Runtime
 from cas.syntax import pattern as P
+from cas.syntax import term as T
 from cas.syntax.parse import atom_notation
-from cas.syntax.term import Expr, Int, Rat, Sym, Const, Bound, BVal, Special, DB
+from cas.syntax.term import DB, Bound, BVal, Const, Expr, Int, Rat, Special, Sym, Term
 from cas.syntax.termpath import postorder
 
-_PREC = {"Eq": 2, "Ne": 2, "Lt": 2, "Le": 2, "Gt": 2, "Ge": 2, "Plus": 3, "Times": 4, "Power": 6}
+Rendered: TypeAlias = tuple[str, int]
+PatternLike: TypeAlias = T.Term | P.Pattern
+
+_PREC = {
+    "Eq": 2,
+    "Ne": 2,
+    "Lt": 2,
+    "Le": 2,
+    "Gt": 2,
+    "Ge": 2,
+    "Plus": 3,
+    "Times": 4,
+    "Power": 6,
+}
+_INFIX = {
+    "Plus": "+",
+    "Times": "*",
+    "Eq": "==",
+    "Ne": "!=",
+    "Lt": "<",
+    "Le": "<=",
+    "Gt": ">",
+    "Ge": ">=",
+}
+_ATOM_P = 100
 
 
-def _atom_str(a, src=False):
-    """Render an atom.
-
-    Sym is a user symbol and is never remapped -- remapping would print a custom
-    symbol named pi as the constant pi. Only constants declared in the declaration
-    layer take a print_name.
-
-    src=True (parseable source form) always emits the internal name: the display
-    names for pi/gamma are not in the lexer, so emitting them would be unparseable.
-    Display and source are two purposes and take separate routes.
-
-    An atom whose notation the lexer accepts asks the syntax layer for that notation;
-    an atom without one (the empty solution set, Undefined) has no parseable spelling
-    and falls back to the display spelling.
-    """
-    if isinstance(a, Sym):
-        return a.name
-    if isinstance(a, Const):
+def _atom_str(runtime: Runtime, atom: Term, src: bool = False) -> str:
+    """Render a term atom in display or source mode."""
+    if isinstance(atom, Sym):
+        return atom.name
+    if isinstance(atom, Const):
         if src:
-            return a.name
-        d = rt.const_by_atom(a)
-        return d.print_name if d is not None else a.name
-    if isinstance(a, BVal):
-        return "true" if a.val else "false"
-    if isinstance(a, Int):
-        return str(a.v)
-    if isinstance(a, Rat):
-        return f"{a.f.numerator}/{a.f.denominator}"
-    if isinstance(a, Special):
+            return atom.name
+        declaration = runtime.const_by_atom(atom)
+        return declaration.print_name if declaration is not None else atom.name
+    if isinstance(atom, BVal):
+        return "true" if atom.val else "false"
+    if isinstance(atom, Int):
+        return str(atom.v)
+    if isinstance(atom, Rat):
+        return f"{atom.f.numerator}/{atom.f.denominator}"
+    if isinstance(atom, Special):
         if src:
-            n = atom_notation(a)
-            if n is not None:
-                return n
-        if a is T.EMPTY_SET:
+            notation = atom_notation(atom)
+            if notation is not None:
+                return notation
+        if atom is T.EMPTY_SET:
             return "{}"
-        return a.name
-    if isinstance(a, DB):
-        # the lexer's placeholder notation is `@n` (`#n` is the template display form
-        # and is not a token), so the source form uses the notation the lexer accepts
-        return f"@{a.i}" if src else f"#{a.i}"
-    return repr(a)
+        return atom.name
+    if isinstance(atom, DB):
+        return f"@{atom.i}" if src else f"#{atom.i}"
+    return repr(atom)
 
 
-def _name_of(h, src=False):
-    """The spelling of a head: the declared print name when there is one, else the
-    display name (lowercased) or, in source mode, the canonical head name.
-
-    The parser holds no case convention, so the source form must emit a spelling the
-    declarations map back to this head: a lowercased undeclared head would re-parse as
-    a different head. The display form keeps the friendly lowercase because it is not
-    meant to be re-parsed. A declared print name resolves through the alias table,
-    which is what makes the source form of a declared function round-trip.
-    """
-    if isinstance(h, Sym):
-        pn = rt.print_name(h.name)
-        if pn is not None:
-            return pn
-        return h.name if src else h.name.lower()
-    return repr(h)
+def _name_of(runtime: Runtime, head: Sym, src: bool = False) -> str:
+    """Render a head using declared display data or its canonical name."""
+    print_name = runtime.print_name(head.name)
+    if print_name is not None:
+        return print_name
+    return head.name if src else head.name.lower()
 
 
-def _wrap(child, need):
-    """Parenthesize decision for a child (body string, own precedence) in a context
-    of precedence `need`."""
-    s, p = child
-    return "(" + s + ")" if need > p else s
+def _wrap(child: Rendered, needed_precedence: int) -> str:
+    text, precedence = child
+    return "(" + text + ")" if needed_precedence > precedence else text
 
 
-def _call_str(name, val, args):
-    """Canonical call spelling of a structure: its head name plus its arguments.
-
-    The parser reproduces a call of any head by that name, so this is the source form
-    of a container whose display notation (set braces, interval brackets, an infix
-    union) is not part of the lexer.
-    """
-    return f"{name}(" + ", ".join(_wrap(val[a], 0) for a in args) + ")"
+def _call_str(
+    name: str,
+    values: Mapping[Term, Rendered],
+    arguments: Sequence[Term],
+) -> str:
+    return name + "(" + ", ".join(_wrap(values[argument], 0) for argument in arguments) + ")"
 
 
-# Display notation of the standard binder heads: presentation only. Display mode
-# is not promised to re-parse, so the friendly symbols may live in a table; the
-# **source** form never consults it (see the declared-binder branch of to_str). A
-# declared binder without an entry falls back to the canonical call spelling with
-# the bound variable visible, since there is no notation to invent for it.
-_BINDER_SYMBOLS = {"Integrate": "∫", "Sum": "Σ", "Product": "Π", "Limit": "lim"}
+_BINDER_SYMBOLS = {
+    "Integrate": "∫",
+    "Sum": "Σ",
+    "Product": "Π",
+    "Limit": "lim",
+}
 
 
-def _binder_display(u, b, ob):
-    """Display spelling of one declared binder node (presentation only).
-
-    The definite-integral shape carries its limits; the four traditional words
-    keep their symbol; anything else prints as a call so the bound variable
-    stays visible.
-    """
-    if u.head.name == "DefIntegrate" and len(u.args) == 3:
-        lo, hi = u.args[1], u.args[2]
-        return f"∫_{to_str(lo)}^{to_str(hi)}[{to_str(ob)}] d{b.hint}"
-    sym = _BINDER_SYMBOLS.get(u.head.name)
-    if sym is not None and len(u.args) == 1:
-        return f"{sym}[{to_str(ob)}] d{b.hint}"
-    parts = [to_str(ob), b.hint] + [to_str(a) for a in u.args[1:]]
-    return f"{_name_of(u.head)}({', '.join(parts)})"
+def _binder_display(runtime: Runtime, node: Expr, bound: Bound, body: Term) -> str:
+    if node.head.name == "DefIntegrate" and len(node.args) == 3:
+        lower, upper = node.args[1], node.args[2]
+        return f"∫_{to_str(runtime, lower)}^{to_str(runtime, upper)}[{to_str(runtime, body)}] d{bound.hint}"
+    symbol = _BINDER_SYMBOLS.get(node.head.name)
+    if symbol is not None and len(node.args) == 1:
+        return f"{symbol}[{to_str(runtime, body)}] d{bound.hint}"
+    parts = [to_str(runtime, body), bound.hint]
+    parts.extend(to_str(runtime, argument) for argument in node.args[1:])
+    return f"{_name_of(runtime, node.head)}({', '.join(parts)})"
 
 
-_ATOM_P = 100   # own precedence of a node absent from _PREC: never needs parentheses
-
-
-def to_str(t, prec=0, hint=None, src=False):
-    """Explicit-stack postorder rebuild: each node yields a body string without outer
-    parentheses plus its own precedence, and the parent adds parentheses by context
-    precedence (case-for-case equivalent to the original recursive precedence
-    mechanism).
-
-    With src=True it emits a parseable source form: a declared binder head prints
-    as a canonical call `Head(body, var, ...)` -- binder recognition runs on the
-    canonical head after alias resolution, so the emitted spelling always
-    re-parses, and a newly declared binder or a renamed surface word needs no
-    printer change. Container heads print as canonical calls (Piecewise(...),
-    FiniteSet(...), Interval(...), Union(...)) instead of set notation the lexer
-    does not accept. Every spelling the source form emits therefore re-parses to
-    the same term.
-    """
-    val = {}
-    for u in reversed(postorder(t)):
-        if not isinstance(u, Expr):
-            if isinstance(u, Bound):
-                # A Bound alone has no notation: only the parent node knows whether
-                # a declared binder head can render the binding.
-                val[u] = val[u.body]
+def to_str(
+    runtime: Runtime,
+    term: Term,
+    precedence: int = 0,
+    hint: str | None = None,
+    src: bool = False,
+) -> str:
+    """Render a term in display or parseable source form."""
+    del hint
+    values: dict[Term, Rendered] = {}
+    for current in reversed(postorder(term)):
+        if not isinstance(current, Expr):
+            if isinstance(current, Bound):
+                values[current] = values[current.body]
             else:
-                val[u] = (_atom_str(u, src), _ATOM_P)
+                values[current] = (_atom_str(runtime, current, src), _ATOM_P)
             continue
-        name = u.head.name
+        name = current.head.name
         if name == "Quote":
-            val[u] = ("'" + _wrap(val[u.args[0]], 0), _ATOM_P)
+            values[current] = ("'" + _wrap(values[current.args[0]], 0), _ATOM_P)
             continue
-        if u.args and isinstance(u.args[0], Bound) \
-                and isinstance(u.head, Sym) and rt.is_binder(u.head.name):
-            # A declared binder head, asked of the same runtime query the parser
-            # uses: no binder head name is a literal here. The source form is the
-            # canonical head with body and bound variable (plus trailing
-            # arguments); alias resolution maps a surface word to the canonical
-            # head, where binder recognition runs, so this spelling re-parses even
-            # for a fresh binder or after the surface word was renamed.
-            b = u.args[0]
-            _v, ob = T.open_bound(b)
+        if (
+            current.args
+            and isinstance(current.args[0], Bound)
+            and runtime.is_binder(current.head.name)
+        ):
+            bound = current.args[0]
+            _variable, body = T.open_bound(bound)
             if src:
-                parts = [to_str(ob, src=True), b.hint]
-                parts.extend(to_str(a, src=True) for a in u.args[1:])
-                val[u] = (f"{u.head.name}(" + ", ".join(parts) + ")", _ATOM_P)
+                source_parts = [to_str(runtime, body, src=True), bound.hint]
+                source_parts.extend(
+                    to_str(runtime, argument, src=True) for argument in current.args[1:]
+                )
+                values[current] = (
+                    f"{current.head.name}(" + ", ".join(source_parts) + ")",
+                    _ATOM_P,
+                )
             else:
-                val[u] = (_binder_display(u, b, ob), _ATOM_P)
+                values[current] = (_binder_display(runtime, current, bound, body), _ATOM_P)
             continue
-        if name == "Piecewise" and len(u.args) % 2 == 0:
+        if name == "Piecewise" and len(current.args) % 2 == 0:
             if src:
-                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+                values[current] = (_call_str(name, values, current.args), _ATOM_P)
             else:
                 parts = [
-                    f"{_wrap(val[u.args[i]], 0)} if {_wrap(val[u.args[i + 1]], 0)}"
-                    for i in range(0, len(u.args), 2)
+                    f"{_wrap(values[current.args[index]], 0)} if "
+                    f"{_wrap(values[current.args[index + 1]], 0)}"
+                    for index in range(0, len(current.args), 2)
                 ]
-                val[u] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
+                values[current] = ("piecewise(" + ", ".join(parts) + ")", _ATOM_P)
             continue
         if name == "FiniteSet":
             if src:
-                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+                values[current] = (_call_str(name, values, current.args), _ATOM_P)
             else:
-                val[u] = ("{" + ", ".join(_wrap(val[a], 0) for a in u.args) + "}", _ATOM_P)
+                values[current] = (
+                    "{" + ", ".join(_wrap(values[argument], 0) for argument in current.args) + "}",
+                    _ATOM_P,
+                )
             continue
-        if name == "Interval" and len(u.args) == 4:
+        if name == "Interval" and len(current.args) == 4:
             if src:
-                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+                values[current] = (_call_str(name, values, current.args), _ATOM_P)
             else:
-                lo, hi, lo_o, hi_o = u.args
-                lb = "(" if (isinstance(lo_o, BVal) and lo_o.val) else "["
-                rb = ")" if (isinstance(hi_o, BVal) and hi_o.val) else "]"
-                val[u] = (f"{lb}{_wrap(val[lo], 0)}, {_wrap(val[hi], 0)}{rb}", _ATOM_P)
+                lower, upper, lower_open, upper_open = current.args
+                left = "(" if isinstance(lower_open, BVal) and lower_open.val else "["
+                right = ")" if isinstance(upper_open, BVal) and upper_open.val else "]"
+                values[current] = (
+                    f"{left}{_wrap(values[lower], 0)}, {_wrap(values[upper], 0)}{right}",
+                    _ATOM_P,
+                )
             continue
         if name == "Union":
             if src:
-                val[u] = (_call_str(name, val, u.args), _ATOM_P)
+                values[current] = (_call_str(name, values, current.args), _ATOM_P)
             else:
-                val[u] = (" U ".join(_wrap(val[a], 0) for a in u.args), _ATOM_P)
+                values[current] = (
+                    " U ".join(_wrap(values[argument], 0) for argument in current.args),
+                    _ATOM_P,
+                )
             continue
-        if name == "O" and len(u.args) == 1:
-            val[u] = ("O(" + _wrap(val[u.args[0]], 0) + ")", _ATOM_P)
+        if name == "O" and len(current.args) == 1:
+            values[current] = (
+                "O(" + _wrap(values[current.args[0]], 0) + ")",
+                _ATOM_P,
+            )
             continue
         if name in _PREC:
-            p = _PREC[name]
+            own_precedence = _PREC[name]
             if name == "Plus":
-                parts = []
-                for i, a in enumerate(u.args):
-                    sa = _wrap(val[a], p)
-                    neg = sa.startswith("-")
-                    parts.append(sa if i == 0 else ("- " + sa[1:] if neg else "+ " + sa))
-                s = " ".join(parts)
+                plus_parts: list[str] = []
+                for index, argument in enumerate(current.args):
+                    argument_text = _wrap(values[argument], own_precedence)
+                    negative = argument_text.startswith("-")
+                    plus_parts.append(
+                        argument_text
+                        if index == 0
+                        else "- " + argument_text[1:]
+                        if negative
+                        else "+ " + argument_text
+                    )
+                body_text = " ".join(plus_parts)
             elif name == "Times":
-                facs = []
-                dens = []
-                keep = []
-                v = Fr(1)
-                for a in u.args:
-                    if T.is_num(a):
-                        v *= T.num_val(a)
+                factors: list[str] = []
+                denominator_factors: list[tuple[Term, int]] = []
+                kept: list[Term] = []
+                coefficient = Fraction(1)
+                for argument in current.args:
+                    if T.is_num(argument):
+                        coefficient *= T.num_val(argument)
                         continue
                     if (
-                        isinstance(a, Expr)
-                        and a.head.name == "Power"
-                        and isinstance(a.args[1], T.Int)
-                        and a.args[1].v < 0
+                        isinstance(argument, Expr)
+                        and argument.head.name == "Power"
+                        and isinstance(argument.args[1], Int)
+                        and argument.args[1].v < 0
                     ):
-                        base, e = a.args
+                        base = argument.args[0]
+                        exponent_term = argument.args[1]
+                        if not isinstance(exponent_term, Int):
+                            continue
                         if T.is_num(base) and T.num_val(base) != 0:
-                            # a reciprocal of a number is numeric as well, so it
-                            # converges into the one exact rational coefficient
-                            # (b^-k = 1/b^k for a nonzero b)
-                            v *= T.num_val(base) ** e.v
+                            coefficient *= T.num_val(base) ** exponent_term.v
                         else:
-                            # a symbolic negative integer power factor -> denominator
-                            # (b^-k -> /b^k), several allowed; store only (base, exponent)
-                            # and never build a new term, since a new term is not in the
-                            # postorder and looking it up in val would raise KeyError
-                            dens.append((base, -e.v))
+                            denominator_factors.append((base, -exponent_term.v))
                         continue
-                    keep.append(a)
-                # all numeric factors are multiplied into one exact rational value before
-                # anything is rendered, so no factor can overwrite another and the sign
-                # of the whole product survives; that value is spelled as its numerator
-                # over its denominator, the same convention a rational atom uses, with a
-                # numerator of 1 absorbed and -1 keeping its bare sign spelling
-                num_v, den_v = v.numerator, v.denominator
-                coef = ""
-                if num_v == -1:
-                    coef = "-"
-                elif num_v != 1:
-                    coef = _atom_str(T.N(num_v))
-                cden = "" if den_v == 1 else str(den_v)
-                for a in keep:
-                    facs.append(_wrap(val[a], p))   # the precedence mechanism already parenthesizes subexpressions
-                body = "*".join(facs) if facs else (coef if coef not in ("", "-") else "1")
-                if coef and coef != "-" and facs:
-                    body = coef + "*" + body
-                elif coef == "-":
-                    body = "-" + body
-                elif coef and not facs:
-                    body = coef
-                if dens or cden:
-                    ds = [cden] if cden else []   # the coefficient's denominator comes first
-                    for base, be in dens:
-                        sb = _wrap(val[base], 6)   # render the denominator power base at Power precedence
-                        if T.is_num(base) and (T.num_val(base) < 0 or isinstance(base, Rat)):
-                            sb = "(" + sb + ")"
-                        ds.append(sb if be == 1 else f"{sb}^{be}")
-                    den_s = ds[0] if len(ds) == 1 else "(" + "*".join(ds) + ")"
-                    s = body + "/" + den_s
-                else:
-                    s = body
+                    kept.append(argument)
+                numerator, denominator = coefficient.numerator, coefficient.denominator
+                coefficient_text = ""
+                if numerator == -1:
+                    coefficient_text = "-"
+                elif numerator != 1:
+                    coefficient_text = _atom_str(runtime, T.N(numerator))
+                denominator_text = "" if denominator == 1 else str(denominator)
+                factors.extend(_wrap(values[argument], own_precedence) for argument in kept)
+                body_text = (
+                    "*".join(factors)
+                    if factors
+                    else coefficient_text
+                    if coefficient_text not in ("", "-")
+                    else "1"
+                )
+                if coefficient_text and coefficient_text != "-" and factors:
+                    body_text = coefficient_text + "*" + body_text
+                elif coefficient_text == "-":
+                    body_text = "-" + body_text
+                elif coefficient_text and not factors:
+                    body_text = coefficient_text
+                if denominator_factors or denominator_text:
+                    denominator_parts = [denominator_text] if denominator_text else []
+                    for denominator_base, denominator_exponent in denominator_factors:
+                        base_text = _wrap(values[denominator_base], 6)
+                        if T.is_num(denominator_base) and (
+                            T.num_val(denominator_base) < 0 or isinstance(denominator_base, Rat)
+                        ):
+                            base_text = "(" + base_text + ")"
+                        denominator_parts.append(
+                            base_text if denominator_exponent == 1
+                            else f"{base_text}^{denominator_exponent}"
+                        )
+                    rendered_denominator = (
+                        denominator_parts[0]
+                        if len(denominator_parts) == 1
+                        else "(" + "*".join(denominator_parts) + ")"
+                    )
+                    body_text += "/" + rendered_denominator
             elif name == "Power":
-                b, e = u.args
-                sb = _wrap(val[b], p)
-                if T.is_num(b) and (T.num_val(b) < 0 or isinstance(b, Rat)):
-                    sb = "(" + sb + ")"
-                se = _wrap(val[e], p + 1)
-                if isinstance(e, Rat):
-                    se = "(" + se + ")"   # 3^1/2 is ambiguous (^ binds tighter than /), so a fractional exponent needs parentheses
-                s = f"{sb}^{se}"
+                base, exponent = current.args
+                base_text = _wrap(values[base], own_precedence)
+                if T.is_num(base) and (
+                    T.num_val(base) < 0 or isinstance(base, Rat)
+                ):
+                    base_text = "(" + base_text + ")"
+                exponent_text = _wrap(values[exponent], own_precedence + 1)
+                if isinstance(exponent, Rat):
+                    exponent_text = "(" + exponent_text + ")"
+                body_text = f"{base_text}^{exponent_text}"
             else:
-                parts = [_wrap(val[a], p + 1) for a in u.args]
-                op = T._INFIX.get(name, name)
-                s = f" {op} ".join(parts)
-            val[u] = (s, p)
+                parts = [
+                    _wrap(values[argument], own_precedence + 1)
+                    for argument in current.args
+                ]
+                body_text = f" {_INFIX.get(name, name)} ".join(parts)
+            values[current] = (body_text, own_precedence)
             continue
-        # An undeclared head (or a declared one used without a bound first
-        # argument): a Bound renders as its body, because there is no notation
-        # that could re-parse the binding; declared binders were rendered above
-        # with the variable kept.
-        args = ", ".join(_wrap(val[a], 0) for a in u.args)
-        val[u] = (f"{_name_of(u.head, src)}({args})", _ATOM_P)
-    s, p = val[t]
-    # top-level precedence only applies to _PREC heads (case-for-case equivalent to
-    # the original recursive version; atoms and function heads get no parentheses)
-    if prec > p and isinstance(t, Expr) and t.head.name in _PREC:
-        return "(" + s + ")"
-    return s
+        arguments = ", ".join(_wrap(values[argument], 0) for argument in current.args)
+        values[current] = (f"{_name_of(runtime, current.head, src)}({arguments})", _ATOM_P)
+
+    text, own_precedence = values[term]
+    if (
+        precedence > own_precedence
+        and isinstance(term, Expr)
+        and term.head.name in _PREC
+    ):
+        return "(" + text + ")"
+    return text
 
 
-# ---------------------------------------------------------------------------
-# Pattern rendering: rule listing display, emitting a reparsable DSL form
-# ---------------------------------------------------------------------------
-
-def _pat_prec(a):
-    if isinstance(a, P.PatternCall) and isinstance(a.head, Sym) and a.head.name in _PREC:
-        return _PREC[a.head.name]
+def _pat_prec(pattern: PatternLike) -> int:
+    if isinstance(pattern, P.PatternCall) and pattern.head.name in _PREC:
+        return _PREC[pattern.head.name]
     return _ATOM_P
 
 
-def pat_to_str(p, src=False):
-    """Render a pattern. A literal term goes to to_str; a hole prints as
-    ?name / ??name / ?name::pred; a PatternCall renders infix via _PREC/_INFIX,
-    matching term printing."""
-    if isinstance(p, T.Term):
-        return to_str(p, src=src)
-    if isinstance(p, P.PatternVar):
-        return "?" + p.name + (("::" + p.pred) if p.pred else "")
-    if isinstance(p, P.PatternSeq):
-        return "??" + p.name
-    name = p.head.name if isinstance(p.head, Sym) else repr(p.head)
+def pat_to_str(runtime: Runtime, pattern: PatternLike, src: bool = False) -> str:
+    """Render a pattern in a reparsable pattern-language form."""
+    if isinstance(pattern, T.Term):
+        return to_str(runtime, pattern, src=src)
+    if isinstance(pattern, P.PatternVar):
+        return "?" + pattern.name + (("::" + pattern.pred) if pattern.pred else "")
+    if isinstance(pattern, P.PatternSeq):
+        return "??" + pattern.name
+    if not isinstance(pattern, P.PatternCall):
+        raise TypeError(f"unsupported pattern node: {pattern!r}")
+    name = pattern.head.name
     if name in _PREC:
-        pr = _PREC[name]
+        precedence = _PREC[name]
         if name == "Power":
-            b, e = p.args
-            sb = _wrap((pat_to_str(b, src), _pat_prec(b)), pr)
-            se = _wrap((pat_to_str(e, src), _pat_prec(e)), pr + 1)
-            return f"{sb}^{se}"
-        parts = [_wrap((pat_to_str(a, src), _pat_prec(a)), pr + 1) for a in p.args]
-        return f" {T._INFIX.get(name, name)} ".join(parts)
-    args = ", ".join(pat_to_str(a, src) for a in p.args)
-    return f"{_name_of(p.head, src)}({args})"
+            base, exponent = pattern.args
+            base_text = _wrap((pat_to_str(runtime, base, src), _pat_prec(base)), precedence)
+            exponent_text = _wrap(
+                (pat_to_str(runtime, exponent, src), _pat_prec(exponent)),
+                precedence + 1,
+            )
+            return f"{base_text}^{exponent_text}"
+        parts = [
+            _wrap(
+                (pat_to_str(runtime, argument, src), _pat_prec(argument)),
+                precedence + 1,
+            )
+            for argument in pattern.args
+        ]
+        return f" {_INFIX.get(name, name)} ".join(parts)
+    arguments = ", ".join(pat_to_str(runtime, argument, src) for argument in pattern.args)
+    return f"{_name_of(runtime, pattern.head, src)}({arguments})"

@@ -8,10 +8,12 @@ registration statements. That is what turns "admit only unconditional identities
 instead of something a human has to notice in code.
 """
 
-import pytest
 from pathlib import Path
 
-from cas.math.loader import load_declarations, parse_declarations, parse_rule_line
+import pytest
+from cas.runtime import Runtime
+
+from cas.math.loader import load_declarations, parse_declarations
 from cas.math.piecewise import is_piecewise
 
 # Walk up to the directory that contains `cas/`: this test may live at any depth
@@ -38,34 +40,33 @@ def test_elementary_module_has_no_python_declarations():
         "the parser still hardcodes surface notation (it should use the declared alias table)"
 
 
-def test_surface_aliases_are_declared():
+def test_surface_aliases_are_declared(runtime: Runtime):
     """The surface notation ln/sqrt comes from the DSL declaration and is visible in the
     runtime after assembly."""
-    from cas.runtime import dispatch
     d = load_declarations(str(_DSL))
-    amap = dict(d.aliases)
+    amap = {record.surface: record.head for record in d.aliases}
     assert amap.get("ln") == "Log" and amap.get("sqrt") == "Sqrt"
-    assert dispatch.alias_head("sqrt") == "Sqrt"
-    assert dispatch.alias_head("ln") == "Log"
+    assert runtime.alias_head("sqrt") == "Sqrt"
+    assert runtime.alias_head("ln") == "Log"
 
 
-def test_algorithm_roles_are_declared():
+def test_algorithm_roles_are_declared(runtime: Runtime):
     """The canonical function an algorithm refers to (the logarithm) comes from a DSL
     role declaration rather than being hardcoded in the algorithm."""
-    from cas.runtime import dispatch
     d = load_declarations(str(_DSL))
-    rmap = dict(d.roles)
+    rmap = {record.role: record.head for record in d.roles}
     assert rmap.get("logarithm") == "Log"
-    assert dispatch.role_head("logarithm") == "Log"
+    assert runtime.role_head("logarithm") == "Log"
 
 
 
 
 def test_lift_policies_are_declared_for_mathematical_heads():
     d = parse_declarations(_text())
-    policies = dict(d.lifts)
-    assert set(policies) == {f["name"] for f in d.functions}
-    assert set(policies.values()) <= {"congruent", "conditional", "forbidden"}
+    policies = {record.head: record.policy for record in d.lifts}
+    assert set(policies) == {function.name for function in d.functions}
+    assert {policy.value for policy in policies.values()} <= {
+        "congruent", "conditional", "forbidden"}
     assert "lift Sin = congruent" in _text()
 
 
@@ -73,38 +74,37 @@ def test_lift_parser_rejects_unknown_policy():
     from cas.errors import ParseError
     with pytest.raises(ParseError):
         parse_declarations("lift Sin = sometimes")
-def test_dsl_is_the_only_declaration_source():
+def test_dsl_is_the_only_declaration_source(runtime: Runtime):
     """The DSL file exists and covers every constant and function; what assembly
     registers matches it entry for entry."""
-    from cas.runtime import dispatch
     d = load_declarations(str(_DSL))
-    assert {c["name"] for c in d.constants} == {"pi", "e", "i", "gamma"}
-    assert {f["name"] for f in d.functions} == {
+    assert {constant.name for constant in d.constants} == {"pi", "e", "i", "gamma"}
+    assert {function.name for function in d.functions} == {
         "Sin", "Cos", "Tan", "Sinh", "Cosh", "Tanh", "Exp", "Log", "Sqrt",
         "Abs", "Atan",
     }
-    rt = dispatch.get_runtime()
-    assert rt.stats()["constants"] == len(d.constants)
-    assert rt.stats()["functions"] == len(d.functions)
-    assert rt.stats()["binders"] == len(d.binders)
-    assert rt.stats()["rules"] == len(d.rules)
+    stats = runtime.stats()
+    assert stats.constants == len(d.constants)
+    assert stats.functions == len(d.functions)
+    assert stats.binders == len(d.binders)
+    assert stats.rules == len(d.rules)
 
 
-def test_binder_heads_are_declared():
+def test_binder_heads_are_declared(runtime: Runtime):
     """The bound heads come from the DSL `binder` statement and are visible in the
     runtime, so the parser holds no binder table of its own. The surface word that
     reaches a binder head is an ordinary alias declaration."""
-    from cas.runtime import dispatch
     d = load_declarations(str(_DSL))
-    assert set(d.binders) == {"Integrate", "Sum", "Product", "Limit", "DefIntegrate"}
-    for head in d.binders:
-        assert dispatch.is_binder(head) is True, head
-    assert dispatch.is_binder("Sin") is False
-    amap = dict(d.aliases)
+    binder_heads = {record.head for record in d.binders}
+    assert binder_heads == {"Integrate", "Sum", "Product", "Limit", "DefIntegrate"}
+    for head in binder_heads:
+        assert runtime.is_binder(head) is True, head
+    assert runtime.is_binder("Sin") is False
+    aliases = {record.surface: record.head for record in d.aliases}
     for word, head in (("integrate", "Integrate"), ("sum", "Sum"),
                        ("product", "Product"), ("limit", "Limit"),
                        ("int", "DefIntegrate")):
-        assert amap.get(word) == head, word
+        assert aliases.get(word) == head, word
 
 
 def test_statement_dispatch_rejects_everything_it_does_not_know():
@@ -123,8 +123,7 @@ def test_admission_auto_rules_have_no_guard():
     """An auto rule may only be unconditional: a branch-breaking rewrite must not land
     silently (the text side of the invariant)."""
     d = parse_declarations(_text())
-    auto = [parse_rule_line(l) for l in d.rules]
-    auto = [r for r in auto if r.auto]
+    auto = [rule for rule in d.rules if rule.auto]
     assert auto, "the DSL has no auto rule, so the admission check has nothing to test"
     for r in auto:
         assert r.guard is None, f"an auto rule carries a guard: {r.id}"
@@ -139,13 +138,13 @@ def test_admission_branch_breaking_derivs_are_honest():
     "unconditional" formula but declared as a Piecewise container with a note.
     """
     d = parse_declarations(_text())
-    pw = [f for f in d.functions
-          if f.get("deriv") is not None and is_piecewise(f["deriv"])]
-    assert [f["name"] for f in pw] == ["Abs"], \
-        f"the branch-breaking derivative set changed, re-check admission: {[f['name'] for f in pw]}"
-    for f in d.functions:
-        if f["name"] in ("Tan", "Log", "Sqrt", "Exp") :
-            assert f.get("note"), f"{f['name']} does not record the reason for its branch-breaking rewrite"
+    pw = [function for function in d.functions
+          if function.deriv is not None and is_piecewise(function.deriv)]
+    assert [function.name for function in pw] == ["Abs"], \
+        f"the branch-breaking derivative set changed: {[f.name for f in pw]}"
+    for function in d.functions:
+        if function.name in ("Tan", "Log", "Sqrt", "Exp"):
+            assert function.note, f"{function.name} does not record its branch-breaking reason"
 
 
 def test_dsl_templates_parse_with_debruijn_placeholder():
@@ -154,17 +153,15 @@ def test_dsl_templates_parse_with_debruijn_placeholder():
     from cas.syntax import term as T
     from cas.syntax.term import Int
     d = parse_declarations(_text())
-    by = {f["name"]: f for f in d.functions}
+    by = {function.name: function for function in d.functions}
     # the Cos template is -Sin(@0): after folding, Times(Int(-1), Sin(DB0))
-    tpl = by["Cos"]["deriv"]
-    assert isinstance(tpl, T.Expr) and tpl.head.name == "Times"
-    assert any(isinstance(a, Int) and a.v == -1 for a in tpl.args)
-    # the Tan template is Cos(@0)^(-2): the exponent is Int(-2)
-    t = by["Tan"]["deriv"]
-    assert t.head.name == "Power" and isinstance(t.args[1], Int) \
-        and t.args[1].v == -2
-    # the Abs template is Piecewise(...), whose conditions contain DB(0)
+    template = by["Cos"].deriv
+    assert isinstance(template, T.Expr) and template.head.name == "Times"
+    assert any(isinstance(argument, Int) and argument.v == -1 for argument in template.args)
+    tan_template = by["Tan"].deriv
+    assert tan_template.head.name == "Power" and isinstance(tan_template.args[1], Int) \
+        and tan_template.args[1].v == -2
     from cas.syntax.termpath import postorder
-    tpl_abs = by["Abs"]["deriv"]
-    assert is_piecewise(tpl_abs)
-    assert any(isinstance(u, T.DB) and u.i == 0 for u in postorder(tpl_abs))
+    absolute_template = by["Abs"].deriv
+    assert is_piecewise(absolute_template)
+    assert any(isinstance(node, T.DB) and node.i == 0 for node in postorder(absolute_template))

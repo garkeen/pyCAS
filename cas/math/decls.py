@@ -1,26 +1,22 @@
-"""Declaration data types: the shape of what the declaration DSL produces.
+"""Immutable mathematical declaration records and assembled declaration sets."""
 
-A declaration is **data**, not behaviour: a constant declares its atom and the
-decidable properties it carries lemata for, a function declares its head, print
-name, arity, properties, derivative template and domain-condition template. The
-admission discipline (what may be declared) is checked mechanically against the
-DSL text, and the assembly-time builder holds the declaration tables.
-
-These types live in the math layer because they are mathematical semantics --
-"which functions exist and what is true of them" belongs to `math/*`, and the
-runtime layer composes them into its own registry.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from fractions import Fraction
+from typing import TYPE_CHECKING
 
-from cas.syntax.term import Const
+from cas.syntax.term import Const, Term
+
+if TYPE_CHECKING:
+    from cas.math.rules import Rule
 
 
 @dataclass(frozen=True, slots=True)
 class ConstantDecl:
-    """Mathematical constant: the atom plus lemma declarations for decidable
-    properties."""
+    """A mathematical constant and the coarse facts declared for it."""
+
     atom: Const
     name: str
     print_name: str
@@ -29,18 +25,61 @@ class ConstantDecl:
     bounds: tuple[int, int] | None = None
 
 
+class LiftPolicy(StrEnum):
+    """How a declared mathematical head participates in equality lifting."""
+
+    CONGRUENT = "congruent"
+    CONDITIONAL = "conditional"
+    FORBIDDEN = "forbidden"
+
+
 @dataclass(frozen=True, slots=True)
 class FunctionDecl:
-    """A declared mathematical function and its registered properties."""
+    """A declared mathematical function and its admitted properties."""
 
     name: str
     print_name: str
-    arity: int | None
+    arity: int
     real_on_real: bool | None = None
     bound: tuple[Fraction | None, Fraction | None] | None = None
     zero_iff_arg_zero: bool = False
-    deriv: object = None
-    domain: object = None
-    deriv_note: str = ""
+    deriv: Term | None = None
+    domain: Term | None = None
     note: str = ""
-    lift: str = "forbidden"
+    lift: LiftPolicy = LiftPolicy.FORBIDDEN
+
+
+@dataclass(frozen=True, slots=True)
+class AliasDecl:
+    surface: str
+    head: str
+
+
+@dataclass(frozen=True, slots=True)
+class BinderDecl:
+    head: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoleDecl:
+    role: str
+    head: str
+
+
+@dataclass(frozen=True, slots=True)
+class LiftDecl:
+    head: str
+    policy: LiftPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class DeclarationSet:
+    """All records parsed from one declaration DSL document."""
+
+    constants: tuple[ConstantDecl, ...]
+    functions: tuple[FunctionDecl, ...]
+    aliases: tuple[AliasDecl, ...]
+    binders: tuple[BinderDecl, ...]
+    roles: tuple[RoleDecl, ...]
+    lifts: tuple[LiftDecl, ...]
+    rules: tuple[Rule, ...]

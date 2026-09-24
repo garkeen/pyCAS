@@ -1,33 +1,21 @@
-"""Task / TaskCandidate: a computation problem and a candidate.
+"""Task and candidate storage for the workflow computation graph."""
 
-A request is an ordinary term (`Simplify(expr)`, `Differentiate(expr, x)`,
-`Integrate(expr, x)`, `Solve(equation, x)`, ...). There is no closed TaskKind
-enum: neither the kernel nor the workflow knows these heads, they are just
-terms being carried.
-
-State is derived from data, so no mutable `verified=True` is needed:
-
-    validation is None                        unverified candidate
-    validation has an open requirement        verified but conditional
-    validation is directly applicable         verified candidate
-
-`parent` is a single parent pointer, so the task tree is acyclic. The cycle in
-cyclic integration is not in this tree: it lives in the candidate <-> constraint
-subgraph (see constraint.py).
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cas.syntax import term as T
 from cas.kernel.ids import JudgmentId, ScopeId
+from cas.kernel.store import KernelStore
+from cas.syntax.term import Term
 from cas.workflow.ids import ArtifactId, TaskCandidateId, TaskId
+from cas.workflow.states import CandidateState
 
 
 @dataclass(frozen=True, slots=True)
 class Task:
     id: TaskId
     scope: ScopeId
-    request: T.Term
+    request: Term
     parent: TaskId | None = None
 
 
@@ -41,98 +29,88 @@ class TaskCandidate:
     def is_validated(self) -> bool:
         return self.validation is not None
 
-    def state(self, store, scope: ScopeId) -> str:
-        """Derive the state from data: unverified, verified but conditional, or
-        verified.
-
-        `store` and `scope` are both required: without them "verified" cannot be
-        distinguished from "conditional", and any silent downgrade would call an
-        unverified candidate verified. Applicability is computed by the kernel
-        per scope; the workflow only queries it.
-
-        `scope` is the scope the candidate would be used in, not the scope its
-        validation was produced in. The two differ as soon as branches exist: a
-        validation whose conditions were discharged by a branch assumption is
-        applicable inside that branch and only conditional outside it.
-        """
+    def state(self, store: TaskStore, scope: ScopeId) -> CandidateState:
+        """Derive the candidate state from stored validation data."""
         if self.validation is None:
-            return "unverified"
+            return CandidateState.UNVERIFIED
         if not store.is_applicable(self.validation, scope):
-            return "conditional"
-        return "validated"
+            return CandidateState.CONDITIONAL
+        return CandidateState.VALIDATED
 
 
 class TaskStore:
-    """Task and candidate storage (append-only)."""
+    """Append-only task and candidate storage."""
 
-    def __init__(self, kernel):
-        self.kernel = kernel                        # KernelStore; the independent facility for applicability queries
+    def __init__(self, kernel: KernelStore) -> None:
+        self.kernel = kernel
         self._tasks: dict[TaskId, Task] = {}
-        self._cands: dict[TaskCandidateId, TaskCandidate] = {}
-        self._next_t = 0
-        self._next_c = 0
+        self._candidates: dict[TaskCandidateId, TaskCandidate] = {}
+        self._next_task = 0
+        self._next_candidate = 0
 
-    # --- tasks ---
-
-    def open_task(self, scope, request, parent=None) -> Task:
+    def open_task(
+        self,
+        scope: ScopeId,
+        request: Term,
+        parent: TaskId | None = None,
+    ) -> Task:
         if parent is not None and parent not in self._tasks:
             raise KeyError(f"parent task does not exist: {parent}")
-        tid = TaskId(self._next_t)
-        self._next_t += 1
-        t = Task(id=tid, scope=scope, request=request, parent=parent)
-        self._tasks[tid] = t
-        return t
+        task_id = TaskId(self._next_task)
+        self._next_task += 1
+        task = Task(id=task_id, scope=scope, request=request, parent=parent)
+        self._tasks[task_id] = task
+        return task
 
-    def get_task(self, tid: TaskId) -> Task:
-        return self._tasks[tid]
+    def get_task(self, task_id: TaskId) -> Task:
+        return self._tasks[task_id]
 
-    def subtasks(self, tid: TaskId):
-        return tuple(t for t in self._tasks.values() if t.parent == tid)
+    def subtasks(self, task_id: TaskId) -> tuple[Task, ...]:
+        return tuple(
+            task for task in self._tasks.values() if task.parent == task_id
+        )
 
-    def task_tree_edges(self):
-        """Tree edges (parent -> child). The task tree is acyclic by
-        construction: a new task can only be attached to an existing parent
-        (ids increase), so there is no back-reference."""
-        return tuple((t.parent, t.id) for t in self._tasks.values()
-                     if t.parent is not None)
+    def task_tree_edges(self) -> tuple[tuple[TaskId, TaskId], ...]:
+        return tuple(
+            (task.parent, task.id)
+            for task in self._tasks.values()
+            if task.parent is not None
+        )
 
-    # --- candidates ---
+    def propose(
+        self,
+        task: TaskId,
+        artifact: ArtifactId,
+        validation: JudgmentId | None = None,
+    ) -> TaskCandidate:
+        candidate_id = TaskCandidateId(self._next_candidate)
+        self._next_candidate += 1
+        candidate = TaskCandidate(
+            id=candidate_id,
+            task=task,
+            artifact=artifact,
+            validation=validation,
+        )
+        self._candidates[candidate_id] = candidate
+        return candidate
 
-    def propose(self, task: TaskId, artifact: ArtifactId,
-                validation: JudgmentId | None = None) -> TaskCandidate:
-        cid = TaskCandidateId(self._next_c)
-        self._next_c += 1
-        c = TaskCandidate(id=cid, task=task, artifact=artifact,
-                          validation=validation)
-        self._cands[cid] = c
-        return c
+    def get_candidate(self, candidate_id: TaskCandidateId) -> TaskCandidate:
+        return self._candidates[candidate_id]
 
-    def get_candidate(self, cid: TaskCandidateId) -> TaskCandidate:
-        return self._cands[cid]
+    def candidates_of(self, task: TaskId) -> tuple[TaskCandidate, ...]:
+        return tuple(
+            candidate
+            for candidate in self._candidates.values()
+            if candidate.task == task
+        )
 
-    def candidates_of(self, task: TaskId):
-        return tuple(c for c in self._cands.values() if c.task == task)
+    def is_applicable(self, judgment_id: JudgmentId, scope: ScopeId) -> bool:
+        """Return whether a stored judgment is usable in a query scope."""
+        judgment = self.kernel.get_judgment(judgment_id)
+        return (
+            self.kernel.scopes.is_visible(judgment.scope, scope)
+            and self.kernel.applicability(judgment_id, scope).is_applicable()
+        )
 
-    def is_applicable(self, jid: JudgmentId, scope: ScopeId) -> bool:
-        """Whether the conclusion `jid` is usable in `scope`.
-
-        `scope` is the query scope (where the conclusion is to be used), never
-        the judgment's own scope: a conclusion proved under a branch assumption
-        is applicable in that branch and not in the parent.
-
-        Two questions are answered together, because usability needs both. The
-        kernel's `applicability` answers the *condition* question (are the
-        judgment's requirements discharged in `scope`), which does not look at
-        where the conclusion was asserted: a branch-local claim that happens to
-        carry no requirement would read as applicable in the parent. The kernel
-        refuses to use a judgment as a premise outside its scope (`commit`'s
-        premise visibility check), so the *scope* relation must gate usability
-        as well: the judgment's own scope has to be visible from the query
-        scope.
-        """
-        j = self.kernel.get_judgment(jid)
-        return (self.kernel.scopes.is_visible(j.scope, scope)
-                and self.kernel.applicability(jid, scope).is_applicable())
-
-    def __len__(self):
-        return self._next_t
+    def __len__(self) -> int:
+        return self._next_task

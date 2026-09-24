@@ -1,147 +1,168 @@
-# -*- coding: utf-8 -*-
-"""Assembly-time registry (`RuntimeBuilder`).
+"""Assembly-only math builder and its immutable frozen registration snapshot."""
 
-`RuntimeBuilder` is the **only write entry during assembly**: math modules register
-their declarations inside their own `install(builder)`, and once assembly finishes
-`Runtime` freezes it into a read-only snapshot.
+from __future__ import annotations
 
-**Only categories with actual content get a table.** A registry that is always empty
-is a husk, so the builder holds only what is really used today: constants, function
-declarations, domain conditions, identity-decision stages, and domain builders.
-Rules are assembled by `math/rules.py` from function declarations, and checkers are
-owned by the kernel's CheckerRegistry, so neither is duplicated here; a table gets
-added when it has content.
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import Mapping
 
-**No import-time global state mutation**: this module writes to the builder only
-when explicitly called, and math modules register nothing on import. Assembly is
-triggered explicitly by `bootstrap()`.
-The declaration **data types** live in the math layer (`cas.math.decls`), because
-"which functions exist and what is true of them" is mathematical semantics; this
-module imports them and holds the assembly-time tables.
-"""
+from cas.math.builder import CheckerRegistration, CommandSpec, DecisionStage
+from cas.math.decls import ConstantDecl, DeclarationSet, FunctionDecl, LiftPolicy
+from cas.math.domains.base import Domain
+from cas.math.rules import RuleCatalog, RuleSet
+from cas.syntax.term import Const
 
-from cas.math.decls import ConstantDecl, FunctionDecl
-from cas.syntax.term import C as _mk_const
+
+@dataclass(frozen=True, slots=True)
+class RuntimeAssembly:
+    """Read-only registration data frozen at the end of bootstrap."""
+
+    constants: tuple[ConstantDecl, ...]
+    functions: tuple[FunctionDecl, ...]
+    aliases: Mapping[str, str]
+    binders: frozenset[str]
+    roles: Mapping[str, str]
+    lifts: Mapping[str, LiftPolicy]
+    rules: RuleCatalog
+    decision_stages: tuple[DecisionStage, ...]
+    domains: tuple[Domain, ...]
+    checkers: tuple[CheckerRegistration, ...]
+    commands: Mapping[str, CommandSpec]
 
 
 class RuntimeBuilder:
-    """The set of assembly-time registries. A duplicate declaration raises, since
-    one declaration has exactly one home."""
+    """The sole write surface during explicit mathematical assembly."""
 
-    def __init__(self):
-        self.constants: dict[str, ConstantDecl] = {}
-        self.functions: dict[str, FunctionDecl] = {}
-        self.aliases: dict[str, str] = {}  # surface name -> canonical head
-        self.binders: list[str] = []       # canonical heads whose surface word binds a variable
-        self.roles: dict[str, str] = {}    # role -> canonical head
-        self.lifts: dict[str, str] = {}    # mathematical head -> lift policy
-        self.rule_lines: list[str] = []    # rule lines (DSL text; math/rules.py parses)
-        self.eq_stages: list = []          # (name, run)
-        self.domains: list = []            # resident base field builders (ladder order)
-        self.checkers: list = []           # (checker_id, factory) registered by math modules
-        self.commands: dict[str, tuple] = {}  # name -> (help, argument kind, checker id)
-    #     so adding a module never requires editing a second hardcoded list) ---
+    def __init__(self) -> None:
+        self._constants: list[ConstantDecl] = []
+        self._constant_names: set[str] = set()
+        self._constant_atoms: set[Const] = set()
+        self._functions: list[FunctionDecl] = []
+        self._function_names: set[str] = set()
+        self._aliases: dict[str, str] = {}
+        self._binders: set[str] = set()
+        self._roles: dict[str, str] = {}
+        self._lifts: dict[str, LiftPolicy] = {}
+        self._rule_set = RuleSet()
+        self._decision_stages: list[DecisionStage] = []
+        self._stage_names: set[str] = set()
+        self._domains: list[Domain] = []
+        self._domain_names: set[str] = set()
+        self._checkers: list[CheckerRegistration] = []
+        self._checker_ids: set[str] = set()
+        self._commands: dict[str, CommandSpec] = {}
 
-    def register_checker(self, checker_id: str, factory) -> None:
-        """Register one checker as a **factory** `(math_context) -> checker`.
+    def require_constant(self, name: str) -> ConstantDecl:
+        for declaration in self._constants:
+            if declaration.name == name:
+                return declaration
+        raise KeyError(f"constant not declared: {name} (check install order)")
 
-        A factory rather than a ready instance, because every checker reads
-        declarations and therefore needs the math context -- and the context does
-        not exist while `install(builder)` runs (assembly order is: every module
-        installs, then the context is assembled from what the builder holds).
+    def register_declarations(self, declarations: DeclarationSet) -> None:
+        """Register one fully parsed declaration set and validate references."""
 
-        A duplicate id raises, matching the duplicate-reject policy of every other
-        registry here: a collision between two modules' checker ids is a decision
-        that must surface, not one to resolve silently by registration order.
-        """
-        if any(cid == checker_id for cid, _ in self.checkers):
-            raise ValueError(f"checker already registered: {checker_id}")
-        self.checkers.append((checker_id, factory))
+        policies = {record.head: record.policy for record in declarations.lifts}
+        for constant in declarations.constants:
+            if constant.name in self._constant_names:
+                raise ValueError(f"constant redeclared: {constant.name}")
+            if constant.atom in self._constant_atoms:
+                raise ValueError(f"constant atom redeclared: {constant.name}")
+            self._constant_names.add(constant.name)
+            self._constant_atoms.add(constant.atom)
+            self._constants.append(constant)
 
-    # --- constants ---
+        for original in declarations.functions:
+            if original.name in self._function_names:
+                raise ValueError(f"function redeclared: {original.name}")
+            function = replace(
+                original,
+                lift=policies.get(original.name, original.lift),
+            )
+            self._function_names.add(function.name)
+            self._functions.append(function)
 
-    def declare_constant(self, *, name, print_name, real=None, positive=None,
-                         bounds=None) -> ConstantDecl:
-        return self.register_constant(ConstantDecl(
-            atom=_mk_const(name), name=name, print_name=print_name,
-            real=real, positive=positive, bounds=bounds))
+        for binder in declarations.binders:
+            if binder.head in self._binders:
+                raise ValueError(f"binder redeclared: {binder.head}")
+            self._binders.add(binder.head)
+        for alias in declarations.aliases:
+            if alias.surface in self._aliases:
+                raise ValueError(f"alias redeclared: {alias.surface}")
+            self._aliases[alias.surface] = alias.head
+        for role in declarations.roles:
+            if role.role in self._roles:
+                raise ValueError(f"role redeclared: {role.role}")
+            self._roles[role.role] = role.head
+        for lift in declarations.lifts:
+            if lift.head in self._lifts:
+                raise ValueError(f"lift policy redeclared: {lift.head}")
+            self._lifts[lift.head] = lift.policy
+        for rule in declarations.rules:
+            self._rule_set.add(rule)
 
-    def register_constant(self, decl: ConstantDecl) -> ConstantDecl:
-        if decl.name in self.constants:
-            raise ValueError(f"constant redeclared: {decl.name}")
-        self.constants[decl.name] = decl
-        return decl
+        known_heads = self._function_names | self._binders
+        for surface, head in self._aliases.items():
+            if head not in known_heads:
+                raise ValueError(f"alias {surface!r} targets undeclared head {head!r}")
+        for role_name, head in self._roles.items():
+            if head not in self._function_names:
+                raise ValueError(
+                    f"role {role_name!r} targets undeclared function {head!r}"
+                )
+        for head in self._lifts:
+            if head not in self._function_names:
+                raise ValueError(f"lift targets undeclared function {head!r}")
+        for head in self._binders:
+            if not any(alias_head == head for alias_head in self._aliases.values()):
+                raise ValueError(f"binder {head!r} has no declared surface alias")
 
-    def require_constant(self, name) -> ConstantDecl:
-        """Fetch an already-declared constant; a miss raises, which makes the
-        assembly-order dependency explicit."""
-        d = self.constants.get(name)
-        if d is None:
-            raise KeyError(f"constant not declared: {name} (check install order)")
-        return d
+    def register_domain(self, domain: Domain) -> None:
+        if domain.scoped:
+            raise ValueError(f"scoped domain cannot be resident: {domain.name}")
+        if domain.name in self._domain_names:
+            raise ValueError(f"domain redeclared: {domain.name}")
+        self._domain_names.add(domain.name)
+        self._domains.append(domain)
 
-    # --- functions ---
+    def register_checker(self, registration: CheckerRegistration) -> None:
+        if registration.checker_id in self._checker_ids:
+            raise ValueError(
+                f"checker already registered: {registration.checker_id}")
+        self._checker_ids.add(registration.checker_id)
+        self._checkers.append(registration)
 
-    def declare_function(self, **kw) -> FunctionDecl:
-        return self.register_function(FunctionDecl(**kw))
-
-    def register_function(self, decl: FunctionDecl) -> FunctionDecl:
-        if decl.name in self.functions:
-            raise ValueError(f"function redeclared: {decl.name}")
-        self.functions[decl.name] = decl
-        return decl
-
-    # --- aliases / rules / decision stages / domains ---
-
-    def declare_alias(self, surface: str, head: str) -> None:
-        """Parser surface name -> canonical head (e.g. ln->Log, sqrt->Sqrt).
-
-        An alias is a **declaration**, not parser hardcoding: a different surface
-        name needs no parser change.
-        """
-        if surface in self.aliases:
-            raise ValueError(f"alias redeclared: {surface}")
-        self.aliases[surface] = head
-
-    def declare_role(self, role: str, head: str) -> None:
-        """Register a role used by an algorithm to fetch a canonical head."""
-        if role in self.roles:
-            raise ValueError(f"role redeclared: {role}")
-        self.roles[role] = head
-
-    def declare_lift(self, head: str, policy: str) -> None:
-        if policy not in {"congruent", "conditional", "forbidden"}:
-            raise ValueError(f"unknown lift policy: {policy}")
-        if head in self.lifts:
-            raise ValueError(f"lift policy redeclared: {head}")
-        self.lifts[head] = policy
-
-    def declare_binder(self, head: str) -> None:
-        """Declare a canonical head as a binder head: its surface word takes the bound
-        variable as its second argument and the parser builds the bound form.
-
-        The head is declaration data like an alias, so the syntax layer knows no
-        binder by name; a new binder needs a declaration, not a parser change.
-        """
-        if head in self.binders:
-            raise ValueError(f"binder redeclared: {head}")
-        self.binders.append(head)
-
-    def declare_rule(self, line: str) -> None:
-        """Register the text of one rule DSL line."""
-        self.rule_lines.append(line)
-
-    def register_command(self, name: str, help: str, args: str, checker_id: str) -> None:
-        if name in self.commands:
-            raise ValueError(f"command redeclared: {name}")
-        self.commands[name] = (help, args, checker_id)
-
-    def register_eq_stage(self, name, run, prepend=False) -> None:
-        entry = (name, run)
+    def register_decision_stage(
+        self,
+        stage: DecisionStage,
+        *,
+        prepend: bool = False,
+    ) -> None:
+        if stage.name in self._stage_names:
+            raise ValueError(f"decision stage already registered: {stage.name}")
+        self._stage_names.add(stage.name)
         if prepend:
-            self.eq_stages.insert(0, entry)
+            self._decision_stages.insert(0, stage)
         else:
-            self.eq_stages.append(entry)
+            self._decision_stages.append(stage)
 
-    def register_domain(self, domain) -> None:
-        self.domains.append(domain)
+    def register_command(self, command: CommandSpec) -> None:
+        if command.name in self._commands:
+            raise ValueError(f"command redeclared: {command.name}")
+        self._commands[command.name] = command
+
+    def freeze(self) -> RuntimeAssembly:
+        """Return the immutable assembly snapshot consumed by runtime."""
+
+        return RuntimeAssembly(
+            constants=tuple(self._constants),
+            functions=tuple(self._functions),
+            aliases=MappingProxyType(dict(self._aliases)),
+            binders=frozenset(self._binders),
+            roles=MappingProxyType(dict(self._roles)),
+            lifts=MappingProxyType(dict(self._lifts)),
+            rules=RuleCatalog.from_set(self._rule_set),
+            decision_stages=tuple(self._decision_stages),
+            domains=tuple(self._domains),
+            checkers=tuple(self._checkers),
+            commands=MappingProxyType(dict(self._commands)),
+        )

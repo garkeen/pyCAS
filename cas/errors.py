@@ -1,55 +1,54 @@
+"""Shared typed exception hierarchy."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cas.kernel.verdict import Reason
+
+
 class BudgetExceeded(Exception):
-    def __init__(self, spent=0, message="evaluation budget exceeded"):
+    def __init__(self, spent: int = 0, message: str = "evaluation budget exceeded") -> None:
         self.spent = spent
         super().__init__(message)
 
 
 class ParseError(Exception):
-    pass
+    """Surface text cannot be decoded by the syntax parser."""
 
 
 class ScopeError(Exception):
-    """A declaration/definition violates the scope contract (symbol not fresh,
-    illegal recursion, unbound right-hand side)."""
+    """A declaration or definition violates the scope contract."""
 
 
 class BranchError(Exception):
-    """A branch operation violates the merge conditions (coverage unproved, the
-    branches answer different tasks, a symbol escaped, ...)."""
+    """A branch operation violates coverage, lineage, or namespace rules."""
 
 
 class TacticsError(Exception):
-    """Tactics refusal: cannot be completed within the capability boundary.
-    Reported honestly rather than guessed."""
+    """A solving tactic cannot complete inside its admitted fragment."""
 
 
 class DiffError(Exception):
-    """Differentiation refusal: a derivative template is missing or the
-    structure is unsupported (for example differentiating under a binder)."""
+    """Differentiation is unsupported for the requested expression."""
 
 
 class CadError(Exception):
-    """Cylindrical decomposition refusal. `reason` comes from verdict.Reason:
-    FRAGMENT means the fragment does not cover the input (multivariate or
-    non-polynomial partitioning), UNDECIDABLE means undecidable in principle
-    (transcendental conditions, comparing transcendental roots)."""
+    """A CAD partition request is outside the implemented fragment."""
 
-    def __init__(self, message, reason=None):
+    def __init__(self, message: str, reason: Reason | None = None) -> None:
         super().__init__(message)
         self.reason = reason
 
 
 class PiecewiseError(Exception):
-    """Piecewise container refusal: an ill-formed structure (for example a
-    piecewise value in a condition slot) or an unsupported fragment."""
+    """A Piecewise container is structurally invalid."""
 
 
 class IntegrateError(Exception):
-    """Integration refusal. `reason` comes from verdict.Reason: FRAGMENT means
-    the fragment does not cover the input (rational or transcendental
-    integrands, improper endpoints needing a limit), UNDECIDABLE means
-    undecidable. Refused honestly rather than guessing an antiderivative."""
+    """Integration is unsupported for the requested expression."""
 
-    def __init__(self, message, reason=None):
+    def __init__(self, message: str, reason: Reason | None = None) -> None:
         super().__init__(message)
         self.reason = reason

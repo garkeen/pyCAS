@@ -19,22 +19,20 @@ import pytest
 
 from cas.errors import BudgetExceeded
 from cas.kernel.scope import Assumptions
+from cas.runtime import Runtime
+from cas.math.piecewise import (
+    LIFT_BRANCH_BUDGET,
+    SelectedValue,
+    branches,
+    lift,
+    piecewise,
+    select,
+)
 from cas.syntax import term as T
-from cas.syntax.term import S, N, mk
-from cas.math.piecewise import (LIFT_BRANCH_BUDGET, branches, lift, piecewise,
-                                select)
+from cas.syntax.term import N, S, mk
 
 X = S("x")
 
-
-def _math():
-    """The installed math context.
-
-    Note the local name `ctx` in this file is an **assumption set** passed to the
-    piecewise channels, never the math context.
-    """
-    from cas.runtime import get_runtime
-    return get_runtime().math
 
 
 def cond(op, k):
@@ -99,18 +97,23 @@ def test_non_adjacent_same_value_branches_are_not_merged():
 # Pointwise agreement: the merged form means the same function
 # ---------------------------------------------------------------------------
 
-def test_merged_lift_agrees_pointwise_with_the_selected_values():
+def test_merged_lift_agrees_pointwise_with_the_selected_values(runtime: Runtime):
     c1, c2 = cond("Gt", 0), cond("Lt", -3)
     p = piecewise([(N(1), c1), (N(1), c2), (N(2), T.TRUE)])
     q = piecewise([(N(5), c2), (N(7), T.TRUE)])
     m = lift(T.plus, p, q)
     for a in range(-7, 8):
         ctx = at(a)
-        st_p, vp = select(_math(), p, ctx)
-        st_q, vq = select(_math(), q, ctx)
-        st_m, vm = select(_math(), m, ctx)
-        assert (st_p, st_q, st_m) == ("value", "value", "value")
-        assert T.plus(vp, vq) is vm
+        selected_p = select(runtime.math, p, ctx)
+        selected_q = select(runtime.math, q, ctx)
+        selected_m = select(runtime.math, m, ctx)
+        assert isinstance(selected_p, SelectedValue)
+        assert isinstance(selected_q, SelectedValue)
+        assert isinstance(selected_m, SelectedValue)
+        assert (
+            T.plus(selected_p.value, selected_q.value)
+            is selected_m.value
+        )
 
 
 # ---------------------------------------------------------------------------

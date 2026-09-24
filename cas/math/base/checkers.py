@@ -21,113 +21,189 @@ invariant rules:
 The shared helpers here are also reused by the calculus and equation checkers.
 """
 
-from cas.syntax import term as T
-from cas.syntax import pattern as P
-from cas.syntax.term import S
-from cas.syntax.match import matches
-from cas.kernel.evidence import Accepted, Rejected, UnknownResult
-from cas.kernel.verdict import Reason
-from cas.math.domcond import dom_condition
-from cas.math.base.equality import identity_verdict, normal_form
+from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, TypeGuard, TypeVar
+
+from cas.kernel.commit import ResolvedProposal
+from cas.kernel.context import TrackedContext
+from cas.kernel.evidence import (
+    Accepted,
+    CheckResult,
+    RefutationRejected,
+    Rejected,
+    UnknownResult,
+)
+from cas.kernel.services import KernelServices
+from cas.kernel.verdict import No, Reason, Unknown, Verdict
+from cas.math.base.equality import identity_verdict, normal_form
+from cas.math.builder import CheckerRegistration, MathBuilder
+from cas.math.decls import LiftPolicy
+from cas.math.domcond import dom_condition
+from cas.syntax import pattern as P
+from cas.syntax import term as T
+from cas.syntax.match import matches
+from cas.syntax.pattern import PatternSubstitution
+from cas.syntax.term import Expr, S, Sym, Term
+from cas.syntax.termpath import free_vars, replace_at, subst, term_at
+from cas.workflow.command import (
+    BothSidesPayload,
+    ClaimPayload,
+    Command,
+    Direction,
+    MergePayload,
+    RewritePayload,
+    SplitPayload,
+    SubstPayload,
+    TransPayload,
+    UsePayload,
+    ValuationPayload,
+)
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
+    from cas.math.rules import Rule
+
+PayloadT = TypeVar("PayloadT")
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _is_piecewise(t) -> bool:
+def _is_piecewise(term: Term) -> TypeGuard[Expr]:
     from cas.math.piecewise import is_piecewise
-    return is_piecewise(t)
+
+    return is_piecewise(term)
 
 
-def _ok(ctx, proposal, context, extra=()):
+def _ok(
+    ctx: MathContext,
+    proposal: ResolvedProposal,
+    context: TrackedContext,
+    extra: Sequence[Term] = (),
+) -> Accepted:
     """Accept with de-duplicated direct requirements and tracked reads."""
     content = proposal.conclusions[0]
-    reqs = []
-    for req in tuple(dom_condition(ctx, content)) + tuple(extra):
-        if req not in reqs:
-            reqs.append(req)
-    return Accepted(direct_requirements=tuple(reqs), reads=context.read_set())
+    requirements: list[Term] = []
+    for requirement in tuple(dom_condition(ctx, content)) + tuple(extra):
+        if requirement not in requirements:
+            requirements.append(requirement)
+    return Accepted(
+        direct_requirements=tuple(requirements),
+        reads=context.read_set(),
+    )
 
 
-def _one_conclusion(proposal):
+def _is_equation(term: Term) -> TypeGuard[Expr]:
+    return (
+        isinstance(term, Expr)
+        and isinstance(term.head, Sym)
+        and term.head.name == "Eq"
+    )
+
+
+def _one_conclusion(proposal: ResolvedProposal) -> Term | Rejected:
     if len(proposal.conclusions) != 1:
-        return None, Rejected(Reason.FRAGMENT, "checker accepts single-conclusion proposals only")
-    return proposal.conclusions[0], None
+        return Rejected(
+            Reason.FRAGMENT,
+            "checker accepts single-conclusion proposals only",
+        )
+    return proposal.conclusions[0]
 
 
-def _premise(proposal):
+
+def _command(proposal: ResolvedProposal) -> Command | None:
+    """Decode the command envelope at a checker boundary."""
+    raw = proposal.evidence.payload
+    return raw if isinstance(raw, Command) else None
+
+
+def _payload(
+    proposal: ResolvedProposal,
+    payload_type: type[PayloadT],
+) -> PayloadT | None:
+    """Decode one closed command payload, rejecting malformed evidence."""
+    command = _command(proposal)
+    if command is None:
+        return None
+    payload = command.payload
+    return payload if isinstance(payload, payload_type) else None
+
+def _premise(proposal: ResolvedProposal) -> Term | None:
     if not proposal.premise_propositions:
         return None
     return proposal.premise_propositions[0]
 
 
-def _expand(context, t):
-    """Expand the scope's definitions in `t` before comparing.
-
-    A definition is a predicative alias, so it is transparent to verification; an
-    equation is an assumption and is **never** expanded. The lookup goes through
-    the tracked context, so every definition read lands in the step's read
-    dependencies. A missing context means no scope is visible, and definitions
-    are scope entries: there is then nothing to expand.
-    """
-    if context is None or not hasattr(context, "lookup_definition"):
-        return t
+def _expand(context: TrackedContext, term: Term) -> Term:
+    """Expand visible definitions before comparing terms."""
     from cas.math.definitions import expand
-    return expand(context.lookup_definition, t)
+
+    return expand(context.lookup_definition, term)
 
 
-def _defined(context, symbol) -> bool:
-    """Whether `symbol` is a definition in the visible scope.
-
-    A missing context means no visible scope, so nothing is defined there; the
-    question is answered from the scope, never guessed from the name.
-    """
-    if context is None or not hasattr(context, "lookup_definition"):
-        return False
-    return context.lookup_definition(symbol) is not None
+def _defined(context: TrackedContext | None, symbol: Term) -> bool:
+    """Whether a symbol is defined in the visible scope."""
+    return (
+        context is not None
+        and context.lookup_definition(symbol) is not None
+    )
 
 
-def _identity(ctx, content, expected, mismatch):
-    """Re-check a candidate as an identity, three-valued.
-
-    Returns None when the candidate really is that expression, a Rejected result
-    when it demonstrably is not, and an Unknown result when the identity channel
-    does not cover it. "Cannot re-check" is never dressed up as a refutation, and
-    an undecided candidate still does not enter trusted reasoning (it lands as
-    `undecided`, not as a committed conclusion).
-    """
-    v = identity_verdict(ctx, content, expected)
-    if v.is_yes():
+def _identity(
+    ctx: MathContext,
+    content: Term,
+    expected: Term,
+    mismatch: str,
+) -> CheckResult | None:
+    """Return a typed refutation/unknown when a candidate is not the expected identity."""
+    verdict = identity_verdict(ctx, content, expected)
+    if verdict.is_yes():
         return None
-    if v.is_no():
-        return Rejected(Reason.FRAGMENT, mismatch)
-    return UnknownResult(v.reason, f"{mismatch} (identity undecided)")
+    if isinstance(verdict, No):
+        return RefutationRejected(verdict.evidence)
+    if not isinstance(verdict, Unknown):
+        raise TypeError("identity channel returned an unsupported verdict")
+    return UnknownResult(
+        verdict.reason,
+        f"{mismatch} (identity undecided)",
+    )
 
 
-def _same_subst(a, b):
-    """Whether two substitutions agree hole by hole (terms by pointer, sequences
-    element-wise by pointer)."""
-    if set(a) != set(b):
+def _same_subst(
+    first: PatternSubstitution,
+    second: PatternSubstitution,
+) -> bool:
+    """Compare pattern substitutions by variable and interned term identity."""
+    if set(first) != set(second):
         return False
-    for k, va in a.items():
-        vb = b[k]
-        if isinstance(va, tuple) or isinstance(vb, tuple):
-            if not (isinstance(va, tuple) and isinstance(vb, tuple)):
+    for name, first_value in first.items():
+        second_value = second[name]
+        if isinstance(first_value, tuple) or isinstance(second_value, tuple):
+            if not (
+                isinstance(first_value, tuple)
+                and isinstance(second_value, tuple)
+            ):
                 return False
-            if len(va) != len(vb) or any(x is not y for x, y in zip(va, vb)):
+            if len(first_value) != len(second_value) or any(
+                left is not right
+                for left, right in zip(first_value, second_value)
+            ):
                 return False
-        elif va is not vb:
+        elif first_value is not second_value:
             return False
     return True
 
 
-def _rule_conditions(rule, subst):
-    """Instantiate the rule guard into concrete conditions. The checker reports
-    conditions; deciding and discharging them belongs to the kernel."""
+def _rule_conditions(
+    rule: Rule,
+    substitution: PatternSubstitution,
+) -> tuple[Term, ...]:
+    """Instantiate a rule guard into concrete direct requirements."""
     if rule.guard is None:
         return ()
-    return (P.instantiate(rule.guard, subst),)
+    return (P.instantiate(rule.guard, substitution),)
 
 
 # ---------------------------------------------------------------------------
@@ -148,15 +224,21 @@ class ClaimChecker:
     """
     id = "assumption.entry"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
-        cmd = proposal.evidence.payload
-        if not getattr(cmd, "registers_assumption", False):
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
+        cmd = _command(proposal)
+        if (cmd is None or not isinstance(cmd.payload, ClaimPayload)
+                or not cmd.registers_assumption):
             return Rejected(Reason.FRAGMENT,
                             "assumption.entry requires a claim command")
         return _ok(self.ctx, proposal, context)
@@ -169,18 +251,32 @@ class BothSidesChecker:
     deciding it."""
     id = "both_sides.operate"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
-        if pred is None or not T.is_eq(pred):
+        if pred is None:
             return Rejected(Reason.FRAGMENT, "predecessor is not an equation")
-        d = proposal.evidence.payload
-        pred = _expand(context, pred)
+        payload = _payload(proposal, BothSidesPayload)
+        if payload is None:
+            return Rejected(
+                Reason.FRAGMENT,
+                "both_sides requires a both-sides payload",
+            )
+        d = payload
+        expanded_pred = _expand(context, pred)
+        if not _is_equation(expanded_pred):
+            return Rejected(Reason.FRAGMENT, "predecessor is not an equation")
+        pred = expanded_pred
         content = _expand(context, content)
         lhs, rhs = pred.args
         op = d.op
@@ -200,7 +296,7 @@ class BothSidesChecker:
                         "content does not match the operation on the predecessor")
         if bad is not None:
             return bad
-        extra = ()
+        extra: tuple[T.Term, ...] = ()
         if op in ("mul", "div"):
             extra = (T.mk(S("Ne"), (d.operand, T.ZERO)),)
         return _ok(self.ctx, proposal, context, extra)
@@ -211,16 +307,23 @@ class NormalizeChecker:
     domain normal form, with no rule search involved."""
     id = "equality.normalize"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
+        if _payload(proposal, RewritePayload) is None:
+            return Rejected(Reason.FRAGMENT, "equality.normalize requires a rewrite payload")
         bad = _identity(self.ctx, _expand(context, content),
                         normal_form(self.ctx, _expand(context, pred)),
                         "content is not the domain normal form of the predecessor")
@@ -246,17 +349,24 @@ class RuleInstanceChecker:
     """
     id = "rule.instance"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
-        d = proposal.evidence.payload
+        d = _payload(proposal, RewritePayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "rule.instance requires a rewrite payload")
         from cas.math.rules import declared_ruleset
         rule = declared_ruleset(self.ctx).rules.get(d.rule)
         if rule is None:
@@ -269,14 +379,14 @@ class RuleInstanceChecker:
         pred = _expand(context, pred)
         content = _expand(context, content)
         try:
-            sub_t = T.term_at(pred, path)
+            sub_t = term_at(pred, path)
         except IndexError:
             return Rejected(Reason.FRAGMENT, f"path out of range: {path}")
         if not any(_same_subst(s, d.substitution)
                    for s in matches(rule.pattern, sub_t)):
             return Rejected(Reason.FRAGMENT, "the given substitution is not a match at that position")
         inst = _expand(context, P.instantiate(rule.template, d.substitution))
-        if T.replace_at(pred, path, inst) is not content:
+        if replace_at(pred, path, inst) is not content:
             return Rejected(Reason.FRAGMENT, "content is not the result of that instance")
         return _ok(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
 
@@ -286,37 +396,48 @@ class SubstChecker:
     syntactic operation."""
     id = "substitute"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         pred = _expand(context, pred)
         content = _expand(context, content)
-        d = proposal.evidence.payload
+        d = _payload(proposal, SubstPayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "substitute requires a substitution payload")
         # The key and the occurrence are part of what the step claims: a compound
         # key is not a variable, and substituting a variable that does not occur
         # would commit a step whose name says something that did not happen.
         if not isinstance(d.var, T.Sym):
             return Rejected(Reason.FRAGMENT,
                             "the substitution key must be a single variable")
-        if d.var not in T.free_vars(pred):
+        if d.var not in free_vars(pred):
             return Rejected(Reason.FRAGMENT,
                             f"the substituted variable does not occur in the predecessor: {d.var}")
-        substituted = T.subst(pred, {d.var: d.value})
-        last = None
+        substituted = subst(pred, {d.var: d.value})
+        last: Verdict | None = None
         for expected in (substituted, normal_form(self.ctx, substituted)):
-            v = identity_verdict(self.ctx, content, expected)
-            if v.is_yes():
+            verdict = identity_verdict(self.ctx, content, expected)
+            if verdict.is_yes():
                 return _ok(self.ctx, proposal, context)
-            last = v
-        if last.is_no():
-            return Rejected(Reason.FRAGMENT, "content does not match the substitution result")
+            last = verdict
+        if last is None:
+            return UnknownResult(Reason.FRAGMENT, "substitution identity unavailable")
+        if isinstance(last, No):
+            return RefutationRejected(last.evidence)
+        if not isinstance(last, Unknown):
+            raise TypeError("substitution identity returned an unsupported verdict")
         return UnknownResult(last.reason, "substitution identity undecided")
 
 
@@ -325,31 +446,40 @@ class SplitChecker:
     predecessor and (not) condition."""
     id = "branch.split"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
-        d = proposal.evidence.payload
+        d = _payload(proposal, SplitPayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "branch.split requires a split payload")
         cond = d.condition
         branch = T.not_(cond) if d.negate else cond
         expected = T.mk(S("And"), (_expand(context, pred), branch))
         if content is expected:
             return _ok(self.ctx, proposal, context)
-        v = identity_verdict(self.ctx, _expand(context, content), expected)
-        if v.is_yes():
+        verdict = identity_verdict(ctx=self.ctx, left=_expand(context, content), right=expected)
+        if verdict.is_yes():
             return _ok(self.ctx, proposal, context)
-        if v.is_no():
-            return Rejected(Reason.FRAGMENT, "content is not the conjunction of the predecessor and the branch condition")
-        return UnknownResult(v.reason, "branch equivalence undecided")
+        if isinstance(verdict, No):
+            return RefutationRejected(verdict.evidence)
+        if not isinstance(verdict, Unknown):
+            raise TypeError("identity channel returned an unsupported verdict")
+        return UnknownResult(verdict.reason, "branch equivalence undecided")
 
 
-def _is_tautology(t) -> bool:
+def _is_tautology(term: Term) -> bool:
     """Syntactic tautology: a disjunction containing a complementary pair
     (`c` and `not c`), or the constant true.
 
@@ -358,13 +488,17 @@ def _is_tautology(t) -> bool:
     construction. Only the law of excluded middle is recognized; any other
     coverage needs a real proof.
     """
-    if isinstance(t, T.BVal):
-        return t.val
-    if not (isinstance(t, T.Expr) and t.head.name == "Or"):
+    if isinstance(term, T.BVal):
+        return term.val
+    if not (isinstance(term, T.Expr) and term.head.name == "Or"):
         return False
-    disjuncts = {a._h for a in t.args}
-    return any(isinstance(a, T.Expr) and a.head.name == "Not"
-               and a.args[0]._h in disjuncts for a in t.args)
+    disjuncts = {argument._h for argument in term.args}
+    return any(
+        isinstance(argument, T.Expr)
+        and argument.head.name == "Not"
+        and argument.args[0]._h in disjuncts
+        for argument in term.args
+    )
 
 
 class BranchCoverageChecker:
@@ -379,13 +513,18 @@ class BranchCoverageChecker:
     """
     id = "branch.coverage"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         if _is_tautology(content):
             return Accepted()
         return UnknownResult(Reason.FRAGMENT, "coverage is not a syntactic tautology; a real coverage proof is needed")
@@ -417,14 +556,21 @@ class BranchMergeChecker:
     """
     id = "branch.merge"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
-        d = proposal.evidence.payload
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
+        d = _payload(proposal, MergePayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "branch.merge requires a merge payload")
         coverage = T.or_(*d.conditions)
         if not any(p is coverage for p in proposal.premise_propositions):
             return Rejected(Reason.FRAGMENT, "the premise does not contain this branch group's coverage proposition")
@@ -458,34 +604,50 @@ class ConstraintSatisfiedChecker:
     """
     id = "constraint.satisfied"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
-        d = proposal.evidence.payload
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
+        d = _payload(proposal, ValuationPayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "constraint.satisfied requires a valuation payload")
         rel = _expand(context, d.constraint.relation)
-        inst = T.subst(rel, dict(d.valuation))
+        inst = subst(rel, dict(d.valuation))
         if _expand(context, content) is not _expand(context, inst):
             return Rejected(Reason.FRAGMENT, "content is not this constraint's instance under that valuation")
         # The instance is re-checked as an **identity** in the free symbols that
         # remain after the valuation: a construction constraint must vanish as a
         # function, so a demonstrably nonzero difference is evidence of a wrong
         # valuation, while an uncovered (non-identity) shape stays undecided.
-        if T.is_eq(inst):
-            bad = _identity(self.ctx, inst.args[0], inst.args[1],
-                            "the constraint does not hold under this valuation")
+        if _is_equation(inst):
+            bad = _identity(
+                self.ctx,
+                inst.args[0],
+                inst.args[1],
+                "the constraint does not hold under this valuation",
+            )
             if bad is not None:
                 return bad
             return _ok(self.ctx, proposal, context)
-        v = context.decide(inst)
-        if v.is_yes():
+        verdict = context.decide(inst)
+        if verdict.is_yes():
             return _ok(self.ctx, proposal, context)
-        if v.is_no():
-            return Rejected(Reason.FRAGMENT, "the constraint does not hold under this valuation")
-        return UnknownResult(v.reason, "constraint instance vanishing undecided")
+        if isinstance(verdict, No):
+            return RefutationRejected(verdict.evidence)
+        if not isinstance(verdict, Unknown):
+            raise TypeError("decision service returned an unsupported verdict")
+        return UnknownResult(
+            verdict.reason,
+            "constraint instance vanishing undecided",
+        )
 
 
 class TransChecker:
@@ -493,39 +655,45 @@ class TransChecker:
 
     id = "equality.trans"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         if len(proposal.premise_propositions) != 2:
             return Rejected(Reason.FRAGMENT, "transitivity needs exactly two premises")
-        first, second = (_expand(context, p) for p in proposal.premise_propositions)
-        if not (T.is_eq(first) and T.is_eq(second)):
+        first, second = (_expand(context, proposition) for proposition in proposal.premise_propositions)
+        if not _is_equation(first) or not _is_equation(second):
             return Rejected(Reason.FRAGMENT, "transitivity premises must be equalities")
         if first.args[1] is not second.args[0]:
             return Rejected(Reason.FRAGMENT, "the middle equality terms do not match")
         expected = T.eq(first.args[0], second.args[1])
-        d = proposal.evidence.payload
-        if d.value is not None and tuple(d.value) != (first.args[0], first.args[1], second.args[1]):
-            return Rejected(Reason.FRAGMENT, "transitivity evidence payload does not match the premises")
+        d = _payload(proposal, TransPayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "equality.trans requires a trans payload")
+        if d.value != (first.args[0], first.args[1], second.args[1]):
+            return Rejected(Reason.FRAGMENT,
+                            "transitivity evidence payload does not match the premises")
         if _expand(context, content) is not expected:
             return Rejected(Reason.FRAGMENT, "conclusion is not the transitive equality")
         return _ok(self.ctx, proposal, context)
 
 
-def _path_requirements(target, path):
+def _path_requirements(target: Term, path: tuple[int, ...]) -> tuple[Term, ...]:
     """Return branch conditions for a replacement inside a Piecewise value."""
-    requirements = []
     current = target
-    prefix = ()
+    requirements: list[Term] = []
     for index in path:
-        if _is_piecewise(current) and index < len(current.args) and index % 2 == 0:
+        if _is_piecewise(current) and index % 2 == 0:
             requirements.append(current.args[index + 1])
-        current = T.term_at(current, (index,))
-        prefix += (index,)
+        current = term_at(current, (index,))
     return tuple(requirements)
 
 
@@ -534,27 +702,37 @@ class CongruenceLiftChecker:
 
     id = "congruence.lift"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         if len(proposal.premise_propositions) != 2:
             return Rejected(Reason.FRAGMENT, "use needs an equality and a target premise")
-        source, target = (_expand(context, p) for p in proposal.premise_propositions)
-        if not T.is_eq(source):
+        source, target = (
+            _expand(context, proposition)
+            for proposition in proposal.premise_propositions
+        )
+        if not _is_equation(source):
             return Rejected(Reason.FRAGMENT, "use source is not an equality")
-        d = proposal.evidence.payload
-        if d.direction == "->":
+        d = _payload(proposal, UsePayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "congruence.lift requires a use payload")
+        if d.direction is Direction.RIGHT:
             before, after = source.args
-        elif d.direction == "<-":
+        elif d.direction is Direction.LEFT:
             before, after = source.args[1], source.args[0]
         else:
             return Rejected(Reason.FRAGMENT, "use direction must be -> or <-")
         try:
-            subterm = T.term_at(target, tuple(d.path))
+            subterm = term_at(target, tuple(d.path))
         except (IndexError, TypeError):
             return Rejected(Reason.FRAGMENT, "use path is outside the target")
         bad = _identity(self.ctx, subterm, before,
@@ -564,34 +742,47 @@ class CongruenceLiftChecker:
         if not d.path:
             return Rejected(Reason.FRAGMENT, "an empty path cannot select a replacement site")
         try:
-            parent = T.term_at(target, tuple(d.path[:-1]))
+            parent = term_at(target, tuple(d.path[:-1]))
         except (IndexError, TypeError):
             return Rejected(Reason.FRAGMENT, "use path is outside the target")
-        extra = []
+        extra: list[Term] = []
+        policy: LiftPolicy
         if isinstance(parent, T.Expr):
             head = parent.head.name
             if head in ("Derivative", "Quote"):
-                return Rejected(Reason.FRAGMENT, f"{head} does not admit equality lifting")
+                return Rejected(
+                    Reason.FRAGMENT,
+                    f"{head} does not admit equality lifting",
+                )
             if head == "Power":
                 if d.path[-1] != 0 or not isinstance(parent.args[1], T.Int):
-                    return Rejected(Reason.FRAGMENT,
-                                    "only an integer exponent permits base lifting")
+                    return Rejected(
+                        Reason.FRAGMENT,
+                        "only an integer exponent permits base lifting",
+                    )
             if head in ("Integrate", "DefIntegrate"):
                 extra.append(source)
             if head in ("Plus", "Times", "Eq"):
-                policy = "congruent"
+                policy = LiftPolicy.CONGRUENT
             elif head in ("Power", "Piecewise", "Integrate", "DefIntegrate"):
-                policy = "conditional"
+                policy = LiftPolicy.CONDITIONAL
             else:
                 policy = self.ctx.lift_policy(head)
         else:
-            policy = "congruent" if isinstance(parent, T.Bound) else "forbidden"
+            policy = (
+                LiftPolicy.CONGRUENT
+                if isinstance(parent, T.Bound)
+                else LiftPolicy.FORBIDDEN
+            )
         extra.extend(_path_requirements(target, tuple(d.path)))
-        if policy == "forbidden":
-            return Rejected(Reason.FRAGMENT,
-                            f"no lifting policy is declared for {parent.head.name}"
-                            if isinstance(parent, T.Expr) else "only expression subterms are liftable")
-        expected = T.replace_at(target, tuple(d.path), after)
+        if policy is LiftPolicy.FORBIDDEN:
+            detail = (
+                f"no lifting policy is declared for {parent.head.name}"
+                if isinstance(parent, T.Expr)
+                else "only expression subterms are liftable"
+            )
+            return Rejected(Reason.FRAGMENT, detail)
+        expected = replace_at(target, tuple(d.path), after)
         bad = _identity(self.ctx, content, expected,
                         "content is not the selected replacement")
         if bad is not None:
@@ -605,8 +796,7 @@ CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,
             ConstraintSatisfiedChecker, TransChecker, CongruenceLiftChecker)
 
 
-def register(builder) -> None:
-    """Register this module's checkers with the assembly builder. Called from
-    `base.install` during bootstrap; import never mutates global state."""
-    for cls in CHECKERS:
-        builder.register_checker(cls.id, cls)
+def register(builder: MathBuilder) -> None:
+    """Register this module's checker factories during explicit assembly."""
+    for checker in CHECKERS:
+        builder.register_checker(CheckerRegistration(checker.id, checker))

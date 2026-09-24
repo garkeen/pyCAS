@@ -18,12 +18,16 @@ changes are expressed by new Scope objects. Two kinds of creation exist:
 resolves an id to the version where new entries land.
 """
 
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 from cas.errors import ScopeError
-
 from cas.kernel.ids import ScopeId
 from cas.kernel.model import Assumption, Declaration, Definition
+from cas.syntax.term import Term
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,22 +58,22 @@ class Assumptions:
     consumed by the decision layer and takes no part in bookkeeping. Undo is
     done by moving the revision pointer.
     """
-    items: tuple = ()
+    items: tuple[Term, ...] = ()
 
     @classmethod
-    def of(cls, store, scope_id):
+    def of(cls, store: ScopeStore, scope_id: ScopeId) -> Assumptions:
         return cls(tuple(a.proposition for a in store.assumptions(scope_id)))
 
-    def extended(self, *terms):
+    def extended(self, *terms: Term) -> Assumptions:
         return Assumptions(self.items + tuple(terms))
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Term]:
         return iter(self.items)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.items)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.items)
 
 
@@ -81,20 +85,25 @@ class ScopeStore:
     answers for exactly the context that id names.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._scopes: dict[ScopeId, Scope] = {}
         self._heads: dict[ScopeId, ScopeId] = {}
         # symbol -> scopes introducing it as a local symbol, in creation order.
         # Maintained at the two creation sites so the escape check never scans
         # every scope; symbols are interned with identity hashing, so a lookup
         # keeps the identity semantics of the check.
-        self._introducers: dict = {}
+        self._introducers: dict[Term, list[ScopeId]] = {}
         self._next = 0
 
     # --- construction ---
 
-    def create(self, parent=None, declarations=(), definitions=(),
-               assumptions=()) -> Scope:
+    def create(
+        self,
+        parent: ScopeId | None = None,
+        declarations: Iterable[Declaration] = (),
+        definitions: Iterable[Definition] = (),
+        assumptions: Iterable[Assumption] = (),
+    ) -> Scope:
         """Create a root scope, or a fork under `parent` (a new lineage)."""
         if parent is not None and parent not in self._scopes:
             raise KeyError(f"parent scope does not exist: {parent}")
@@ -109,8 +118,13 @@ class ScopeStore:
         self._index_entries(s)
         return s
 
-    def child(self, parent: Scope, declarations=(), definitions=(),
-              assumptions=()) -> Scope:
+    def child(
+        self,
+        parent: Scope,
+        declarations: Iterable[Declaration] = (),
+        definitions: Iterable[Definition] = (),
+        assumptions: Iterable[Assumption] = (),
+    ) -> Scope:
         """Fork a new lineage under one fixed version of `parent`."""
         return self.create(parent=parent.id, declarations=declarations,
                            definitions=definitions, assumptions=assumptions)
@@ -125,8 +139,13 @@ class ScopeStore:
         for entry in tuple(s.declarations) + tuple(s.definitions):
             self._introducers.setdefault(entry.symbol, []).append(s.id)
 
-    def extend(self, scope: Scope, declarations=(), definitions=(),
-               assumptions=()) -> Scope:
+    def extend(
+        self,
+        scope: Scope,
+        declarations: Iterable[Declaration] = (),
+        definitions: Iterable[Definition] = (),
+        assumptions: Iterable[Assumption] = (),
+    ) -> Scope:
         """Record entries on top of `scope` and return a **new version** of it.
 
         The new version carries a new id, so the previous version stays
@@ -171,9 +190,9 @@ class ScopeStore:
 
     # --- visibility ---
 
-    def chain(self, sid: ScopeId):
+    def chain(self, sid: ScopeId) -> tuple[Scope, ...]:
         """The scope chain from root down to this scope."""
-        out = []
+        out: list[Scope] = []
         cur = self._scopes[sid]
         while True:
             out.append(cur)
@@ -181,6 +200,10 @@ class ScopeStore:
                 break
             cur = self._scopes[cur.parent]
         return tuple(reversed(out))
+
+    def count(self) -> int:
+        """Number of scope versions issued by this store."""
+        return self._next
 
     def is_visible(self, ancestor: ScopeId, descendant: ScopeId) -> bool:
         """Whether `descendant` is inside `ancestor` (inclusive).
@@ -193,18 +216,18 @@ class ScopeStore:
     # --- entry queries ---
 
     def declarations(self, sid: ScopeId) -> tuple[Declaration, ...]:
-        out = []
+        out: list[Declaration] = []
         for s in self.chain(sid):
             out.extend(s.declarations)
         return tuple(out)
 
     def assumptions(self, sid: ScopeId) -> tuple[Assumption, ...]:
-        out = []
+        out: list[Assumption] = []
         for s in self.chain(sid):
             out.extend(s.assumptions)
         return tuple(out)
 
-    def definition_map(self, sid: ScopeId) -> dict:
+    def definition_map(self, sid: ScopeId) -> dict[Term, Term]:
         """Visible definition table; an inner scope shadows an outer one."""
         m = {}
         for s in self.chain(sid):
@@ -212,17 +235,17 @@ class ScopeStore:
                 m[d.symbol] = d.body
         return m
 
-    def lookup_definition(self, sid: ScopeId, symbol):
+    def lookup_definition(self, sid: ScopeId, symbol: Term) -> Term | None:
         return self.definition_map(sid).get(symbol)
 
     # --- hygiene checks ---
 
-    def introducers(self, symbol) -> tuple:
+    def introducers(self, symbol: Term) -> tuple[ScopeId, ...]:
         """Which scopes introduce this symbol as a local symbol (declaration or
         definition left-hand side), in creation order."""
         return tuple(self._introducers.get(symbol, ()))
 
-    def escapes(self, sid: ScopeId, term) -> tuple:
+    def escapes(self, sid: ScopeId, term: Term) -> tuple[Term, ...]:
         """Local symbols that escape from `term`; empty when none do.
 
         Criterion: a free symbol is introduced by a scope that is *not* on the

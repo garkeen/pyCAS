@@ -18,12 +18,18 @@ The kernel knows no mathematical head: this module depends on syntax only and
 imports no concrete mathematical module.
 """
 
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cas.kernel.evidence import Evidence
 from enum import Enum
 
-from cas.syntax import term as T
 from cas.kernel.ids import JudgmentId, RequirementId, ScopeId, StepId
-
+from cas.syntax import term as T
 
 # ---------------------------------------------------------------------------
 # Scope entries
@@ -107,7 +113,7 @@ class ContextReadSet:
     """
     entries: tuple[tuple[str, str], ...] = ()
 
-    def merge(self, other):
+    def merge(self, other: ContextReadSet) -> ContextReadSet:
         """Union with per-item deduplication: a read dependency is a set, so
         reading the same item twice counts once.
 
@@ -117,7 +123,7 @@ class ContextReadSet:
         return ContextReadSet(tuple(sorted(set(self.entries)
                                               | set(other.entries))))
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.entries)
 
 
@@ -133,7 +139,7 @@ class Step:
     scope: ScopeId
     premises: tuple[JudgmentId, ...]
     conclusions: tuple[JudgmentId, ...]
-    evidence: object                    # kernel.evidence.Evidence
+    evidence: Evidence
     reads: ContextReadSet = field(default_factory=ContextReadSet)
 
 
@@ -163,13 +169,13 @@ class Applicability:
     """
     __slots__ = ()
 
-    def is_applicable(self):
+    def is_applicable(self) -> bool:
         return self.__class__ is Applicable
 
-    def is_conditional(self):
+    def is_conditional(self) -> bool:
         return self.__class__ is Conditional
 
-    def is_inapplicable(self):
+    def is_inapplicable(self) -> bool:
         return self.__class__ is Inapplicable
 
 

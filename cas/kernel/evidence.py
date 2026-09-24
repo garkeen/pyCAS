@@ -1,108 +1,119 @@
-"""Evidence and the checker registry.
+"""Typed evidence values and the checker registry."""
 
-Two rules:
-
-· A certificate must match an exact proposition. There is no fuzzy
-  `sound=True` / `complete=False` flag: "the candidate is correct" and "the
-  result is complete" are two different propositions with two different
-  checkers.
-· A guard cannot be declared by the algorithm alone. A checker must re-check
-  the conclusion and return the direct conditions under which it holds
-  (`Accepted.direct_requirements`).
-
-A checker does not import the search algorithm it verifies: the registry only
-looks up by id, and independence is the registrant's responsibility.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 from cas.kernel.model import ContextReadSet
-from cas.kernel.verdict import Reason
+from cas.kernel.verdict import Reason, Refutation
+from cas.syntax.term import Term
+
+if TYPE_CHECKING:
+    from cas.kernel.commit import ResolvedProposal
+    from cas.kernel.context import TrackedContext
+    from cas.kernel.services import KernelServices
+
+EvidencePayload: TypeAlias = object
 
 
 @dataclass(frozen=True, slots=True)
 class Evidence:
-    """Evidence: a checker id plus a payload that checker understands.
+    """Checker identity plus an opaque payload decoded only by that checker."""
 
-    The payload is private to the checker (a rule instance, an antiderivative
-    candidate, a back-substitution certificate, ...); the kernel only carries
-    it.
-    """
     checker_id: str
-    payload: object = None
+    payload: EvidencePayload = None
 
 
 class CheckResult:
-    """Closed hierarchy returned by a checker. Consumers must exhaust all three
-    branches."""
+    """Closed checker-result hierarchy."""
+
     __slots__ = ()
 
-    def is_accepted(self):
-        return self.__class__ is Accepted
+    def is_accepted(self) -> bool:
+        return isinstance(self, Accepted)
 
-    def is_rejected(self):
-        return self.__class__ is Rejected
+    def is_rejected(self) -> bool:
+        return isinstance(self, (Rejected, RefutationRejected))
 
-    def is_unknown(self):
-        return self.__class__ is UnknownResult
+    def is_refutation_rejected(self) -> bool:
+        return isinstance(self, RefutationRejected)
+
+    def is_unknown(self) -> bool:
+        return isinstance(self, UnknownResult)
 
 
 @dataclass(frozen=True, slots=True)
 class Accepted(CheckResult):
-    """Accepted, reporting the direct conditions and the read dependencies.
+    """Accepted with the conditions and context reads established by a checker."""
 
-    `direct_requirements` are the propositions the checker established as
-    necessary for the conclusion, not guards the algorithm claimed for itself.
-    The kernel turns them into Requirements.
-    """
-    direct_requirements: tuple = ()
+    direct_requirements: tuple[Term, ...] = ()
     reads: ContextReadSet = field(default_factory=ContextReadSet)
 
 
 @dataclass(frozen=True, slots=True)
 class Rejected(CheckResult):
-    """Refuted: the conclusion does not hold. `reason` comes from verdict.Reason."""
+    """Malformed or operationally unsupported checker input."""
+
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
-class UnknownResult(CheckResult):
-    """Undecided: the checker can neither assert nor refute (outside the
-    fragment, budget exhausted, ...).
+class RefutationRejected(CheckResult):
+    """A checker has a mathematical refutation with its evidence intact."""
 
-    An undecided candidate cannot enter trusted reasoning; GuardPolicy decides
-    how to handle it.
-    """
+    refutation: Refutation
+
+    @property
+    def reason(self) -> Reason:
+        """Mathematical refutations are inapplicable, hence guarded at commit."""
+
+        return Reason.GUARDED
+
+    @property
+    def detail(self) -> str:
+        """Expose the explanation without replacing the structured evidence."""
+
+        return self.refutation.detail
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownResult(CheckResult):
+    """Neither assertion nor refutation is currently justified."""
+
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
 
 
 class Checker(Protocol):
-    """The checker protocol."""
+    """Context-bound candidate verifier."""
 
-    def check(self, proposal, context, services) -> CheckResult:
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
         ...
 
 
 class CheckerRegistry:
-    """Checker registry. A Step has no subclasses, so dispatch goes through
-    this table instead."""
+    """ID-to-checker registry with duplicate rejection."""
 
-    def __init__(self):
-        self._checkers: dict[str, object] = {}
+    def __init__(self) -> None:
+        self._checkers: dict[str, Checker] = {}
 
-    def register(self, checker_id: str, checker) -> None:
+    def register(self, checker_id: str, checker: Checker) -> None:
         if checker_id in self._checkers:
             raise ValueError(f"checker already registered: {checker_id}")
         self._checkers[checker_id] = checker
 
-    def get(self, checker_id: str):
+    def get(self, checker_id: str) -> Checker | None:
         return self._checkers.get(checker_id)
 
-    def ids(self):
+    def ids(self) -> tuple[str, ...]:
         return tuple(self._checkers)
 
-    def __contains__(self, checker_id):
+    def __contains__(self, checker_id: str) -> bool:
         return checker_id in self._checkers

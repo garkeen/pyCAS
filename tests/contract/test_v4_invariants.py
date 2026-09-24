@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from cas.runtime import new_workflow
-from cas.syntax import term as T
+from cas.runtime import Runtime, new_workflow
 from cas.syntax import pattern as P
+from cas.syntax import term as T
 
 # Walk up to the directory that contains `cas/`: this test may live at any depth
 # under tests/, so a fixed parents[N] would break on a future reclassification.
@@ -211,32 +211,31 @@ def test_invariant2_pattern_is_not_term():
     assert not (names & {"PatVar", "PatSeq"}), f"term variants include pattern variables: {names}"
 
 
-def test_invariant2_no_pattern_var_inside_term():
+def test_invariant2_no_pattern_var_inside_term(runtime: Runtime):
     """The pattern channel produces a Pattern and the normal channel rejects ?x, so a
     hole cannot enter a Term."""
-    from cas.frontend.parser import parse
     from cas.errors import ParseError
+    from cas.frontend.parser import parse
 
-    pat = parse("exp(?a)*exp(?b)", pattern=True)
+    pat = parse(runtime, "exp(?a)*exp(?b)", pattern=True)
     assert isinstance(pat, P.PatternCall)
     assert not isinstance(pat, T.Term)
-    # normal channel: ?x is pattern notation, not an expression
     with pytest.raises(ParseError):
-        parse("exp(?a)")
+        parse(runtime, "exp(?a)")
     with pytest.raises(ParseError):
-        parse("f(??xs)")
+        parse(runtime, "f(??xs)")
 
 
-def test_invariant2_instantiation_yields_term():
+def test_invariant2_instantiation_yields_term(runtime: Runtime):
     """Template instantiation must land in the Term layer, and an unbound hole must
     raise explicitly rather than leak."""
+    from cas.errors import ParseError
     from cas.frontend.parser import parse
     from cas.syntax.match import matches
-    from cas.errors import ParseError
 
-    tpl = parse("exp(?a + ?b)", pattern=True)
-    tgt = parse("exp(x)*exp(y)")
-    subs = list(matches(parse("exp(?a)*exp(?b)", pattern=True), tgt))
+    tpl = parse(runtime, "exp(?a + ?b)", pattern=True)
+    tgt = parse(runtime, "exp(x)*exp(y)")
+    subs = list(matches(parse(runtime, "exp(?a)*exp(?b)", pattern=True), tgt))
     assert subs, "the rule pattern did not match the target"
     inst = P.instantiate(tpl, subs[0])
     assert isinstance(inst, T.Term) and not isinstance(inst, P.Pattern)
@@ -267,12 +266,11 @@ def test_rule_no_hardcoded_math_semantics_head():
     assert not bad, "a mathematical-semantics head is hardcoded:\n" + "\n".join(bad)
 
 
-def test_invariant18_auto_simplify_skips_unproved_conditional_rules():
+def test_invariant18_auto_simplify_skips_unproved_conditional_rules(runtime: Runtime):
     """An auto rule may only be unconditional; a guarded one is never auto, so a
     branch-breaking rewrite cannot land silently."""
     from cas.math.rules import declared_ruleset
-    from cas.runtime import get_runtime
-    rs = declared_ruleset(get_runtime().math)
+    rs = declared_ruleset(runtime.math)
     bad = [r.id for r in rs.rules.values() if r.auto and r.guard is not None]
     assert not bad, f"an auto rule carries a guard: {bad}"
 
@@ -355,46 +353,42 @@ def test_solver_module_does_not_contain_verifier():
     assert "def _judge_zero_diff" not in src, "zero re-checking moved back into the solver module"
 
 
-def test_rule_instance_checker_only_accepts_given_instance():
+def test_rule_instance_checker_only_accepts_given_instance(runtime: Runtime):
     """A substitution/path that does not match the instance is refused; one that matches
     passes (no search of other paths or matches)."""
     from cas.frontend.parser import parse
     from cas.workflow.command import Claim, Rewrite
 
-    wf = new_workflow()
-    wf.add(parse("exp(x)*exp(y)"), Claim())
-    X, Y = parse("x"), parse("y")
-    good = wf.add(parse("exp(x + y)"),
+    wf = new_workflow(runtime)
+    wf.add(parse(runtime, "exp(x)*exp(y)"), Claim())
+    X, Y = parse(runtime, "x"), parse(runtime, "y")
+    good = wf.add(parse(runtime, "exp(x + y)"),
                   Rewrite(pred=0, rule="exp_add", path=(),
                           substitution={"a": X, "b": Y}))
     assert good.status == "committed", good.note
     assert good.judgment is not None
-    # the substitution is not a valid match at that position (?a and ?b both bound to x), so refuse
-    wrong = wf.add(parse("exp(x + y)"),
+    wrong = wf.add(parse(runtime, "exp(x + y)"),
                    Rewrite(pred=0, rule="exp_add", path=(),
                            substitution={"a": X, "b": X}))
     assert wrong.status == "refused", wrong.note
     assert wrong.judgment is None
-    # a path out of bounds is refused
-    oob = wf.add(parse("exp(x + y)"),
+    oob = wf.add(parse(runtime, "exp(x + y)"),
                  Rewrite(pred=0, rule="exp_add", path=(5,),
                          substitution={"a": X, "b": Y}))
     assert oob.status == "refused", oob.note
 
 
-def test_invariant16_unverified_candidate_not_trusted():
+def test_invariant16_unverified_candidate_not_trusted(runtime: Runtime):
     """A candidate the checker leaves undecided may not enter the ledger in a
     dependable state: unverified is not open."""
     from cas.frontend.parser import parse
-    from cas.syntax.term import S, N
+    from cas.syntax.term import N, S
     from cas.workflow.command import Claim, Solve
 
-    wf = new_workflow()
-    wf.add(parse("sin(x) == 1/2"), Claim())
+    wf = new_workflow(runtime)
+    wf.add(parse(runtime, "sin(x) == 1/2"), Claim())
     before = dict(wf.store.stats())
-    # the back-substitution judge is honestly undecided outside the projection
-    # (transcendental function), so the checker returns UnknownResult
-    step = wf.add(parse("x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
+    step = wf.add(parse(runtime, "x == 1"), Solve(pred=0, var=S("x"), solution=N(1)))
     assert step.status == "undecided", \
         f"an undecided candidate should be unverified, got {step.status}"
     assert step.judgment is None, "an undecided candidate may not hold a dependable conclusion"

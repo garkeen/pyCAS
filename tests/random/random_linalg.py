@@ -17,23 +17,25 @@ Four properties, all self-proving with no external ground truth:
 Usage: python tests/random/random_linalg.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
+from cas.math.domains.linalg import det_bareiss, nullspace, rank, solve_system
+from cas.math.domains.poly import _norm, p_mul
 from cas.math.domains.q import Q_RING as R
 from cas.math.domains.z import Z_RING
-from cas.math.domains.linalg import rank, nullspace, solve_system, det_bareiss
-from cas.math.domains.poly import _norm, p_mul
-from cas.math.tactics import solve_diophantine_linear, integer_roots, TacticsError
+from cas.math.tactics import TacticsError, integer_roots, solve_diophantine_linear
+from cas.runtime import bootstrap
 from cas.syntax.term import S
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
+MATH = bootstrap().math
 
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
+
+def _ctx():
+    return MATH
 
 X = S("x")
 
@@ -133,13 +135,13 @@ def prop_diophantine(rounds, rng):
         c = rng.randint(-20, 20)
         if g == 0 or c % g != 0:
             try:
-                solve_diophantine_linear(a, b, c)
+                solve_diophantine_linear(_ctx(), a, b, c)
                 if not (g == 0 and c == 0):
                     fail("P17 unsolvable case not refused", i, f"a={a} b={b} c={c} g={g}")
             except TacticsError:
                 pass
         else:
-            (x0, y0), (dx, dy) = solve_diophantine_linear(a, b, c)
+            (x0, y0), (dx, dy) = solve_diophantine_linear(_ctx(), a, b, c)
             if a * x0 + b * y0 != c:
                 fail("P17 particular solution verification", i)
             if a * dx + b * dy != 0:
@@ -158,7 +160,7 @@ def prop_integer_roots(rounds, rng):
         p = _norm(R, (X,), {k: c * lc for k, c in p.monos})
         for r in roots:
             p = p_mul(R, p, _norm(R, (X,), {(1,): Fr(1), (0,): Fr(-r)}))
-        got = integer_roots(p, X)
+        got = integer_roots(p, X, R)
         want = sorted(set(roots))
         if got != want:
             fail("P17 integer root set", i, f"got={got} want={want}")

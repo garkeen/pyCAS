@@ -12,28 +12,14 @@ comments and notes and is checkable mechanically against that text rather than b
 reviewing Python registration calls.
 """
 
-import os
+from pathlib import Path
 
+from cas.math.builder import MathBuilder
 from cas.math.loader import load_declarations
 
-_DATA = os.path.join(os.path.dirname(__file__), "declarations.dsl")
+_DATA = Path(__file__).with_name("declarations.dsl")
 
 
-def install(builder) -> None:
-    """Install the DSL declarations into the builder (called by bootstrap in
-    dependency order)."""
-    decls = load_declarations(_DATA)
-    for c in decls.constants:
-        builder.declare_constant(**c)
-    for f in decls.functions:
-        builder.declare_function(**f)
-    for surface, head in decls.aliases:
-        builder.declare_alias(surface, head)
-    for role, head in decls.roles:
-        builder.declare_role(role, head)
-    for head in decls.binders:
-        builder.declare_binder(head)
-    for head, policy in decls.lifts:
-        builder.declare_lift(head, policy)
-    for line in decls.rules:
-        builder.declare_rule(line)
+def install(builder: MathBuilder) -> None:
+    """Install the parsed declaration set in explicit assembly order."""
+    builder.register_declarations(load_declarations(_DATA))

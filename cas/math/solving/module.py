@@ -7,6 +7,9 @@ hardcoded list in the runtime.
 """
 
 
-def install(builder) -> None:
+from cas.math.builder import MathBuilder
+
+
+def install(builder: MathBuilder) -> None:
     from cas.math.solving.equations import checkers as eq_c
     eq_c.register(builder)

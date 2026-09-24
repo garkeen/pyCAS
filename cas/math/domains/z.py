@@ -1,22 +1,10 @@
-"""Z: an ordered Euclidean integral domain, not a field.
+"""Z: an ordered Euclidean integral domain, not a field."""
 
-Two reasons it is a first-class domain:
-· factorization must pass through it: Zassenhaus lifts to Z[x] (content and
-  primitive part);
-· it hosts the decidable Diophantine fragment: linear Diophantine equations by
-  the extended Euclidean algorithm and univariate integer roots by the rational
-  root theorem. The general multivariate Diophantine problem is UNDECIDABLE by
-  Hilbert's tenth problem, which is a theorem rather than a TODO.
+from fractions import Fraction
 
-Division uses the Euclidean convention that the remainder has the same sign as
-the divisor (|r| < |b| and r >= 0 when b > 0), which keeps the gcd chain
-strictly decreasing.
-"""
-
-from fractions import Fraction as Fr
-
-from cas.math.domains.qarith import fold, eval_exact, EvalNumError
-from cas.math.domains.base import Domain, Ring, RingError
+from cas.math.domains.base import Domain, DomainCapabilities, DomainElement, Ring, RingError
+from cas.math.domains.qarith import EvalNumError, eval_exact, fold
+from cas.syntax.term import Term
 
 
 class ZZRing(Ring):
@@ -24,82 +12,88 @@ class ZZRing(Ring):
 
     is_euclidean = True
 
-    def from_int(self, n):
-        return int(n)
+    def from_int(self, value: int) -> DomainElement:
+        return value
 
-    def from_frac(self, f):
-        if f.denominator != 1:
-            raise RingError(f"Z does not contain the rational {f}")
-        return f.numerator
+    def from_frac(self, value: Fraction) -> DomainElement:
+        if value.denominator != 1:
+            raise RingError(f"Z does not contain the rational {value}")
+        return value.numerator
 
-    def add(self, a, b):
-        return a + b
+    def add(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        if not isinstance(left, int) or not isinstance(right, int):
+            raise TypeError("Z ring elements must be integers")
+        return left + right
 
-    def neg(self, a):
-        return -a
+    def neg(self, value: DomainElement) -> DomainElement:
+        if not isinstance(value, int):
+            raise TypeError("Z ring elements must be integers")
+        return -value
 
-    def mul(self, a, b):
-        return a * b
+    def mul(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        if not isinstance(left, int) or not isinstance(right, int):
+            raise TypeError("Z ring elements must be integers")
+        return left * right
 
-    def equal(self, a, b):
-        return a == b
+    def equal(self, left: DomainElement, right: DomainElement) -> bool:
+        return left == right
 
-    def divmod_(self, a, b):
-        if b == 0:
+    def divmod_(self, left: DomainElement, right: DomainElement) -> tuple[DomainElement, DomainElement]:
+        if not isinstance(left, int) or not isinstance(right, int):
+            raise TypeError("Z ring elements must be integers")
+        if right == 0:
             raise ZeroDivisionError("division by zero")
-        q, r = divmod(a, b)
-        if b < 0 and r > 0:              # make the remainder share the divisor's sign
-            q += 1
-            r -= b
-        return q, r
+        quotient, remainder = divmod(left, right)
+        if right < 0 and remainder > 0:
+            quotient += 1
+            remainder -= right
+        return quotient, remainder
 
-    def xgcd(self, a, b):
-        """Extended Euclidean algorithm: return (g, s, t) with s*a + t*b = g =
-        gcd(a, b)."""
-        old_r, r = a, b
+    def xgcd(self, left: DomainElement, right: DomainElement) -> tuple[DomainElement, DomainElement, DomainElement]:
+        if not isinstance(left, int) or not isinstance(right, int):
+            raise TypeError("Z ring elements must be integers")
+        old_r, remainder = left, right
         old_s, s = 1, 0
         old_t, t = 0, 1
-        while r != 0:
-            q, rem = self.divmod_(old_r, r)
-            old_r, r = r, rem
-            old_s, s = s, old_s - q * s
-            old_t, t = t, old_t - q * t
+        while remainder != 0:
+            quotient, rem = divmod(old_r, remainder)
+            old_r, remainder = remainder, rem
+            old_s, s = s, old_s - quotient * s
+            old_t, t = t, old_t - quotient * t
         if old_r < 0:
             return -old_r, -old_s, -old_t
         return old_r, old_s, old_t
+
+    def integer_value(self, value: DomainElement) -> int | None:
+        return value if isinstance(value, int) else None
 
 
 Z_RING = ZZRing()
 
 
 class ZDomain(Domain):
-    """The integers Z, as the first rung of the domain ladder: solving semantics
-    is divisibility, not division."""
+    """The integers Z."""
 
     name = "Z"
-    is_ordered = True
-    is_euclidean = True
+    capabilities = DomainCapabilities(ordered=True, euclidean=True)
     ring = Z_RING
 
-    def member(self, t) -> bool:
+    def member(self, term: Term) -> bool:
         try:
-            v = eval_exact(t, {})
+            value = eval_exact(term, {})
         except (EvalNumError, ZeroDivisionError):
             return False
-        return isinstance(v, Fr) and v.denominator == 1
+        return value.denominator == 1
 
-    def normalize(self, t):
-        if not self.member(t):
+    def normalize(self, term: Term) -> Term | None:
+        if not self.member(term):
             return None
-        return fold(t)
+        return fold(term)
 
-    def equal(self, a, b):
-        if not (self.member(a) and self.member(b)):
+    def equal(self, left: Term, right: Term) -> bool | None:
+        if not (self.member(left) and self.member(right)):
             return None
-        return eval_exact(a, {}) == eval_exact(b, {})
+        return eval_exact(left, {}) == eval_exact(right, {})
 
 
-# The singleton. Registration is not this module's business: the domain package
-# only declares, and assembly (including registration into the projection ladder)
-# belongs to the projection layer.
 Z_DOMAIN = ZDomain()

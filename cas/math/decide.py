@@ -23,19 +23,60 @@ side effects.
 """
 
 from collections import deque
+from collections.abc import Callable, Iterable, Sequence
+from fractions import Fraction
+from typing import Literal, TypeAlias, TypeGuard
 
-from cas.syntax import term as T
-from cas.syntax.term import S
-from cas.math.base.equality import closure_decide, is_closed
-from cas.math.domains.qarith import fold as _qfold
-from cas.kernel.verdict import (Verdict, Reason, YES, NO, unknown,
-                          and3, or3, not3)
 from cas.kernel.scope import Assumptions
+from cas.kernel.verdict import (
+    YES,
+    No,
+    Reason,
+    Refutation,
+    RefutationChannel,
+    Verdict,
+    and3,
+    contextualize,
+    not3,
+    or3,
+    refute,
+    unknown,
+)
+from cas.math.base.equality import closure_decide, is_closed
+from cas.math.context import MathContext
+from cas.math.domains.qarith import fold as _qfold
+from cas.syntax import term as T
+from cas.syntax.term import Const, Expr, S, Term
+
+AssumptionFrame: TypeAlias = Assumptions | Iterable[Term] | None
+Query: TypeAlias = Callable[[Term], Verdict]
+Interval: TypeAlias = tuple[Fraction | None, Fraction | None, bool, bool]
+ContextFreeRule: TypeAlias = Callable[[Expr, Assumptions, Query], Verdict | None]
+ContextRule: TypeAlias = Callable[
+    [MathContext, Expr, Assumptions, Query], Verdict | None
+]
+RuleApplies: TypeAlias = Callable[[Expr], bool]
 
 
-def _A(a):
-    """None is treated as the empty assumption set (older call sites pass None)."""
-    return a if a is not None else Assumptions()
+def _comparison_no(
+    channel: RefutationChannel,
+    op: str,
+    lhs: Term,
+    rhs: Term,
+    detail: str,
+    *witnesses: Term,
+) -> No:
+    claim = T.mk(S(op), (lhs, rhs))
+    return refute(channel, claim, lhs, rhs, *witnesses, detail=detail)
+
+
+def _A(a: AssumptionFrame) -> Assumptions:
+    """Normalize an optional assumption collection to an immutable frame."""
+    if isinstance(a, Assumptions):
+        return a
+    if a is None:
+        return Assumptions()
+    return Assumptions(tuple(a))
 
 
 _NEG = {
@@ -51,7 +92,7 @@ _NEG = {
 _ORD = ("Lt", "Le", "Gt", "Ge")
 
 
-def _nonreal_constant(ctx, t):
+def _nonreal_constant(ctx: MathContext, t: Term) -> Const | None:
     """A constant declared not real that occurs in `t`, or None.
 
     An order comparison is read over an ordered domain. The declared constants
@@ -71,7 +112,7 @@ def _nonreal_constant(ctx, t):
     return None
 
 
-def _ordered_fact(ctx, f):
+def _ordered_fact(ctx: MathContext, f: Term) -> bool:
     """Whether an assumption can be consumed as ordered information.
 
     The comparison gate in `decide` withholds answering an order comparison whose
@@ -86,7 +127,7 @@ def _ordered_fact(ctx, f):
     return _nonreal_constant(ctx, f) is None
 
 
-def negate(ctx, f):
+def negate(ctx: MathContext, f: Term) -> Term:
     """Strong negation of a comparison predicate (not (a>b) == a<=b and so on);
     everything else goes through a syntactic Not.
 
@@ -108,7 +149,7 @@ _CMP = ("Lt", "Le", "Gt", "Ge", "Eq", "Ne")
 _CMP_INV = {"Lt": "Gt", "Gt": "Lt", "Le": "Ge", "Ge": "Le"}
 
 
-def _cmp_numeric(op, a, b):
+def _cmp_numeric(op: str, a: Term, b: Term) -> Verdict | None:
     av = T.num_val(a) if T.is_num(a) else None
     bv = T.num_val(b) if T.is_num(b) else None
     if av is None or bv is None:
@@ -125,18 +166,24 @@ def _cmp_numeric(op, a, b):
         r = av == bv
     else:
         r = av != bv
-    return YES if r else NO
+    if r:
+        return YES
+    return _comparison_no(
+        RefutationChannel.EXACT_COMPARISON, op, a, b,
+        "exact rational comparison is false")
 
 
-def _same(op, a, b):
+def _same(op: str, a: Term, b: Term) -> Verdict | None:
     if a is not b:
         return None
     if op in ("Eq", "Le", "Ge"):
         return YES
-    return NO
+    return _comparison_no(
+        RefutationChannel.EXACT_COMPARISON, op, a, a,
+        "pointer-identical terms refute a strict or unequal comparison")
 
 
-def _poly_eq_check(ctx, a, b):
+def _poly_eq_check(ctx: MathContext, a: Term, b: Term) -> Verdict | None:
     """Projection zero-test channel: when a-b falls inside Q/K[x]/K(x), the domain
     normal form decides it completely."""
     d = _qfold(T.plus(a, T.neg(b)))
@@ -147,16 +194,22 @@ def _poly_eq_check(ctx, a, b):
     if r is True:
         return YES
     if r is False:
-        return NO
+        return _comparison_no(
+            RefutationChannel.NORMAL_FORM, "Eq", a, b,
+            "the projected difference has a nonzero domain normal form", d)
     return None
 
 
-def _facts_lookup(ctx, fact, assumptions):
+def _facts_lookup(
+    ctx: MathContext, fact: Expr, assumptions: Assumptions
+) -> Verdict | None:
     for f in assumptions:
         if f is fact:
             return YES
         if f is negate(ctx, fact):
-            return NO
+            return refute(
+                RefutationChannel.ASSUMPTION_FACT, fact, fact, f,
+                detail="the assumption frame contains the syntactic negation")
         if isinstance(f, T.Expr) and isinstance(fact, T.Expr):
             if f.head.name in _CMP_INV and fact.head.name in _CMP_INV:
                 if (
@@ -168,18 +221,24 @@ def _facts_lookup(ctx, fact, assumptions):
     return None
 
 
-def _chain_query(ctx, op, a, b, assumptions):
+def _chain_query(
+    ctx: MathContext,
+    op: str,
+    a: Term,
+    b: Term,
+    assumptions: Assumptions,
+) -> Verdict | None:
     """Order-chain BFS: ledger inequalities become edges and the transitive closure
     answers queries of the form a<b.
 
     A state is (node, whether the path contains a strict edge), and the best
     strictness per node is recorded. Numeric-bound inference and equality
     substitution belong to the interval channel; here only graph edges are walked.
-    An assumption carrying a constant declared not real is not an order edge
+    An order edge set is built explicitly below.
     (`_ordered_fact`) and is skipped: otherwise `x < i` and `i < 3` would chain
     to `x < 3` where the ordered reading does not apply.
     """
-    adj = {}
+    adjacency: dict[Term, list[tuple[Term, bool]]] = {}
     strict = op in ("Lt", "Gt")
     want = (a, b)
     if op in ("Gt", "Ge"):
@@ -192,215 +251,281 @@ def _chain_query(ctx, op, a, b, assumptions):
             if opf in ("Gt", "Ge"):
                 u, v = v, u
                 opf = "Lt" if opf == "Gt" else "Le"
-            adj.setdefault(u, []).append((v, opf == "Lt"))
+            adjacency.setdefault(u, []).append((v, opf == "Lt"))
     if a is b:
-        return YES if op in ("Le", "Ge", "Eq") else NO
+        if op in ("Le", "Ge", "Eq"):
+            return YES
+        return _comparison_no(
+            RefutationChannel.DERIVATION, op, a, b,
+            "pointer-identical terms refute the comparison")
     start, goal = want
-    best = {start._h: False}
+    best: dict[int, bool] = {start._h: False}
     queue = deque([(start, False)])
     while queue:
         cur, evs = queue.popleft()
         if best.get(cur._h, False) != evs:
             continue                       # stale state: a better strictness was found
-        for nxt, st in adj.get(cur, ()):
-            ns = evs or st
-            if nxt is goal and (not strict or ns):
+        for nxt, edge_strict in adjacency.get(cur, ()):
+            next_strict = evs or edge_strict
+            if nxt is goal and (not strict or next_strict):
                 return YES
-            prev = best.get(nxt._h)
-            if prev is None or (ns and not prev):
-                best[nxt._h] = ns
-                queue.append((nxt, ns))
+            previous = best.get(nxt._h)
+            if previous is None or (next_strict and not previous):
+                best[nxt._h] = next_strict
+                queue.append((nxt, next_strict))
     return None
 
 
-def _interval(ctx, t, assumptions, seen=None, depth=0):
-    """Numeric interval propagation: (lo, hi, lo_strict, hi_strict) with either
-    endpoint possibly None (unbounded).
-
-    Sources: numeric atoms / declared constant axiom bounds / direct ledger numeric
-    bounds / ledger equality substitution (recursive) / Plus sums / numeric scalar
-    Times scaling / even powers and Abs being nonnegative. An assumption carrying a
-    constant declared not real is not an ordered bound (`_ordered_fact`), so it is
-    skipped. It reads only the term and the ledger and never calls back into decide
-    (to prevent cycles). Returns None when there is no information at all.
-    """
-    from fractions import Fraction as Fr
-
-    if T.is_num(t):
-        v = T.num_val(t)
-        return (v, v, False, False)
-    lb = ctx.const_bounds(t)
-    if lb is not None:
-        return (Fr(lb[0]), Fr(lb[1]), True, True)
+def _interval(
+    ctx: MathContext,
+    term: Term,
+    assumptions: Assumptions,
+    seen: set[int] | None = None,
+    depth: int = 0,
+) -> Interval | None:
+    """Propagate numeric intervals from literals, declarations and assumptions."""
+    if T.is_num(term):
+        value = T.num_val(term)
+        return value, value, False, False
+    bounds = ctx.const_bounds(term) if isinstance(term, T.Const) else None
+    if bounds is not None:
+        return Fraction(bounds[0]), Fraction(bounds[1]), True, True
     if depth > 8:
         return None
-    if seen is None:
-        seen = set()
-    if t._h in seen:
+    visited = set() if seen is None else seen
+    if term._h in visited:
         return None
-    seen.add(t._h)
-    lo = hi = None
-    los = his = False
-    is_int = False
+    visited.add(term._h)
 
-    def tighten(nlo, nlos, nhi, nhis):
-        nonlocal lo, hi, los, his
-        if nlo is not None and (lo is None or nlo > lo or (nlo == lo and nlos)):
-            lo, los = nlo, nlos
-        if nhi is not None and (hi is None or nhi < hi or (nhi == hi and nhis)):
-            hi, his = nhi, nhis
+    lower: Fraction | None = None
+    upper: Fraction | None = None
+    lower_strict = False
+    upper_strict = False
+    is_integer = False
 
-    for f in assumptions:
-        if not isinstance(f, T.Expr):
+    def tighten(
+        new_lower: Fraction | None,
+        new_lower_strict: bool,
+        new_upper: Fraction | None,
+        new_upper_strict: bool,
+    ) -> None:
+        nonlocal lower, upper, lower_strict, upper_strict
+        if new_lower is not None and (
+            lower is None
+            or new_lower > lower
+            or (new_lower == lower and new_lower_strict)
+        ):
+            lower, lower_strict = new_lower, new_lower_strict
+        if new_upper is not None and (
+            upper is None
+            or new_upper < upper
+            or (new_upper == upper and new_upper_strict)
+        ):
+            upper, upper_strict = new_upper, new_upper_strict
+
+    for assumption in assumptions:
+        if not isinstance(assumption, T.Expr):
             continue
-        n = f.head.name
-        if n == "Attr" and f.args[0] is t and f.args[1].name == "integer":
-            is_int = True
+        name = assumption.head.name
+        if (
+            name == "Attr"
+            and assumption.args[0] is term
+            and isinstance(assumption.args[1], T.Sym)
+            and assumption.args[1].name == "integer"
+        ):
+            is_integer = True
             continue
-        # Ordered information from an assumption carrying a constant declared not
-        # real is not consumed (neither as a bound nor as an equality that would
-        # bound through substitution): the ordered reading does not apply there.
-        if not _ordered_fact(ctx, f):
+        if not _ordered_fact(ctx, assumption):
             continue
-        if n in ("Lt", "Le", "Gt", "Ge"):
-            u, v = f.args
-            if u is t and T.is_num(v):
-                bv = T.num_val(v)
-                if n == "Lt":
-                    tighten(None, False, bv, True)
-                elif n == "Le":
-                    tighten(None, False, bv, False)
-                elif n == "Gt":
-                    tighten(bv, True, None, False)
+        if name in ("Lt", "Le", "Gt", "Ge"):
+            first, second = assumption.args
+            if first is term and T.is_num(second):
+                value = T.num_val(second)
+                if name == "Lt":
+                    tighten(None, False, value, True)
+                elif name == "Le":
+                    tighten(None, False, value, False)
+                elif name == "Gt":
+                    tighten(value, True, None, False)
                 else:
-                    tighten(bv, False, None, False)
-            elif v is t and T.is_num(u):
-                bv = T.num_val(u)
-                if n == "Lt":
-                    tighten(bv, True, None, False)
-                elif n == "Le":
-                    tighten(bv, False, None, False)
-                elif n == "Gt":
-                    tighten(None, False, bv, True)
+                    tighten(value, False, None, False)
+            elif second is term and T.is_num(first):
+                value = T.num_val(first)
+                if name == "Lt":
+                    tighten(value, True, None, False)
+                elif name == "Le":
+                    tighten(value, False, None, False)
+                elif name == "Gt":
+                    tighten(None, False, value, True)
                 else:
-                    tighten(None, False, bv, False)
-        elif n == "Eq":
-            u, v = f.args
-            o = v if u is t else (u if v is t else None)
-            if o is not None and o is not t:
-                if T.is_num(o):
-                    # constant equality x=c: x is exactly c with non-strict endpoints,
-                    # so that x=5 does not imply x<5
-                    bv = T.num_val(o)
-                    tighten(bv, False, bv, False)
+                    tighten(None, False, value, False)
+        elif name == "Eq":
+            first, second = assumption.args
+            other = second if first is term else (first if second is term else None)
+            if other is not None and other is not term:
+                if T.is_num(other):
+                    value = T.num_val(other)
+                    tighten(value, False, value, False)
                 else:
-                    # variable equality x=y: x and y share a value, so interval and
-                    # strictness pass through transparently
-                    iv = _interval(ctx, o, assumptions, seen, depth + 1)
-                    if iv is not None:
-                        tighten(*iv)
-    if is_int:
-        # consume the integer attribute: tighten endpoints to the nearest integer
-        # (x>2 and x in Z implies x>=3)
-        if lo is not None:
-            c = lo.numerator // lo.denominator + 1 if los else -((-lo.numerator) // lo.denominator)
-            if c > lo or los:
-                lo, los = c, False
-        if hi is not None:
-            c = -((-hi.numerator) // hi.denominator) - 1 if his else hi.numerator // hi.denominator
-            if c < hi or his:
-                hi, his = c, False
-    if isinstance(t, T.Expr):
-        n = t.head.name
-        if n == "Plus":
-            ivs = [_interval(ctx, a, assumptions, seen, depth + 1) for a in t.args]
-            if all(iv is not None for iv in ivs):
-                slo = sum(iv[0] for iv in ivs) if all(iv[0] is not None for iv in ivs) else None
-                shi = sum(iv[1] for iv in ivs) if all(iv[1] is not None for iv in ivs) else None
-                st = any(iv[2] for iv in ivs if iv[0] is not None)
-                sht = any(iv[3] for iv in ivs if iv[1] is not None)
-                tighten(slo, st, shi, sht)
-        elif n == "Times":
-            nums = [a for a in t.args if T.is_num(a)]
-            rest = [a for a in t.args if not T.is_num(a)]
-            if nums and len(rest) == 1:
-                c = Fr(1)
-                for nn in nums:
-                    c *= T.num_val(nn)
-                iv = _interval(ctx, rest[0], assumptions, seen, depth + 1)
-                if iv is not None:
-                    if c > 0:
+                    interval = _interval(ctx, other, assumptions, visited, depth + 1)
+                    if interval is not None:
+                        tighten(interval[0], interval[2], interval[1], interval[3])
+
+    if is_integer:
+        if lower is not None:
+            candidate = (
+                Fraction(lower.numerator // lower.denominator + 1)
+                if lower_strict
+                else Fraction(-((-lower.numerator) // lower.denominator))
+            )
+            if candidate > lower or lower_strict:
+                lower, lower_strict = candidate, False
+        if upper is not None:
+            candidate = (
+                Fraction(-((-upper.numerator) // upper.denominator) - 1)
+                if upper_strict
+                else Fraction(upper.numerator // upper.denominator)
+            )
+            if candidate < upper or upper_strict:
+                upper, upper_strict = candidate, False
+
+    if isinstance(term, T.Expr):
+        name = term.head.name
+        if name == "Plus":
+            intervals: list[Interval] = []
+            for argument in term.args:
+                interval = _interval(
+                    ctx, argument, assumptions, visited, depth + 1
+                )
+                if interval is None:
+                    break
+                intervals.append(interval)
+            if len(intervals) == len(term.args):
+                if all(interval[0] is not None for interval in intervals):
+                    lower = sum(
+                        (interval[0] for interval in intervals if interval[0] is not None),
+                        Fraction(0),
+                    )
+                if all(interval[1] is not None for interval in intervals):
+                    upper = sum(
+                        (interval[1] for interval in intervals if interval[1] is not None),
+                        Fraction(0),
+                    )
+                lower_strict = any(
+                    interval[2] for interval in intervals
+                )
+                upper_strict = any(
+                    interval[3] for interval in intervals
+                )
+        elif name == "Times":
+            numeric = [argument for argument in term.args if T.is_num(argument)]
+            symbolic = [argument for argument in term.args if not T.is_num(argument)]
+            if numeric and len(symbolic) == 1:
+                coefficient = Fraction(1)
+                for argument in numeric:
+                    coefficient *= T.num_val(argument)
+                interval = _interval(
+                    ctx, symbolic[0], assumptions, visited, depth + 1
+                )
+                if interval is not None:
+                    if coefficient > 0:
                         tighten(
-                            None if iv[0] is None else c * iv[0], iv[2],
-                            None if iv[1] is None else c * iv[1], iv[3],
+                            None if interval[0] is None else coefficient * interval[0],
+                            interval[2],
+                            None if interval[1] is None else coefficient * interval[1],
+                            interval[3],
                         )
-                    elif c < 0:
+                    elif coefficient < 0:
                         tighten(
-                            None if iv[1] is None else c * iv[1], iv[3],
-                            None if iv[0] is None else c * iv[0], iv[2],
+                            None if interval[1] is None else coefficient * interval[1],
+                            interval[3],
+                            None if interval[0] is None else coefficient * interval[0],
+                            interval[2],
                         )
-        elif n == "Power" and isinstance(t.args[1], T.Int) and t.args[1].v % 2 == 0:
-            tighten(Fr(0), False, None, False)
+        elif name == "Power" and isinstance(term.args[1], T.Int) and term.args[1].v % 2 == 0:
+            tighten(Fraction(0), False, None, False)
         else:
-            # declared function range bound: endpoints are attained (lo <= f <= hi),
-            # so strictness is false
-            bd = _func_bound(ctx, n)
-            if bd is not None:
-                tighten(bd[0], False, bd[1], False)
-    if lo is None and hi is None:
+            function_bounds = _func_bound(ctx, name)
+            if function_bounds is not None:
+                tighten(function_bounds[0], False, function_bounds[1], False)
+
+    if lower is None and upper is None:
         return None
-    return (lo, hi, los, his)
+    return lower, upper, lower_strict, upper_strict
 
 
-def _cmp_interval(ctx, op, a, b, assumptions):
-    """Reduce a op b to an interval comparison of d = a - b against 0 (d first folded
-    over Q literals)."""
-    d = _qfold(T.plus(a, T.neg(b)))
+def _cmp_interval(
+    ctx: MathContext,
+    op: str,
+    a: Term,
+    b: Term,
+    assumptions: Assumptions,
+) -> Verdict | None:
+    """Reduce a comparison to an interval comparison against zero."""
+    difference = _qfold(T.plus(a, T.neg(b)))
+
+    def no(detail: str, *witnesses: Term) -> No:
+        return _comparison_no(
+            RefutationChannel.ORDER,
+            op,
+            a,
+            b,
+            detail,
+            difference,
+            *witnesses,
+        )
     if op in ("Eq", "Ne"):
-        if d is T.ZERO:
-            return YES if op == "Eq" else NO
-        iv = _interval(ctx, d, assumptions)
-        if iv is not None:
-            lo, hi, _, _ = iv
-            away = (lo is not None and lo > 0) or (hi is not None and hi < 0)
+        if difference is T.ZERO:
+            if op == "Eq":
+                return YES
+            return no("the exact difference is zero")
+        interval = _interval(ctx, difference, assumptions)
+        if interval is not None:
+            lower, upper, _, _ = interval
+            away = (lower is not None and lower > 0) or (
+                upper is not None and upper < 0
+            )
             if away:
-                return NO if op == "Eq" else YES
+                if op == "Eq":
+                    return no("the difference interval is bounded away from zero")
+                return YES
         return None
-    if d is T.ZERO:
-        return YES if op in ("Le", "Ge") else NO
-    iv = _interval(ctx, d, assumptions)
-    if iv is None:
+    if difference is T.ZERO:
+        if op in ("Le", "Ge"):
+            return YES
+        return no("the exact difference is zero")
+    interval = _interval(ctx, difference, assumptions)
+    if interval is None:
         return None
-    lo, hi, los, his = iv
-    if lo is not None and hi is not None and lo == hi and not los and not his:
-        # the closed interval degenerates to a point, i.e. an exact value: decide directly
+    lower, upper, lower_strict, upper_strict = interval
+    if lower is not None and upper is not None and lower == upper and not lower_strict and not upper_strict:
         if op == "Gt":
-            return YES if lo > 0 else NO
+            return YES if lower > 0 else no("the exact interval value is not positive")
         if op == "Ge":
-            return YES if lo >= 0 else NO
+            return YES if lower >= 0 else no("the exact interval value is negative")
         if op == "Lt":
-            return YES if lo < 0 else NO
-        return YES if lo <= 0 else NO
+            return YES if lower < 0 else no("the exact interval value is not negative")
+        return YES if lower <= 0 else no("the exact interval value is positive")
     if op == "Gt":
-        if (lo is not None and lo > 0) or (lo == 0 and los):
+        if (lower is not None and lower > 0) or (lower == 0 and lower_strict):
             return YES
-        if (hi is not None and hi < 0) or (hi == 0 and his):
-            return NO
+        if (upper is not None and upper < 0) or (upper == 0 and upper_strict):
+            return no("the difference interval is non-positive")
     elif op == "Ge":
-        if lo is not None and lo >= 0:
+        if lower is not None and lower >= 0:
             return YES
-        if (hi is not None and hi < 0) or (hi == 0 and his):
-            return NO
+        if (upper is not None and upper < 0) or (upper == 0 and upper_strict):
+            return no("the difference interval is strictly negative")
     elif op == "Lt":
-        if (hi is not None and hi < 0) or (hi == 0 and his):
+        if (upper is not None and upper < 0) or (upper == 0 and upper_strict):
             return YES
-        if (lo is not None and lo > 0) or (lo == 0 and los):
-            return NO
-    else:  # Le
-        if hi is not None and hi <= 0:
+        if (lower is not None and lower > 0) or (lower == 0 and lower_strict):
+            return no("the difference interval is non-negative")
+    else:
+        if upper is not None and upper <= 0:
             return YES
-        if (lo is not None and lo > 0) or (lo == 0 and los):
-            return NO
+        if (lower is not None and lower > 0) or (lower == 0 and lower_strict):
+            return no("the difference interval is strictly positive")
     return None
 
 
@@ -408,13 +533,21 @@ def _cmp_interval(ctx, op, a, b, assumptions):
 # Symbolic structure lemmas
 # ---------------------------------------------------------------------------
 
-def _func_bound(ctx, name):
-    """Declared function range bound: returns (lo|None, hi|None) or None."""
-    d = ctx.lookup_function(name)
-    return d.bound if d is not None else None
+def _func_bound(
+    ctx: MathContext, name: str
+) -> tuple[Fraction | None, Fraction | None] | None:
+    """Return a declared function range bound."""
+    declaration = ctx.lookup_function(name)
+    if declaration is None or declaration.bound is None:
+        return None
+    lower, upper = declaration.bound
+    return (
+        Fraction(lower) if lower is not None else None,
+        Fraction(upper) if upper is not None else None,
+    )
 
 
-def _nonneg_zero_arg(ctx, t):
+def _nonneg_zero_arg(ctx: MathContext, t: Term) -> Term | None:
     """For t = g(u) where g is declared "nonnegative with lower bound 0 and
     g(u)=0 iff u=0" (absolute-value / norm family), return u.
 
@@ -432,7 +565,9 @@ def _nonneg_zero_arg(ctx, t):
     return t.args[0]
 
 
-def _nneg(ctx, t, assumptions):
+def _nneg(
+    ctx: MathContext, t: Term, assumptions: Assumptions | None
+) -> bool | None:
     """Nonnegativity structure decision: True/False/None (reads structure and ledger
     only, never calls back into decide)."""
     if T.is_num(t):
@@ -465,7 +600,9 @@ def _nneg(ctx, t, assumptions):
     return None
 
 
-def _pos(ctx, t, assumptions):
+def _pos(
+    ctx: MathContext, t: Term, assumptions: Assumptions | None
+) -> bool | None:
     """Positivity structure decision: True/False/None."""
     if T.is_num(t):
         return T.sign_num(t) > 0
@@ -488,40 +625,51 @@ def _pos(ctx, t, assumptions):
 # function of the entry depth.
 
 
-def _is_cmp(f):
+def _is_cmp(f: Term) -> TypeGuard[Expr]:
     return isinstance(f, T.Expr) and f.head.name in _CMP
 
 
-def _is_ord(f):
+def _is_ord(f: Term) -> TypeGuard[Expr]:
     return isinstance(f, T.Expr) and f.head.name in ("Lt", "Le", "Gt", "Ge")
 
 
-def _zero_cmp_of(ctx, a, assumptions, q, op):
+def _zero_cmp_of(
+    ctx: MathContext,
+    a: Term,
+    assumptions: Assumptions | None,
+    q: Query,
+    op: str,
+) -> Verdict | None:
     nneg = _nneg(ctx, a, assumptions)
     pos = _pos(ctx, a, assumptions)
+
+    def no(detail: str) -> No:
+        return _comparison_no(
+            RefutationChannel.DERIVATION, op, a, T.ZERO, detail, a)
+
     if op == "Gt":
         if pos is True:
             return YES
         if nneg is False or (nneg is True and pos is False):
-            return NO
+            return no("the operand is nonnegative and not positive")
         return None
     if op == "Ge":
         if nneg is True:
             return YES
         if nneg is False:
-            return NO
+            return no("the operand is not nonnegative")
         return None
     if op == "Lt":
         if pos is True:
-            return NO
+            return no("a positive operand is not less than zero")
         if nneg is False:
             return YES
         if nneg is True and pos is False:
-            return NO
+            return no("a nonnegative operand is not less than zero")
         return None
     if op == "Le":
         if pos is True:
-            return NO
+            return no("a positive operand is not at most zero")
         if nneg is False:
             return YES
         if nneg is True and pos is False:
@@ -530,16 +678,23 @@ def _zero_cmp_of(ctx, a, assumptions, q, op):
     return None
 
 
-def _rule_ne_from_ord(f, assumptions, q):
+def _rule_ne_from_ord(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     a, b = f.args
     if q(T.mk(S("Gt"), (a, b))) is YES or q(T.mk(S("Lt"), (a, b))) is YES:
         return YES
-    if q(T.mk(S("Eq"), (a, b))) is YES:
-        return NO
+    equality = T.mk(S("Eq"), (a, b))
+    if q(equality) is YES:
+        return refute(
+            RefutationChannel.DERIVATION, f, f, equality,
+            detail="the operands are equal, so they are not unequal")
     return None
 
 
-def _rule_cmp_via_eq(f, assumptions, q):
+def _rule_cmp_via_eq(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     a, b = f.args
     if T.is_num(b):
         for g in assumptions:
@@ -553,7 +708,9 @@ def _rule_cmp_via_eq(f, assumptions, q):
     return None
 
 
-def _sign_of_term(ctx, t, assumptions, q):
+def _sign_of_term(
+    ctx: MathContext, t: Term, assumptions: Assumptions, q: Query
+) -> int | None:
     if T.is_num(t):
         s = T.sign_num(t)
         if s > 0:
@@ -577,198 +734,248 @@ def _sign_of_term(ctx, t, assumptions, q):
         return 2
     return None
 
+def _expr_arg(term: Term) -> Expr:
+    """Require a structural child after a rule applicability check."""
+    if not isinstance(term, T.Expr):
+        raise TypeError("derived rule received a non-expression argument")
+    return term
 
-def _rule_sign_atom(ctx, f, assumptions, q):
+
+def _rule_sign_atom(
+    ctx: MathContext, f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     return _zero_cmp_of(ctx, f.args[0], assumptions, q, f.head.name)
 
 
-def _rule_sign_times(ctx, f, assumptions, q):
+def _rule_sign_times(
+    ctx: MathContext, f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     op = f.head.name
-    a = f.args[0]
+    a = _expr_arg(f.args[0])
+
+    def no(detail: str) -> No:
+        return _comparison_no(
+            RefutationChannel.DERIVATION, op, a, T.ZERO, detail, a, *a.args)
+
     s_zero = False
     s_nn = False
     neg_count = 0
     for fac in a.args:
-        s = _sign_of_term(ctx, fac, assumptions, q)
-        if s is None:
+        sign = _sign_of_term(ctx, fac, assumptions, q)
+        if sign is None:
             return None
-        if s == 0:
+        if sign == 0:
             s_zero = True
-        elif s == -1:
+        elif sign == -1:
             neg_count += 1
-        elif s == 2:
+        elif sign == 2:
             s_nn = True
     if s_zero:
-        return NO if op in ("Gt", "Lt") else YES
+        if op in ("Gt", "Lt"):
+            return no("a zero factor makes the product exactly zero")
+        return YES
     odd = neg_count % 2 == 1
-    # an undecided nonnegative factor blocks the answer, which can flip once the
-    # condition is discharged
     guarded = unknown(Reason.GUARDED) if s_nn else unknown()
     if op == "Gt":
         if odd:
-            return NO
-        return YES if not s_nn else guarded
+            return no("the product has an odd number of negative factors")
+        return guarded if s_nn else YES
     if op == "Ge":
         if odd and not s_nn:
-            return NO
+            return no("the product is negative")
         return guarded if odd else YES
     if op == "Lt":
         if odd and not s_nn:
             return YES
-        return guarded if odd else NO
-    return YES if odd else (guarded if s_nn else NO)
+        return no("the product is nonnegative") if not odd else guarded
+    if odd:
+        return YES
+    return guarded if s_nn else no("the product is positive")
 
 
-def _rule_sign_even_power(f, assumptions, q):
+def _rule_sign_even_power(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     op = f.head.name
-    b = f.args[0].args[0]
-    if op in ("Ge",):
+    base = _expr_arg(f.args[0]).args[0]
+
+    def no(detail: str) -> No:
+        return refute(
+            RefutationChannel.DERIVATION,
+            f,
+            f,
+            base,
+            detail=f"even-power sign rule: {detail}",
+        )
+
+    if op == "Ge":
         return YES
     if op == "Lt":
-        return NO
+        return no("an even power is nonnegative")
     if op == "Gt":
-        r = q(T.mk(S("Ne"), (b, T.ZERO)))
-        if r is YES:
+        if q(T.mk(S("Ne"), (base, T.ZERO))) is YES:
             return YES
-        r = q(T.mk(S("Eq"), (b, T.ZERO)))
-        if r is YES:
-            return NO
+        if q(T.mk(S("Eq"), (base, T.ZERO))) is YES:
+            return no("the base is zero")
         return None
-    r = q(T.mk(S("Eq"), (b, T.ZERO)))
-    if r is YES:
+    if q(T.mk(S("Eq"), (base, T.ZERO))) is YES:
         return YES
-    r = q(T.mk(S("Ne"), (b, T.ZERO)))
-    if r is YES:
-        return NO
+    if q(T.mk(S("Ne"), (base, T.ZERO))) is YES:
+        return no("a nonzero even power is positive")
     return None
 
 
-def _rule_sign_nonneg_zero(ctx, f, assumptions, q):
-    """Sign of g(u) against 0 where g is declared nonnegative with g(u)=0 iff u=0
-    (absolute-value / norm family): g>=0 always true and g<0 always false, while
-    g>0 iff u!=0 and g<=0 iff u=0. The decision rests on the declaration, not the
-    name. Returns None when the argument carries no declaration of that shape."""
+def _rule_sign_nonneg_zero(
+    ctx: MathContext, f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
+    """Use the declared nonnegative-and-zero-only-on-zero function shape."""
     op = f.head.name
     u = _nonneg_zero_arg(ctx, f.args[0])
     if u is None:
         return None
+
+    def no(detail: str) -> No:
+        return refute(
+            RefutationChannel.DERIVATION, f, f, u,
+            detail=f"declared function shape: {detail}")
+
     if op == "Ge":
         return YES
     if op == "Lt":
-        return NO
+        return no("the declared value is nonnegative")
     if op == "Gt":
-        r = q(T.mk(S("Ne"), (u, T.ZERO)))
-        if r is YES:
+        if q(T.mk(S("Ne"), (u, T.ZERO))) is YES:
             return YES
-        r = q(T.mk(S("Eq"), (u, T.ZERO)))
-        if r is YES:
-            return NO
+        if q(T.mk(S("Eq"), (u, T.ZERO))) is YES:
+            return no("the argument is zero")
         return None
-    r = q(T.mk(S("Eq"), (u, T.ZERO)))
-    if r is YES:
+    if q(T.mk(S("Eq"), (u, T.ZERO))) is YES:
         return YES
-    r = q(T.mk(S("Ne"), (u, T.ZERO)))
-    if r is YES:
-        return NO
+    if q(T.mk(S("Ne"), (u, T.ZERO))) is YES:
+        return no("the declared value is strictly positive")
     return None
 
 
-def _rule_sign_odd_power(f, assumptions, q):
-    b = f.args[0].args[0]
-    return q(T.mk(S(f.head.name), (b, T.ZERO)))
+def _rule_sign_odd_power(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
+    base = _expr_arg(f.args[0]).args[0]
+    return q(T.mk(S(f.head.name), (base, T.ZERO)))
 
 
-def _rule_sign_sum(f, assumptions, q):
+def _rule_sign_sum(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     op = f.head.name
-    a = f.args[0]
+    a = _expr_arg(f.args[0])
+
+    def no(detail: str) -> No:
+        return _comparison_no(
+            RefutationChannel.DERIVATION, op, a, T.ZERO, detail, a, *a.args)
+
     if op in ("Gt", "Ge"):
         all_ge = True
         any_pos = False
-        for t_ in a.args:
-            r = q(T.mk(S("Ge"), (t_, T.ZERO)))
-            if r is not YES:
+        for term in a.args:
+            if q(T.mk(S("Ge"), (term, T.ZERO))) is not YES:
                 all_ge = False
                 break
-            r2 = q(T.mk(S("Gt"), (t_, T.ZERO)))
-            if r2 is YES:
+            if q(T.mk(S("Gt"), (term, T.ZERO))) is YES:
                 any_pos = True
         if all_ge and any_pos:
             return YES
         all_le = True
         any_neg = False
-        for t_ in a.args:
-            r = q(T.mk(S("Le"), (t_, T.ZERO)))
-            if r is not YES:
+        for term in a.args:
+            if q(T.mk(S("Le"), (term, T.ZERO))) is not YES:
                 all_le = False
                 break
-            r2 = q(T.mk(S("Lt"), (t_, T.ZERO)))
-            if r2 is YES:
+            if q(T.mk(S("Lt"), (term, T.ZERO))) is YES:
                 any_neg = True
         if all_le and any_neg:
-            return NO
+            return no("every summand is nonpositive and one is negative")
         return None
     all_le = True
     any_neg = False
-    for t_ in a.args:
-        r = q(T.mk(S("Le"), (t_, T.ZERO)))
-        if r is not YES:
+    for term in a.args:
+        if q(T.mk(S("Le"), (term, T.ZERO))) is not YES:
             all_le = False
             break
-        r2 = q(T.mk(S("Lt"), (t_, T.ZERO)))
-        if r2 is YES:
+        if q(T.mk(S("Lt"), (term, T.ZERO))) is YES:
             any_neg = True
     if all_le and any_neg:
         return YES
     all_ge = True
     any_pos = False
-    for t_ in a.args:
-        r = q(T.mk(S("Ge"), (t_, T.ZERO)))
-        if r is not YES:
+    for term in a.args:
+        if q(T.mk(S("Ge"), (term, T.ZERO))) is not YES:
             all_ge = False
             break
-        r2 = q(T.mk(S("Gt"), (t_, T.ZERO)))
-        if r2 is YES:
+        if q(T.mk(S("Gt"), (term, T.ZERO))) is YES:
             any_pos = True
     if all_ge and any_pos:
-        return NO
+        return no("every summand is nonnegative and one is positive")
     return None
 
 
-def _rule_eq_times_zero(f, assumptions, q):
-    """Zero product. Premise: every coefficient structure this system builds (Q, K[x],
-    K(x), algebraic and transcendental towers) is an integral domain, so ab=0 iff a=0
-    or b=0. If a non-domain structure such as a matrix ring is ever introduced, this
-    rule must be gated on the ambient domain."""
-    a = f.args[0]
-    any_zero = NO
-    for fac in a.args:
-        r = q(T.mk(S("Eq"), (fac, T.ZERO)))
-        if r is YES:
+def _rule_eq_times_zero(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
+    """Zero product over the integral domains currently supported."""
+    product = _expr_arg(f.args[0])
+    causes: list[Refutation] = []
+    for factor in product.args:
+        result = q(T.mk(S("Eq"), (factor, T.ZERO)))
+        if result is YES:
             return YES
-        if r is not NO:
-            any_zero = unknown()
-    return any_zero
+        if isinstance(result, No):
+            causes.append(result.evidence)
+            continue
+        return unknown()
+    return refute(
+        RefutationChannel.DERIVATION,
+        f,
+        product,
+        *product.args,
+        detail="all factors are nonzero in an integral domain",
+        causes=tuple(causes),
+    )
 
 
-def _rule_sign_num(f, assumptions, q):
-    s = T.sign_num(f.args[0])
+def _rule_sign_num(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
+    sign = T.sign_num(f.args[0])
     op = f.head.name
-    if op == "Gt":
-        return YES if s > 0 else NO
-    if op == "Ge":
-        return YES if s >= 0 else NO
-    if op == "Lt":
-        return YES if s < 0 else NO
-    return YES if s <= 0 else NO
+    holds = {
+        "Gt": sign > 0,
+        "Ge": sign >= 0,
+        "Lt": sign < 0,
+        "Le": sign <= 0,
+    }[op]
+    if holds:
+        return YES
+    return refute(
+        RefutationChannel.EXACT_COMPARISON, f, f,
+        detail=f"exact numeric sign {sign} refutes {op}")
 
 
-def _rule_eq_num(f, assumptions, q):
-    if f.head.name == "Eq":
-        return YES if T.num_val(f.args[0]) == T.num_val(f.args[1]) else NO
-    return YES if T.num_val(f.args[0]) != T.num_val(f.args[1]) else NO
+def _rule_eq_num(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
+    lhs, rhs = f.args
+    equal = T.num_val(lhs) == T.num_val(rhs)
+    holds = equal if f.head.name == "Eq" else not equal
+    if holds:
+        return YES
+    return _comparison_no(
+        RefutationChannel.EXACT_COMPARISON, f.head.name, lhs, rhs,
+        "exact rational comparison")
 
 
-def _rule_cmp_flip(f, assumptions, q):
+def _rule_cmp_flip(
+    f: Expr, assumptions: Assumptions, q: Query
+) -> Verdict | None:
     op = f.head.name
     a, b = f.args
     if op in ("Eq", "Ne"):
@@ -777,12 +984,17 @@ def _rule_cmp_flip(f, assumptions, q):
     return q(T.mk(S(flip[op]), (b, a)))
 
 
-def _ctx_free(fn):
-    """Lift a derive rule that reads no declarations to the table's `fn(ctx, ...)`
-    call protocol, so every `_RULES` entry has the same call shape. A rule that
-    reads declarations takes the context itself as its first parameter and appears
-    in the table unwrapped."""
-    return lambda ctx, f, assumptions, q: fn(f, assumptions, q)
+def _ctx_free(fn: ContextFreeRule) -> ContextRule:
+    """Lift a context-free rule to the common rule-call protocol."""
+    def wrapped(
+        ctx: MathContext,
+        f: Expr,
+        assumptions: Assumptions,
+        q: Query,
+    ) -> Verdict | None:
+        return fn(f, assumptions, q)
+
+    return wrapped
 
 
 # The derive rules are an explicit data table, not import-time self-registration:
@@ -793,7 +1005,7 @@ def _ctx_free(fn):
 # pipeline table; the cross-module eq_stages channel is the one that must be
 # assembled explicitly by bootstrap (it carries plugins from other modules), and
 # these two are deliberately different mechanisms.
-_RULES = (
+_RULES: tuple[tuple[str, RuleApplies, ContextRule], ...] = (
     ("ne-from-ord", lambda f: f.head.name == "Ne", _ctx_free(_rule_ne_from_ord)),
     ("cmp-via-eq", lambda f: _is_ord(f), _ctx_free(_rule_cmp_via_eq)),
     ("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_atom),
@@ -807,7 +1019,12 @@ _RULES = (
     ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _ctx_free(_rule_eq_num)),
     ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _ctx_free(_rule_cmp_flip)),
 )
-def _derive_layer(ctx, fact, assumptions, seen):
+def _derive_layer(
+    ctx: MathContext,
+    fact: Expr,
+    assumptions: Assumptions,
+    seen: frozenset[int],
+) -> Verdict | None:
     """Apply the derived-rule table under a **cycle guard**, not a depth cap: a
     fact already being derived in this chain is skipped. The reachable fact set
     is finite (every rule builds its facts out of the subterms of the original
@@ -816,7 +1033,8 @@ def _derive_layer(ctx, fact, assumptions, seen):
     if fact._h in seen:
         return None
     seen = seen | {fact._h}
-    q = lambda f: decide(ctx, f, assumptions, seen)
+    def q(fact: Term) -> Verdict:
+        return decide(ctx, fact, assumptions, seen)
     for name, applies, fn in _RULES:
         if applies(fact):
             r = fn(ctx, fact, assumptions, q)
@@ -825,12 +1043,14 @@ def _derive_layer(ctx, fact, assumptions, seen):
     return None
 
 
-def _axiom_constants(ctx, fact, assumptions):
+def _axiom_constants(
+    ctx: MathContext, fact: Expr, assumptions: Assumptions
+) -> Verdict | None:
     """Constant coarse-bound lemma (from the declaration's const_bounds data)."""
     if not (isinstance(fact, T.Expr) and fact.head.name in ("Gt", "Ge", "Lt", "Le")):
         return None
     a, b = fact.args
-    bounds = ctx.const_bounds(a)
+    bounds = ctx.const_bounds(a) if isinstance(a, T.Const) else None
     if bounds is None or not T.is_num(b):
         return None
     lo, hi = bounds
@@ -840,16 +1060,22 @@ def _axiom_constants(ctx, fact, assumptions):
         if bv <= lo:
             return YES
         if bv >= hi:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, b,
+                detail="the comparison lies outside the declared constant range")
     else:
         if bv >= hi:
             return YES
         if bv <= lo:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, b,
+                detail="the comparison lies outside the declared constant range")
     return None
 
 
-def _axiom_function_bounds(ctx, fact, assumptions):
+def _axiom_function_bounds(
+    ctx: MathContext, fact: Expr, assumptions: Assumptions
+) -> Verdict | None:
     """Function range-bound lemma (from the FunctionDecl.bound declaration).
 
     The |f|-style bounds are left to the interval channel; this handles the direct
@@ -872,29 +1098,42 @@ def _axiom_function_bounds(ctx, fact, assumptions):
         if lo is not None and bv < lo:
             return YES
         if hi is not None and bv >= hi:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, a, b,
+                detail="the comparison lies above the declared function range")
     elif op == "Ge":
         if lo is not None and bv <= lo:
             return YES
         if hi is not None and bv > hi:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, a, b,
+                detail="the comparison lies above the declared function range")
     elif op == "Lt":
         if hi is not None and bv > hi:
             return YES
         if lo is not None and bv <= lo:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, a, b,
+                detail="the comparison lies below the declared function range")
     else:  # Le
         if hi is not None and bv >= hi:
             return YES
         if lo is not None and bv < lo:
-            return NO
+            return refute(
+                RefutationChannel.DERIVATION, fact, fact, a, b,
+                detail="the comparison lies below the declared function range")
     return None
 
 
 # Same as _RULES: explicit data, built after the functions are defined, not a
 # decorator side effect. These are the declaration-bound fallback lemmas.
 _AXIOM_CHECKS = (_axiom_constants, _axiom_function_bounds)
-def _family_cmp(ctx, fact, assumptions, seen):
+def _family_cmp(
+    ctx: MathContext,
+    fact: Expr,
+    assumptions: Assumptions,
+    seen: frozenset[int],
+) -> Verdict:
     op = fact.head.name
     a, b = fact.args
     if op in ("Eq", "Ne"):
@@ -914,7 +1153,7 @@ def _family_cmp(ctx, fact, assumptions, seen):
             # honestly undecided when none of them answers) instead of being
             # refuted by a non-identity.
             r = _poly_eq_check(ctx, a, b)
-            if r is NO and not (is_closed(a) and is_closed(b)):
+            if r is not None and r.is_no() and not (is_closed(a) and is_closed(b)):
                 r = None
             if r is not None:
                 return r
@@ -965,7 +1204,12 @@ def _family_cmp(ctx, fact, assumptions, seen):
 # as an open-ended rewrite rule.
 
 
-def decide(ctx, fact, assumptions, _seen=frozenset()) -> Verdict:
+def decide(
+    ctx: MathContext,
+    fact: Term,
+    assumptions: AssumptionFrame,
+    _seen: frozenset[int] = frozenset(),
+) -> Verdict:
     """Decide a proposition relative to an assumption frame.
 
     `_seen` is a **cycle guard** — the term ids on the current derivation chain
@@ -976,7 +1220,9 @@ def decide(ctx, fact, assumptions, _seen=frozenset()) -> Verdict:
     if fact is T.TRUE:
         return YES
     if fact is T.FALSE:
-        return NO
+        return refute(
+            RefutationChannel.LOGICAL, fact, fact,
+            detail="the false proposition was queried")
     if isinstance(fact, T.Expr):
         name = fact.head.name
         if name in _CMP:
@@ -999,34 +1245,63 @@ def decide(ctx, fact, assumptions, _seen=frozenset()) -> Verdict:
                     return r
             return _family_cmp(ctx, fact, assumptions, _seen)
         if name == "And":
-            r = YES
-            for a in fact.args:
-                r = and3(r, decide(ctx, a, assumptions, _seen))
-                if r is NO:
-                    return r
-            return r
+            result: Verdict | None = None
+            for arg in fact.args:
+                child = decide(ctx, arg, assumptions, _seen)
+                result = (
+                    contextualize(child, fact, "a conjunct was refuted")
+                    if result is None
+                    else and3(result, child, fact)
+                )
+                if result.is_no():
+                    return result
+            return result if result is not None else YES
         if name == "Or":
-            r = NO
-            for a in fact.args:
-                r = or3(r, decide(ctx, a, assumptions, _seen))
-                if r is YES:
-                    return r
-            return r
+            result = None
+            for arg in fact.args:
+                child = decide(ctx, arg, assumptions, _seen)
+                result = child if result is None else or3(result, child, fact)
+                if result is YES:
+                    return result
+            if result is None:
+                return YES
+            if isinstance(result, No) and result.evidence.proposition is not fact:
+                return contextualize(result, fact, "every disjunct was refuted")
+            return result
         if name == "Not":
-            return not3(decide(ctx, fact.args[0], assumptions, _seen))
+            return not3(decide(ctx, fact.args[0], assumptions, _seen), fact)
     return unknown()
 
 
-def satisfiable(ctx, constraints, assumptions) -> Verdict:
+def satisfiable(
+    ctx: MathContext,
+    constraints: Sequence[Term],
+    assumptions: AssumptionFrame,
+) -> Verdict:
+    if not constraints:
+        return YES
     assumptions = _A(assumptions)
-    for i, c in enumerate(constraints):
-        tmp = assumptions.extended(*[d for j, d in enumerate(constraints) if j != i])
-        if decide(ctx, c, tmp) is NO or decide(ctx, negate(ctx, c), tmp) is YES:
-            return NO
-    return YES if not constraints else unknown()
+    claim = T.mk(S("And"), tuple(constraints))
+    for i, constraint in enumerate(constraints):
+        frame = assumptions.extended(
+            *[other for j, other in enumerate(constraints) if j != i])
+        direct = decide(ctx, constraint, frame)
+        if isinstance(direct, No):
+            return refute(
+                RefutationChannel.BRANCH, claim, constraint,
+                detail="one required constraint was refuted",
+                causes=(direct.evidence,))
+        opposite = negate(ctx, constraint)
+        if decide(ctx, opposite, frame) is YES:
+            return refute(
+                RefutationChannel.LOGICAL, claim, constraint, opposite,
+                detail="the negation of one required constraint was proved")
+    return unknown()
 
 
-def domain_ok(ctx, fact, assumptions) -> Verdict:
+def domain_ok(
+    ctx: MathContext, fact: Term, assumptions: AssumptionFrame
+) -> Verdict:
     from cas.math.domcond import dom_condition
 
     return satisfiable(ctx, dom_condition(ctx, fact), assumptions)
@@ -1040,7 +1315,13 @@ def domain_ok(ctx, fact, assumptions) -> Verdict:
 # None to let the next stage continue. An exception inside a stage means the stage
 # has a bug and propagates, since failure is part of the return value and must not
 # be swallowed; a stage that genuinely has no conclusion returns None explicitly.
-def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
+def equivalent(
+    ctx: MathContext,
+    a: Term,
+    b: Term,
+    assumptions: AssumptionFrame = None,
+    budget: int = 100000,
+) -> Verdict:
     """The unified identity pipeline: pointer -> numeric constants -> normal-form
     zero test -> registered stage sequence -> honest UNKNOWN.
 
@@ -1051,13 +1332,17 @@ def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
     if a is b:
         return YES
     if T.is_num(a) and T.is_num(b):
-        return YES if T.num_val(a) == T.num_val(b) else NO
+        return _comparison_no(
+            RefutationChannel.EXACT_COMPARISON, "Eq", a, b,
+            "exact rational values differ")
     a = _qfold(a)
     b = _qfold(b)
     if a is b:
         return YES
     if T.is_num(a) and T.is_num(b):
-        return YES if T.num_val(a) == T.num_val(b) else NO
+        return _comparison_no(
+            RefutationChannel.EXACT_COMPARISON, "Eq", a, b,
+            "exact rational values differ")
     r = autosimplify(ctx, T.plus(a, T.neg(b)), budget)
     if r is T.ZERO:
         return YES
@@ -1066,10 +1351,12 @@ def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
     if z is True:
         return YES
     if z is False:
-        return NO
+        return _comparison_no(
+            RefutationChannel.NORMAL_FORM, "Eq", a, b,
+            "the projected difference is nonzero", r)
     assumptions = _A(assumptions)
-    for _name, run in ctx.eq_stages:
-        d = run(ctx, r, a, b, assumptions)
+    for stage in ctx.decision_stages:
+        d = stage.run(ctx, r, a, b, assumptions)
         if d is not None and not d.is_unknown():
             return d
     return unknown()
@@ -1094,7 +1381,9 @@ def equivalent(ctx, a, b, assumptions=None, budget=100000) -> Verdict:
 # the kernel Context/Branch, which is a legal math -> kernel dependency.
 # ---------------------------------------------------------------------------
 
-def extend_frame(ctx, assumptions, fact):
+def extend_frame(
+    ctx: MathContext, assumptions: AssumptionFrame, fact: Term
+) -> tuple[Verdict, Assumptions | None]:
     """Return the frame with `fact` added, or `(Verdict, None)` when the fact is
     not even readable in the current declared domains.
 
@@ -1103,14 +1392,16 @@ def extend_frame(ctx, assumptions, fact):
     it instead of policing it; the only refusal here is a domain violation, i.e.
     a fact whose own predicates cannot be read over the declared domains.
     """
-    from cas.kernel.verdict import NO, YES
     assumptions = _A(assumptions)
-    if domain_ok(ctx, fact, assumptions) is NO:
-        return NO, None
+    domain_verdict = domain_ok(ctx, fact, assumptions)
+    if domain_verdict.is_no():
+        return domain_verdict, None
     return YES, assumptions.extended(fact)
 
 
-def branch(ctx, assumptions, *conds):
+def branch(
+    ctx: MathContext, assumptions: AssumptionFrame, *conds: Term
+) -> list[tuple[Term, Assumptions | None, Literal["open", "empty"]]]:
     """Split one branch per condition:
     `[(condition, that branch's assumption set | None, "open"|"empty")]`.
 
@@ -1120,10 +1411,12 @@ def branch(ctx, assumptions, *conds):
     conditions stay open by design**, because the system has no global
     consistency notion to police.
     """
-    from cas.kernel.verdict import NO
     assumptions = _A(assumptions)
-    out = []
-    for c in conds:
-        st, ext = extend_frame(ctx, assumptions, c)
-        out.append((c, ext, "empty" if st is NO else "open"))
+    out: list[tuple[Term, Assumptions | None, Literal["open", "empty"]]] = []
+    for condition in conds:
+        status, extended = extend_frame(ctx, assumptions, condition)
+        branch_status: Literal["open", "empty"] = (
+            "empty" if status.is_no() else "open"
+        )
+        out.append((condition, extended, branch_status))
     return out

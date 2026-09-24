@@ -1,104 +1,56 @@
-# -*- coding: utf-8 -*-
-"""Runtime query exits: mathematical semantics have a single home and **must be
-explicitly assembled**.
+"""Runtime query and explicit-assembly contracts."""
 
-Nail: constants once carried a print_name in their declaration but had no query exit,
-so the kernel had to keep a hardcoded table in both pprint and parser. After the exit
-was added, the kernel must hold no copy.
+import ast
+from pathlib import Path
 
-Since stage 6 there is one more rule: the semantics must come from an **explicit
-bootstrap**, not from an import side effect.
-"""
-
-from cas.runtime import dispatch
+from cas.runtime import Runtime
 
 
-def test_const_by_name_returns_declaration():
-    d = dispatch.const_by_name("gamma")
-    assert d is not None
-    assert d.print_name == "γ"
-    assert d.real is True
+def test_runtime_query_surface(runtime: Runtime) -> None:
+    declaration = runtime.const_by_name("gamma")
+    assert declaration is not None
+    assert declaration.print_name == "γ"
+    assert declaration.real is True
+    assert runtime.const_by_name("__nope__") is None
+    assert runtime.is_const_name("pi") is True
+    assert runtime.is_const_name("e") is True
+    assert runtime.is_const_name("Sin") is False
+    assert runtime.print_name("gamma") == "γ"
+    assert runtime.print_name("pi") == "π"
+    assert runtime.print_name("Sin") == "sin"
+    assert runtime.print_name("__nope__") is None
 
 
-def test_const_by_name_missing_returns_none():
-    assert dispatch.const_by_name("__nope__") is None
+def test_const_literals_live_in_runtime_not_kernel() -> None:
+    import cas.syntax.parse as syntax_parse
+
+    assert not hasattr(syntax_parse, "_CONSTS")
+    assert set(syntax_parse._SYNTAX_ATOMS) == {"infinity", "true", "false"}
 
 
-def test_is_const_name_distinguishes_const_and_function():
-    assert dispatch.is_const_name("pi") is True
-    assert dispatch.is_const_name("e") is True
-    assert dispatch.is_const_name("Sin") is False      # a function head is not a constant
+def test_domain_condition_single_registration_channel() -> None:
+    import cas.math.domcond as domain_conditions
+
+    assert not hasattr(domain_conditions, "DOM_HOOKS")
 
 
-def test_print_name_covers_constants_and_functions():
-    assert dispatch.print_name("gamma") == "γ"
-    assert dispatch.print_name("pi") == "π"
-    assert dispatch.print_name("Sin") == "sin"          # functions use the same exit
-    assert dispatch.print_name("__nope__") is None
+def test_runtime_dispatch_module_is_removed() -> None:
+    assert not Path("cas/runtime/dispatch.py").exists()
 
 
-def test_const_literals_live_in_runtime_not_kernel():
-    """The kernel must hold no name-to-constant-atom copy table."""
-    import cas.syntax.parse as P
-    assert not hasattr(P, "_CONSTS")                   # the old hardcoded table is gone
-    assert set(P._SYNTAX_ATOMS) == {"infinity", "true", "false"}
+def test_production_has_no_module_getattr() -> None:
+    root = Path("cas")
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "__getattr__":
+                offenders.append(str(path))
+    assert not offenders
 
 
-def test_domain_condition_single_registration_channel():
-    import cas.math.domcond as DC
-    assert not hasattr(DC, "DOM_HOOKS")                # the empty-shell channel is gone
-
-
-def test_importing_math_has_no_registration_side_effect():
-    """No import-time mutation of global state, and no declaration handle either.
-
-    In a clean process, import only the math modules: the domain ladder stays empty
-    and a freshly built context is empty, so nothing was registered behind the
-    reader's back. The handles declarations used to travel through (`_DECLS`,
-    `_EQ_STAGES`) must be gone rather than merely unwritten: a second channel would
-    leave a reader unable to tell which one is in effect.
-    """
-    import subprocess
-    import sys
-    code = ("import cas.math.decide, cas.math.diff, cas.math.domcond, "
-            "cas.math.rules, cas.math.project; "
-            "import cas.math.decide as D; "
-            "from cas.math.domains.base import _DOMAINS; "
-            "from cas.math.context import MathContext; "
-            "c = MathContext(); "
-            "print(len(_DOMAINS), len(c.consts), len(c.funcs), len(c.eq_stages), "
-            "hasattr(D, '_DECLS'), hasattr(D, '_EQ_STAGES'), "
-            "hasattr(D, 'bind_runtime'))")
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       text=True, cwd=".")
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "0 0 0 0 False False False", r.stdout
-
-
-def test_reading_semantics_before_assembly_raises():
-    """Reading the semantics before the application assembled them is a wiring error.
-
-    The query exit names the fix instead of assembling a runtime on the first
-    attribute read: a module that assembles itself hides an application-level
-    decision inside a read.
-    """
-    import subprocess
-    import sys
-    code = ("import cas.runtime.dispatch as disp\n"
-            "try:\n"
-            "    disp.get_runtime()\n"
-            "except RuntimeError as e:\n"
-            "    print('refused' if 'install(bootstrap())' in str(e) else 'wrong message')\n"
-            "else:\n"
-            "    print('assembled silently')\n")
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       text=True, cwd=".")
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "refused", r.stdout
-
-
-def test_semantics_complete_after_bootstrap():
-    rt = dispatch.get_runtime()
-    s = rt.stats()
-    assert s["constants"] == 4 and s["functions"] == 11
-    assert s["domain_conds"] == 2 and s["eq_stages"] == 1 and s["domains"] == 3
+def test_semantics_complete_after_bootstrap(runtime: Runtime) -> None:
+    stats = runtime.stats()
+    assert stats.constants == 4 and stats.functions == 11
+    assert stats.domain_conditions == 2
+    assert stats.decision_stages == 1 and stats.domains == 3

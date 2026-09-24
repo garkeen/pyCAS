@@ -1,44 +1,56 @@
-"""Frontend parser: the runtime-aware face of the syntax parser.
+"""Runtime-aware frontend wrapper around the pure syntax parser."""
 
-The grammar and the construction primitives live in `cas/syntax/parse.py`, which
-is pure syntax and depends on neither the runtime nor any math module. That lets
-the declaration DSL (`cas/math/loader.py`) parse rule and template text through
-the syntax layer instead of reaching into the frontend, so the trusted admission
-channel no longer depends on a UI-layer module.
+from __future__ import annotations
 
-This module is the thin runtime-binding shim for ordinary surface expressions: it
-injects the assembled runtime's alias, constant-atom and binder-head lookup into
-the syntax parser. The DSL channel passes its own constant table and bypasses
-these hooks.
-"""
+from typing import Literal, overload
 
-from cas.syntax.parse import tokenize, Parser
-from cas.runtime import dispatch as rt
+from cas.runtime.runtime import Runtime
+from cas.syntax import pattern as P
+from cas.syntax.parse import ConstantTable, Parser, ParseValue, tokenize
+from cas.syntax.term import Term
 
 
-def _alias(name):
-    h = rt.alias_head(name)
-    return h if h is not None else name
+@overload
+def parse(
+    runtime: Runtime,
+    text: str,
+    pattern: Literal[False] = False,
+    constants: ConstantTable | None = None,
+) -> Term: ...
 
 
-def _const_atom(name):
-    d = rt.const_by_name(name)
-    return d.atom if d is not None else None
+@overload
+def parse(
+    runtime: Runtime,
+    text: str,
+    pattern: Literal[True],
+    constants: ConstantTable | None = None,
+) -> P.Pattern: ...
 
 
-def _is_binder(name):
-    return rt.is_binder(name)
+def parse(
+    runtime: Runtime,
+    text: str,
+    pattern: bool = False,
+    constants: ConstantTable | None = None,
+) -> ParseValue:
+    """Parse a surface expression using the explicitly supplied runtime."""
+    def alias(name: str) -> str:
+        resolved = runtime.alias_head(name)
+        return resolved if resolved is not None else name
 
+    def const_atom(name: str) -> Term | None:
+        declaration = runtime.const_by_name(name)
+        return declaration.atom if declaration is not None else None
 
-def parse(s, pattern=False, constants=None):
-    """Parse an expression.
+    def is_binder(name: str) -> bool:
+        return runtime.is_binder(name)
 
-    `constants` is an optional name-to-constant-atom table; the declaration DSL
-    passes it to avoid calling back into the runtime during bootstrap. Ordinary
-    expressions are resolved through the assembled runtime's alias, constant and
-    binder tables (injected here), so a new surface name, constant or binder needs
-    no parser change.
-    """
-    return Parser(tokenize(s), pattern=pattern, constants=constants,
-                  alias_fn=_alias, const_fn=_const_atom,
-                  binder_fn=_is_binder).parse()
+    return Parser[ParseValue](
+        tokenize(text),
+        pattern=pattern,
+        constants=constants,
+        alias_fn=alias,
+        const_fn=const_atom,
+        binder_fn=is_binder,
+    ).parse()

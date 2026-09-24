@@ -13,24 +13,24 @@ Usage: python tests/random/random_qarith.py [rounds] [seed]
 On any failure it prints a minimal counterexample and the seed and exits with code 1.
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.syntax.term import S, N, mk, plus, times, pw, neg, Expr, Int
-from cas.math.domains.qarith import fold, eval_exact, EvalNumError
 from cas.kernel.scope import Assumptions
-from cas.math.decide import decide, branch
 from cas.kernel.verdict import YES, Unknown
-from cas.math.domains.poly import from_term as _poly_from_term, to_term as _poly_to_term
+from cas.math.decide import branch, decide
+from cas.math.domains.poly import from_term as _poly_from_term
+from cas.math.domains.poly import to_term as _poly_to_term
 from cas.math.domains.q import Q_RING
-
+from cas.math.domains.qarith import EvalNumError, eval_exact, fold
 from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
+from cas.syntax.term import Expr, Int, N, S, mk, neg, plus, pw, times
 
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
 
 X, Y = S("x"), S("y")
 
@@ -115,9 +115,7 @@ def prop_fold(rounds, rng):
 
 
 def _ctx():
-    """The installed math context: the bench assembled its own runtime above."""
-    from cas.runtime import get_runtime
-    return get_runtime().math
+    return MATH
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +138,7 @@ def prop_interval(rounds, rng):
             _ctx(), assumptions, mk(S("Lt"), (X, N(k + 10))))[0]
         got = decide(_ctx(), mk(S("Lt"), (X, N(k + 100))), b_assumptions)
         if got is not YES:
-            fail(f"P3 branch frame inheritance", k)
+            fail("P3 branch frame inheritance", k)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +181,7 @@ if __name__ == "__main__":
     prop_fold(rounds, rng)
     print(f"P1+P2 fold fidelity/idempotence  {rounds} rounds passed")
     prop_interval(200, rng)
-    print(f"P3 interval channel              200x15 queries passed")
+    print("P3 interval channel              200x15 queries passed")
     prop_backsub(min(rounds, 500), rng)
     print(f"P4 back-substitution judge       {min(rounds, 500)} rounds passed")
     print("== all passed ==")

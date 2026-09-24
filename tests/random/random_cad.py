@@ -20,26 +20,29 @@ external ground truth).
 Usage: python tests/random/random_cad.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
-
-from cas.syntax.term import S
-from cas.frontend.parser import parse
 from cas.errors import CadError
+from cas.frontend.parser import parse
 from cas.kernel.verdict import Reason
-from cas.math.domains.q import Q_RING
+from cas.math.cad import resolve_partition
 from cas.math.domains.poly import from_term
-from cas.math.realroot import (real_roots_intervals, p_eval_at, coef_sign,
-                          squarefree_part)
-from cas.math.cad import resolve_partition, extract_boundary_polys, cells, sign_at_cell
+from cas.math.domains.q import Q_RING
+from cas.math.realroot import coef_sign, p_eval_at, real_roots_intervals, squarefree_part
+from cas.runtime import bootstrap
+from cas.syntax.term import S
+
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
+
+
+def _ctx():
+    return MATH
+
 
 X = S("x")
 
@@ -52,7 +55,7 @@ def fail(msg, seed, *extra):
 
 
 def poly(s):
-    return from_term(Q_RING, parse(s), (X,))
+    return from_term(Q_RING, parse(RUNTIME, s), (X,))
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +86,12 @@ def prop_isolation(rounds, rng):
         sf = squarefree_part(Q_RING, p)
         for (a, b) in ivs:
             if a == b:
-                if coef_sign(p_eval_at(sf, a)) != 0:
+                if coef_sign(p_eval_at(Q_RING, sf, a)) != 0:
                     fail("P25 exact root is not a root", i, expr, a)
             else:
-                if coef_sign(p_eval_at(sf, a)) * coef_sign(p_eval_at(sf, b)) >= 0:
+                left = coef_sign(p_eval_at(Q_RING, sf, a))
+                right = coef_sign(p_eval_at(Q_RING, sf, b))
+                if left * right >= 0:
                     fail("P25 interval has no root", i, expr, (a, b))
         # every rational root is covered by some isolating interval (the isolating
         # contract does not force an exact hit)
@@ -104,8 +109,8 @@ def prop_partition(rounds, rng):
                  "x-3>=0", "x+1<0", "x^2-x>0"]
     for i in range(rounds):
         k = rng.randint(1, 3)
-        conds = [parse(s) for s in rng.sample(cond_pool, k)]
-        res = resolve_partition(conds, X)
+        conds = [parse(RUNTIME, s) for s in rng.sample(cond_pool, k)]
+        res = resolve_partition(MATH, conds, X)
         if not res:
             fail("P26 empty partition", i)
         # open intervals at both ends, alternating with points
@@ -146,7 +151,7 @@ def prop_refusal(rounds, rng):
     for i in range(rounds):
         s, want = rng.choice(cases)
         try:
-            resolve_partition([parse(s)], X)
+            resolve_partition(MATH, [parse(RUNTIME, s)], X)
         except CadError as e:
             if e.reason is not want:
                 fail("P27 reason mismatch", i, s, e.reason, want)
@@ -162,8 +167,8 @@ def prop_point_sign(rounds, rng):
     for i in range(rounds):
         r = rng.randint(-5, 5)
         # conditions: (x-r)==0 and (x-r)>0; on the root cell the first is true, the second false
-        conds = [parse(f"(x - ({r})) == 0"), parse(f"(x - ({r})) > 0")]
-        res = resolve_partition(conds, X)
+        conds = [parse(RUNTIME, f"(x - ({r})) == 0"), parse(RUNTIME, f"(x - ({r})) > 0")]
+        res = resolve_partition(MATH, conds, X)
         # find the root cell covering r (the isolating interval contains r; an exact (r, r) is not required)
         hit = None
         for cell, labels in res:
@@ -177,8 +182,8 @@ def prop_point_sign(rounds, rng):
         if hit[0] is not True or hit[1] is not False:
             fail("P28 sign wrong at the root", i, r, hit)
         # non-vanishing boundary: (x-(r+1)) should be negative at the root r
-        c2 = parse(f"(x - ({r + 1})) < 0")
-        res2 = resolve_partition([conds[0], c2], X)
+        c2 = parse(RUNTIME, f"(x - ({r + 1})) < 0")
+        res2 = resolve_partition(MATH, [conds[0], c2], X)
         for cell, labels in res2:
             if cell.kind == "point":
                 a, b = cell.iso

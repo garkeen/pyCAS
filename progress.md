@@ -16,8 +16,8 @@
 | `cas/workflow/` | `workflow`、`command`、`artifact`、`task`、`event`、`constraint`、`branch`、`ids` |
 | `cas/math/domains/` | `base`、`z`、`q`、`qi`、`poly`、`ratfunc`、`polytools`、`linalg`、`module` |
 | `cas/math/` | `context`、`project`、`qarith`、`decide`、`diff`、`integrate`、`cad`、`realroot`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader`，以及 `base/`、`elementary/`、`calculus/`、`solving/` |
-| `cas/runtime/` | `registry`（RuntimeBuilder）、`runtime`（Runtime、new_workflow）、`bootstrap`、`dispatch`、`algorithms`、`services` |
-| `cas/frontend/` | `parser`、`pprint`、`repl`；根目录 `repl.py` 是入口外壳 |
+| `cas/runtime/` | `registry`（RuntimeBuilder）、`runtime`（Runtime、new_workflow）、`bootstrap`、`algorithms`、`services` |
+| `cas/frontend/` | `parser`、`pprint`、`session`、`repl`；根目录 `repl.py` 是入口外壳 |
 | `cas/api.py`、`cas/errors.py` | 前端计算门面；共享异常 |
 
 ## 依赖方向
@@ -32,10 +32,10 @@
 - `math/domains` 依赖 `syntax`；其余 math 模块可用 `syntax`、`kernel`、`workflow`
   与 `math/domains`。math 永不导入 `runtime`。
 - runtime 是装配者：`bootstrap()` 装入全部 math 模块，把声明查询面与装配配置
-  收进 `MathContext` 返回（不写模块句柄）；应用入口 `install(bootstrap())` 才使
-  其生效，未装配即读语义报错。import 期与装配期都不修改全局状态。
-- 前端只经 `cas/api.py` 与 `cas/runtime/dispatch.py` 触达计算，不导入
-  `cas.math` 或 `cas.kernel`。
+  收进 `MathContext` 返回（不写模块句柄）；应用显式接收返回的 `Runtime`。
+  import 期与装配期都不修改全局状态。
+- 前端显式接收 `Runtime` / `Session`：parser、printer、API 不读取进程级 runtime；
+  math 模块注册 `CommandSpec`，Session 构造时绑定 callable `CommandDescriptor`。
 
 ## v4 迁移状态
 
@@ -78,8 +78,8 @@
 - 积分验证器住在 `math/calculus/integration/verify.py`，与求解器分家；门禁拒绝任何
   checker 导入自己的求解器模块。
 - 工作流步骤记录命名为 `WorkflowStep`，与内核 `Step` 区分。
-- `cas/runtime/dispatch.py` 以模块 `__getattr__` 转发到已装配的 runtime，取代逐方法
-  手写转发。
+- runtime 不保存进程级装配槽；REPL 通过显式 `Runtime` 创建 `Session`，Session 在构造时
+  校验完整的 command handler 表，REPL 只按 descriptor handler 通用分派。
 
 ## 已实现地基
 
@@ -127,14 +127,21 @@
   再抽象和积分边界条件均进入证据/Requirement 通道。
 - 参数化线性求解：`cas/math/linearform.py` 成为唯一线性形式实现；`solve_linear`
   允许其它符号作为系数，`solve_linear_with_condition` 显式返回斜率非零条件。
-- 前端命令注册面：builder/runtime 注册 command descriptor，REPL 通用分派；`apply`
-  无路径时列出全部匹配位置；`split` 接真实分支作用域并提供 `enter`/`merge`。
+- 前端命令注册面：数学模块注册 `CommandSpec`，Session 将其与 handler 绑定为不可变
+  `CommandDescriptor`；REPL 通用分派，`apply` 无路径时列出全部匹配位置；`split` 接真实
+  分支作用域并提供 `enter`/`merge`。
 - 判定和维护：`is_zero`/`back_substitute` 传播假设帧，定义展开读依赖进入
   `TrackedContext`，`ScopeServices` 使用按 scope 版本键控的有界缓存。
 - 文档、DSL 准入门禁、随机同余/参数求解台架和 REPL 冒烟测试已同步。
 
-验证：`python -m pytest tests` 326 项全绿（含 12 个随机台架）；
-`python -m pytest -m random` 为 12 passed、314 deselected。
+阶段 3 历史验证：`python -m pytest -m "not random"` 为 317 passed、12 deselected；
+`python -m pytest -m random` 为 12 passed、317 deselected；合计 329 项全绿。
+
+### 四阶段类型与数据模式迁移验收
+
+- 阶段 1–4 的类型与数据模式迁移已完成：frontend 显式注入、Session handler 装配和旧入口清理已落地。
+- 阶段 3 的历史验收证据保持记录；阶段 4 新增 frontend 边界、动态属性和核心注解 AST 门禁。
+- 本轮按会话纪律未重新运行测试、mypy、Ruff、compileall 或其它验收命令；因此不把阶段 4 写成已重新验收。
 
 ## 未实现（下一步）
 
@@ -152,9 +159,8 @@
 
 ## 已知缺陷（已定位，未修）
 
-阶段 0–3 的旧缺陷均已有回归钉子；阶段 4–7 已消除工作单列出的七项缺口。仍待
-处理的是上述长期能力缺口与工作流序列化、分支蕴含引入规则，而不是阶段 4–7 的
-临时接口。源码与测试不保留旧命令/旧分类兼容包装。
+阶段 4 已消除旧的 runtime dispatch、隐式 parser/printer/API 和后绑定 handler 接口。仍待
+处理的是上述长期能力缺口与工作流序列化、分支蕴含引入规则。源码与测试不保留旧命令/旧分类兼容包装。
 
 ## 语言与引用纪律
 

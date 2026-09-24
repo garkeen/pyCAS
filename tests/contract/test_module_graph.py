@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """Module graph: every module imports standalone.
 
-Nail: cas/syntax/term.py once ended with a direct `from cas.termpath import ...`,
-while termpath began with `from cas import term as T`, so entering through
-`import cas.termpath` necessarily hit term's half-initialized state and raised
-ImportError (the baseline crashed while the comment claimed "no import cycle").
-With the PEP 562 lazy __getattr__ both directions import standalone.
+Nail: traversal helpers used to be re-exported lazily from the term module,
+which blurred the syntax-term/termpath boundary and allowed stale imports.
+Traversal utilities now live only in ``cas.syntax.termpath`` and must be
+imported explicitly.
 
 Since 2026-09-10 the tree is split into subpackages (syntax/kernel/workflow/math/
 frontend), and the inventory walks each subpackage directory instead of a fixed list,
@@ -59,22 +58,16 @@ def test_termpath_imports_standalone():
     assert r.returncode == 0, r.stderr
 
 
-def test_term_import_surface_unchanged():
-    """The lazy re-export must not change the public import surface.
-
-    Instantiation moved to cas.syntax.pattern along with the pattern metalanguage:
-    the term layer has no holes, so term-level instantiation does not exist, and no
-    compatibility alias is kept.
-    """
-    from cas.syntax import term as T
-    for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths"):
-        assert hasattr(T, name), f"import surface lost: {name}"
-    # termpath-internal helpers are not re-exported (no cross-package caller)
-    for name in ("_bind_into", "subst_raw", "_subst_raw"):
-        assert not hasattr(T, name), f"termpath-internal name leaked to term: {name}"
+def test_term_surface_excludes_termpath_helpers():
+    """The term layer exposes terms only, not traversal utilities."""
     from cas.syntax import pattern as P
-    for name in ("instantiate", "matches"):
-        assert hasattr(P, name) or name == "matches", f"pattern-layer export lost: {name}"
+    from cas.syntax import term as T
+    from cas.syntax import termpath
+
+    for name in ("subst", "free_vars", "term_at", "replace_at", "all_paths"):
+        assert not hasattr(T, name), f"termpath helper leaked to term: {name}"
+        assert callable(getattr(termpath, name))
+    assert callable(P.instantiate)
 
 
 def test_lazy_reexport_does_not_swallow_unknown():

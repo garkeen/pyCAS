@@ -17,30 +17,24 @@ Four properties, all self-proving with no external ground truth:
 Usage: python tests/random/random_diff.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.runtime import new_workflow
-from cas.syntax.term import S, N, mk, plus, times, pw, neg
-from cas.syntax import term as T
-from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.domains.qarith import fold
 from cas.math.diff import differentiate
-from cas.math.domains.poly import (p_mul, p_add, p_const, p_deriv, from_term,
-                              to_term, _norm)
-from cas.math.domains.ratfunc import (RatFunc, rf_deriv, rf_from_term,
-                                 ratfunc_domain)
+from cas.math.domains.poly import _norm, from_term, p_deriv, to_term
 from cas.math.domains.q import Q_RING
+from cas.math.domains.ratfunc import RatFunc, ratfunc_domain, rf_deriv
+from cas.runtime import bootstrap, new_workflow
+from cas.syntax.term import N, S, neg, plus, pw, times
+from cas.syntax.termpath import subst
 from cas.workflow.command import Claim, Diff
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
 
 X, Y, H = S("x"), S("y"), S("h")
 
@@ -77,9 +71,11 @@ def rand_nonzero_poly(rng):
 
 
 def _ctx():
-    """The installed math context: the bench assembled its own runtime above."""
-    from cas.runtime import get_runtime
-    return get_runtime().math
+    return MATH
+
+
+def _render(term):
+    return to_str(RUNTIME, term)
 
 
 def rf_equal_terms(a, b):
@@ -102,8 +98,8 @@ def prop_cross(rounds, rng):
                 got = differentiate(_ctx(), t, var)
                 want = to_term(Q_RING, p_deriv(Q_RING, p, idx))
                 if not rf_equal_terms(got, want):
-                    fail("P10 polynomial cross-check", i, f"t={to_str(t)} d/d{var.name}",
-                         f"got={to_str(got)}", f"want={to_str(want)}")
+                    fail("P10 polynomial cross-check", i, f"t={_render(t)} d/d{var.name}",
+                         f"got={_render(got)}", f"want={_render(want)}")
         else:
             a, b = rand_poly(rng), rand_nonzero_poly(rng)
             rf = RatFunc(a, b)
@@ -116,8 +112,8 @@ def prop_cross(rounds, rng):
                              pw(to_term(Q_RING, d.den), N(-1)))
                 if not rf_equal_terms(got, want):
                     fail("P10 rational-function cross-check", i,
-                         f"t={to_str(t)} d/d{var.name}",
-                         f"got={to_str(got)}", f"want={to_str(want)}")
+                         f"t={_render(t)} d/d{var.name}",
+                         f"got={_render(got)}", f"want={_render(want)}")
 
 
 # ---------------------------------------------------------------------------
@@ -131,17 +127,17 @@ def prop_leibniz(rounds, rng):
         da, db = differentiate(_ctx(), a, X), differentiate(_ctx(), b, X)
         # d(a+b) = da + db
         if not rf_equal_terms(differentiate(_ctx(), plus(a, b), X), plus(da, db)):
-            fail("P11 linearity", i, to_str(a), to_str(b))
+            fail("P11 linearity", i, _render(a), _render(b))
         # d(ab) = a*db + b*da
         want = plus(times(a, db), times(b, da))
         if not rf_equal_terms(differentiate(_ctx(), times(a, b), X), want):
-            fail("P11 Leibniz", i, to_str(a), to_str(b))
+            fail("P11 Leibniz", i, _render(a), _render(b))
         # d(a/b) = (da*b - a*db)/b^2
         q = times(a, pw(b, N(-1)))
         want_q = times(plus(times(da, b), neg(times(a, db))),
                        pw(b, N(-2)))
         if not rf_equal_terms(differentiate(_ctx(), q, X), want_q):
-            fail("P11 quotient rule", i, to_str(q))
+            fail("P11 quotient rule", i, _render(q))
 
 
 # ---------------------------------------------------------------------------
@@ -152,10 +148,10 @@ def prop_taylor(rounds, rng):
     for i in range(rounds):
         p = rand_poly(rng)
         t = to_term(Q_RING, p)
-        th = T.subst(t, {X: plus(X, H)})      # f(x+h, y)
+        th = subst(t, {X: plus(X, H)})         # f(x+h, y)
         ph = from_term(Q_RING, th, (H, X, Y))
         if ph is None:
-            fail("P12 expansion left the domain", i, to_str(th))
+            fail("P12 expansion left the domain", i, _render(th))
         coefs = {}
         for k, c in ph.monos:
             coefs.setdefault(k[0], {})[(k[1], k[2])] = c
@@ -163,8 +159,8 @@ def prop_taylor(rounds, rng):
         got = differentiate(_ctx(), t, X)
         want = to_term(Q_RING, lin)
         if not rf_equal_terms(got, want):
-            fail("P12 Taylor h^1", i, f"t={to_str(t)}",
-                 f"got={to_str(got)}", f"want={to_str(want)}")
+            fail("P12 Taylor h^1", i, f"t={_render(t)}",
+                 f"got={_render(got)}", f"want={_render(want)}")
 
 
 # ---------------------------------------------------------------------------
@@ -176,15 +172,15 @@ def prop_workflow(rounds, rng):
         p = rand_poly(rng)
         t = to_term(Q_RING, p)
         good = differentiate(_ctx(), t, X)
-        wf = new_workflow()
+        wf = new_workflow(RUNTIME)
         s0 = wf.add(t, Claim())
         s1 = wf.add(good, Diff(pred=s0.id, var=X))
         if s1.status != "committed":
-            fail("P13 correct derivative was refused", i, to_str(t), to_str(good))
+            fail("P13 correct derivative was refused", i, _render(t), _render(good))
         bad = plus(good, N(1))
         s2 = wf.add(bad, Diff(pred=s0.id, var=X))
         if s2.status != "refused":
-            fail("P13 wrong derivative was not refused", i, to_str(t), to_str(bad))
+            fail("P13 wrong derivative was not refused", i, _render(t), _render(bad))
 
 
 if __name__ == "__main__":

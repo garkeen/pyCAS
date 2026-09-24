@@ -8,19 +8,53 @@ outside the projection domain there is no independent channel, so the result is
 honestly undecided rather than passing itself off as verified.
 """
 
-from cas.kernel.evidence import Rejected, UnknownResult
-from cas.kernel.verdict import Reason
-from cas.math.domains.poly import p_deriv, to_term
-from cas.math.domains.ratfunc import rf_deriv, rf_from_term, rf_to_term
-from cas.math.domains.qarith import fold
-from cas.math.project import project
-from cas.math.base.checkers import (
-    _defined, _expand, _is_piecewise, _ok, _one_conclusion, _premise,
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from cas.kernel.commit import ResolvedProposal
+from cas.kernel.context import TrackedContext
+from cas.kernel.evidence import (
+    CheckResult,
+    RefutationRejected,
+    Rejected,
+    UnknownResult,
 )
+from cas.kernel.services import KernelServices
+from cas.kernel.verdict import (
+    YES,
+    No,
+    Reason,
+    RefutationChannel,
+    Unknown,
+    Verdict,
+    refute,
+    unknown,
+)
+from cas.math.base.checkers import (
+    _defined,
+    _expand,
+    _is_piecewise,
+    _ok,
+    _one_conclusion,
+    _payload,
+    _premise,
+)
+from cas.math.builder import CheckerRegistration, MathBuilder
+from cas.math.domains.poly import Poly, p_deriv, to_term
+from cas.math.domains.qarith import fold
+from cas.math.domains.ratfunc import rf_deriv, rf_from_term, rf_to_term
+from cas.math.project import Projected, project
 from cas.syntax import term as T
+from cas.syntax.term import Sym, Term
+from cas.syntax.termpath import free_vars
+from cas.workflow.command import DiffPayload
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
 
 
-def _element_deriv(hit, x):
+def _element_deriv(hit: Projected, variable: Sym) -> Term | None:
     """The domain-layer derivative of a projected element as an interned term, or
     None when the domain exposes no independent channel for it.
 
@@ -34,112 +68,176 @@ def _element_deriv(hit, x):
     field read the domain does not declare.
     """
     domain = hit.domain
-    p = domain.element_as_poly(hit.element)
-    if p is not None:
-        # The element's own polynomial denotation, not its vanishing view.
-        vs, ring = domain.vars, domain.ring
-        if vs is None or ring is None:
+    element = hit.element
+    if element is None:
+        return None
+    polynomial = domain.element_as_poly(element)
+    if polynomial is not None:
+        variables, ring = domain.vars, domain.ring
+        if variables is None or ring is None:
             return None
-        if x not in vs:
+        if variable not in variables:
             return T.ZERO
-        return to_term(ring, p_deriv(ring, p, vs.index(x)))
-    vs, ring = domain.vars, domain.ring
-    if vs is None or ring is None:
+        concrete = Poly(polynomial.vars, polynomial.monos)
+        return to_term(ring, p_deriv(ring, concrete, variables.index(variable)))
+    variables, ring = domain.vars, domain.ring
+    if variables is None or ring is None:
         return None
-    rf = rf_from_term(ring, hit.term, vs)
-    if rf is None:
+    rational = rf_from_term(ring, hit.term, variables)
+    if rational is None:
         return None
-    if x not in vs:
+    if variable not in variables:
         return T.ZERO
-    return rf_to_term(ring, rf_deriv(ring, rf, vs.index(x)))
+    return rf_to_term(
+        ring,
+        rf_deriv(ring, rational, variables.index(variable)),
+    )
 
 
-def _cross_diff(ctx, src, got, x):
-    """Cross-check one term: rebuild the expected value from the domain-layer
-    derivative (a different implementation) and compare it with the term-layer
-    result.
+def _cross_diff(
+    ctx: MathContext,
+    source: Term,
+    result: Term,
+    variable: Sym,
+) -> Verdict:
+    """Cross-check one term through the domain-layer derivative.
 
-    None means the source is outside the projection domain, or its projected
-    element is a representation the cross-check has no independent channel for
-    (None is then the honest undecided result, never an AttributeError from
-    reading fields of a representation the domain does not declare); True means
-    the domain-layer rebuild equals the term-layer result in the
-    rational-function field; False means they differ.
+    ``Unknown`` means the source is outside the projection domain, or its
+    projected element is a representation the cross-check has no independent
+    channel for. A mismatch is a typed mathematical refutation, never a string
+    compressed into an operational rejection.
     """
-    hit = project(ctx, src)
+    expected: Term
+    hit = project(ctx, source)
     if hit is None:
-        return None
+        return unknown(Reason.FRAGMENT)
     if hit.element is None:
-        expected = T.ZERO                      # a constant cell (Z/Q) differentiates to 0
+        expected = T.ZERO
     else:
-        expected = _element_deriv(hit, x)
-        if expected is None:
-            return None
+        expected_term = _element_deriv(hit, variable)
+        if expected_term is None:
+            return unknown(Reason.FRAGMENT)
+        expected = expected_term
     from cas.math.domains.ratfunc import ratfunc_domain
-    allv = tuple(sorted(T.free_vars(expected) | T.free_vars(got),
-                        key=lambda s: s.name))
-    if not allv:
-        return True if fold(T.plus(expected, T.neg(got))) is T.ZERO else False
-    rfd = ratfunc_domain(*allv, ring=ctx.coeff_ring)
-    if rfd.equal(expected, got) is True:
-        return True
-    if rfd.equal(expected, got) is False:
-        return False
-    return None
+
+    variables = tuple(
+        sorted(
+            free_vars(expected) | free_vars(result),
+            key=lambda symbol: symbol.name,
+        )
+    )
+    if not variables:
+        difference = fold(T.plus(expected, T.neg(result)))
+        if difference is T.ZERO:
+            return YES
+        return refute(
+            RefutationChannel.NORMAL_FORM,
+            T.eq(expected, result),
+            expected,
+            result,
+            difference,
+            detail="the domain-layer derivative differs from the term-layer result",
+        )
+    rational = ratfunc_domain(*variables, ring=ctx.coeff_ring)
+    equality = rational.equal(expected, result)
+    if equality is True:
+        return YES
+    if equality is False:
+        return refute(
+            RefutationChannel.NORMAL_FORM,
+            T.eq(expected, result),
+            expected,
+            result,
+            detail="the domain-layer derivative differs in the rational-function view",
+        )
+    return unknown(Reason.FRAGMENT)
 
 
 class DiffChecker:
     id = "calculus.derivative"
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def check(self, proposal, context, services):
-        content, bad = _one_conclusion(proposal)
-        if bad is not None:
-            return bad
+    def check(
+        self,
+        proposal: ResolvedProposal,
+        context: TrackedContext,
+        services: KernelServices,
+    ) -> CheckResult:
+        content = _one_conclusion(proposal)
+        if isinstance(content, Rejected):
+            return content
         pred = _premise(proposal)
         if pred is None:
             return Rejected(Reason.FRAGMENT, "missing predecessor")
         if T.is_eq(pred):
-            return Rejected(Reason.FRAGMENT, "an equation predecessor cannot be differentiated")
+            return Rejected(
+                Reason.FRAGMENT,
+                "an equation predecessor cannot be differentiated",
+            )
         pred = _expand(context, pred)
         content = _expand(context, content)
-        d = proposal.evidence.payload
+        d = _payload(proposal, DiffPayload)
+        if d is None:
+            return Rejected(Reason.FRAGMENT, "calculus.derivative requires a diff payload")
         x = d.var
         if _defined(context, x):
             # A definition is an alias, not a variable: differentiating with
             # respect to it is not defined (the expansion has no such symbol).
-            return Rejected(Reason.FRAGMENT,
-                            f"cannot differentiate with respect to a defined symbol: {x}")
+            return Rejected(
+                Reason.FRAGMENT,
+                f"cannot differentiate with respect to a defined symbol: {x}",
+            )
         if _is_piecewise(pred):
-            from cas.math.piecewise import fold_nested, branches
+            from cas.math.piecewise import branches, fold_nested
+
             if not _is_piecewise(content):
-                return UnknownResult(Reason.FRAGMENT, "piecewise source with a non-piecewise result: no independent channel")
-            sbs = branches(fold_nested(pred))
-            gbs = branches(fold_nested(content))
-            if len(sbs) != len(gbs):
-                return UnknownResult(Reason.FRAGMENT, "different branch counts; not pretending to refute")
-            for (sv, sc), (gv, gc) in zip(sbs, gbs):
-                if sc is not gc:
+                return UnknownResult(
+                    Reason.FRAGMENT,
+                    "piecewise source with a non-piecewise result: no independent channel",
+                )
+            source_branches = branches(fold_nested(pred))
+            result_branches = branches(fold_nested(content))
+            if len(source_branches) != len(result_branches):
+                return UnknownResult(
+                    Reason.FRAGMENT,
+                    "different branch counts; not pretending to refute",
+                )
+            for (source_value, source_condition), (
+                result_value,
+                result_condition,
+            ) in zip(source_branches, result_branches):
+                if source_condition is not result_condition:
                     return UnknownResult(Reason.FRAGMENT, "branch conditions differ")
-                r = _cross_diff(self.ctx, sv, gv, x)
-                if r is None:
-                    return UnknownResult(Reason.FRAGMENT, "this branch is outside the projection domain")
-                if r is not True:
-                    return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees on this branch")
+                result = _cross_diff(
+                    self.ctx,
+                    source_value,
+                    result_value,
+                    x,
+                )
+                if isinstance(result, No):
+                    return RefutationRejected(result.evidence)
+                if isinstance(result, Unknown):
+                    return UnknownResult(
+                        Reason.FRAGMENT,
+                        "this branch is outside the projection domain",
+                    )
             return _ok(self.ctx, proposal, context)
-        r = _cross_diff(self.ctx, pred, content, x)
-        if r is None:
-            return UnknownResult(Reason.FRAGMENT, "source is outside the projection domain: no independent channel")
-        if r is not True:
-            return Rejected(Reason.FRAGMENT, "domain-layer derivative disagrees with the term-layer result")
+        result = _cross_diff(self.ctx, pred, content, x)
+        if isinstance(result, No):
+            return RefutationRejected(result.evidence)
+        if isinstance(result, Unknown):
+            return UnknownResult(
+                Reason.FRAGMENT,
+                "source is outside the projection domain: no independent channel",
+            )
         return _ok(self.ctx, proposal, context)
 
 
 CHECKERS = (DiffChecker,)
 
 
-def register(builder) -> None:
-    for cls in CHECKERS:
-        builder.register_checker(cls.id, cls)
+def register(builder: MathBuilder) -> None:
+    for checker in CHECKERS:
+        builder.register_checker(CheckerRegistration(checker.id, checker))

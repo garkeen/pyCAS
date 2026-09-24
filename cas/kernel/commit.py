@@ -26,17 +26,34 @@ The typical case with no premises and no conditions degenerates to four steps
 provable subset of the full flow.
 """
 
-from dataclasses import dataclass, field, replace
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from enum import Enum
 
 from cas.kernel.context import TrackedContext
-from cas.kernel.evidence import Evidence
-from cas.kernel.ids import StepId
-from cas.kernel.model import (
-    ContextReadSet, Discharge, Judgment, Requirement, RequirementReason, Step,
+from cas.kernel.evidence import (
+    Accepted,
+    Evidence,
+    RefutationRejected,
+    Rejected,
+    UnknownResult,
 )
-from cas.kernel.services import NullServices
-from cas.kernel.verdict import Reason
+from cas.kernel.ids import JudgmentId, RequirementId, ScopeId, StepId
+from cas.kernel.mode import DEFAULT_MODE, ExecutionMode
+from cas.kernel.model import (
+    ContextReadSet,
+    Discharge,
+    Judgment,
+    Requirement,
+    RequirementReason,
+    Step,
+)
+from cas.kernel.services import KernelServices, NullServices
+from cas.kernel.store import KernelStore
+from cas.kernel.verdict import No, Reason, Refutation, Unknown
+from cas.syntax.term import Term
 
 
 class GuardPolicy(Enum):
@@ -49,14 +66,26 @@ class GuardPolicy(Enum):
 
 @dataclass(frozen=True, slots=True)
 class StepProposal:
-    scope: object
-    premises: tuple = ()
-    conclusions: tuple = ()
-    evidence: Evidence = None
+    scope: ScopeId
+    evidence: Evidence
+    premises: tuple[JudgmentId, ...] = ()
+    conclusions: tuple[Term, ...] = ()
     guard_policy: GuardPolicy = GuardPolicy.REQUIRE_PROVED
-    # Filled in by commit after resolving premises; a checker may read only
-    # this and must never trust premises reported by the caller.
-    premise_propositions: tuple = field(default=())
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedProposal:
+    """A proposal after kernel premise resolution.
+
+    Only the kernel creates this value. A checker receives resolved premises,
+    never caller-supplied premise propositions.
+    """
+    scope: ScopeId
+    evidence: Evidence
+    premises: tuple[JudgmentId, ...]
+    conclusions: tuple[Term, ...]
+    guard_policy: GuardPolicy
+    premise_propositions: tuple[Term, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -66,24 +95,24 @@ class StepProposal:
 class CommitResult:
     __slots__ = ()
 
-    def is_committed(self):
-        return self.__class__ is Committed
+    def is_committed(self) -> bool:
+        return isinstance(self, Committed)
 
-    def is_refused(self):
-        return self.__class__ is Refused
+    def is_refused(self) -> bool:
+        return isinstance(self, Refused)
 
-    def is_undecided(self):
-        return self.__class__ is Undecided
+    def is_undecided(self) -> bool:
+        return isinstance(self, Undecided)
 
-    def is_needs_split(self):
-        return self.__class__ is NeedsSplit
+    def is_needs_split(self) -> bool:
+        return isinstance(self, NeedsSplit)
 
 
 @dataclass(frozen=True, slots=True)
 class Committed(CommitResult):
     step: StepId
-    judgments: tuple
-    requirements: tuple
+    judgments: tuple[JudgmentId, ...]
+    requirements: tuple[RequirementId, ...]
     reads: ContextReadSet = field(default_factory=ContextReadSet)
 
 
@@ -91,9 +120,10 @@ class Committed(CommitResult):
 class Refused(CommitResult):
     """The conclusion does not hold, a premise is inaccessible, or a condition
     was refuted: this application is inapplicable."""
+
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
-
+    refutation: Refutation | None = None
 
 @dataclass(frozen=True, slots=True)
 class Undecided(CommitResult):
@@ -107,19 +137,25 @@ class Undecided(CommitResult):
 class NeedsSplit(CommitResult):
     """The policy requests a case split: hand the pending condition back to the
     workflow to open branches."""
-    conditions: tuple = ()
+    conditions: tuple[Term, ...] = ()
 
 
 # ---------------------------------------------------------------------------
 # Commit
 # ---------------------------------------------------------------------------
 
-def commit(store, proposal, context=None, services=None,
-           discharge_checker_id="kernel.decide",
-           mode=None, inherited_reads=None) -> CommitResult:
-    from cas.kernel.mode import DEFAULT_MODE
-    mode = mode if mode is not None else DEFAULT_MODE
-    services = services if services is not None else NullServices()
+def commit(
+    store: KernelStore,
+    proposal: StepProposal,
+    context: TrackedContext | None = None,
+    services: KernelServices | None = None,
+    discharge_checker_id: str = "kernel.decide",
+    mode: ExecutionMode | None = None,
+    inherited_reads: ContextReadSet | None = None,
+) -> CommitResult:
+    selected_mode = DEFAULT_MODE if mode is None else mode
+    selected_services: KernelServices = (
+        NullServices() if services is None else services)
 
     # --- 1. scope validity and term binding legality ---
     try:
@@ -134,13 +170,13 @@ def commit(store, proposal, context=None, services=None,
         if escaped:
             return Refused(Reason.FRAGMENT,
                            f"local symbol escapes into this scope's conclusion: {escaped!r}")
-    ctx = context if context is not None \
-        else TrackedContext(store.scopes, services, proposal.scope, mode)
+    ctx = TrackedContext(store.scopes, selected_services, proposal.scope, selected_mode) \
+        if context is None else context
 
     # --- 2. premise visibility (a child conclusion may not be used upward;
     #        sibling branches cannot see each other) ---
-    inherited = []
-    premise_props = []
+    inherited: list[RequirementId] = []
+    premise_props: list[Term] = []
     for pid in proposal.premises:
         try:
             pj = store.get_judgment(pid)
@@ -151,9 +187,16 @@ def commit(store, proposal, context=None, services=None,
                            f"premise {pid} is not visible in scope {proposal.scope}")
         inherited.extend(pj.requirements)
         premise_props.append(pj.proposition)
-    # Back-fill premise propositions: anything the caller reported is discarded
-    # and the checker reads only what the kernel resolved.
-    proposal = replace(proposal, premise_propositions=tuple(premise_props))
+    # The checker sees only the kernel-resolved premise propositions. The
+    # public proposal remains unchanged and carries no trusted premise data.
+    resolved = ResolvedProposal(
+        scope=proposal.scope,
+        evidence=proposal.evidence,
+        premises=proposal.premises,
+        conclusions=proposal.conclusions,
+        guard_policy=proposal.guard_policy,
+        premise_propositions=tuple(premise_props),
+    )
 
     # --- 3. checker ---
     checker = store.checkers.get(proposal.evidence.checker_id)
@@ -161,35 +204,44 @@ def commit(store, proposal, context=None, services=None,
         return Undecided(Reason.FRAGMENT,
                          f"checker not registered: {proposal.evidence.checker_id}")
 
-    # --- 4. re-check ---
-    result = checker.check(proposal, ctx, services)
-    if result.is_rejected():
+    result = checker.check(resolved, ctx, selected_services)
+    if isinstance(result, RefutationRejected):
+        return Refused(
+            result.reason,
+            result.detail,
+            refutation=result.refutation,
+        )
+    if isinstance(result, Rejected):
         return Refused(result.reason, result.detail)
-
-    # The checker could not re-check the conclusion: the candidate is
-    # unverified and lands under no policy. GuardPolicy governs undecided
-    # *condition discharge* below, not "let an unverified conclusion through".
-    if result.is_unknown():
+    if isinstance(result, UnknownResult):
         return Undecided(result.reason, result.detail or "conclusion not re-checked")
-
-    direct = tuple(result.direct_requirements) if result.is_accepted() else ()
+    if not isinstance(result, Accepted):
+        raise TypeError("checker returned an unsupported result")
+    direct = result.direct_requirements
 
     # --- 5/6. condition collection and discharge attempt (Proved / Refuted /
     #          Unknown) ---
-    proved_terms = []
-    for t in direct:
-        v = ctx.decide(t)
-        if v.is_yes():
-            proved_terms.append(t)                    # 7. Proved
-        elif v.is_no():
-            return Refused(Reason.GUARDED, f"condition refuted: {t!r}")   # 8. Refuted
+    proved_terms: list[Term] = []
+    for term in direct:
+        verdict = ctx.decide(term)
+        if verdict.is_yes():
+            proved_terms.append(term)
+        elif isinstance(verdict, No):
+            return Refused(
+                Reason.GUARDED,
+                f"condition refuted: {term!r}; {verdict.evidence.detail}",
+                refutation=verdict.evidence,
+            )
         else:
-            # 9. Unknown -> handle by guard policy
+            if not isinstance(verdict, Unknown):
+                raise TypeError("decision service returned a non-decision verdict")
             if proposal.guard_policy is GuardPolicy.REQUIRE_PROVED:
-                return Undecided(v.reason,
-                                 f"condition undecided, REQUIRE_PROVED refuses to land: {t!r}")
+                return Undecided(
+                    verdict.reason,
+                    f"condition undecided, REQUIRE_PROVED refuses to land: {term!r}",
+                )
             if proposal.guard_policy is GuardPolicy.REQUEST_SPLIT:
-                return NeedsSplit((t,))
+                return NeedsSplit((term,))
 
     for rid in inherited:
         if store.is_refuted(rid, proposal.scope):
@@ -198,7 +250,7 @@ def commit(store, proposal, context=None, services=None,
     # --- 10. atomic write ---
     step_id = store.new_step_id()
 
-    direct_ids = {}
+    direct_ids: dict[Term, RequirementId] = {}
     all_req = list(inherited)
     for t in direct:
         rid = store.new_requirement_id()
@@ -212,15 +264,14 @@ def commit(store, proposal, context=None, services=None,
     # original conclusion, it only makes queries report direct applicability).
     carried = tuple(inherited) + tuple(direct_ids[t] for t in direct)
 
-    jids = []
+    jids: list[JudgmentId] = []
     for prop in proposal.conclusions:
         jid = store.new_judgment_id()
         store.put_judgment(Judgment(
             id=jid, scope=proposal.scope, proposition=prop,
             requirements=carried, producer=step_id))
         jids.append(jid)
-
-    step_reads = ctx.read_set(dedupe=not mode.raw_reads())
+    step_reads = ctx.read_set(dedupe=not selected_mode.raw_reads())
     if inherited_reads is not None:
         # Inherited read dependencies, e.g. a branch merge whose conclusion
         # depends on facts read in each branch. Merging and deduplication
@@ -239,14 +290,18 @@ def commit(store, proposal, context=None, services=None,
     # interactive defers discharge registration: conditions are still decided
     # above (otherwise a refuted guard would slip through), but a proved
     # condition is not recorded as a Discharge yet.
-    if not mode.defers_discharge():
-        for t in proved_terms:
-            dj = _commit_decided(store, proposal.scope, t, ctx, services,
-                                 discharge_checker_id, mode)
-            if dj is not None:
-                store.add_discharge(Discharge(requirement=direct_ids[t],
-                                              by_judgment=dj,
-                                              scope=proposal.scope))
+    if not selected_mode.defers_discharge():
+        for term in proved_terms:
+            decided = _commit_decided(
+                store, proposal.scope, term, ctx, selected_services,
+                discharge_checker_id, selected_mode,
+            )
+            if decided is not None:
+                store.add_discharge(Discharge(
+                    requirement=direct_ids[term],
+                    by_judgment=decided,
+                    scope=proposal.scope,
+                ))
 
     # 10d. refutation registration: when a conclusion is exactly the negation
     # of a pending condition, mark the original conclusion Inapplicable
@@ -258,8 +313,15 @@ def commit(store, proposal, context=None, services=None,
                      requirements=tuple(all_req), reads=step_reads)
 
 
-def _commit_decided(store, scope, proposition, ctx, services, checker_id,
-                    mode=None):
+def _commit_decided(
+    store: KernelStore,
+    scope: ScopeId,
+    proposition: Term,
+    ctx: TrackedContext,
+    services: KernelServices,
+    checker_id: str,
+    mode: ExecutionMode | None = None,
+) -> JudgmentId | None:
     """Land an already-decided condition through the same protocol, to serve as
     a discharge basis.
 
@@ -273,10 +335,15 @@ def _commit_decided(store, scope, proposition, ctx, services, checker_id,
                         guard_policy=GuardPolicy.REQUIRE_PROVED)
     res = commit(store, prop, context=ctx, services=services,
                  discharge_checker_id=checker_id, mode=mode)
-    return res.judgments[0] if res.is_committed() else None
+    return res.judgments[0] if isinstance(res, Committed) else None
 
 
-def _record_refutations(store, scope, proposition, jid):
+def _record_refutations(
+    store: KernelStore,
+    scope: ScopeId,
+    proposition: Term,
+    jid: JudgmentId,
+) -> None:
     """When a conclusion is the syntactic negation of a pending condition,
     register a refutation. Syntactic negation only, no semantic guessing.
 

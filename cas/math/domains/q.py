@@ -1,42 +1,48 @@
-"""The field Q: literal rational arithmetic.
+"""The field Q: literal rational arithmetic."""
 
-Normal form: qarith.fold, folding all-numeric subtrees exactly and absorbing
-identity elements.
-Equality: numeric comparison after folding, decided completely inside the
-fragment.
-Membership: an all-numeric tree, i.e. exact evaluation succeeds in an empty
-environment.
-"""
+from fractions import Fraction
 
-from fractions import Fraction as Fr
-
-from cas.syntax import term as T
-from cas.math.domains.qarith import fold, eval_exact, EvalNumError
-from cas.math.domains.base import Domain, FracRing
+from cas.math.domains.base import Domain, DomainCapabilities, DomainElement, FracRing
+from cas.math.domains.qarith import EvalNumError, eval_exact, fold
+from cas.syntax.term import Term
 
 
 class QRing(FracRing):
     """The coefficient ring Q: native Fraction arithmetic with no wrapping."""
 
     is_euclidean = True
+    supports_rational_evaluation = True
 
-    def from_int(self, n):
-        return Fr(n)
+    def from_int(self, value: int) -> DomainElement:
+        return Fraction(value)
 
-    def from_frac(self, f):
-        return f
+    def from_frac(self, value: Fraction) -> DomainElement:
+        return value
 
-    def add(self, a, b):
-        return a + b
+    def to_fraction(self, value: DomainElement) -> Fraction:
+        if not isinstance(value, Fraction):
+            raise TypeError("Q ring elements must be Fractions")
+        return value
 
-    def neg(self, a):
-        return -a
+    def add(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        if not isinstance(left, Fraction) or not isinstance(right, Fraction):
+            raise TypeError("Q ring elements must be Fractions")
+        return left + right
 
-    def mul(self, a, b):
-        return a * b
+    def neg(self, value: DomainElement) -> DomainElement:
+        if not isinstance(value, Fraction):
+            raise TypeError("Q ring elements must be Fractions")
+        return -value
 
-    def divmod_(self, a, b):
-        return a / b, Fr(0)
+    def mul(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        if not isinstance(left, Fraction) or not isinstance(right, Fraction):
+            raise TypeError("Q ring elements must be Fractions")
+        return left * right
+
+    def divmod_(self, left: DomainElement, right: DomainElement) -> tuple[DomainElement, DomainElement]:
+        if not isinstance(left, Fraction) or not isinstance(right, Fraction):
+            raise TypeError("Q ring elements must be Fractions")
+        return left / right, Fraction(0)
 
 
 Q_RING = QRing()
@@ -46,29 +52,25 @@ class QDomain(Domain):
     """The rational field Q."""
 
     name = "Q"
-    is_field = True
-    is_ordered = True
-    is_euclidean = True
+    capabilities = DomainCapabilities(field=True, ordered=True, euclidean=True)
     ring = Q_RING
 
-    def member(self, t) -> bool:
+    def member(self, term: Term) -> bool:
         try:
-            eval_exact(t, {})
+            eval_exact(term, {})
             return True
         except (EvalNumError, ZeroDivisionError):
             return False
 
-    def normalize(self, t):
-        if not self.member(t):
+    def normalize(self, term: Term) -> Term | None:
+        if not self.member(term):
             return None
-        return fold(t)
+        return fold(term)
 
-    def equal(self, a, b):
-        if not (self.member(a) and self.member(b)):
-            return None                  # non-member: the caller overstepped
-        return T.num_val(fold(a)) == T.num_val(fold(b))
+    def equal(self, left: Term, right: Term) -> bool | None:
+        if not (self.member(left) and self.member(right)):
+            return None
+        return eval_exact(left, {}) == eval_exact(right, {})
 
 
-# The singleton. Registration is not this module's business: the domain package
-# only declares, and registration into the ladder belongs to the projection layer.
 Q_DOMAIN = QDomain()

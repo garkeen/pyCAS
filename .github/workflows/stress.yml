@@ -10,7 +10,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest pytest-timeout
+      - run: pip install -e ".[dev]" pytest pytest-timeout
+      - name: 静态门禁
+        run: |
+          python -m mypy --strict cas
+          python -m ruff check cas tests
+          python -m compileall -q cas
       # 钉子库：确定性单测，失败直接定位到断言
       - name: 钉子库
         run: python -m pytest tests/ -m "not random" -q

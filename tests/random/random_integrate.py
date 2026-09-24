@@ -14,36 +14,34 @@
 Usage: python tests/random/random_integrate.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
-
 import cas.syntax.term as T
-from cas.syntax.term import S
+from cas.errors import IntegrateError
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.domains.qarith import fold
-from cas.math.integrate import integrate_term, definite_integrate
 from cas.math.calculus.integration.verify import verify_antideriv
-from cas.errors import IntegrateError
-from cas.math.domains.q import Q_RING
 from cas.math.domains.poly import _norm, to_term
+from cas.math.domains.q import Q_RING
+from cas.math.domains.qarith import fold
+from cas.math.integrate import definite_integrate, integrate_term
 from cas.math.piecewise import piecewise
+from cas.runtime import bootstrap
+from cas.syntax.term import S
+
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
+
 
 X = S("x")
 
 
 def _ctx():
-    """The installed math context: the bench assembled its own runtime above."""
-    from cas.runtime import get_runtime
-    return get_runtime().math
+    return MATH
 
 
 def fail(msg, seed, *extra):
@@ -92,8 +90,8 @@ def prop_indefinite(rounds, rng):
         p, coefs = rand_poly(rng)
         f = to_term(Q_RING, p)
         F = integrate_term(_ctx(), f, X)
-        if verify_antideriv(_ctx(), F, f, X) is not True:
-            fail("P32 antiderivative verification failed", i, to_str(f), to_str(F))
+        if not verify_antideriv(_ctx(), F, f, X).is_yes():
+            fail("P32 antiderivative verification failed", i, to_str(RUNTIME, f), to_str(RUNTIME, F))
         a = Fr(rng.randint(-5, 5), 1)
         b = Fr(rng.randint(-5, 5), 1)
         if a > b:
@@ -101,7 +99,7 @@ def prop_indefinite(rounds, rng):
         got = _num(definite_integrate(_ctx(), f, X, T.N(a), T.N(b)))
         want = ref_definite(coefs, a, b)
         if got != want:
-            fail("P32 definite integral disagrees between channels", i, to_str(f), a, b, got, want)
+            fail("P32 definite integral disagrees between channels", i, to_str(RUNTIME, f), a, b, got, want)
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +115,10 @@ def prop_additivity(rounds, rng):
         bc = _num(definite_integrate(_ctx(), f, X, T.N(b), T.N(c)))
         ac = _num(definite_integrate(_ctx(), f, X, T.N(a), T.N(c)))
         if ab + bc != ac:
-            fail("P33 additivity broken", i, to_str(f), a, b, c, ab, bc, ac)
+            fail("P33 additivity broken", i, to_str(RUNTIME, f), a, b, c, ab, bc, ac)
         aa = _num(definite_integrate(_ctx(), f, X, T.N(a), T.N(a)))
         if aa != 0:
-            fail("P33 integral_a^a is nonzero", i, to_str(f), a, aa)
+            fail("P33 integral_a^a is nonzero", i, to_str(RUNTIME, f), a, aa)
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +130,8 @@ def prop_piecewise(rounds, rng):
         r = rng.randint(-3, 3)
         p1, c1 = rand_poly(rng, maxdeg=3)
         p2, c2 = rand_poly(rng, maxdeg=3)
-        pw = piecewise([(to_term(Q_RING, p1), parse(f"x < {r}")),
-                        (to_term(Q_RING, p2), parse(f"x >= {r}"))])
+        pw = piecewise([(to_term(Q_RING, p1), parse(RUNTIME, f"x < {r}")),
+                        (to_term(Q_RING, p2), parse(RUNTIME, f"x >= {r}"))])
         # entirely in the left region (a < b < r)
         a = Fr(r - rng.randint(3, 5), 1)
         b = Fr(r - rng.randint(1, 2), 1)
@@ -148,8 +146,8 @@ def prop_piecewise(rounds, rng):
         if got2 != want2:
             fail("P34 crossing the breakpoint mismatch", i, lo, hi, got2, want2)
         # gap refusal: x<r and x>r+1 leave a gap between them
-        gap_pw = piecewise([(parse("1"), parse(f"x < {r}")),
-                            (parse("1"), parse(f"x > {r + 1}"))])
+        gap_pw = piecewise([(parse(RUNTIME, "1"), parse(RUNTIME, f"x < {r}")),
+                            (parse(RUNTIME, "1"), parse(RUNTIME, f"x > {r + 1}"))])
         try:
             definite_integrate(_ctx(), gap_pw, X, T.N(Fr(r - 2)), T.N(Fr(r + 3)))
             fail("P34 gap was not refused", i)
@@ -165,20 +163,20 @@ def prop_refusal(rounds, rng):
     for i in range(rounds):
         # proper fraction
         try:
-            integrate_term(_ctx(), parse("1/x"), X)
+            integrate_term(MATH, parse(RUNTIME, "1/x"), X)
             fail("P35 proper fraction not refused", i)
         except IntegrateError:
             pass
         # transcendental
         try:
-            integrate_term(_ctx(), parse("exp(x)"), X)
+            integrate_term(MATH, parse(RUNTIME, "exp(x)"), X)
             fail("P35 transcendental not refused", i)
         except IntegrateError:
             pass
         # irrational limits (the roots of x^2-2 are not rational terms, so a symbolic
         # limit triggers it)
         try:
-            definite_integrate(_ctx(), parse("x^2"), X, parse("y"), T.N(1))
+            definite_integrate(MATH, parse(RUNTIME, "x^2"), X, parse(RUNTIME, "y"), T.N(1))
             fail("P35 non-rational limit not refused", i)
         except IntegrateError:
             pass

@@ -20,31 +20,27 @@
 Usage: python tests/random/random_qi.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
-
 import cas.syntax.term as T
-from cas.syntax.term import S
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
-from cas.math.project import project, zero_of, normalize
+from cas.math.calculus.integration.verify import verify_antideriv
 from cas.math.domains.qi import QI_RING, qi_of_term
 from cas.math.integrate import integrate_term
-from cas.math.calculus.integration.verify import verify_antideriv
+from cas.math.project import normalize, project, zero_of
+from cas.runtime import bootstrap
+from cas.syntax.term import S
 
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
+IMAGINARY_UNIT = MATH.const_by_name("i").atom
+DOM = project(MATH, parse(RUNTIME, "i")).domain
 X = S("x")
-from cas.runtime import get_runtime
-MATH = get_runtime().math         # the bench assembled its own runtime above
-I = MATH.const_by_name("i").atom
-DOM = project(MATH, parse("i")).domain
 
 
 def fail(msg, seed, *extra):
@@ -75,19 +71,19 @@ def prop_two_channels(rounds, rng):
         a = rand_qi(rng)
         b = rand_qi(rng, nonzero=True)
         c = rand_qi(rng)
-        ta, tb, tc = DOM.to_term(a), DOM.to_term(b), DOM.to_term(c)
+        ta, tb, _tc = DOM.to_term(a), DOM.to_term(b), DOM.to_term(c)
         # channel 1: ring dual arithmetic; channel 2: term-level arithmetic through the
         # membership channel (rf machinery plus reduction)
         m1 = QI_RING.mul(a, b)
-        m2 = qi_of_term(I, T.times(ta, tb))
+        m2 = qi_of_term(IMAGINARY_UNIT, T.times(ta, tb))
         if m1 != m2:
             fail("P39 multiplication disagrees between channels", i, a, b, m1, m2)
         d1 = QI_RING.div_exact(a, b)
-        d2 = qi_of_term(I, T.times(ta, T.pw(tb, T.N(-1))))
+        d2 = qi_of_term(IMAGINARY_UNIT, T.times(ta, T.pw(tb, T.N(-1))))
         if d1 != d2:
             fail("P39 division disagrees between channels", i, a, b, d1, d2)
         s1 = QI_RING.add(a, b)
-        s2 = qi_of_term(I, T.plus(ta, tb))
+        s2 = qi_of_term(IMAGINARY_UNIT, T.plus(ta, tb))
         if s1 != s2:
             fail("P39 addition disagrees between channels", i, a, b, s1, s2)
         # domain axioms: distributivity, inverse, norm multiplicativity (proved inside the ring channel)
@@ -113,7 +109,7 @@ def prop_membership(rounds, rng):
         # test (conjugate/norm formula)
         want = QI_RING.div_exact(a, b)
         expr = f"({a[0]}+({a[1]})*i)/({b[0]}+({b[1]})*i)"
-        got = qi_of_term(I, parse(expr))
+        got = qi_of_term(IMAGINARY_UNIT, parse(RUNTIME, expr))
         if got != want:
             fail("P40 division-term value mismatch", i, expr, got, want)
         # power shape: the value of i^n is i^(n mod 4)
@@ -121,22 +117,22 @@ def prop_membership(rounds, rng):
         k = n % 4
         want_pow = [(Fr(1), Fr(0)), (Fr(0), Fr(1)),
                     (Fr(-1), Fr(0)), (Fr(0), Fr(-1))][k]
-        got_pow = qi_of_term(I, parse(f"i^{n}"))
+        got_pow = qi_of_term(IMAGINARY_UNIT, parse(RUNTIME, f"i^{n}"))
         if got_pow != want_pow:
             fail("P40 power-term value mismatch", i, n, got_pow, want_pow)
         # reordered shape: b*i + a has the same value as a + b*i
-        for shape in (parse(f"{a[1]}*i + {a[0]}"),
-                      parse(f"{a[0]} + {a[1]}*i")):
-            if qi_of_term(I, shape) != a:
-                fail("P40 reordered shape mismatch", i, to_str(shape), a)
+        for shape in (parse(RUNTIME, f"{a[1]}*i + {a[0]}"),
+                      parse(RUNTIME, f"{a[0]} + {a[1]}*i")):
+            if qi_of_term(IMAGINARY_UNIT, shape) != a:
+                fail("P40 reordered shape mismatch", i, to_str(RUNTIME, shape), a)
         # normalization idempotence: normalizing the output again gives the same interned pointer
-        t1 = normalize(project(MATH, parse(expr)))
+        t1 = normalize(project(MATH, parse(RUNTIME, expr)))
         t2 = normalize(project(MATH, t1))
         if t1 is not t2:
-            fail("P40 normalization is not idempotent", i, to_str(t1), to_str(t2))
+            fail("P40 normalization is not idempotent", i, to_str(RUNTIME, t1), to_str(RUNTIME, t2))
         # non-members: pi+i, sin(i), a square root, one with a variable, division by zero
         for bad in ("pi + i", "sin(i)", "2^(1/2)", "x + i", "1/(i*i+1)"):
-            if qi_of_term(I, parse(bad)) is not None:
+            if qi_of_term(IMAGINARY_UNIT, parse(RUNTIME, bad)) is not None:
                 fail("P40 non-member did not fall through", i, bad)
 
 
@@ -148,9 +144,9 @@ def prop_ladder(rounds, rng):
     for i in range(rounds):
         a = rand_qi(rng)
         # ladder order: integers -> Q -> Q(i)
-        if project(MATH, parse("3")).name != "Z":
+        if project(MATH, parse(RUNTIME, "3")).name != "Z":
             fail("P41 integer ladder", i)
-        if project(MATH, parse("1/3")).name != "Q":
+        if project(MATH, parse(RUNTIME, "1/3")).name != "Q":
             fail("P41 rational ladder", i)
         h = project(MATH, DOM.to_term(a))
         if a[1] == 0:
@@ -165,10 +161,10 @@ def prop_ladder(rounds, rng):
         z = zero_of(MATH, t)
         if z is not (a == (Fr(0), Fr(0))):
             fail("P41 zero test distorted", i, a, z)
-        if zero_of(MATH, parse("i*i+1")) is not True:
+        if zero_of(MATH, parse(RUNTIME, "i*i+1")) is not True:
             fail("P41 i^2+1 was not decided zero", i)
-        if zero_of(MATH, parse("(1+i)*(1-i) - 2")) is not True:
-            fail("P41 (1+i)(1-i)=2 was not decided zero", i)
+        if zero_of(MATH, parse(RUNTIME, "(1+i)*(1-i) - 2")) is not True:
+            fail("P41 Gaussian norm identity was not decided zero", i)
         # capability fields: the capability lookup that must refuse an order test
         if not DOM.is_field or DOM.is_ordered or DOM.is_euclidean:
             fail("P41 capability fields wrong", i)
@@ -176,8 +172,8 @@ def prop_ladder(rounds, rng):
         # independently by the differentiation layer
         f = DOM.to_term(a)
         F = integrate_term(MATH, f, X)
-        if verify_antideriv(MATH, F, f, X) is not True:
-            fail("P41 integration-constant verification failed", i, to_str(f), to_str(F))
+        if not verify_antideriv(MATH, F, f, X).is_yes():
+            fail("P41 integration-constant verification failed", i, to_str(RUNTIME, f), to_str(RUNTIME, F))
 
 
 if __name__ == "__main__":

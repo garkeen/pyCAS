@@ -28,34 +28,50 @@ Properties, all self-proving with no external ground truth:
 Usage: python tests/random/random_piecewise.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 
 sys.path.insert(0, ".")
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
-
-from cas.syntax import term as T
-from cas.syntax.term import S, N, mk, plus, times, pw
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
 from cas.kernel.scope import Assumptions
-from cas.math.project import project
-from cas.kernel.verdict import YES, NO
+from cas.kernel.verdict import YES
+from cas.math.domains.qarith import eval_exact
 from cas.math.domcond import dom_condition
-from cas.math.piecewise import (piecewise, branches, project_pw, select, coverage,
-                           conflicts, lift, is_piecewise)
+from cas.math.piecewise import (
+    ResidualSelection,
+    SelectedValue,
+    branches,
+    conflicts,
+    connected_components,
+    coverage,
+    domain_cells,
+    fold_nested,
+    is_piecewise,
+    lift,
+    piecewise,
+    project_pw,
+    select,
+)
+from cas.math.project import project
+from cas.runtime import bootstrap
+from cas.syntax import term as T
+from cas.syntax.term import N, S, mk, plus, pw
+
+RUNTIME = bootstrap()
+MATH = RUNTIME.math
+
 
 X = S("x")
 
 
 def _ctx():
-    """The installed math context: the bench assembled its own runtime above."""
-    from cas.runtime import get_runtime
-    return get_runtime().math
+    return MATH
+
+
+def _render(term):
+    return to_str(RUNTIME, term)
 
 
 def fail(msg, seed, *extra):
@@ -114,10 +130,10 @@ def ref_first(t, a):
 
 def prop_projection(rounds, rng):
     het = [pw(X, N(2)),                            # K[x]
-           parse("1/x"),                           # K(x)
-           parse("(x^2+1)/(x-3)"),                 # K(x)
+           parse(RUNTIME, "1/x"),                           # K(x)
+           parse(RUNTIME, "(x^2+1)/(x-3)"),                 # K(x)
            X,                                      # K[x]
-           parse("sin(x)")]                        # outside the fragment (no tower) -> None
+           parse(RUNTIME, "sin(x)")]                        # outside the fragment (no tower) -> None
     for i in range(rounds):
         nb = rng.randint(2, 5)
         picks = [rng.choice(het) for _ in range(nb)]
@@ -131,7 +147,7 @@ def prop_projection(rounds, rng):
             a = hit.name if hit else None
             b = solo.name if solo else None
             if a != b:
-                fail("P21 projection is not per-branch independent", i, f"branch={k} v={to_str(v)}",
+                fail("P21 projection is not per-branch independent", i, f"branch={k} v={_render(v)}",
                      f"pw={a} solo={b}")
         # the key ruling: heterogeneous hosts coexist (polynomial + rational + out-of-fragment
         # branches) with no shared host required
@@ -150,20 +166,29 @@ def prop_select(rounds, rng):
         t = rand_pw(rng, vals)
         for a in range(-7, 8):
             want = ref_first(t, a)
-            st, payload = select(_ctx(), t, at_ctx(a))
+            selection = select(_ctx(), t, at_ctx(a))
             if want is None:
-                if st == "value":
-                    fail("P22 false hit with no branch holding", i, f"a={a}", to_str(t))
+                if not isinstance(selection, ResidualSelection):
+                    fail("P22 false hit with no branch holding", i, f"a={a}", _render(t))
                 continue
-            if st != "value":
-                fail("P22 concrete point did not collapse", i, f"a={a}", f"t={to_str(t)}",
-                     f"payload={payload}")
-            if payload is not want:
-                fail("P22 wrong branch selected", i, f"a={a} want={to_str(want)} "
-                     f"got={to_str(payload)} t={to_str(t)}")
+            if not isinstance(selection, SelectedValue):
+                fail(
+                    "P22 concrete point did not collapse",
+                    i,
+                    f"a={a}",
+                    f"t={_render(t)}",
+                    selection,
+                )
+            if selection.value is not want:
+                fail(
+                    "P22 wrong branch selected",
+                    i,
+                    f"a={a} want={_render(want)} "
+                    f"got={_render(selection.value)} t={_render(t)}",
+                )
         # the final TRUE branch always covers, so an empty context must not falsely report a gap (NO)
-        if coverage(_ctx(), t, Assumptions()) is NO:
-            fail("P22 coverage misjudged", i, to_str(t))
+        if coverage(_ctx(), t, Assumptions()).is_no():
+            fail("P22 coverage misjudged", i, _render(t))
 
 
 # ---------------------------------------------------------------------------
@@ -195,15 +220,24 @@ def prop_lift(rounds, rng):
         # pointwise agreement: at x = a, select(lift(plus,p,q)) == plus(select p, select q)
         for a in range(-7, 8):
             ctx = at_ctx(a)
-            _, vp = select(_ctx(), p, ctx)
-            _, vq = select(_ctx(), q, ctx)
-            st_m, vm = select(_ctx(), m, ctx)
-            if st_m != "value":
+            selected_p = select(_ctx(), p, ctx)
+            selected_q = select(_ctx(), q, ctx)
+            selected_m = select(_ctx(), m, ctx)
+            if not (
+                isinstance(selected_p, SelectedValue)
+                and isinstance(selected_q, SelectedValue)
+                and isinstance(selected_m, SelectedValue)
+            ):
                 fail("P23 lifted container did not hit", i, f"a={a}")
-            if plus(vp, vq) is not vm:
-                fail("P23 pointwise disagreement", i, f"a={a} "
-                     f"plus({to_str(vp)},{to_str(vq)})={to_str(plus(vp,vq))} "
-                     f"vs {to_str(vm)}")
+            if plus(selected_p.value, selected_q.value) is not selected_m.value:
+                fail(
+                    "P23 pointwise disagreement",
+                    i,
+                    f"a={a} plus({_render(selected_p.value)},"
+                    f"{_render(selected_q.value)})="
+                    f"{_render(plus(selected_p.value, selected_q.value))} "
+                    f"vs {_render(selected_m.value)}",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -226,19 +260,28 @@ def prop_lift_merge(rounds, rng):
         for (va, _ca), (vb, _cb) in zip(bs, bs[1:]):
             if va is vb:
                 fail("P33 adjacent same-value branches survived the merge", i,
-                     to_str(m))
+                     _render(m))
         # the merged container still takes the pointwise product value
         for a in range(-7, 8):
             ctx = at_ctx(a)
-            _, vp = select(_ctx(), p, ctx)
-            _, vq = select(_ctx(), q, ctx)
-            st_m, vm = select(_ctx(), m, ctx)
-            if st_m != "value":
+            selected_p = select(_ctx(), p, ctx)
+            selected_q = select(_ctx(), q, ctx)
+            selected_m = select(_ctx(), m, ctx)
+            if not (
+                isinstance(selected_p, SelectedValue)
+                and isinstance(selected_q, SelectedValue)
+                and isinstance(selected_m, SelectedValue)
+            ):
                 fail("P33 merged container did not hit", i, f"a={a}")
-            if plus(vp, vq) is not vm:
-                fail("P33 merge changed the pointwise value", i, f"a={a} ",
-                     f"plus({to_str(vp)},{to_str(vq)})={to_str(plus(vp,vq))} "
-                     f"vs {to_str(vm)}")
+            if plus(selected_p.value, selected_q.value) is not selected_m.value:
+                fail(
+                    "P33 merge changed the pointwise value",
+                    i,
+                    f"a={a} plus({_render(selected_p.value)},"
+                    f"{_render(selected_q.value)})="
+                    f"{_render(plus(selected_p.value, selected_q.value))} "
+                    f"vs {_render(selected_m.value)}",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +289,7 @@ def prop_lift_merge(rounds, rng):
 # ---------------------------------------------------------------------------
 
 def prop_guards(rounds, rng):
-    bodies = [T.call("Sqrt", X), parse("log(x)"), pw(X, N(-1)),
+    bodies = [T.call("Sqrt", X), parse(RUNTIME, "log(x)"), pw(X, N(-1)),
               T.call("Sqrt", plus(pw(X, N(2)), N(1)))]
     for i in range(rounds):
         nb = rng.randint(2, 4)
@@ -266,28 +309,26 @@ def prop_guards(rounds, rng):
                 want.append(mk(S("Or"), (neg, g)))
         if sorted(x._h for x in got) != sorted(x._h for x in want):
             fail("P24 guarded conditions mismatch", i,
-                 f"got={[to_str(x) for x in got]}",
-                 f"want={[to_str(x) for x in want]}")
+                 f"got={[_render(x) for x in got]}",
+                 f"want={[_render(x) for x in want]}")
         # overlap consistency: constant branches with a provably empty overlap -> all YES;
         # a provably unequal constant overlap -> NO
         disjoint = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                               (N(2), mk(S("Lt"), (X, N(0))))])
-        for _a, _b, verdict in conflicts(_ctx(), disjoint, Assumptions()):
-            if verdict is not YES:
-                fail("P24 empty overlap misjudged", i, verdict)
+        for check in conflicts(_ctx(), disjoint, Assumptions()):
+            if check.verdict is not YES:
+                fail("P24 empty overlap misjudged", i, check.verdict)
         clash = piecewise([(N(1), mk(S("Gt"), (X, N(0)))),
                            (N(2), mk(S("Gt"), (X, N(0))))])
-        vs = [verdict for _a, _b, verdict in conflicts(_ctx(), clash, Assumptions())]
-        if not any(v is NO for v in vs):
-            fail("P24 constant conflict not detected", i, vs)
+        verdicts = [check.verdict for check in conflicts(_ctx(), clash, Assumptions())]
+        if not any(verdict.is_no() for verdict in verdicts):
+            fail("P24 constant conflict not detected", i, verdicts)
 
 
 # ---------------------------------------------------------------------------
 # P29-P31: nested flattening + domain cells + connected components (consuming CAD)
 # ---------------------------------------------------------------------------
 
-from cas.math.piecewise import fold_nested, domain_cells, connected_components
-from cas.math.domains.qarith import eval_exact
 
 
 def eval_prop(c, a):
@@ -304,10 +345,16 @@ def eval_prop(c, a):
         return any(eval_prop(x, a) for x in c.args)
     if h == "Not":
         return not eval_prop(c.args[0], a)
-    l = eval_exact(c.args[0], {X: T.num_val(N(a))})
-    r = eval_exact(c.args[1], {X: T.num_val(N(a))})
-    return {"Lt": l < r, "Le": l <= r, "Gt": l > r,
-            "Ge": l >= r, "Eq": l == r, "Ne": l != r}[h]
+    left = eval_exact(c.args[0], {X: T.num_val(N(a))})
+    right = eval_exact(c.args[1], {X: T.num_val(N(a))})
+    return {
+        "Lt": left < right,
+        "Le": left <= right,
+        "Gt": left > right,
+        "Ge": left >= right,
+        "Eq": left == right,
+        "Ne": left != right,
+    }[h]
 
 
 def ref_eval(t, a):
@@ -340,7 +387,7 @@ def prop_fold_nested(rounds, rng):
         if not is_piecewise(fl):
             fail("P29 flattened form is not piecewise", i)
         if any(is_piecewise(v) for v, _c in branches(fl)):
-            fail("P29 flattening incomplete", i, to_str(fl))
+            fail("P29 flattening incomplete", i, _render(fl))
         if fold_nested(fl) is not fl:
             fail("P29 flattening is not idempotent", i)
         # pointwise agreement: the nested original and the flattened form take the same value
@@ -348,14 +395,14 @@ def prop_fold_nested(rounds, rng):
             a = rng.randint(-6, 6)
             if not _same(ref_eval(outer, a), ref_eval(fl, a)):
                 fail("P29 flattening pointwise mismatch", i, f"a={a}",
-                     to_str(outer), to_str(fl))
+                     _render(outer), _render(fl))
 
 
 def prop_components(rounds, rng):
     vals = [N(k) for k in range(1, 4)]
     for i in range(rounds):
         t = rand_pw(rng, vals, minb=2, maxb=4)
-        dom = domain_cells(t, X)
+        dom = domain_cells(_ctx(), t, X)
         comps = connected_components(dom)
         # total cells inside components == number of defined cells (Undefined enters no component)
         defined = sum(1 for _c, v in dom if v is not T.SP("Undefined"))
@@ -374,7 +421,7 @@ def prop_gap(rounds, rng):
         # domain is x<lo or x>hi: the middle is a gap, so exactly two connected components
         t = piecewise([(N(1), mk(S("Lt"), (X, N(lo)))),
                        (N(2), mk(S("Gt"), (X, N(hi))))])
-        dom = domain_cells(t, X)
+        dom = domain_cells(_ctx(), t, X)
         comps = connected_components(dom)
         if len(comps) != 2:
             fail("P31 a gap should split into exactly 2 components", i, lo, hi, len(comps))
@@ -383,7 +430,7 @@ def prop_gap(rounds, rng):
         for c in comps:
             v = c.cells[0][1]
             if not T.is_num(v):
-                fail("P31 component value is not numeric", i, to_str(v))
+                fail("P31 component value is not numeric", i, _render(v))
             vals.add(T.num_val(v))
         if vals != {T.num_val(N(1)), T.num_val(N(2))}:
             fail("P31 component values mismatch", i, vals)

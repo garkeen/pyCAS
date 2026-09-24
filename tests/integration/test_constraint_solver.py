@@ -1,89 +1,98 @@
-# -*- coding: utf-8 -*-
-"""Constraint solving and three-valued antiderivative verification.
-
-Two disciplines meet here:
-* the solver sits on the **untrusted side**: it produces a candidate and the checker
-  re-verifies it;
-* when the decision channels cannot cover an input, the result must be **honestly
-  undecided** -- "cannot decide" is never reported as "not an antiderivative".
-"""
+"""Constraint solving and three-valued antiderivative verification."""
 
 from cas.frontend.parser import parse
-from cas.syntax.term import S, N
-from cas.syntax import term as T
+from cas.math.calculus.integration.verify import verify_antideriv
 from cas.math.constraints import solve_linear_constraints
 from cas.math.linearform import is_linear
-from cas.math.calculus.integration.verify import verify_antideriv
-from cas.runtime import new_workflow, get_runtime
+from cas.runtime import Runtime, new_workflow
+from cas.syntax import term as T
+from cas.syntax.term import N, S
 from cas.workflow.command import Claim, Integrate
 
 
-def _ctx():
-    """The installed math context: solver and verifier take it explicitly."""
-    return get_runtime().math
-
-
-# --- linear-form analysis (syntactic, not relying on the simplifier) ---
-
-def test_linear_form_decomposition_holds_for_transcendental_coeffs():
+def test_linear_form_decomposition_holds_for_transcendental_coeffs(
+    runtime: Runtime,
+) -> None:
     u = S("_u")
-    e = T.plus(T.plus(parse("exp(x)*sin(x)"), T.neg(u)), T.times(N(3), u))
-    assert is_linear(e, (u,))
+    expression = T.plus(
+        T.plus(parse(runtime, "exp(x)*sin(x)"), T.neg(u)),
+        T.times(N(3), u),
+    )
+    assert is_linear(expression, (u,))
     assert not is_linear(T.times(u, u), (u,))
     assert not is_linear(T.pw(u, N(-1)), (u,))
-    assert not is_linear(parse("sin(_u)"), (u,))
+    assert not is_linear(parse(runtime, "sin(_u)"), (u,))
 
 
-def test_coefficient_sign_kept_with_constant_factor():
-    """The coefficient of `-1*v` must be -1 (this once broke because the Times
-    decomposition missed the constant factor)."""
+def test_coefficient_sign_kept_with_constant_factor(runtime: Runtime) -> None:
     u, v = S("_u"), S("_v")
-    res = solve_linear_constraints(_ctx(), [T.eq(u, T.neg(v)), T.eq(u, N(2))], (u, v))
-    assert res is not None
-    val, complete = res
+    result = solve_linear_constraints(
+        runtime.math,
+        [T.eq(u, T.neg(v)), T.eq(u, N(2))],
+        (u, v),
+    )
+    assert result is not None
+    valuation, complete = result
     assert complete
-    assert val[u] is N(2)
-    assert val[v] is N(-2)
+    assert valuation[u] is N(2)
+    assert valuation[v] is N(-2)
 
 
-def test_solver_honestly_refuses_nonlinear_and_inconsistent():
-    u, X = S("_u"), S("x")
-    assert solve_linear_constraints(_ctx(), [T.eq(T.times(u, u), X)], (u,)) is None
-    assert solve_linear_constraints(_ctx(), [T.eq(u, N(1)), T.eq(u, N(2))], (u,)) is None
+def test_solver_honestly_refuses_nonlinear_and_inconsistent(
+    runtime: Runtime,
+) -> None:
+    u, x = S("_u"), S("x")
+    assert solve_linear_constraints(
+        runtime.math, [T.eq(T.times(u, u), x)], (u,)
+    ) is None
+    assert solve_linear_constraints(
+        runtime.math, [T.eq(u, N(1)), T.eq(u, N(2))], (u,)
+    ) is None
 
 
-# --- antiderivative zero test: three-valued ---
+def test_antiderivative_verification_three_valued(runtime: Runtime) -> None:
+    x = S("x")
+    proved = verify_antideriv(
+        runtime.math,
+        parse(runtime, "1/3*x^3"),
+        parse(runtime, "x^2"),
+        x,
+    )
+    assert proved.is_yes()
+    refuted = verify_antideriv(
+        runtime.math,
+        parse(runtime, "x^2"),
+        parse(runtime, "x^2"),
+        x,
+    )
+    assert refuted.is_no()
+    assert refuted.evidence.proposition == T.eq(
+        parse(runtime, "2*x"), parse(runtime, "x^2")
+    )
+    undecided = verify_antideriv(
+        runtime.math,
+        parse(runtime, "(exp(x)*(sin(x) - cos(x)))/2"),
+        parse(runtime, "exp(x)*sin(x)"),
+        x,
+    )
+    assert undecided.is_unknown()
 
-def test_antiderivative_verification_three_valued():
-    X = S("x")
-    # proved zero: polynomial
-    assert verify_antideriv(_ctx(), parse("1/3*x^3"), parse("x^2"), X) is True
-    # proved nonzero: a genuine refutation
-    assert verify_antideriv(_ctx(), parse("x^2"), parse("x^2"), X) is False
-    # undecided: correct, but the zero channel (trigonometric-basis zeroing) has not
-    # been rebuilt -- must be None, not False
-    assert verify_antideriv(_ctx(), parse("(exp(x)*(sin(x) - cos(x)))/2"),
-                            parse("exp(x)*sin(x)"), X) is None
 
-
-# --- loop-integral end to end ---
-
-def test_loop_integral_end_to_end_solved_but_verification_undecided():
-    wf = new_workflow()
-    u, v, X = S("_u"), S("_v"), S("x")
-    a, b = parse("exp(x)*sin(x)"), parse("exp(x)*cos(x)")
-    wf.add_constraint(T.eq(u, T.plus(a, T.neg(v))))          # u = a - v
-    wf.add_constraint(T.eq(v, T.plus(T.plus(b, N(-1)), u)))  # v = b - 1 + u
-
-    val, steps, complete = wf.solve_constraints((u, v))
-    assert val is not None and complete, "the cyclic system should have a unique solution"
-    # the solution has the expected form, but the zero channel cannot cover it: undecided
-    assert verify_antideriv(_ctx(), val[u], a, X) is None
-
-    # the workflow therefore reports unverified, **never dead** (dead would be a forged
-    # refutation)
-    s0 = wf.add(a, Claim())
-    content = T.eq(T.mk(S("Integrate"), (T.mk_bound(X, a),)), val[u])
-    s1 = wf.add(content, Integrate(pred=s0.id, var=X, antideriv=val[u]))
-    assert s1.status == "undecided", (s1.status, s1.note)
-    assert s1.judgment is None
+def test_loop_integral_remains_undecided(runtime: Runtime) -> None:
+    workflow = new_workflow(runtime)
+    u, v, x = S("_u"), S("_v"), S("x")
+    first = parse(runtime, "exp(x)*sin(x)")
+    second = parse(runtime, "exp(x)*cos(x)")
+    workflow.add_constraint(T.eq(u, T.plus(first, T.neg(v))))
+    workflow.add_constraint(T.eq(v, T.plus(T.plus(second, N(-1)), u)))
+    valuation, _steps, complete = workflow.solve_constraints((u, v))
+    assert valuation is not None and complete
+    assert verify_antideriv(runtime.math, valuation[u], first, x).is_unknown()
+    source = workflow.add(first, Claim())
+    content = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, first),)), valuation[u])
+    result = workflow.add(
+        content,
+        Integrate(pred=source.id, var=x, antideriv=valuation[u]),
+    )
+    assert result.status == "undecided"
+    assert result.judgment is None

@@ -1,463 +1,454 @@
-# -*- coding: utf-8 -*-
-"""Piecewise container: Piecewise is a syntax container, not a new numeric domain.
+"""Piecewise syntax container with ordered first-match evaluation.
 
-Structure: `Piecewise(v1, c1, v2, c2, ...)` -- value/condition pairs, interned.
-
-Evaluation semantics (single, consistent across the module): **ordered
-first-match** (if / elif / else, the standard Piecewise). The value at a point is
-the value of the first branch whose condition holds in declaration order; a
-condition of TRUE is the "else" branch and applies only where no earlier branch
-holds. Because every point falls on at most one branch, evaluation is intrinsically
-unique -- no semantic conflict at the evaluation level exists or is permitted. Three
-consequences:
-
-* A branch body need not share a host structure: each branch projects
-  independently (`project_pw`), the domain is branch-local, and failing to find a
-  common host is not an error.
-* A condition may be any proposition: it goes to the decision pipeline, which yields
-  a truth value when it can and propagates GUARDED otherwise (`select` for values,
-  `coverage` for coverage).
-* `conflicts` is an **order-independence lint** (not an evaluation gate): if two
-  branches overlap and their values differ there, the value at that point depends on
-  declaration order, so the author is told to tighten the guards into a mutually
-  exclusive form. An undecided question stays Unknown and is never reported as
-  well-defined. Coverage completeness is the user's declaration, decided when
-  decidable and never filled in unasked.
-
-Operation lifting (`lift`): a piecewise function participates in an operation
-pointwise, `(f+g)(x) = f(x)+g(x)`, by Cartesian expansion per branch with the
-conditions conjoined. Note that **differentiation and integration of a piecewise
-function must separately check continuity and one-sided limits at the breakpoints**
-and are not per-branch composable: the cautious channel is
-`differentiate_piecewise` in the differentiation module (breakpoints explicitly
-unverified), and piecewise definite integration refuses gaps and point holes.
+``Piecewise(v1, c1, v2, c2, ...)`` is interned syntax, not a numeric domain.
+The first branch whose condition is proved true supplies the value.  A TRUE
+condition is the else branch and later branches are unreachable.  Operations
+lift pointwise by Cartesian branch expansion; differentiation and integration
+retain their separate breakpoint cautions.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, TypeAlias, TypeGuard
+
+from cas.errors import BudgetExceeded, PiecewiseError
+from cas.kernel.scope import Assumptions
+from cas.kernel.verdict import (
+    YES,
+    No,
+    Reason,
+    Refutation,
+    RefutationChannel,
+    Unknown,
+    Verdict,
+    refute,
+    unknown,
+)
+from cas.math.cad import Cell, PointCell, resolve_partition
+from cas.math.decide import decide
+from cas.math.project import Projected, project
+from cas.math.realroot import RootInterval
 from cas.syntax import term as T
-from cas.syntax.term import S, Expr
-from cas.math.project import project
-from cas.kernel.verdict import YES, NO, unknown, Reason
-from cas.errors import BudgetExceeded
+from cas.syntax.term import Expr, S, Sym, Term
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
+
+_HEAD = "Piecewise"
+Branch: TypeAlias = tuple[Term, Term]
+DomainCell: TypeAlias = tuple[Cell, Term]
+
+
+@dataclass(frozen=True, slots=True)
+class SelectedValue:
+    """A uniquely selected branch value and discarded branch evidence."""
+
+    value: Term
+    refutations: tuple[Refutation, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ResidualSelection:
+    """An earlier undecided condition leaves a residual suffix."""
+
+    residual: Term
+    reason: Reason
+    refutations: tuple[Refutation, ...] = ()
+
+
+Selection: TypeAlias = SelectedValue | ResidualSelection
+
+
+@dataclass(frozen=True, slots=True)
+class OverlapCheck:
+    """Order-independence verdict for one pair of branches."""
+
+    first: int
+    second: int
+    verdict: Verdict
 
 
 # ---------------------------------------------------------------------------
 # Construction and decomposition
 # ---------------------------------------------------------------------------
 
-_HEAD = "Piecewise"
+
+def is_piecewise(term: Term) -> TypeGuard[Expr]:
+    return (
+        isinstance(term, Expr)
+        and term.head.name == _HEAD
+        and len(term.args) % 2 == 0
+    )
 
 
-def is_piecewise(t) -> bool:
-    return isinstance(t, Expr) and t.head.name == _HEAD \
-        and len(t.args) % 2 == 0
-
-
-def piecewise(pairs) -> object:
-    """(value, condition) sequence -> interned Piecewise.
-
-    Syntactic normalization (no semantic decision): drop branches whose condition is
-    FALSE, truncate after a condition of TRUE (first-match decides, later branches
-    are unreachable), collapse an empty container to Undefined, and collapse a single
-    true branch to its value.
-    """
-    kept = []
-    for v, c in pairs:
-        if c is T.FALSE:
+def piecewise(pairs: Iterable[Branch]) -> Term:
+    """Build an interned Piecewise after syntax-only normalization."""
+    kept: list[Branch] = []
+    for value, condition in pairs:
+        if condition is T.FALSE:
             continue
-        kept.append((v, c))
-        if c is T.TRUE:
-            break                        # branches after TRUE are never reached
+        kept.append((value, condition))
+        if condition is T.TRUE:
+            break
     if not kept:
         return T.SP("Undefined")
     if len(kept) == 1 and kept[0][1] is T.TRUE:
         return kept[0][0]
-    flat = []
-    for v, c in kept:
-        flat.append(v)
-        flat.append(c)
-    return T.mk(S(_HEAD), tuple(flat))
+    flattened: list[Term] = []
+    for value, condition in kept:
+        flattened.extend((value, condition))
+    return T.mk(S(_HEAD), tuple(flattened))
 
 
-def branches(t):
-    """Interned Piecewise -> [(value, condition)]. A non-piecewise term maps to
-    [(t, TRUE)], the trivial cover."""
-    if not is_piecewise(t):
-        return [(t, T.TRUE)]
-    a = t.args
-    return [(a[i], a[i + 1]) for i in range(0, len(a), 2)]
+def branches(term: Term) -> list[Branch]:
+    """Return value/condition branches, using TRUE for a non-piecewise term."""
+    if not is_piecewise(term):
+        return [(term, T.TRUE)]
+    arguments = term.args
+    return [
+        (arguments[index], arguments[index + 1])
+        for index in range(0, len(arguments), 2)
+    ]
 
 
-def conditions(t):
-    return [c for _v, c in branches(t)]
+def conditions(term: Term) -> list[Term]:
+    return [condition for _value, condition in branches(term)]
+
+
+def project_pw(
+    ctx: MathContext,
+    term: Term,
+) -> list[tuple[Term, Term, Projected | None]]:
+    """Project each branch independently into the current projection ladder."""
+    return [
+        (value, condition, project(ctx, value))
+        for value, condition in branches(term)
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Independent per-branch projection (no shared host)
+# Condition semantics
 # ---------------------------------------------------------------------------
 
-def project_pw(ctx, t):
-    """Project each branch into its own host domain, independently.
 
-    Returns [(value, condition, Projected|None)]. A Projected of None means the
-    branch lies outside the current projection ladder (not a member of Q / K[x] /
-    K(x)), which the caller handles honestly."""
-    return [(v, c, project(ctx, v)) for v, c in branches(t)]
-
-
-# ---------------------------------------------------------------------------
-# Condition semantics: consumed by the decision pipeline
-# ---------------------------------------------------------------------------
-
-def select(ctx, t, assumptions):
-    """Evaluate a piecewise function under `assumptions` by ordered first-match
-    (if/elif/else): the first condition provably true.
-
-    Scan top down: a branch provably false is skipped; a branch provably true
-    determines the value if no earlier branch survives that could shadow it. At most
-    one branch per point, so the value is unique and there is no evaluation-level
-    conflict. A condition of TRUE is the "else" branch.
-
-    Returns (status, payload):
-    * ("value", v)           unique hit; or v = Undefined when every branch is
-                             provably false
-    * ("residual", (pw, r))  an earlier branch condition is undecided, so the
-                             shadowing relation is open; pw is the residual suffix and
-                             r the reason for that undecidedness
-    """
-    bs = branches(t)
-    survivors = []              # later candidates to keep until the first match is decided
-    first_unknown = None
-    for v, c in bs:
-        if c is T.TRUE:
-            if not survivors:                   # else branch with all earlier ones false: hit
-                return ("value", v)
-            survivors.append((v, c))            # an earlier branch is undecided, so shadowing is open
+def select(
+    ctx: MathContext,
+    term: Term,
+    assumptions: Assumptions,
+) -> Selection:
+    """Select by ordered first-match without guessing around Unknown."""
+    survivors: list[Branch] = []
+    refutations: list[Refutation] = []
+    first_unknown: Reason | None = None
+    for value, condition in branches(term):
+        if condition is T.TRUE:
+            if not survivors:
+                return SelectedValue(value, tuple(refutations))
+            survivors.append((value, condition))
             break
-        verdict = decide(ctx, c, assumptions)
-        if verdict is NO:
-            continue                            # branch does not hold, try the next
-        if verdict is YES:
-            if not survivors:                   # first true branch with all earlier false: hit
-                return ("value", v)
-            survivors.append((v, c))
+        verdict = decide(ctx, condition, assumptions)
+        if verdict.is_no():
+            if isinstance(verdict, No):
+                refutations.append(verdict.evidence)
             continue
-        if first_unknown is None:               # undecided branch: it may hold and shadow the rest
+        if verdict.is_yes():
+            if not survivors:
+                return SelectedValue(value, tuple(refutations))
+            survivors.append((value, condition))
+            continue
+        if not isinstance(verdict, Unknown):
+            raise TypeError("decision pipeline returned an unsupported verdict")
+        if first_unknown is None:
             first_unknown = verdict.reason
-        survivors.append((v, c))
+        survivors.append((value, condition))
     if not survivors:
-        return ("value", T.SP("Undefined"))     # every branch provably false: undefined here
-    return ("residual", (piecewise(survivors),
-                         first_unknown or Reason.FRAGMENT))
+        return SelectedValue(T.SP("Undefined"), tuple(refutations))
+    return ResidualSelection(
+        residual=piecewise(survivors),
+        reason=Reason.FRAGMENT if first_unknown is None else first_unknown,
+        refutations=tuple(refutations),
+    )
 
 
-def coverage(ctx, t, assumptions):
-    """Whether the disjunction of branch conditions covers the whole space (completeness
-    is the user's declaration, decided here when decidable).
-
-    YES means full coverage; NO means there is a provable gap (undefined where every
-    condition is false); Unknown(GUARDED) means some condition is undecided and
-    coverage is undecided with it."""
-    conds = conditions(t)
+def coverage(
+    ctx: MathContext,
+    term: Term,
+    assumptions: Assumptions,
+) -> Verdict:
+    """Decide whether branch conditions cover the whole space."""
+    branch_conditions = conditions(term)
     guarded = False
-    for c in conds:
-        if c is T.TRUE:
+    causes: list[Refutation] = []
+    for condition in branch_conditions:
+        if condition is T.TRUE:
             return YES
-        v = decide(ctx, c, assumptions)
-        if v is YES:
+        verdict = decide(ctx, condition, assumptions)
+        if verdict.is_yes():
             return YES
-        if v is NO:
+        if verdict.is_no():
+            if isinstance(verdict, No):
+                causes.append(verdict.evidence)
             continue
         guarded = True
-    return unknown(Reason.GUARDED) if guarded else NO
+    if guarded:
+        return unknown(Reason.GUARDED)
+    claim = T.mk(S("Or"), tuple(branch_conditions))
+    return refute(
+        RefutationChannel.BRANCH,
+        claim,
+        detail="every branch condition was refuted, so coverage has a gap",
+        causes=tuple(causes),
+    )
 
 
-def collapse(ctx, t, assumptions):
-    """Point collapse: replace every Piecewise subterm by its selected value under
-    `assumptions`.
-
-    The common channel for numeric-point back-substitution: when the conditions are
-    decidable under `assumptions`, each piecewise collapses to a single branch value
-    by ordered first-match, and after outward propagation the whole term is an
-    ordinary term that can go through domain zeroing or evaluation. If any branch
-    selection is undecided (a condition resists decision), the whole result is None
-    (honestly undecided, never guessed).
-
-    A piecewise may occur at any depth of an operation (such as `pw(...) + 2`); a
-    piecewise in condition position is a malformed structure that fold_nested already
-    refuses, so it is never seen here."""
-    if is_piecewise(t):
-        status, load = select(ctx, t, assumptions)
-        if status != "value":
-            return None                        # branch selection undecided: shadowing cannot be settled
-        return collapse(ctx, load, assumptions)             # keep collapsing if the branch value is still piecewise
-    if not isinstance(t, Expr) or not t.args:
-        return t
-    new_args = []
-    changed = False
-    for a in t.args:
-        na = collapse(ctx, a, assumptions)
-        if na is None:
+def collapse(
+    ctx: MathContext,
+    term: Term,
+    assumptions: Assumptions,
+) -> Term | None:
+    """Replace piecewise subterms by values selected in the assumption frame."""
+    if is_piecewise(term):
+        selection = select(ctx, term, assumptions)
+        if isinstance(selection, ResidualSelection):
             return None
-        changed = changed or (na is not a)
-        new_args.append(na)
-    return T.mk(t.head, tuple(new_args)) if changed else t
+        return collapse(ctx, selection.value, assumptions)
+    if not isinstance(term, Expr) or not term.args:
+        return term
+    arguments: list[Term] = []
+    changed = False
+    for argument in term.args:
+        collapsed = collapse(ctx, argument, assumptions)
+        if collapsed is None:
+            return None
+        changed = changed or collapsed is not argument
+        arguments.append(collapsed)
+    return T.mk(term.head, tuple(arguments)) if changed else term
 
 
-def conflicts(ctx, t, assumptions):
-    """Order-independence lint (not an evaluation gate): values differing on an
-    overlap mean the value there depends on declaration order.
-
-    Evaluation uses `select` with ordered first-match and is never ambiguous. This
-    function is an **authoring check**: if two branch regions can hold simultaneously
-    (`ci and cj` satisfiable) while their values differ, swapping the declaration order
-    changes the result there, so the author is told to write mutually exclusive guards.
-    Returns [(i, j, Verdict)], where the Verdict states whether the overlap is
-    well-defined (order independent):
-    * YES  empty overlap, or identical values on the overlap
-    * NO   the overlap is satisfiable and the two values differ: order sensitive, the
-           author should tighten the guards
-    * Unknown  beyond the pipeline's decision power (GUARDED/FRAGMENT/UNDECIDABLE/BUDGET)
-
-    An undecided case is never disguised as agreement."""
+def conflicts(
+    ctx: MathContext,
+    term: Term,
+    assumptions: Assumptions,
+) -> list[OverlapCheck]:
+    """Lint branch pairs whose values differ on a satisfiable overlap."""
     from cas.math.decide import satisfiable
-    bs = branches(t)
-    out = []
-    n = len(bs)
-    for i in range(n):
-        vi, ci = bs[i]
-        for j in range(i + 1, n):
-            vj, cj = bs[j]
-            sat = satisfiable(ctx, [ci, cj], assumptions)      # is the overlap satisfiable
-            if sat is NO:
-                out.append((i, j, YES))            # empty overlap: order independent by construction
+
+    branch_list = branches(term)
+    output: list[OverlapCheck] = []
+    for first_index, (first_value, first_condition) in enumerate(branch_list):
+        for second_index in range(first_index + 1, len(branch_list)):
+            second_value, second_condition = branch_list[second_index]
+            overlap = (first_condition, second_condition)
+            satisfiability = satisfiable(ctx, overlap, assumptions)
+            if satisfiability.is_no():
+                output.append(OverlapCheck(first_index, second_index, YES))
                 continue
-            out.append((i, j, _agree(ctx, vi, vj, (ci, cj), assumptions)))
-    return out
+            output.append(
+                OverlapCheck(
+                    first_index,
+                    second_index,
+                    _agree(
+                        ctx,
+                        first_value,
+                        second_value,
+                        overlap,
+                        assumptions,
+                    ),
+                )
+            )
+    return output
 
 
-def _agree(ctx, vi, vj, conds, assumptions):
-    """Whether two values are equal under the overlap conditions: decide after
-    **extending** the assumption set.
-
-    The assumption set is immutable, so this uses `extended` (producing a new object)
-    rather than writing in place: overlap analysis must not pollute the caller's
-    assumptions.
-    """
-    if vi is vj:
+def _agree(
+    ctx: MathContext,
+    first: Term,
+    second: Term,
+    conditions: tuple[Term, ...],
+    assumptions: Assumptions,
+) -> Verdict:
+    """Decide value agreement after extending the assumption frame."""
+    if first is second:
         return YES
-    tmp = assumptions.extended(*[c for c in conds if c is not T.TRUE])
+    extended = assumptions.extended(
+        *(condition for condition in conditions if condition is not T.TRUE)
+    )
     from cas.math.decide import equivalent
-    return equivalent(ctx, vi, vj, tmp)
+
+    return equivalent(ctx, first, second, extended)
 
 
 # ---------------------------------------------------------------------------
 # Per-branch operation lifting
 # ---------------------------------------------------------------------------
 
-# Largest number of branch combinations a single `lift` may expand. Repeated
-# operations on piecewise values multiply the branch count, so a piecewise chain
-# without an operation node would otherwise grow without bound; past the budget the
-# lift refuses (BudgetExceeded) instead of returning a truncated result. Callers
-# with a proven larger operation pass their own budget explicitly.
 LIFT_BRANCH_BUDGET = 1024
 
 
-def _merge_runs(bs):
-    """Collapse adjacent branches carrying the same value into one.
-
-    Ordered first-hit semantics: two adjacent branches with the *same* value
-    yield that value whether or not their conditions overlap, so replacing them
-    by one branch conditioned on their disjunction is semantics preserving. The
-    merge is deliberately restricted to adjacent branches: same-value branches
-    separated by another branch cannot be merged without deciding whether the
-    intervening branch is reached first.
-
-    `T.or_` normalizes a disjunction, so an adjacent pair that already covers
-    everything collapses to TRUE and the merged branch stays the final else branch.
-    """
-    out = []
-    for v, c in bs:
-        if out:
-            pv, pc = out[-1]
-            if pv is v:                     # same value: one branch, disjoined condition
-                out[-1] = (pv, T.or_(pc, c))
+def _merge_runs(branch_list: Sequence[Branch]) -> list[Branch]:
+    """Merge adjacent same-value branches under their disjunction."""
+    output: list[Branch] = []
+    for value, condition in branch_list:
+        if output:
+            previous_value, previous_condition = output[-1]
+            if previous_value is value:
+                output[-1] = (
+                    previous_value,
+                    T.or_(previous_condition, condition),
+                )
                 continue
-        out.append((v, c))
-    return out
+        output.append((value, condition))
+    return output
 
 
-def lift(op, *terms, budget=LIFT_BRANCH_BUDGET):
-    """Lift an n-ary operation op over Piecewise arguments per branch (pointwise,
-    Cartesian expansion).
-
-    Semantics: a piecewise function participates in an operation pointwise,
-    `(f+g)(x) = f(x)+g(x)`. Each combination of (p-branch, q-branch, ...) produces a
-    new branch whose value is op of the branch values and whose condition is the
-    conjunction of the branch conditions; a combination whose conjunction is provably
-    false (the two branches cannot hold together) has an empty overlap and is dropped.
-    op takes interned terms and returns an interned term (such as T.plus / T.times). A
-    non-Piecewise argument counts as a single always-true branch. The result is
-    normalized by `piecewise`.
-
-    Merging: each argument's branch list is first collapsed by `_merge_runs`, so
-    adjacent branches with the same value enter the product as one branch. The merged
-    form is pointwise identical to the unmerged one, and no branch that could have
-    been kept is dropped.
-
-    Budget: the product of the merged branch-list sizes is computed before expanding.
-    A product above `budget` (default LIFT_BRANCH_BUDGET) refuses with
-    `BudgetExceeded`, whose `spent` is the product size; the operation never returns a
-    truncated Piecewise. A caller that needs a larger expansion passes its own budget.
-    """
-    if not any(is_piecewise(x) for x in terms):
-        return op(*terms)
-    exps = [_merge_runs(branches(x)) for x in terms]
+def lift(
+    operation: Callable[..., Term],
+    *terms: Term,
+    budget: int = LIFT_BRANCH_BUDGET,
+) -> Term:
+    """Lift an operation over Piecewise arguments by Cartesian expansion."""
+    if not any(is_piecewise(term) for term in terms):
+        return operation(*terms)
+    expansions = [_merge_runs(branches(term)) for term in terms]
     total = 1
-    for ex in exps:
-        total *= len(ex)
+    for expansion in expansions:
+        total *= len(expansion)
     if total > budget:
-        raise BudgetExceeded(total, f"piecewise lift would expand to {total} branches "
-                                    f"(budget {budget})")
-    combos = [[]]
-    for ex in exps:
-        combos = [c + [b] for c in combos for b in ex]
-    pairs = []
-    for combo in combos:
-        vals = [v for v, _c in combo]
-        conds = [c for _v, c in combo]
-        conj = _and_all(conds)
-        if conj is T.FALSE:                 # empty combination: conditions cannot hold together
+        raise BudgetExceeded(
+            total,
+            f"piecewise lift would expand to {total} branches (budget {budget})",
+        )
+    combinations: list[list[Branch]] = [[]]
+    for expansion in expansions:
+        combinations = [
+            combination + [branch]
+            for combination in combinations
+            for branch in expansion
+        ]
+    pairs: list[Branch] = []
+    for combination in combinations:
+        values = [value for value, _condition in combination]
+        branch_conditions = [condition for _value, condition in combination]
+        conjunction = _and_all(branch_conditions)
+        if conjunction is T.FALSE:
             continue
-        pairs.append((op(*vals), conj))
+        pairs.append((operation(*values), conjunction))
     return piecewise(pairs)
 
 
-def _and_all(conds):
-    keep = []
-    for c in conds:
-        if c is T.FALSE:
+def _and_all(conditions: Sequence[Term]) -> Term:
+    flattened: list[Term] = []
+    for condition in conditions:
+        if condition is T.FALSE:
             return T.FALSE
-        if c is T.TRUE:
+        if condition is T.TRUE:
             continue
-        if isinstance(c, Expr) and c.head.name == "And":
-            keep.extend(c.args)
+        if isinstance(condition, Expr) and condition.head.name == "And":
+            flattened.extend(condition.args)
         else:
-            keep.append(c)
-    if not keep:
+            flattened.append(condition)
+    if not flattened:
         return T.TRUE
-    return T.and_(*keep)
+    return T.and_(*flattened)
 
 
 # ---------------------------------------------------------------------------
-# Nested flattening + domain extraction (consumes the CAD cells; prerequisite for
-# piecewise differentiation, integration, and equation solving)
+# Nested flattening and CAD domain extraction
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass          # noqa: E402
-from cas.errors import PiecewiseError       # noqa: E402
-from cas.math.decide import decide          # noqa: E402
-from cas.math.cad import resolve_partition       # noqa: E402
 
 _UNDEF = T.SP("Undefined")
 
 
-def _conj(a, b):
-    if a is T.FALSE or b is T.FALSE:
+def _conj(left: Term, right: Term) -> Term:
+    if left is T.FALSE or right is T.FALSE:
         return T.FALSE
-    if a is T.TRUE:
-        return b
-    if b is T.TRUE:
-        return a
-    return T.and_(a, b)
+    if left is T.TRUE:
+        return right
+    if right is T.TRUE:
+        return left
+    return T.and_(left, right)
 
 
-def fold_nested(t):
-    """Flatten nested piecewise into a single layer: a piecewise value distributes
-    into the outer condition by conjunction.
-
-    `pw(pw(a,ca,b,cb), c) -> pw(a, ca and c, b, cb and c)`. A structural rewrite, not
-    a special case; after flattening every algorithm faces a single-layer partition. A
-    piecewise in condition position is malformed and is refused."""
-    if not is_piecewise(t):
-        return t
-    pairs = []
-    for v, c in branches(t):
-        if is_piecewise(c):
-            raise PiecewiseError("a piecewise value is not allowed in condition position")
-        fv = fold_nested(v)
-        if is_piecewise(fv):
-            for iv, ic in branches(fv):
-                pairs.append((iv, _conj(ic, c)))
+def fold_nested(term: Term) -> Term:
+    """Flatten nested piecewise values into one layer."""
+    if not is_piecewise(term):
+        return term
+    pairs: list[Branch] = []
+    for value, condition in branches(term):
+        if is_piecewise(condition):
+            raise PiecewiseError(
+                "a piecewise value is not allowed in condition position"
+            )
+        folded = fold_nested(value)
+        if is_piecewise(folded):
+            for inner_value, inner_condition in branches(folded):
+                pairs.append((inner_value, _conj(inner_condition, condition)))
         else:
-            pairs.append((fv, c))
+            pairs.append((folded, condition))
     return piecewise(pairs)
 
 
-def domain_cells(t, x):
-    """Decompose the domain of a piecewise function in x into cells.
-
-    Returns [(Cell, value|Undefined)]: on each cell the value is that of the first
-    branch holding by ordered first-match, and Undefined when no condition holds (the
-    cell is outside the domain). A condition containing transcendentals or a
-    multivariate partition passes through cad.CadError (UNDECIDABLE / FRAGMENT)."""
-    t = fold_nested(t)
-    bs = branches(t)
-    conds = [c for _v, c in bs]
-    out = []
-    for cell, labels in resolve_partition(conds, x):
-        val = _UNDEF
-        for (v, _c), holds in zip(bs, labels):
+def domain_cells(
+    ctx: MathContext,
+    term: Term,
+    variable: Sym,
+) -> list[DomainCell]:
+    """Resolve ordered-first-match values over the CAD cells in one variable."""
+    flattened = fold_nested(term)
+    branch_list = branches(flattened)
+    branch_conditions = [condition for _value, condition in branch_list]
+    output: list[DomainCell] = []
+    for cell, labels in resolve_partition(ctx, branch_conditions, variable):
+        value: Term = _UNDEF
+        for (branch_value, _condition), holds in zip(branch_list, labels):
             if holds:
-                val = v
+                value = branch_value
                 break
-        out.append((cell, val))
-    return out
+        output.append((cell, value))
+    return output
 
 
 @dataclass(frozen=True, slots=True)
 class Component:
-    """One connected component of the domain.
+    """One maximal connected component of a piecewise domain."""
 
-    cells: the (Cell, value) sequence inside the component;
-    lo / hi: isolating intervals of the lower/upper bound roots, None when unbounded;
-    lo_closed / hi_closed: whether the corresponding endpoint is included (an open
-    interval excludes its endpoints, a point cell includes them)."""
-    cells: tuple
-    lo: object
+    cells: tuple[DomainCell, ...]
+    lo: RootInterval | None
     lo_closed: bool
-    hi: object
+    hi: RootInterval | None
     hi_closed: bool
 
 
-def _mk_component(run):
+def _mk_component(run: Sequence[DomainCell]) -> Component:
     first_cell = run[0][0]
     last_cell = run[-1][0]
-    if first_cell.kind == "point":
-        lo, lo_closed = first_cell.iso, True
+    if isinstance(first_cell, PointCell):
+        lower: RootInterval | None = first_cell.iso
+        lower_closed = True
     else:
-        lo, lo_closed = first_cell.lo, False      # an open cell excludes its left end; None is -inf
-    if last_cell.kind == "point":
-        hi, hi_closed = last_cell.iso, True
+        lower = first_cell.lo
+        lower_closed = False
+    if isinstance(last_cell, PointCell):
+        upper: RootInterval | None = last_cell.iso
+        upper_closed = True
     else:
-        hi, hi_closed = last_cell.hi, False       # an open cell excludes its right end; None is +inf
-    return Component(tuple(run), lo, lo_closed, hi, hi_closed)
+        upper = last_cell.hi
+        upper_closed = False
+    return Component(tuple(run), lower, lower_closed, upper, upper_closed)
 
 
-def connected_components(domain):
-    """Merge the defined cells of `domain_cells` into maximal connected components.
-
-    An undefined cell breaks connectivity: independent constants of indefinite
-    integration and the piecewise sum of definite integrals are both per connected
-    component, and the two sides of a gap are never treated as one."""
-    comps = []
-    run = []
-    for cell, val in domain:
-        if val is _UNDEF:
+def connected_components(domain: Sequence[DomainCell]) -> list[Component]:
+    """Merge defined CAD cells into maximal connected components."""
+    components: list[Component] = []
+    run: list[DomainCell] = []
+    for cell, value in domain:
+        if value is _UNDEF:
             if run:
-                comps.append(_mk_component(run))
+                components.append(_mk_component(run))
                 run = []
         else:
-            run.append((cell, val))
+            run.append((cell, value))
     if run:
-        comps.append(_mk_component(run))
-    return comps
+        components.append(_mk_component(run))
+    return components

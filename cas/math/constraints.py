@@ -1,48 +1,84 @@
-# -*- coding: utf-8 -*-
 """Constraint solving over the shared linear-form channel."""
 
-from cas.syntax import term as T
+from __future__ import annotations
+
+from collections.abc import Sequence
+from fractions import Fraction
+from typing import TYPE_CHECKING
+
+from cas.math.domains.base import DomainElement, Ring
 from cas.math.domains.linalg import solve_system
 from cas.math.linearform import normalized, relation
 from cas.math.project import zero_of
+from cas.syntax import term as T
+from cas.syntax.term import Sym, Term
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
 
 
-class TermField:
-    """Adapt terms to the explicit algebraic interface used by elimination."""
+class TermField(Ring):
+    """Adapt syntax terms to the explicit algebraic elimination interface."""
 
     is_field = True
 
-    def __init__(self, ctx):
+    def __init__(self, ctx: MathContext) -> None:
         self.ctx = ctx
 
-    def from_int(self, n):
-        return T.N(n)
+    @staticmethod
+    def _term(value: DomainElement) -> Term:
+        if not isinstance(value, Term):
+            raise TypeError("TermField expected a syntax term")
+        return value
 
-    def is_zero(self, t):
-        return zero_of(self.ctx, t) is True
+    def from_int(self, value: int) -> DomainElement:
+        return T.N(value)
 
-    def add(self, a, b):
-        return normalized(self.ctx, T.plus(a, b))
+    def from_frac(self, value: Fraction) -> DomainElement:
+        return T.N(value)
 
-    def sub(self, a, b):
-        return normalized(self.ctx, T.plus(a, T.neg(b)))
+    def is_zero(self, value: DomainElement) -> bool:
+        return zero_of(self.ctx, self._term(value)) is True
 
-    def mul(self, a, b):
-        return normalized(self.ctx, T.times(a, b))
+    def add(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        return normalized(
+            self.ctx,
+            T.plus(self._term(left), self._term(right)),
+        )
 
-    def neg(self, a):
-        return normalized(self.ctx, T.neg(a))
+    def mul(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        return normalized(
+            self.ctx,
+            T.times(self._term(left), self._term(right)),
+        )
 
-    def div_exact(self, a, b):
-        return normalized(self.ctx, T.times(a, T.pw(b, T.MONE)))
+    def neg(self, value: DomainElement) -> DomainElement:
+        return normalized(self.ctx, T.neg(self._term(value)))
+
+    def equal(self, left: DomainElement, right: DomainElement) -> bool:
+        return zero_of(
+            self.ctx,
+            T.plus(self._term(left), T.neg(self._term(right))),
+        ) is True
+
+    def div_exact(self, left: DomainElement, right: DomainElement) -> DomainElement:
+        return normalized(
+            self.ctx,
+            T.times(self._term(left), T.pw(self._term(right), T.MONE)),
+        )
 
 
-def solve_linear_constraints(ctx, relations_, unknowns):
-    """Return ``(valuation, complete)`` or ``None`` for a linear witness."""
-    unknowns = tuple(unknowns)
-    rows, rhs_values = [], []
-    for rel in relations_:
-        converted = relation(ctx, rel, unknowns)
+def solve_linear_constraints(
+    ctx: MathContext,
+    relation_terms: Sequence[Term],
+    unknowns: Sequence[Sym],
+) -> tuple[dict[Sym, Term], bool] | None:
+    """Return a linear valuation and completeness flag, or ``None``."""
+    unknown_tuple = tuple(unknowns)
+    rows: list[list[Term]] = []
+    rhs_values: list[Term] = []
+    for relation_term in relation_terms:
+        converted = relation(ctx, relation_term, unknown_tuple)
         if converted is None:
             return None
         row, rhs = converted
@@ -53,5 +89,10 @@ def solve_linear_constraints(ctx, relations_, unknowns):
     if solution is None:
         return None
     particular, homogeneous = solution
-    return ({u: particular[i] for i, u in enumerate(unknowns)},
-            not homogeneous)
+    valuation: dict[Sym, Term] = {}
+    for index, unknown in enumerate(unknown_tuple):
+        value = particular[index]
+        if not isinstance(value, Term):
+            raise TypeError("linear solver returned a non-term value")
+        valuation[unknown] = value
+    return valuation, not homogeneous

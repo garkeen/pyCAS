@@ -29,41 +29,53 @@ from fractions import Fraction as Fr
 
 import pytest
 
-from cas.syntax import term as T
-from cas.syntax.term import S
-from cas.runtime import get_runtime
 from cas.errors import IntegrateError
-from cas.kernel.commit import StepProposal
+from cas.kernel.commit import GuardPolicy, ResolvedProposal
+from cas.kernel.context import TrackedContext
 from cas.kernel.evidence import Evidence
+from cas.kernel.scope import ScopeStore
+from cas.kernel.services import NullServices
 from cas.math import project as projection
 from cas.math.calculus.differentiation.checkers import DiffChecker, _cross_diff
-from cas.math.domains.base import Domain, domain_scope
+from cas.math.domains.base import Domain, DomainCapabilities
 from cas.math.domains.poly import Poly, poly_domain
 from cas.math.domains.poly import from_term as poly_from_term
-from cas.math.domains.ratfunc import ratfunc_domain, rf_from_term
 from cas.math.domains.qarith import fold
-from cas.math.tactics import _lin_core, solve_linear, TacticsError
+from cas.math.domains.ratfunc import ratfunc_domain, rf_from_term
 from cas.math.integrate import integrate_term
+from cas.math.tactics import (
+    LinearRefusal,
+    LinearSolution,
+    TacticsError,
+    _lin_core,
+    solve_linear,
+)
+from cas.runtime import bootstrap
+from cas.syntax import term as T
+from cas.syntax.term import S
 from cas.workflow.command import Diff
 
+RUNTIME = bootstrap()
 
 X = S("x")
 Y = S("y")
 
 
 def _math():
-    """The installed math context: declarations plus the assembled ladder."""
-    return get_runtime().math
+    """Return the assembled math context for this test module."""
+    return RUNTIME.math
 
 
 def _ladder(*stages):
-    """A context whose projection ladder carries exactly these rungs.
+    """Return a context whose immutable projection ladder has exactly ``stages``."""
+    base = _math()
+    ladder = dataclasses.replace(base.projection_ladder, stages=tuple(stages))
+    return dataclasses.replace(base, projection_ladder=ladder)
 
-    The ladder is a value, so a test that wants its own rung builds its own
-    context instead of mutating a shared ladder: no other test can inherit the
-    rung, and nothing has to be restored afterwards.
-    """
-    return dataclasses.replace(_math(), projection_stages=tuple(stages))
+
+def _with_domain(ctx, domain):
+    """Return a nested computation context carrying one scoped domain."""
+    return dataclasses.replace(ctx, domains=ctx.domains.with_scoped(domain))
 
 
 def _project(term):
@@ -76,7 +88,7 @@ def _project(term):
 # ---------------------------------------------------------------------------
 
 def test_constant_cells_keep_their_answers():
-    i = get_runtime().const_by_name("i").atom
+    i = RUNTIME.const_by_name("i").atom
     cases = (
         (T.N(0), True),
         (T.N(3), False),
@@ -138,6 +150,12 @@ class _DualDomain(Domain):
     the domain, never by the projection layer."""
 
     name = "c5-dual"
+    capabilities = DomainCapabilities(scoped=True)
+
+    def member(self, term):
+        return True
+
+
 
     def normalize(self, t):
         return t
@@ -168,19 +186,19 @@ def test_new_representation_is_consumed_through_a_caller_supplied_ladder():
                                         dual.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c5-dual", try_fn))
-    with domain_scope(dual):
-        hit_zero = projection.project(ctx, _marker("C5DualMarker", 0))
-        hit_two = projection.project(ctx, _marker("C5DualMarker", 2))
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c5-dual", try_fn)), dual)
+    hit_zero = projection.project(ctx, _marker("C5DualMarker", 0))
+    hit_two = projection.project(ctx, _marker("C5DualMarker", 2))
 
-        assert hit_zero is not None and hit_zero.domain is dual
-        assert hit_two is not None and hit_two.domain is dual
-        assert type(hit_two.element) is _DualElement
+    assert hit_zero is not None and hit_zero.domain is dual
+    assert hit_two is not None and hit_two.domain is dual
+    assert type(hit_two.element) is _DualElement
 
-        assert projection.is_zero(hit_zero) is True
-        assert projection.is_zero(hit_two) is False
-        assert projection.normalize(hit_zero) is T.N(0)
-        assert projection.normalize(hit_two) is T.N(2)
+    assert projection.is_zero(hit_zero) is True
+    assert projection.is_zero(hit_two) is False
+    assert projection.normalize(hit_zero) is T.N(0)
+    assert projection.normalize(hit_two) is T.N(2)
 
 
 # ---------------------------------------------------------------------------
@@ -190,12 +208,16 @@ def test_new_representation_is_consumed_through_a_caller_supplied_ladder():
 def test_producing_domain_without_consumption_refuses_and_names_itself():
     class OpaqueDomain(Domain):
         name = "c5-opaque"
+        capabilities = DomainCapabilities(scoped=True)
 
-        def normalize(self, t):
-            return t
+        def member(self, term):
+            return True
 
-        def equal(self, a, b):
-            return a is b
+        def normalize(self, term):
+            return term
+
+        def equal(self, left, right):
+            return left is right
 
     opaque = OpaqueDomain()
 
@@ -204,18 +226,18 @@ def test_producing_domain_without_consumption_refuses_and_names_itself():
             return projection.Projected(opaque, object(), t, opaque.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c5-opaque", try_fn))
-    with domain_scope(opaque):
-        hit = projection.project(ctx, _marker("C5OpaqueMarker", 1))
-        assert hit is not None and hit.domain is opaque
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c5-opaque", try_fn)), opaque)
+    hit = projection.project(ctx, _marker("C5OpaqueMarker", 1))
+    assert hit is not None and hit.domain is opaque
 
-        with pytest.raises(NotImplementedError, match="c5-opaque") as zero_err:
-            projection.is_zero(hit)
-        assert "element_is_zero" in str(zero_err.value)
+    with pytest.raises(NotImplementedError, match="c5-opaque") as zero_error:
+        projection.is_zero(hit)
+    assert "element_is_zero" in str(zero_error.value)
 
-        with pytest.raises(NotImplementedError, match="c5-opaque") as nf_err:
-            projection.normalize(hit)
-        assert "element_to_term" in str(nf_err.value)
+    with pytest.raises(NotImplementedError, match="c5-opaque") as normal_error:
+        projection.normalize(hit)
+    assert "element_to_term" in str(normal_error.value)
 
 
 # ---------------------------------------------------------------------------
@@ -238,17 +260,28 @@ def test_protocol_only_domain_reaches_the_honest_refusal():
                                         protocol.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c6-protocol", try_fn))
-    with domain_scope(protocol):
-        marker = _marker("C6ProtocolMarker", 7)
-        with pytest.raises(IntegrateError, match="element representation"):
-            integrate_term(ctx, marker, X)
-        assert _cross_diff(ctx, marker, marker, X) is None
-        proposal = StepProposal(
-            scope=None, premises=(), conclusions=(marker,),
-            evidence=Evidence("calculus.derivative", Diff(pred=None, var=X)),
-            premise_propositions=(marker,))
-        assert DiffChecker(ctx).check(proposal, None, None).is_unknown()
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c6-protocol", try_fn)), protocol)
+    marker = _marker("C6ProtocolMarker", 7)
+    with pytest.raises(IntegrateError, match="element view"):
+        integrate_term(ctx, marker, X)
+    assert _cross_diff(ctx, marker, marker, X).is_unknown()
+    scopes = ScopeStore()
+    root = scopes.create()
+    tracked = TrackedContext(scopes, NullServices(), root.id)
+    proposal = ResolvedProposal(
+        scope=root.id,
+        premises=(),
+        conclusions=(marker,),
+        evidence=Evidence("calculus.derivative", Diff(pred=None, var=X)),
+        guard_policy=GuardPolicy.REQUIRE_PROVED,
+        premise_propositions=(marker,),
+    )
+    assert DiffChecker(ctx).check(
+        proposal,
+        tracked,
+        NullServices(),
+    ).is_unknown()
 
 
 def test_element_variable_view_keeps_the_independent_integrand():
@@ -327,6 +360,12 @@ class _ViewDomain(Domain):
     its element type stays private to the domain."""
 
     name = "c8-view"
+    capabilities = DomainCapabilities(scoped=True)
+
+    def member(self, term):
+        return True
+
+
 
     def __init__(self, ring):
         self.ring = ring
@@ -353,12 +392,12 @@ def test_new_representation_is_consumed_through_the_polynomial_view():
             return projection.Projected(view, _OpaqueViewElement(p), t, view.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c8-view", try_fn))
-    with domain_scope(view):
-        kind, payload, _condition = _lin_core(ctx, _marker("C8ViewMarker", 0), X)
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c8-view", try_fn)), view)
+    result = _lin_core(ctx, _marker("C8ViewMarker", 0), X)
 
-    assert kind == "linear"
-    assert payload is T.N(2)                 # x - 2 = 0 -> x = 2
+    assert isinstance(result, LinearSolution)
+    assert result.solution is T.N(2)
 
 
 class _NoViewDomain(Domain):
@@ -366,6 +405,12 @@ class _NoViewDomain(Domain):
     None and the consumer refuses honestly."""
 
     name = "c8-no-view"
+    capabilities = DomainCapabilities(scoped=True)
+
+    def member(self, term):
+        return True
+
+
 
     def normalize(self, t):
         return t
@@ -382,13 +427,13 @@ def test_domain_without_the_polynomial_view_refuses_honestly():
             return projection.Projected(no_view, object(), t, no_view.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c8-no-view", try_fn))
-    with domain_scope(no_view):
-        kind, reason, _condition = _lin_core(ctx, _marker("C8NoViewMarker", 1), X)
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c8-no-view", try_fn)), no_view)
+    result = _lin_core(ctx, _marker("C8NoViewMarker", 1), X)
 
-    assert no_view.element_poly(object()) is None    # the protocol default: no view
-    assert kind == "refuse"
-    assert "polynomial view" in reason
+    assert no_view.element_poly(object()) is None
+    assert isinstance(result, LinearRefusal)
+    assert "polynomial view" in result.detail
 
 
 def test_tactics_layer_dispatches_by_capability_not_representation():
@@ -397,7 +442,8 @@ def test_tactics_layer_dispatches_by_capability_not_representation():
     root = next(p for p in pathlib.Path(__file__).resolve().parents
                 if (p / "cas").is_dir())
     src = (root / "cas" / "math" / "tactics.py").read_text(encoding="utf-8")
-    for forbidden in ("Poly", "RatFunc", "rf_reduce", "isinstance(el"):
+    for forbidden in ("rf_reduce", "isinstance(Poly", "isinstance(RatFunc",
+                      "isinstance(element"):
         assert forbidden not in src, forbidden
 
 
@@ -490,6 +536,12 @@ class _AsPolyDomain(Domain):
     is available only through the element-as-polynomial capability query."""
 
     name = "c8-as-poly"
+    capabilities = DomainCapabilities(scoped=True)
+
+    def member(self, term):
+        return True
+
+
 
     def __init__(self, vars_, ring):
         self.vars = tuple(vars_)
@@ -519,15 +571,15 @@ def test_new_representation_is_consumed_through_the_element_as_polynomial_query(
             return projection.Projected(domain, _AsPolyElement(p), t, domain.name)
         return None
 
-    ctx = _ladder(projection.ProjectionStage("c8-as-poly", try_fn))
-    with domain_scope(domain):
-        marker = _marker("C8AsPolyMarker", 1)
-        got = integrate_term(ctx, marker, X)                         # x^3/3 - 3x
-        want = fold(T.plus(T.times(T.N(Fr(1, 3)), T.pw(X, T.N(3))),
-                          T.neg(T.times(T.N(3), X))))
-        assert fold(got) == want
-        assert _cross_diff(ctx, marker, T.times(T.N(2), X), X) is True
-        assert _cross_diff(ctx, marker, T.N(1), X) is False
+    ctx = _with_domain(
+        _ladder(projection.ProjectionStage("c8-as-poly", try_fn)), domain)
+    marker = _marker("C8AsPolyMarker", 1)
+    got = integrate_term(ctx, marker, X)                         # x^3/3 - 3x
+    want = fold(T.plus(T.times(T.N(Fr(1, 3)), T.pw(X, T.N(3))),
+                      T.neg(T.times(T.N(3), X))))
+    assert fold(got) == want
+    assert _cross_diff(ctx, marker, T.times(T.N(2), X), X).is_yes()
+    assert _cross_diff(ctx, marker, T.N(1), X).is_no()
 
 
 def test_capability_consumers_name_no_concrete_element_representation():

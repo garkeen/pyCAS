@@ -1,138 +1,170 @@
-# -*- coding: utf-8 -*-
-"""The single implementation of linear-form decomposition and classification.
+"""Linear-form decomposition over explicit syntactic and semantic channels."""
 
-The syntactic channel is used by the constraint solver, where coefficients may
-be arbitrary terms.  The semantic channel is used by the solving tactic, where
-the domain's own polynomial view is the authority.  Keeping both channels here
-prevents the two notions of linearity from drifting apart.
-"""
+from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from cas.math.domains.base import DomainElement, Monomial, Ring
+from cas.math.domains.poly import MonomialKey, _norm, to_term
+from cas.math.project import is_zero, project
+from cas.math.project import normalize as project_normalize
 from cas.syntax import term as T
-from cas.syntax.term import Sym
-from cas.math.domains.poly import _norm, to_term
-from cas.math.project import is_zero, normalize as proj_normalize, project
+from cas.syntax.term import Sym, Term
+from cas.syntax.termpath import free_vars
+
+if TYPE_CHECKING:
+    from cas.math.context import MathContext
+
+Decomposition: TypeAlias = tuple[dict[Sym, Term], Term]
+LinearFormKind: TypeAlias = Literal[
+    "outside", "constant", "no_view", "zero", "independent", "degree", "linear"
+]
+LinearFormPayload: TypeAlias = str | bool | int | tuple[Term, Term] | None
 
 
-# ---------------------------------------------------------------------------
-# Syntactic channel
-
-
-def decompose(t, unknowns):
-    """Return ``(coefficients, constant)`` or ``None``.
-
-    A coefficient is a term that contains none of ``unknowns``.  This channel
-    intentionally does not use semantic simplification: it is the exact input
-    format of the linear Gaussian eliminator.
-    """
-    unknowns = tuple(unknowns)
-    unknown_set = set(unknowns)
-    if t in unknown_set:
-        return ({t: T.ONE}, T.ZERO)
-    if not (T.free_vars(t) & unknown_set):
-        return ({}, t)
-    if not isinstance(t, T.Expr):
+def decompose(term: Term, unknowns: Sequence[Sym]) -> Decomposition | None:
+    """Return syntactic coefficients and a constant, or ``None``."""
+    unknown_tuple = tuple(unknowns)
+    unknown_set = set(unknown_tuple)
+    if isinstance(term, T.Sym) and term in unknown_set:
+        return {term: T.ONE}, T.ZERO
+    if not (free_vars(term) & unknown_set):
+        return {}, term
+    if not isinstance(term, T.Expr):
         return None
-    name = t.head.name
+    name = term.head.name
     if name == "Plus":
-        coeffs, const = {}, T.ZERO
-        for arg in t.args:
-            part = decompose(arg, unknowns)
+        coefficients: dict[Sym, Term] = {}
+        constant: Term = T.ZERO
+        for argument in term.args:
+            part = decompose(argument, unknown_tuple)
             if part is None:
                 return None
-            for key, value in part[0].items():
-                coeffs[key] = T.plus(coeffs.get(key, T.ZERO), value)
-            const = T.plus(const, part[1])
-        return coeffs, const
+            for symbol, value in part[0].items():
+                coefficients[symbol] = T.plus(
+                    coefficients.get(symbol, T.ZERO), value
+                )
+            constant = T.plus(constant, part[1])
+        return coefficients, constant
     if name == "Times":
-        parts = [decompose(arg, unknowns) for arg in t.args]
-        if any(part is None for part in parts):
-            return None
-        unknown_indices = [i for i, part in enumerate(parts) if part[0]]
+        parts: list[Decomposition] = []
+        for argument in term.args:
+            part = decompose(argument, unknown_tuple)
+            if part is None:
+                return None
+            parts.append(part)
+        unknown_indices = [
+            index for index, part in enumerate(parts) if part[0]
+        ]
         if len(unknown_indices) > 1:
             return None
         if not unknown_indices:
-            product = T.ONE
-            for _coeffs, const in parts:
-                product = T.times(product, const)
+            product: Term = T.ONE
+            for _coefficients, constant in parts:
+                product = T.times(product, constant)
             return {}, product
-        index = unknown_indices[0]
-        factor = T.ONE
-        for i, (_coeffs, const) in enumerate(parts):
-            if i != index:
-                factor = T.times(factor, const)
-        coeffs, const = parts[index]
-        return ({key: T.times(value, factor)
-                 for key, value in coeffs.items()},
-                T.times(const, factor))
-    if name == "Power" and len(t.args) == 2 and t.args[1] is T.ONE:
-        return decompose(t.args[0], unknowns)
+        unknown_index = unknown_indices[0]
+        factor: Term = T.ONE
+        for index, (_coefficients, constant) in enumerate(parts):
+            if index != unknown_index:
+                factor = T.times(factor, constant)
+        coefficients, constant = parts[unknown_index]
+        return (
+            {
+                symbol: T.times(value, factor)
+                for symbol, value in coefficients.items()
+            },
+            T.times(constant, factor),
+        )
+    if name == "Power" and len(term.args) == 2 and term.args[1] is T.ONE:
+        return decompose(term.args[0], unknown_tuple)
     return None
 
 
-def is_linear(t, unknowns):
-    """Whether ``t`` is linear in the given unknowns."""
-    return decompose(t, unknowns) is not None
+def is_linear(term: Term, unknowns: Sequence[Sym]) -> bool:
+    """Return whether a term is linear in the supplied unknowns."""
+    return decompose(term, unknowns) is not None
 
 
-def normalized(ctx, t):
-    """Normalize a coefficient through the projection, or fold literals."""
-    hit = project(ctx, t)
+def normalized(ctx: MathContext, term: Term) -> Term:
+    """Normalize a coefficient through projection, or fold literal arithmetic."""
+    hit = project(ctx, term)
     if hit is not None:
-        return proj_normalize(hit)
+        return project_normalize(hit)
     from cas.math.domains.qarith import fold
-    return fold(t)
+
+    return fold(term)
 
 
-def relation(ctx, rel, unknowns):
-    """Convert an equation to ``(row, rhs)`` for ``sum(row_i*u_i)=rhs``."""
-    if not (isinstance(rel, T.Expr) and isinstance(rel.head, Sym)
-            and rel.head.name == "Eq"):
+def relation(
+    ctx: MathContext,
+    relation_term: Term,
+    unknowns: Sequence[Sym],
+) -> tuple[list[Term], Term] | None:
+    """Convert an equation into a coefficient row and right-hand side."""
+    if not (
+        isinstance(relation_term, T.Expr)
+        and isinstance(relation_term.head, Sym)
+        and relation_term.head.name == "Eq"
+    ):
         return None
-    lhs, rhs = rel.args
-    left = decompose(lhs, unknowns)
-    right = decompose(rhs, unknowns)
-    if left is None or right is None:
+    left, right = relation_term.args
+    left_form = decompose(left, unknowns)
+    right_form = decompose(right, unknowns)
+    if left_form is None or right_form is None:
         return None
-    left_coeffs, left_const = left
-    right_coeffs, right_const = right
-    row = [normalized(ctx, T.plus(left_coeffs.get(u, T.ZERO),
-                                  T.neg(right_coeffs.get(u, T.ZERO))))
-           for u in unknowns]
-    rhs_value = normalized(ctx, T.plus(right_const, T.neg(left_const)))
-    return row, rhs_value
-
-
-# ---------------------------------------------------------------------------
-# Semantic channel
+    left_coefficients, left_constant = left_form
+    right_coefficients, right_constant = right_form
+    row = [
+        normalized(
+            ctx,
+            T.plus(
+                left_coefficients.get(unknown, T.ZERO),
+                T.neg(right_coefficients.get(unknown, T.ZERO)),
+            ),
+        )
+        for unknown in unknowns
+    ]
+    right_value = normalized(
+        ctx,
+        T.plus(right_constant, T.neg(left_constant)),
+    )
+    return row, right_value
 
 
 @dataclass(frozen=True, slots=True)
 class LinearForm:
-    """The result of reading linearity from a domain polynomial view."""
+    """A semantic classification of a term relative to one variable."""
 
-    kind: str
-    payload: object = None
-
-
-def _coefficient(ring, monos, var_index, power, rest_vars):
-    coefficients = {}
-    for exponents, value in monos:
-        if exponents[var_index] == power:
-            coefficients[tuple(e for i, e in enumerate(exponents)
-                              if i != var_index)] = value
-    return to_term(ring, _norm(ring, rest_vars, coefficients))
+    kind: LinearFormKind
+    payload: LinearFormPayload = None
 
 
-def linear_form(ctx, t, var: Sym) -> LinearForm:
-    """Classify ``t`` as a linear form in ``var``.
+def _coefficient(
+    ring: Ring,
+    monomials: tuple[Monomial, ...],
+    variable_index: int,
+    power: int,
+    remaining_variables: tuple[Sym, ...],
+) -> Term:
+    coefficients: dict[MonomialKey, DomainElement] = {}
+    for exponents, value in monomials:
+        if exponents[variable_index] == power:
+            coefficients[
+                tuple(
+                    exponent
+                    for index, exponent in enumerate(exponents)
+                    if index != variable_index
+                )
+            ] = value
+    return to_term(ring, _norm(ring, remaining_variables, coefficients))
 
-    Other symbols are parameters.  ``outside``, ``no_view``, ``degree`` and
-    ``independent`` are explicit refusal/classification outcomes; only
-    ``linear`` supplies a candidate coefficient pair.
-    """
-    hit = project(ctx, t)
+
+def linear_form(ctx: MathContext, term: Term, variable: Sym) -> LinearForm:
+    """Classify a term as a linear form in one variable."""
+    hit = project(ctx, term)
     if hit is None:
         return LinearForm("outside", "outside the declared projection domains")
     if hit.element is None:
@@ -142,23 +174,30 @@ def linear_form(ctx, t, var: Sym) -> LinearForm:
         return LinearForm("no_view", "the projected domain exposes no polynomial view")
     if element.is_zero():
         return LinearForm("zero")
-    if var not in element.vars:
+    if variable not in element.vars:
         return LinearForm("independent")
-    index = element.vars.index(var)
+    index = element.vars.index(variable)
     powers = {monomial[index] for monomial, _value in element.monos}
     degree = max(powers)
     if degree == 0:
         return LinearForm("independent")
     if degree != 1:
         return LinearForm("degree", degree)
-    rest_vars = tuple(v for i, v in enumerate(element.vars) if i != index)
+    ring = hit.domain.ring
+    if ring is None:
+        return LinearForm("no_view", "the projected domain has no coefficient ring")
+    remaining = tuple(
+        symbol for position, symbol in enumerate(element.vars) if position != index
+    )
     return LinearForm(
         "linear",
-        (_coefficient(hit.domain.ring, element.monos, index, 1, rest_vars),
-         _coefficient(hit.domain.ring, element.monos, index, 0, rest_vars)),
+        (
+            _coefficient(ring, element.monos, index, 1, remaining),
+            _coefficient(ring, element.monos, index, 0, remaining),
+        ),
     )
 
 
-def nonzero_condition(coefficient):
-    """Return the domain condition needed to divide by a linear coefficient."""
+def nonzero_condition(coefficient: Term) -> Term:
+    """Return the condition required to divide by a linear coefficient."""
     return T.mk(T.S("Ne"), (coefficient, T.ZERO))

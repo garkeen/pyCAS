@@ -6,213 +6,264 @@ layer holds mathematical objects only.
 
 A literal is used directly as a pattern: pointer equality of interned terms is
 literal matching, so no wrapper type is needed and a pattern argument has type
-`Pattern | Term`, recorded here as PatternLike.
+``PatternLike``.
 
 Rule declarations (DSL) are parsed through the pattern channel by the loader,
 producing Pattern objects; template instantiation produces Terms. Pattern
 variables therefore occur in exactly two places: matching and instantiation.
 """
 
-from cas.syntax import term as T
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from typing import TypeAlias
+
 from cas.errors import BudgetExceeded, ParseError
+from cas.syntax import term as T
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class PatternSortKey:
+    """Comparable key shared by literals, holes and pattern calls."""
+
+    kind: int
+    text: str
+    term: T.SortKey
+    children: tuple[PatternSortKey, ...]
+
 
 _hp = 0
 
 
-def _next_hp():
+def _next_hp() -> int:
     global _hp
     _hp += 1
     return _hp
 
 
 class Pattern:
-    """Base of the closed pattern hierarchy: interned pointer semantics,
-    isomorphic to Term."""
+    """Base of the closed pattern hierarchy with interned pointer semantics."""
 
     __slots__ = ("_h",)
 
-    def __hash__(self):
+    _h: int
+
+    def __hash__(self) -> int:
         return self._h
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return self is other
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return self is not other
 
-    def __lt__(self, other):
+    def __lt__(self, other: Pattern) -> bool:
+        if not isinstance(other, Pattern):
+            return NotImplemented
         return sort_key(self) < sort_key(other)
 
 
 class PatternVar(Pattern):
     __slots__ = ("name", "pred")
 
-    def __init__(self, name, pred=None):
+    name: str
+    pred: str | None
+
+    def __init__(self, name: str, pred: str | None = None) -> None:
         self.name = name
         self.pred = pred
         self._h = _next_hp()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"?{self.name}" + (f"::{self.pred}" if self.pred else "")
 
 
 class PatternSeq(Pattern):
     __slots__ = ("name",)
 
-    def __init__(self, name):
+    name: str
+
+    def __init__(self, name: str) -> None:
         self.name = name
         self._h = _next_hp()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"??{self.name}"
 
 
 class PatternCall(Pattern):
     __slots__ = ("head", "args")
 
-    def __init__(self, head, args, h):
-        self.head = head                  # Term (a symbol)
-        self.args = args                  # tuple[PatternLike, ...]
+    head: T.Sym
+    args: tuple[PatternLike, ...]
+
+    def __init__(self, head: T.Sym, args: tuple[PatternLike, ...], h: int) -> None:
+        self.head = head
+        self.args = args
         self._h = h
 
-    def __repr__(self):
-        return f"{self.head.name}{tuple(repr(a) for a in self.args)}"
+    def __repr__(self) -> str:
+        return f"{self.head.name}{tuple(repr(argument) for argument in self.args)}"
+
+PatternLike: TypeAlias = T.Term | Pattern
+PatternSubstitutionValue: TypeAlias = T.Term | tuple[T.Term, ...]
+PatternSubstitution: TypeAlias = Mapping[str, PatternSubstitutionValue]
 
 
-_VARS = {}
-_SEQS = {}
-_CALLS = {}
+_VARS: dict[tuple[str, str | None], PatternVar] = {}
+_SEQS: dict[str, PatternSeq] = {}
+_CALLS: dict[tuple[int, tuple[int, ...]], PatternCall] = {}
 
 
-def PV(name, pred=None):
-    t = _VARS.get((name, pred))
-    if t is None:
-        t = PatternVar(name, pred)
-        _VARS[(name, pred)] = t
-    return t
+def PV(name: str, pred: str | None = None) -> PatternVar:
+    key = (name, pred)
+    pattern = _VARS.get(key)
+    if pattern is None:
+        pattern = PatternVar(name, pred)
+        _VARS[key] = pattern
+    return pattern
 
 
-def PS(name):
-    t = _SEQS.get(name)
-    if t is None:
-        t = PatternSeq(name)
-        _SEQS[name] = t
-    return t
+def PS(name: str) -> PatternSeq:
+    pattern = _SEQS.get(name)
+    if pattern is None:
+        pattern = PatternSeq(name)
+        _SEQS[name] = pattern
+    return pattern
 
 
-def _flatten_ac(head, args):
-    """AC-head flattening, isomorphic to the term layer: flatten same-head
-    nesting and sort deterministically."""
-    flat = []
-    for a in args:
-        if isinstance(a, PatternCall) and a.head is head:
-            flat.extend(a.args)
+def _flatten_ac(head: T.Sym, args: Iterable[PatternLike]) -> list[PatternLike]:
+    """Flatten and deterministically sort same-head AC pattern arguments."""
+    flat: list[PatternLike] = []
+    for argument in args:
+        if isinstance(argument, PatternCall) and argument.head is head:
+            flat.extend(argument.args)
         else:
-            flat.append(a)
-    return sorted(flat, key=sort_key)
+            flat.append(argument)
+    flat.sort(key=sort_key)
+    return flat
 
 
-def pcall(head, args):
-    """Interned PatternCall constructor; AC heads get the same flattening and
-    sorting as the term layer."""
-    name = head.name if isinstance(head, T.Sym) else None
-    if name in T.AC:
-        args = _flatten_ac(head, list(args))
-    key = (head._h, tuple(a._h for a in args))
-    t = _CALLS.get(key)
-    if t is None:
-        t = PatternCall(head, tuple(args), _next_hp())
-        _CALLS[key] = t
-    return t
+def pcall(head: T.Sym, args: Iterable[PatternLike]) -> PatternCall:
+    """Intern a pattern call, applying the term layer's AC shape."""
+    arguments = list(args)
+    if head.name in T.AC:
+        arguments = _flatten_ac(head, arguments)
+    key = (head._h, tuple(argument._h for argument in arguments))
+    pattern = _CALLS.get(key)
+    if pattern is None:
+        pattern = PatternCall(head, tuple(arguments), _next_hp())
+        _CALLS[key] = pattern
+    return pattern
 
 
-def sort_key(p):
-    """Pattern sort key. Terms reuse T.sort_key so that the relative order of
-    literals matches the term layer."""
-    if isinstance(p, T.Term):
-        return (10,) + T.sort_key(p)
-    k = p.__class__
-    if k is PatternVar:
-        return (0, p.name, p.pred or "")
-    if k is PatternSeq:
-        return (1, p.name)
-    return (11, T.sort_key(p.head), tuple(sort_key(a) for a in p.args))
+def sort_key(pattern: PatternLike) -> PatternSortKey:
+    """Return a total order shared by term literals and pattern nodes."""
+    if isinstance(pattern, T.Term):
+        return PatternSortKey(10, "", T.sort_key(pattern), ())
+    if isinstance(pattern, PatternVar):
+        return PatternSortKey(0, pattern.name, T.SortKey(0), ())
+    if isinstance(pattern, PatternSeq):
+        return PatternSortKey(1, pattern.name, T.SortKey(0), ())
+    if not isinstance(pattern, PatternCall):
+        raise ParseError(f"unsupported pattern node: {pattern!r}")
+    return PatternSortKey(
+        11,
+        "",
+        T.sort_key(pattern.head),
+        tuple(sort_key(argument) for argument in pattern.args),
+    )
 
 
-def has_holes(p):
-    """Whether the pattern contains a hole. Always False for a Term, since a
-    hole cannot occur inside a term."""
-    if isinstance(p, T.Term):
+def has_holes(pattern: PatternLike) -> bool:
+    """Return whether a pattern contains a hole."""
+    if isinstance(pattern, T.Term):
         return False
-    if p.__class__ is PatternCall:
-        return any(has_holes(a) for a in p.args)
+    if isinstance(pattern, PatternCall):
+        return any(has_holes(argument) for argument in pattern.args)
     return True
 
 
-def root_key(p):
-    """Rule index key: AC heads bucket by head name, holes map to '*'. Mirrors
-    the term-layer root key."""
-    if isinstance(p, T.Term):
-        if isinstance(p, T.Expr):
-            return p.head.name
-        return p.__class__.__name__ + ":" + repr(p)
-    if p.__class__ is PatternCall:
-        return p.head.name
+def root_key(pattern: PatternLike) -> str:
+    """Return the rule-index root key for a pattern."""
+    if isinstance(pattern, T.Expr):
+        return pattern.head.name
+    if isinstance(pattern, T.Term):
+        return pattern.__class__.__name__ + ":" + repr(pattern)
+    if isinstance(pattern, PatternCall):
+        return pattern.head.name
     return "*"
 
 
-def instantiate(pat, sub):
-    """Template instantiation: Pattern -> Term.
-
-    An unbound hole means the rule declaration is defective, so it is reported
-    explicitly rather than letting a pattern variable leak into the term layer.
-    """
-    if isinstance(pat, T.Term):
-        return pat
-    k = pat.__class__
-    if k is PatternVar:
-        v = sub.get(pat.name)
-        if v is None:
-            raise ParseError(f"unbound pattern variable ?{pat.name} in rule template")
-        return v
-    if k is PatternSeq:
-        raise BudgetExceeded(message=f"sequence hole ??{pat.name} not in arg position")
-    if pat.head.name == "Quote":
-        # Inside Quote the held structure is preserved: rebuild raw, no AC
-        # normalization.
-        return T.intern_expr(pat.head, tuple(_inst_raw(a, sub) for a in pat.args))
-    out = []
-    for a in pat.args:
-        if a.__class__ is PatternSeq:
-            seq = sub.get(a.name)
-            if seq is None:
-                raise ParseError(f"unbound sequence hole ??{a.name} in rule template")
-            out.extend(seq)
+def instantiate(
+    pattern: PatternLike,
+    substitution: PatternSubstitution,
+) -> T.Term:
+    """Instantiate a template pattern into the term language."""
+    if isinstance(pattern, T.Term):
+        return pattern
+    if isinstance(pattern, PatternVar):
+        value = substitution.get(pattern.name)
+        if not isinstance(value, T.Term):
+            raise ParseError(
+                f"unbound pattern variable ?{pattern.name} in rule template"
+            )
+        return value
+    if isinstance(pattern, PatternSeq):
+        raise BudgetExceeded(
+            message=f"sequence hole ??{pattern.name} not in arg position"
+        )
+    if not isinstance(pattern, PatternCall):
+        raise ParseError(f"unsupported pattern node: {pattern!r}")
+    if pattern.head.name == "Quote":
+        return T.intern_expr(
+            pattern.head,
+            tuple(_instantiate_raw(argument, substitution) for argument in pattern.args),
+        )
+    output: list[T.Term] = []
+    for argument in pattern.args:
+        if isinstance(argument, PatternSeq):
+            sequence = substitution.get(argument.name)
+            if not isinstance(sequence, tuple):
+                raise ParseError(
+                    f"unbound sequence hole ??{argument.name} in rule template"
+                )
+            output.extend(sequence)
         else:
-            out.append(instantiate(a, sub))
-    return T.mk(pat.head, tuple(out))
+            output.append(instantiate(argument, substitution))
+    return T.mk(pattern.head, output)
 
 
-def _inst_raw(pat, sub):
-    """Held channel of `instantiate`: rebuild through intern_expr, with no AC
-    normalization."""
-    if isinstance(pat, T.Term):
-        return pat
-    k = pat.__class__
-    if k is PatternVar:
-        v = sub.get(pat.name)
-        if v is None:
-            raise ParseError(f"unbound pattern variable ?{pat.name} in rule template")
-        return v
-    if k is PatternSeq:
-        raise BudgetExceeded(message=f"sequence hole ??{pat.name} not in arg position")
-    out = []
-    for a in pat.args:
-        if a.__class__ is PatternSeq:
-            seq = sub.get(a.name)
-            if seq is None:
-                raise ParseError(f"unbound sequence hole ??{a.name} in rule template")
-            out.extend(seq)
+def _instantiate_raw(
+    pattern: PatternLike,
+    substitution: PatternSubstitution,
+) -> T.Term:
+    """Instantiate held structure without AC normalization."""
+    if isinstance(pattern, T.Term):
+        return pattern
+    if isinstance(pattern, PatternVar):
+        value = substitution.get(pattern.name)
+        if not isinstance(value, T.Term):
+            raise ParseError(
+                f"unbound pattern variable ?{pattern.name} in rule template"
+            )
+        return value
+    if isinstance(pattern, PatternSeq):
+        raise BudgetExceeded(
+            message=f"sequence hole ??{pattern.name} not in arg position"
+        )
+    if not isinstance(pattern, PatternCall):
+        raise ParseError(f"unsupported pattern node: {pattern!r}")
+    output: list[T.Term] = []
+    for argument in pattern.args:
+        if isinstance(argument, PatternSeq):
+            sequence = substitution.get(argument.name)
+            if not isinstance(sequence, tuple):
+                raise ParseError(
+                    f"unbound sequence hole ??{argument.name} in rule template"
+                )
+            output.extend(sequence)
         else:
-            out.append(_inst_raw(a, sub))
-    return T.intern_expr(pat.head, tuple(out))
+            output.append(_instantiate_raw(argument, substitution))
+    return T.intern_expr(pattern.head, tuple(output))

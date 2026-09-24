@@ -1,172 +1,172 @@
-# -*- coding: utf-8 -*-
-"""`Runtime`: the read-only query surface once assembly is complete.
+"""Immutable assembled runtime query surface and workflow construction."""
 
-It composes the math context (the declaration query surface plus the
-assembly-computed configuration) with what only this layer needs: surface names
-for the parser, print names for the printer, the binder heads, the resident
-domains, and the checkers the math modules registered as factories.
+from __future__ import annotations
 
-Consumers (parser / pprint / decide / project / rules / domcond / diff ...)
-receive `None` for an unknown name and degrade on their own -- **no semantic
-fallback**, this layer never guesses. The declaration surface itself is reachable
-as `Runtime.math` and is passed explicitly to every algorithm that needs it, so
-no module depends on a handle that assembly fills in behind its back.
-"""
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Mapping
 
-from cas.syntax.term import Const
-from cas.math.context import MathContext
+from cas.kernel.commit import GuardPolicy
+from cas.kernel.evidence import Checker
+from cas.kernel.mode import ExecutionMode
+from cas.kernel.store import KernelStore
+from cas.math.builder import CommandSpec, DecisionStage
+from cas.math.context import DomainCondition, MathContext
+from cas.math.decls import ConstantDecl, FunctionDecl
+from cas.math.domains.base import Domain
+from cas.math.rules import RuleCatalog
+from cas.runtime.registry import RuntimeAssembly
+from cas.syntax.term import Const, Term
+
+if TYPE_CHECKING:
+    from cas.workflow.workflow import Workflow
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeStats:
+    """Stable typed snapshot of assembled registration counts."""
+
+    constants: int
+    functions: int
+    aliases: int
+    binders: int
+    rules: int
+    domain_conditions: int
+    decision_stages: int
+    domains: int
+    checkers: int
+    commands: int
 
 
 class Runtime:
-    """Read-only snapshot. It does not change after construction, and construction
-    happens only in bootstrap."""
+    """Read-only runtime assembled by one explicit bootstrap call."""
 
-    def __init__(self, builder, math: MathContext):
+    def __init__(self, assembly: RuntimeAssembly, math: MathContext) -> None:
+        self._assembly = assembly
         self._math = math
-        self._aliases = dict(builder.aliases)
-        self._binders = frozenset(builder.binders)
-        self._domains = tuple(builder.domains)
-        # A checker reads declarations and therefore needs the math context, which
-        # does not exist while `install(builder)` runs; modules therefore register a
-        # factory and the context is supplied here -- the single point where
-        # checkers meet declarations.
-        self._checkers = tuple((cid, factory(math))
-                               for cid, factory in builder.checkers)
-        self._commands = dict(builder.commands)
+        self._aliases = assembly.aliases
+        self._binders = assembly.binders
+        self._checkers = tuple(
+            (registration.checker_id, registration.factory(math))
+            for registration in assembly.checkers
+        )
 
     @property
     def math(self) -> MathContext:
-        """The declaration query surface and the assembly configuration."""
+        """The assembled mathematical context."""
         return self._math
 
-    # --- constants (the context owns the data, this layer owns the surface) ---
-
-    def const_by_atom(self, atom: Const):
+    def const_by_atom(self, atom: Const) -> ConstantDecl | None:
         return self._math.const_by_atom(atom)
 
-    def const_by_name(self, name: str):
+    def const_by_name(self, name: str) -> ConstantDecl | None:
         return self._math.const_by_name(name)
 
     def is_const_name(self, name: str) -> bool:
         return self._math.is_const_name(name)
 
-    def const_positive(self, atom):
+    def const_positive(self, atom: Const) -> bool | None:
         return self._math.const_positive(atom)
 
-    def const_real(self, atom):
+    def const_real(self, atom: Const) -> bool | None:
         return self._math.const_real(atom)
 
-    def const_bounds(self, atom):
+    def const_bounds(self, atom: Const) -> tuple[int, int] | None:
         return self._math.const_bounds(atom)
 
-    # --- functions ---
-
-    def lookup_function(self, name: str):
+    def lookup_function(self, name: str) -> FunctionDecl | None:
         return self._math.lookup_function(name)
 
-    def function_deriv(self, name: str):
+    def function_deriv(self, name: str) -> tuple[Term | None, str]:
         return self._math.function_deriv(name)
 
-    def all_functions(self) -> tuple:
+    def all_functions(self) -> tuple[FunctionDecl, ...]:
         return self._math.all_functions()
 
-    def print_name(self, head_name: str):
-        """Display name: constants by internal name, functions by head name (the
-        two namespaces do not overlap)."""
-        c = self._math.const_by_name(head_name)
-        if c is not None:
-            return c.print_name
-        d = self._math.lookup_function(head_name)
-        return d.print_name if d else None
+    def print_name(self, head_name: str) -> str | None:
+        constant = self._math.const_by_name(head_name)
+        if constant is not None:
+            return constant.print_name
+        function = self._math.lookup_function(head_name)
+        return function.print_name if function is not None else None
 
-    # --- domain conditions / decision stages / domains ---
-
-    def lookup_domain_cond(self, name: str):
+    def lookup_domain_cond(self, name: str) -> DomainCondition | None:
         return self._math.lookup_domain_cond(name)
 
-    def alias_head(self, surface: str):
-        """Surface name -> canonical head (None when absent). Parser aliases are
-        declaration data."""
+    def alias_head(self, surface: str) -> str | None:
         return self._aliases.get(surface)
 
     def is_binder(self, head_name: str) -> bool:
-        """Whether a canonical head is a declared binder head.
-
-        The parser resolves a surface word through the alias table and then asks
-        this question, so a bound form (integrate/sum/product/limit and the
-        definite integral) comes from declarations rather than from a parser table.
-        """
         return head_name in self._binders
 
-    def role_head(self, role: str):
-        """Role -> canonical head (None when absent). Algorithms fetch by role and
-        never hardcode a function name."""
+    def role_head(self, role: str) -> str | None:
         return self._math.role_head(role)
 
     @property
-    def rules(self) -> tuple:
-        """Rule DSL line texts (parsed at the consumption point in math/rules.py).
-        Rules are data."""
-        return self._math.rules
+    def rules(self) -> RuleCatalog:
+        return self._assembly.rules
 
     @property
-    def eq_stages(self) -> tuple:
-        return self._math.eq_stages
+    def decision_stages(self) -> tuple[DecisionStage, ...]:
+        return self._assembly.decision_stages
 
     @property
-    def domains(self) -> tuple:
-        return self._domains
+    def domains(self) -> tuple[Domain, ...]:
+        return self._assembly.domains
 
     @property
-    def checkers(self) -> tuple:
-        """The (checker_id, checker) pairs each math module registered through
-        its `install(builder)`. Pulled into a session's checker store by
-        `new_workflow`, so a new module adds checkers in exactly one place
-        (its own install) rather than in a second hardcoded list."""
+    def checkers(self) -> tuple[tuple[str, Checker], ...]:
         return self._checkers
+
     @property
-    def commands(self):
-        """Read-only command descriptors registered by math modules."""
-        return dict(self._commands)
+    def commands(self) -> Mapping[str, CommandSpec]:
+        return self._assembly.commands
 
-    def stats(self):
-        return {"constants": len(self._math.consts),
-                "functions": len(self._math.funcs),
-                "aliases": len(self._aliases), "binders": len(self._binders),
-                "rules": len(self._math.rule_lines),
-                "domain_conds": len(self._math._domain_conds),
-                "eq_stages": len(self._math.eq_stages),
-                "domains": len(self._domains),
-                "checkers": len(self._checkers),
-                "commands": len(self._commands)}
+    def stats(self) -> RuntimeStats:
+        return RuntimeStats(
+            constants=len(self._assembly.constants),
+            functions=len(self._assembly.functions),
+            aliases=len(self._aliases),
+            binders=len(self._binders),
+            rules=len(self._assembly.rules.rules),
+            domain_conditions=len(self._math.declarations.domain_conditions),
+            decision_stages=len(self._assembly.decision_stages),
+            domains=len(self._assembly.domains),
+            checkers=len(self._checkers),
+            commands=len(self._assembly.commands),
+        )
+
+    def new_workflow(
+        self,
+        *,
+        store: KernelStore | None = None,
+        mode: ExecutionMode | None = None,
+        policy: GuardPolicy | None = None,
+    ) -> Workflow:
+        """Create a workflow bound to this runtime and its checker registry."""
+        from cas.kernel.services import register_core_checkers
+        from cas.runtime.algorithms import Algorithms
+        from cas.runtime.services import ScopeServices
+        from cas.workflow.workflow import Workflow
+
+        kernel_store = KernelStore() if store is None else store
+        register_core_checkers(kernel_store)
+        for checker_id, checker in self.checkers:
+            kernel_store.checkers.register(checker_id, checker)
+        return Workflow(
+            store=kernel_store,
+            services=ScopeServices(kernel_store.scopes, self.math),
+            algorithms=Algorithms(self.math),
+            mode=mode,
+            policy=policy,
+        )
 
 
-def new_workflow(**kw):
-    """Build a workflow session: ledger + kernel checkers + math checkers +
-    decision services.
-
-    The workflow never imports `cas.math`, so checkers and decision services must
-    be injected by this layer. The math checkers come from the assembled runtime
-    (each math module registered its own checkers through `install(builder)`), so
-    "which checkers exist" is read from the runtime snapshot rather than from a
-    hardcoded module list here.
-
-    Assembly is guaranteed: the runtime is taken from the installed one, so
-    constructing a workflow requires an application that assembled explicitly.
-    """
-    from cas.runtime.dispatch import get_runtime
-    rt = get_runtime()
-    from cas.kernel.services import register_core_checkers
-    from cas.kernel.store import KernelStore
-    from cas.runtime.algorithms import Algorithms
-    from cas.runtime.services import ScopeServices
-    from cas.workflow.workflow import Workflow
-
-    store = kw.pop("store", None)
-    if store is None:
-        store = KernelStore()
-    register_core_checkers(store)
-    for checker_id, checker in rt.checkers:
-        store.checkers.register(checker_id, checker)
-    return Workflow(store=store, services=ScopeServices(store.scopes, rt.math),
-                    algorithms=Algorithms(rt.math), **kw)
+def new_workflow(
+    runtime: Runtime,
+    *,
+    store: KernelStore | None = None,
+    mode: ExecutionMode | None = None,
+    policy: GuardPolicy | None = None,
+) -> Workflow:
+    """Module-level explicit constructor retained as a static function."""
+    return runtime.new_workflow(store=store, mode=mode, policy=policy)

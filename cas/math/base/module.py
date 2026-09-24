@@ -12,11 +12,21 @@ form for the transcendental tower registers through the same protocol as a new
 stage, without touching the decider.
 """
 
+from cas.kernel.scope import Assumptions
+from cas.kernel.verdict import Verdict
+from cas.math.builder import DecisionStage, MathBuilder
+from cas.math.context import MathContext
 from cas.syntax import term as T
-from cas.syntax.term import S
+from cas.syntax.term import S, Term
 
 
-def _ledger_decide(ctx, r, a, b, assumptions):
+def _ledger_decide(
+    ctx: MathContext,
+    r: Term,
+    a: Term,
+    b: Term,
+    assumptions: Assumptions,
+) -> Verdict | None:
     """Hand `Eq(r, 0)` to the decision pipeline; return None if undecided so a
     later stage can take over."""
     from cas.math.decide import decide
@@ -24,8 +34,8 @@ def _ledger_decide(ctx, r, a, b, assumptions):
     return None if d.is_unknown() else d
 
 
-def install(builder) -> None:
+def install(builder: MathBuilder) -> None:
     from cas.math.base import checkers, commands
     checkers.register(builder)
     commands.install(builder)
-    builder.register_eq_stage("ledger_decide", _ledger_decide)
+    builder.register_decision_stage(DecisionStage("ledger_decide", _ledger_decide))

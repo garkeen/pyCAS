@@ -29,91 +29,123 @@ rule; when the source is outside the domain the workflow verifier honestly
 returns UNKNOWN rather than certifying itself.
 """
 
-from cas.syntax import term as T
-from cas.syntax.term import Expr, Sym, Bound
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from cas.errors import DiffError
 from cas.math.domains.qarith import fold
+from cas.syntax import term as T
+from cas.syntax.term import Bound, Expr, Sym, Term
+from cas.syntax.termpath import free_vars, instantiate_de_bruijn
+
+if TYPE_CHECKING:
+    from cas.math.cad import PointCell
+    from cas.math.context import MathContext
 
 
-def differentiate(ctx, t, x: Sym):
-    """d(t)/dx: structural recursion plus rule application, then folding."""
-    return fold(_diff(ctx, t, x))
+def differentiate(ctx: MathContext, term: Term, variable: Sym) -> Term:
+    """Differentiate one term and fold literal arithmetic."""
+    return fold(_diff(ctx, term, variable))
 
 
-def _has(t, x) -> bool:
-    return x in T.free_vars(t)
+def _has(term: Term, variable: Sym) -> bool:
+    return variable in free_vars(term)
 
 
-def _diff(ctx, t, x):
-    if T.is_num(t):
+def _diff(ctx: MathContext, term: Term, variable: Sym) -> Term:
+    if T.is_num(term):
         return T.ZERO
-    if isinstance(t, Sym):
-        return T.ONE if t is x else T.ZERO
-    if isinstance(t, T.Const):
-        return T.ZERO                       # named constants (pi, e, gamma, ...)
-    if isinstance(t, Bound):
+    if isinstance(term, Sym):
+        return T.ONE if term is variable else T.ZERO
+    if isinstance(term, T.Const):
+        return T.ZERO
+    if isinstance(term, Bound):
         raise DiffError("differentiation inside a binder is not implemented")
-    if not isinstance(t, Expr):
-        raise DiffError(f"term cannot be differentiated: {t!r}")
-    head = t.head.name
+    if not isinstance(term, Expr):
+        raise DiffError(f"term cannot be differentiated: {term!r}")
+    head = term.head.name
     if head == "Plus":
-        return T.plus(*(_diff(ctx, a, x) for a in t.args))
+        return T.plus(
+            *(_diff(ctx, argument, variable) for argument in term.args)
+        )
     if head == "Times":
-        # Leibniz: sum over i of a_1...a_{i-1} * da_i * a_{i+1}...a_n
-        parts = []
-        for i, a in enumerate(t.args):
-            da = _diff(ctx, a, x)
-            others = [t.args[j] for j in range(len(t.args)) if j != i]
-            parts.append(T.times(*others, da))
+        parts: list[Term] = []
+        for index, argument in enumerate(term.args):
+            derivative = _diff(ctx, argument, variable)
+            others = [
+                term.args[position]
+                for position in range(len(term.args))
+                if position != index
+            ]
+            parts.append(T.times(*others, derivative))
         return T.plus(*parts)
     if head == "Power":
-        b, e = t.args
-        db, de = _diff(ctx, b, x), _diff(ctx, e, x)
-        if not _has(e, x):
-            # power rule: e * b^(e-1) * db (constant exponent, fractional or negative)
-            return T.times(e, T.pw(b, T.plus(e, T.MONE)), db)
-        # A variable-exponent power needs the logarithm, taken by declared role
-        # rather than by hardcoding the Log name. When the role is undeclared
-        # this refuses honestly instead of guessing a same-named function.
-        log_head = ctx.role_head("logarithm")
-        if log_head is None:
-            raise DiffError("logarithm role is not declared: variable-exponent "
-                            "power cannot be differentiated")
-        lnb = T.call(log_head, b)
-        if not _has(b, x):
-            # exponential rule: b^e * ln(b) * de
-            return T.times(t, lnb, de)
-        # general case: b^e * (de * ln b + e * db / b)
-        return T.times(t, T.plus(T.times(de, lnb),
-                                 T.times(e, db, T.pw(b, T.MONE))))
+        base, exponent = term.args
+        base_derivative = _diff(ctx, base, variable)
+        exponent_derivative = _diff(ctx, exponent, variable)
+        if not _has(exponent, variable):
+            return T.times(
+                exponent,
+                T.pw(base, T.plus(exponent, T.MONE)),
+                base_derivative,
+            )
+        logarithm_head = ctx.role_head("logarithm")
+        if logarithm_head is None:
+            raise DiffError(
+                "logarithm role is not declared: variable-exponent "
+                "power cannot be differentiated"
+            )
+        logarithm = T.call(logarithm_head, base)
+        if not _has(base, variable):
+            return T.times(term, logarithm, exponent_derivative)
+        return T.times(
+            term,
+            T.plus(
+                T.times(exponent_derivative, logarithm),
+                T.times(
+                    exponent,
+                    base_derivative,
+                    T.pw(base, T.MONE),
+                ),
+            ),
+        )
     if head in ("Eq", "Ne", "Lt", "Le", "Gt", "Ge", "And", "Or", "Not"):
         raise DiffError("predicates cannot be differentiated")
     if head == "Piecewise":
-        # Branch-wise differentiation is unsafe at breakpoints: derivatives on
-        # the two sides need continuity and one-sided derivative checks, and
-        # piecing the branch derivatives together is not the whole derivative
-        # (for example x^2 for x <= 0 and x for x > 0 gives 0 branch-wise at 0
-        # while the two one-sided derivatives differ). The cautious channel is
-        # not built here, so this refuses honestly.
-        raise DiffError("branch-wise differentiation of a piecewise function "
-                        "needs continuity and one-sided derivative checks at "
-                        "breakpoints, not implemented")
-    # function application: look up the declared derivative template
-    tpl, note = ctx.function_deriv(head)
-    if tpl is None:
-        raise DiffError(f"{head} has no derivative template"
-                        + (f" ({note})" if note else ""))
-    d = ctx.lookup_function(head)
-    if d is not None and d.arity is not None and len(t.args) != d.arity:
-        raise DiffError(f"{head} declares arity {d.arity}, got {len(t.args)} arguments")
-    if len(t.args) != 1:
-        raise DiffError(f"differentiation of the multivariate {head} is not implemented")
-    arg = t.args[0]
-    inner = T.lift(tpl, arg, 0)            # instantiate DB(0) with the argument
-    return T.times(inner, _diff(ctx, arg, x))    # chain rule: template value times inner derivative
+        raise DiffError(
+            "branch-wise differentiation of a piecewise function needs "
+            "continuity and one-sided derivative checks at breakpoints, "
+            "not implemented"
+        )
+    template, note = ctx.function_deriv(head)
+    if template is None:
+        raise DiffError(
+            f"{head} has no derivative template"
+            + (f" ({note})" if note else "")
+        )
+    declaration = ctx.lookup_function(head)
+    if (
+        declaration is not None
+        and declaration.arity is not None
+        and len(term.args) != declaration.arity
+    ):
+        raise DiffError(
+            f"{head} declares arity {declaration.arity}, got {len(term.args)} arguments"
+        )
+    if len(term.args) != 1:
+        raise DiffError(
+            f"differentiation of the multivariate {head} is not implemented"
+        )
+    argument = term.args[0]
+    instantiated = instantiate_de_bruijn(template, argument)
+    return T.times(instantiated, _diff(ctx, argument, variable))
 
-
-def differentiate_piecewise(ctx, t, x: Sym):
+def differentiate_piecewise(
+    ctx: MathContext,
+    term: Term,
+    variable: Sym,
+) -> tuple[Term, list[PointCell]]:
     """Cautious piecewise differentiation: differentiate each open cell and mark
     breakpoints as explicitly unverified.
 
@@ -127,9 +159,16 @@ def differentiate_piecewise(ctx, t, x: Sym):
     condition that is not a univariate polynomial partition propagates
     cad.CadError.
     """
-    from cas.math.piecewise import branches, piecewise, fold_nested, domain_cells
-    t = fold_nested(t)
-    deriv = piecewise([(differentiate(ctx, v, x), c) for v, c in branches(t)])
-    boundaries = [cell for cell, _v in domain_cells(t, x)
-                  if cell.kind == "point"]
-    return deriv, boundaries
+    from cas.math.piecewise import branches, domain_cells, fold_nested, piecewise
+
+    flattened = fold_nested(term)
+    derivative = piecewise(
+        [(differentiate(ctx, value, variable), condition)
+         for value, condition in branches(flattened)]
+    )
+    breakpoints = [
+        cell
+        for cell, _value in domain_cells(ctx, flattened, variable)
+        if cell.kind == "point"
+    ]
+    return derivative, breakpoints

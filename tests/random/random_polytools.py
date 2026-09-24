@@ -13,21 +13,17 @@ Four properties, all self-proving with no external ground truth:
 Usage: python tests/random/random_polytools.py [rounds] [seed]
 """
 
-import sys
 import random
+import sys
 from fractions import Fraction as Fr
 
 sys.path.insert(0, ".")
 
+from cas.math.domains.poly import _norm, p_deriv, p_gcd_univar, p_mul, p_pow
+from cas.math.domains.polytools import p_deg, p_monic, resultant, squarefree
 from cas.math.domains.q import Q_RING as R
-from cas.math.domains.poly import (_norm, p_mul, p_pow, p_gcd_univar, p_deriv)
-from cas.math.domains.polytools import resultant, squarefree, p_monic, p_deg
 from cas.syntax.term import S
 
-from cas.runtime import bootstrap
-from cas.runtime.dispatch import install
-
-install(bootstrap())      # a standalone bench has no conftest: assemble explicitly
 
 X = S("x")
 V = (X,)

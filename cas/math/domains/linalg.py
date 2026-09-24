@@ -1,134 +1,139 @@
-"""Linear algebra machine: row elimination over a field, rank, nullspace and
-linear-system solving.
+"""Linear algebra over an explicit coefficient field."""
 
-Linear dependence tests, the method of undetermined coefficients and the
-parametric logarithmic-derivative test all rest on this layer, so it is a hard
-item of the foundation gate. A matrix is a table of coefficient tables (a list of
-rows); coefficients are manipulated through the generic ring protocol. Nullspace
-bases and particular solutions are exact, with no floating point.
+from __future__ import annotations
 
-Determinants use the purely integer Bareiss algorithm (det_bareiss), which avoids
-fraction growth on integer matrices and also serves matrices over Q after
-clearing denominators.
-"""
+from collections.abc import Sequence
+from typing import TypeAlias
+
+from cas.math.domains.base import DomainElement, Ring, RingError
+
+CoefficientRow: TypeAlias = list[DomainElement]
+Matrix: TypeAlias = list[CoefficientRow]
 
 
-def _copy(rows):
-    return [list(r) for r in rows]
+def _copy(rows: Sequence[Sequence[DomainElement]]) -> Matrix:
+    return [list(row) for row in rows]
 
 
-def echelon(ring, rows, ncols=None):
-    """Row echelon form (Gaussian elimination over a field).
-
-    Returns (echelon matrix, list of pivot column indices). The input is not
-    modified. `ncols` bounds the columns searched for pivots, so an augmented
-    system eliminates only the coefficient columns and leaves the augmented
-    column alone.
-    """
+def echelon(
+    ring: Ring,
+    rows: Sequence[Sequence[DomainElement]],
+    ncols: int | None = None,
+) -> tuple[Matrix, list[int]]:
+    """Return row-echelon form and pivot columns over a field."""
     if not ring.is_field:
-        from cas.math.domains.base import RingError
         raise RingError("row elimination requires field coefficients")
-    m = _copy(rows)
-    nrows = len(m)
-    width = len(m[0]) if m else 0
-    if ncols is None:
-        ncols = width
-    pivots = []
-    r = 0
-    for c in range(ncols):
-        if r >= nrows:
+    matrix = _copy(rows)
+    row_count = len(matrix)
+    width = len(matrix[0]) if matrix else 0
+    column_count = width if ncols is None else ncols
+    pivots: list[int] = []
+    pivot_row = 0
+    for column in range(column_count):
+        if pivot_row >= row_count:
             break
-        piv = None
-        for i in range(r, nrows):
-            if not ring.is_zero(m[i][c]):
-                piv = i
+        pivot: int | None = None
+        for index in range(pivot_row, row_count):
+            if not ring.is_zero(matrix[index][column]):
+                pivot = index
                 break
-        if piv is None:
+        if pivot is None:
             continue
-        m[r], m[piv] = m[piv], m[r]
-        inv = ring.div_exact(ring.from_int(1), m[r][c])
-        m[r] = [ring.mul(x, inv) for x in m[r]]
-        for i in range(nrows):
-            if i != r and not ring.is_zero(m[i][c]):
-                f = m[i][c]
-                m[i] = [ring.sub(m[i][j], ring.mul(f, m[r][j]))
-                        for j in range(width)]
-        pivots.append(c)
-        r += 1
-    return m, pivots
+        matrix[pivot_row], matrix[pivot] = matrix[pivot], matrix[pivot_row]
+        inverse = ring.div_exact(ring.from_int(1), matrix[pivot_row][column])
+        matrix[pivot_row] = [
+            ring.mul(value, inverse) for value in matrix[pivot_row]
+        ]
+        for index in range(row_count):
+            if index == pivot_row or ring.is_zero(matrix[index][column]):
+                continue
+            factor = matrix[index][column]
+            matrix[index] = [
+                ring.sub(matrix[index][column_index], ring.mul(factor, matrix[pivot_row][column_index]))
+                for column_index in range(width)
+            ]
+        pivots.append(column)
+        pivot_row += 1
+    return matrix, pivots
 
 
-def rank(ring, rows) -> int:
+def rank(ring: Ring, rows: Sequence[Sequence[DomainElement]]) -> int:
     _, pivots = echelon(ring, rows)
     return len(pivots)
 
 
-def nullspace(ring, rows):
-    """A nullspace basis: basis vectors of {x | Ax = 0}, each a tuple of length
-    equal to the number of columns."""
-    m, pivots = echelon(ring, rows)
-    ncols = len(m[0]) if m else 0
-    free = [c for c in range(ncols) if c not in pivots]
-    basis = []
-    for f in free:
-        x = [ring.from_int(0)] * ncols
-        x[f] = ring.from_int(1)
-        for ri, pc in enumerate(pivots):
-            x[pc] = ring.neg(m[ri][f])      # pivot row: x_pc + sum m*x_free = 0
-        basis.append(tuple(x))
+def nullspace(
+    ring: Ring,
+    rows: Sequence[Sequence[DomainElement]],
+) -> list[tuple[DomainElement, ...]]:
+    """Return a basis for the nullspace of a matrix."""
+    matrix, pivots = echelon(ring, rows)
+    column_count = len(matrix[0]) if matrix else 0
+    free_columns = [
+        column for column in range(column_count) if column not in pivots
+    ]
+    basis: list[tuple[DomainElement, ...]] = []
+    for free_column in free_columns:
+        vector: list[DomainElement] = [ring.from_int(0)] * column_count
+        vector[free_column] = ring.from_int(1)
+        for row_index, pivot_column in enumerate(pivots):
+            vector[pivot_column] = ring.neg(matrix[row_index][free_column])
+        basis.append(tuple(vector))
     return basis
 
 
-def solve_system(ring, rows, b):
-    """Solve Ax = b. Returns (particular solution, homogeneous basis), or None
-    when there is no solution.
+def solve_system(
+    ring: Ring,
+    rows: Sequence[Sequence[DomainElement]],
+    right_hand_side: Sequence[DomainElement],
+) -> tuple[tuple[DomainElement, ...], list[tuple[DomainElement, ...]]] | None:
+    """Solve ``Ax = b`` or return ``None`` for an inconsistent system."""
+    augmented = [
+        list(row) + [value]
+        for row, value in zip(rows, right_hand_side)
+    ]
+    column_count = len(rows[0]) if rows else 0
+    matrix, pivots = echelon(ring, augmented, ncols=column_count)
+    for row_index, row in enumerate(matrix):
+        if row_index >= len(pivots) and all(
+            ring.is_zero(value) for value in row[:column_count]
+        ):
+            if not ring.is_zero(row[column_count]):
+                return None
+    particular: list[DomainElement] = [ring.from_int(0)] * column_count
+    for row_index, pivot_column in enumerate(pivots):
+        particular[pivot_column] = matrix[row_index][column_count]
+    return tuple(particular), nullspace(ring, rows)
 
-    `b` is a sequence of length equal to the number of rows. The augmented column
-    is eliminated; if some row has all-zero coefficients but a nonzero augmented
-    entry, there is no solution.
-    """
-    aug = [list(r) + [bi] for r, bi in zip(rows, b)]
-    ncols = len(rows[0]) if rows else 0
-    m, pivots = echelon(ring, aug, ncols=ncols)
-    for ri, row in enumerate(m):
-        if ri >= len(pivots) and all(ring.is_zero(x) for x in row[:ncols]):
-            if not ring.is_zero(row[ncols]):
-                return None                  # 0 = nonzero: no solution
-    x0 = [ring.from_int(0)] * ncols
-    for ri, pc in enumerate(pivots):
-        x0[pc] = m[ri][ncols]
-    basis = [v for v in nullspace(ring, rows)]
-    return tuple(x0), basis
 
-
-def det_bareiss(mat):
-    """Determinant of an integer matrix by the fraction-free Bareiss algorithm,
-    exact throughout.
-
-    A step that does not divide evenly means the implementation is wrong, because
-    Bareiss's theorem guarantees divisibility, so this raises. The empty matrix
-    has determinant 1; a non-square matrix is refused.
-    """
-    n = len(mat)
-    if any(len(r) != n for r in mat):
+def det_bareiss(matrix: Sequence[Sequence[int]]) -> int:
+    """Compute an integer determinant with fraction-free Bareiss elimination."""
+    size = len(matrix)
+    if any(len(row) != size for row in matrix):
         raise ValueError("not a square matrix")
-    if n == 0:
+    if size == 0:
         return 1
-    m = [list(r) for r in mat]
+    work: list[list[int]] = [list(row) for row in matrix]
     sign = 1
-    prev = 1
-    for k in range(n - 1):
-        if m[k][k] == 0:                     # find a nonzero pivot and swap rows
-            sw = next((i for i in range(k + 1, n) if m[i][k] != 0), None)
-            if sw is None:
+    previous = 1
+    for index in range(size - 1):
+        if work[index][index] == 0:
+            swap = next(
+                (row for row in range(index + 1, size) if work[row][index] != 0),
+                None,
+            )
+            if swap is None:
                 return 0
-            m[k], m[sw] = m[sw], m[k]
+            work[index], work[swap] = work[swap], work[index]
             sign = -sign
-        for i in range(k + 1, n):
-            for j in range(k + 1, n):
-                num = m[k][k] * m[i][j] - m[i][k] * m[k][j]
-                if num % prev != 0:
+        for row in range(index + 1, size):
+            for column in range(index + 1, size):
+                numerator = (
+                    work[index][index] * work[row][column]
+                    - work[row][index] * work[index][column]
+                )
+                if numerator % previous != 0:
                     raise ArithmeticError("Bareiss divisibility violated")
-                m[i][j] = num // prev
-        prev = m[k][k]
-    return sign * m[n - 1][n - 1]
+                work[row][column] = numerator // previous
+        previous = work[index][index]
+    return sign * work[size - 1][size - 1]
