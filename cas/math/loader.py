@@ -177,7 +177,7 @@ def _integer(tokens: list[str], index: int, statement: str, lineno: int) -> int:
 
 _LIFT = re.compile(r"^lift\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z]+)$")
 _ALIAS = re.compile(r"^alias\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
-_BINDER = re.compile(r"^binder\s+([A-Za-z_]\w*)$")
+_BINDER = re.compile(r'^binder\s+([A-Za-z_]\w*)(?:\s+print\s+"([^"]*)")?$')
 _ROLE = re.compile(r"^role\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)$")
 
 
@@ -205,8 +205,8 @@ def _parse_binder(lineno: int, line: str) -> BinderDecl:
     match = _BINDER.match(line)
     if match is None:
         raise ParseError(
-            f"line {lineno}: binder must look like 'binder <Head>'")
-    return BinderDecl(match.group(1))
+            f'line {lineno}: binder must look like \'binder <Head> [print "<symbol>"]\'')
+    return BinderDecl(match.group(1), match.group(2))
 
 
 def _parse_role(lineno: int, line: str) -> RoleDecl:

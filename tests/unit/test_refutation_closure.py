@@ -20,7 +20,6 @@ from cas.syntax.term import N, S
 from cas.workflow.command import Claim, Solve
 
 
-
 def test_refutation_requires_proposition_and_evidence(runtime: Runtime) -> None:
     proposition = parse(runtime, "1 == 2")
     with pytest.raises(ValueError):
@@ -91,7 +90,7 @@ def test_undefined_is_a_domain_refutation_not_normal_form_nonzero(
     runtime: Runtime,
 ) -> None:
     x = S("x")
-    value = piecewise([(T.SP("Undefined"), parse(runtime, "x > 0"))])
+    value = piecewise([(T.UNDEFINED, parse(runtime, "x > 0"))])
     equation = T.eq(value, N(0))
     result = back_substitute(runtime.math, equation, x, N(1))
     assert result.verdict.is_no()

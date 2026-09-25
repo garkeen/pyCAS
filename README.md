@@ -74,7 +74,7 @@ pyCAS REPL. Type 'help' for commands.
 > int x 0 1           # 定积分（端点差 + 独立复核）
 > norm #1             # 域标准形
 > steps               # 列出当前视图中的步骤
-> undo                # 真 undo：回退一步事件指针（记录不删）
+> undo / redo        # 真 undo / redo：移动事件历史指针（记录不删）
 > rules / apply <id>  # 列出声明规则；无路径时列出全部匹配位置
 > help / quit
 ```
@@ -99,6 +99,8 @@ from cas.frontend.parser import parse
 api.differentiate(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
 api.solve_linear(runtime, parse(runtime, "2*x + 3 == 7"), parse(runtime, "x"))
 api.solve_linear_with_condition(runtime, parse(runtime, "a*x + b == 0"), parse(runtime, "x"))
+api.solve_diophantine_linear(runtime, [2, 3], 7)
+api.integer_roots(runtime, parse(runtime, "x^2 - 4"), parse(runtime, "x"))
 api.integrate_term(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
 api.guard_report(runtime, [parse(runtime, "x > 0")], parse(runtime, "x"), parse(runtime, "2"))
 ```

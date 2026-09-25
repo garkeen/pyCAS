@@ -4,10 +4,11 @@
 explicitly. There is no process-global runtime slot or compatibility dispatch.
 """
 
+from cas.math.builder import CommandSpec
 from cas.math.decls import ConstantDecl, FunctionDecl
 from cas.runtime.bootstrap import bootstrap
 from cas.runtime.registry import RuntimeBuilder
-from cas.runtime.runtime import CommandSpec, Runtime, new_workflow
+from cas.runtime.runtime import Runtime, new_workflow
 
 __all__ = (
     "bootstrap",

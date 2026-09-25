@@ -141,6 +141,12 @@
 
 - 阶段 1–4 的类型与数据模式迁移已完成：frontend 显式注入、Session handler 装配和旧入口清理已落地。
 - 阶段 3 的历史验收证据保持记录；阶段 4 新增 frontend 边界、动态属性和核心注解 AST 门禁。
+- 架构收敛与硬约束治理落地：
+  - 静态门禁与声明通道：修复 ruff 格式化；显式导出 `CommandSpec`；DSL 为 binder（如 `Integral`）增加 `print` 符号声明与 `lift` 策略；积分 checker 与 pprint 彻底消除写死 head 清单。
+  - 核心命名与未决常量：`_A` → `_assumption_frame`、`_ok` → `_accepted`、`conditional` → `conditionals`，特殊未决常量统一为 `T.UNDEFINED`，移除 `Applied.subst` 别名。
+  - 缓存边界化与防泄漏：`poly.py`、`ratfunc.py` 的单例域缓存设上限与淘汰；`pattern.py` 的模式变量驻留表设上限与淘汰；`tests/contract/test_v4_invariants.py` 追加模块级缓存有界性静态门禁。
+  - 既有能力导出与死代码裁定：REPL 接入 `redo` 命令并注册进命令表；`api.py` 导出 `solve_diophantine_linear` 和 `integer_roots`；删除无用的 `TaskStore.subtasks` 与 `KernelStore.all_judgments`；裁定保留对应 CAD/Risch 后续路线图的 `abstract.py`、`connected_components`、`is_linear`。
+  - 契约门禁转绿：落实并强化不变量 3、4、5、6、11、13、14、16、18、21。
 - 本轮按会话纪律未重新运行测试、mypy、Ruff、compileall 或其它验收命令；因此不把阶段 4 写成已重新验收。
 
 ## 未实现（下一步）

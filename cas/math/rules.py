@@ -109,10 +109,6 @@ class Applied(ApplyResult):
     guard: Verdict
     rule_id: str
 
-    @property
-    def subst(self) -> Substitution:
-        return self.substitution
-
 
 @dataclass(frozen=True, slots=True)
 class ApplyFailed(ApplyResult):

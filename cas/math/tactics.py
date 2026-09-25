@@ -13,7 +13,7 @@ from cas.kernel.verdict import (
     refute,
 )
 from cas.math.domains.base import Ring, RingError
-from cas.math.domains.poly import Poly
+from cas.math.domains.poly import Poly, from_term
 from cas.math.linearform import linear_form, nonzero_condition, normalized
 from cas.math.project import zero_of
 from cas.syntax import term as T
@@ -58,7 +58,7 @@ class ConditionalSolution:
 class PiecewiseSolutions:
     points: list[Term]
     regions: list[Term]
-    conditional: list[ConditionalSolution]
+    conditionals: list[ConditionalSolution]
     refutations: tuple[Refutation, ...] = ()
 
 
@@ -228,6 +228,25 @@ def integer_roots(polynomial: Poly, variable: Sym, ring: Ring) -> list[int]:
     return sorted(set(roots))
 
 
+def integer_roots_of_term(
+    ctx: MathContext,
+    term: Term,
+    variable: Sym,
+) -> list[int]:
+    """All integer roots of a univariate integer-coefficient polynomial term.
+
+    The host ring is the unique Euclidean non-field domain of the assembled
+    catalog, so the caller passes a term rather than a ring.
+    """
+    if variable not in free_vars(term):
+        return []
+    ring = _integer_ring(ctx)
+    polynomial = from_term(ring, term, (variable,))
+    if polynomial is None:
+        raise TacticsError("not a polynomial over the integer ring")
+    return integer_roots(polynomial, variable, ring)
+
+
 def solve_piecewise(
     ctx: MathContext,
     function: Term,
@@ -245,7 +264,7 @@ def solve_piecewise(
     flattened = fold_nested(function)
     points: list[Term] = []
     regions: list[Term] = []
-    conditional: list[ConditionalSolution] = []
+    conditionals: list[ConditionalSolution] = []
     refutations: list[Refutation] = []
     for value, condition in branches(flattened):
         difference = fold(T.plus(value, T.neg(target)))
@@ -261,7 +280,7 @@ def solve_piecewise(
                     ).evidence
                 )
             else:
-                conditional.append(ConditionalSolution(None, condition))
+                conditionals.append(ConditionalSolution(None, condition))
             continue
         result = _lin_core(ctx, difference, variable)
         if isinstance(result, IdentityEquation):
@@ -293,7 +312,7 @@ def solve_piecewise(
         elif isinstance(verdict, No):
             refutations.append(verdict.evidence)
         else:
-            conditional.append(
+            conditionals.append(
                 ConditionalSolution(result.solution, condition)
             )
-    return PiecewiseSolutions(points, regions, conditional, tuple(refutations))
+    return PiecewiseSolutions(points, regions, conditionals, tuple(refutations))

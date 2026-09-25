@@ -23,6 +23,7 @@ COMMANDS = (
     CommandSpec("merge", "merge branch results", "step_ref step_ref", "branch.merge"),
     CommandSpec("focus", "show or set the focus", "step_ref", None),
     CommandSpec("undo", "move one revision back", "", None),
+    CommandSpec("redo", "move one revision forward again", "", None),
     CommandSpec("quit", "leave the REPL", "", None),
 )
 

@@ -19,7 +19,6 @@ import pytest
 
 from cas.errors import BudgetExceeded
 from cas.kernel.scope import Assumptions
-from cas.runtime import Runtime
 from cas.math.piecewise import (
     LIFT_BRANCH_BUDGET,
     SelectedValue,
@@ -28,6 +27,7 @@ from cas.math.piecewise import (
     piecewise,
     select,
 )
+from cas.runtime import Runtime
 from cas.syntax import term as T
 from cas.syntax.term import N, S, mk
 

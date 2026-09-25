@@ -70,7 +70,7 @@ def _comparison_no(
     return refute(channel, claim, lhs, rhs, *witnesses, detail=detail)
 
 
-def _A(a: AssumptionFrame) -> Assumptions:
+def _assumption_frame(a: AssumptionFrame) -> Assumptions:
     """Normalize an optional assumption collection to an immutable frame."""
     if isinstance(a, Assumptions):
         return a
@@ -1216,7 +1216,7 @@ def decide(
     — not a depth budget: a fact met twice on one chain is skipped. There is no
     search-depth cap, so a verdict cannot depend on the entry depth.
     """
-    assumptions = _A(assumptions)
+    assumptions = _assumption_frame(assumptions)
     if fact is T.TRUE:
         return YES
     if fact is T.FALSE:
@@ -1280,7 +1280,7 @@ def satisfiable(
 ) -> Verdict:
     if not constraints:
         return YES
-    assumptions = _A(assumptions)
+    assumptions = _assumption_frame(assumptions)
     claim = T.mk(S("And"), tuple(constraints))
     for i, constraint in enumerate(constraints):
         frame = assumptions.extended(
@@ -1354,7 +1354,7 @@ def equivalent(
         return _comparison_no(
             RefutationChannel.NORMAL_FORM, "Eq", a, b,
             "the projected difference is nonzero", r)
-    assumptions = _A(assumptions)
+    assumptions = _assumption_frame(assumptions)
     for stage in ctx.decision_stages:
         d = stage.run(ctx, r, a, b, assumptions)
         if d is not None and not d.is_unknown():
@@ -1392,7 +1392,7 @@ def extend_frame(
     it instead of policing it; the only refusal here is a domain violation, i.e.
     a fact whose own predicates cannot be read over the declared domains.
     """
-    assumptions = _A(assumptions)
+    assumptions = _assumption_frame(assumptions)
     domain_verdict = domain_ok(ctx, fact, assumptions)
     if domain_verdict.is_no():
         return domain_verdict, None
@@ -1411,7 +1411,7 @@ def branch(
     conditions stay open by design**, because the system has no global
     consistency notion to police.
     """
-    assumptions = _A(assumptions)
+    assumptions = _assumption_frame(assumptions)
     out: list[tuple[Term, Assumptions | None, Literal["open", "empty"]]] = []
     for condition in conds:
         status, extended = extend_frame(ctx, assumptions, condition)

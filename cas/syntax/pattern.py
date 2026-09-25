@@ -115,12 +115,20 @@ _VARS: dict[tuple[str, str | None], PatternVar] = {}
 _SEQS: dict[str, PatternSeq] = {}
 _CALLS: dict[tuple[int, tuple[int, ...]], PatternCall] = {}
 
+# Pattern interning is bounded like every other cache: rule declarations are a
+# finite set, but the pattern channel also parses user input, so an unbounded
+# table would grow with the session. Reaching the cap drops the whole table; the
+# entries are cheap to rebuild and no consumer compares patterns by pointer.
+_PATTERN_INTERN_CAP = 1 << 14
+
 
 def PV(name: str, pred: str | None = None) -> PatternVar:
     key = (name, pred)
     pattern = _VARS.get(key)
     if pattern is None:
         pattern = PatternVar(name, pred)
+        if len(_VARS) >= _PATTERN_INTERN_CAP:
+            _VARS.clear()
         _VARS[key] = pattern
     return pattern
 
@@ -129,6 +137,8 @@ def PS(name: str) -> PatternSeq:
     pattern = _SEQS.get(name)
     if pattern is None:
         pattern = PatternSeq(name)
+        if len(_SEQS) >= _PATTERN_INTERN_CAP:
+            _SEQS.clear()
         _SEQS[name] = pattern
     return pattern
 
@@ -154,6 +164,8 @@ def pcall(head: T.Sym, args: Iterable[PatternLike]) -> PatternCall:
     pattern = _CALLS.get(key)
     if pattern is None:
         pattern = PatternCall(head, tuple(arguments), _next_hp())
+        if len(_CALLS) >= _PATTERN_INTERN_CAP:
+            _CALLS.clear()
         _CALLS[key] = pattern
     return pattern
 

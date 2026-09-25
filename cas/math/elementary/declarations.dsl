@@ -80,7 +80,9 @@ alias ln   = Log
 alias sqrt = Sqrt
 
 # --- binder words: whose surface word binds its second argument ---
-# `binder` marks the canonical head; the word itself is an alias entry above.
+# `binder` marks the canonical head, the display symbol is declared data (the
+# printer holds no symbol table of its own), and the word itself is an alias
+# entry above.
 # The bound form is word(body, var) -> Head(Bound(var, body)), and any further
 # argument follows the bound body, so the definite integral prints and parses as
 # int(body, var, lo, hi) -> DefIntegrate(Bound(var, body), lo, hi).
@@ -89,15 +91,24 @@ alias sum       = Sum
 alias product   = Product
 alias limit     = Limit
 alias int       = DefIntegrate
-binder Integrate
-binder Sum
-binder Product
-binder Limit
-binder DefIntegrate
+binder Integrate    print "∫"
+binder Sum          print "Σ"
+binder Product      print "Π"
+binder Limit        print "lim"
+binder DefIntegrate print "∫"
 
-# --- canonical functions algorithms refer to by role (role -> head, so no algorithm
-# hardcodes a function name) ---
+# --- canonical heads algorithms refer to by role (role -> head, so no algorithm
+# hardcodes a head name) ---
 role logarithm = Log
+role antiderivative = Integrate
+role definite_integral = DefIntegrate
+
+# --- equality-lifting policies ---
+# Signature heads (Plus/Times/Eq/Power/Piecewise) use the structural defaults in
+# the lifting checker; every other head that admits lifting is declared here and
+# defaults to forbidden when absent.
+lift Integrate = conditional
+lift DefIntegrate = conditional
 
 # --- rules (unconditional identities; an auto rule must be guard-free) ---
 rule exp_add = Exp(?a)*Exp(?b) -> Exp(?a + ?b) auto

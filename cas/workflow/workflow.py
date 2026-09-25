@@ -855,5 +855,6 @@ class Workflow:
         """The domain of a step, assigned by the projection layer through the
         injected facade, never by leaf sniffing."""
         if self.algorithms is None:
-            return ""
+            raise RuntimeError(
+                "no algorithm facade injected: construct with cas.runtime.new_workflow()")
         return self.algorithms.domain_of(content)

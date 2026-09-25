@@ -29,6 +29,8 @@ from cas.math.piecewise import is_piecewise
 from cas.math.rules import Applied, ApplyFailed, RuleCatalog, apply_rule
 from cas.math.rules import declared_ruleset as _declared_ruleset
 from cas.math.tactics import PiecewiseSolutions
+from cas.math.tactics import integer_roots_of_term as _integer_roots_of_term
+from cas.math.tactics import solve_diophantine_linear as _solve_diophantine_linear
 from cas.math.tactics import solve_linear as _solve_linear
 from cas.math.tactics import solve_linear_with_condition as _solve_linear_with_condition
 from cas.math.tactics import solve_piecewise as _solve_piecewise
@@ -45,6 +47,7 @@ __all__ = (
     "fold", "domain_normal_form",
     "back_substitute", "guard_report",
     "solve_linear", "solve_linear_with_condition", "solve_piecewise",
+    "solve_diophantine_linear", "integer_roots",
     "differentiate", "differentiate_piecewise",
     "integrate_term", "definite_integrate",
     "is_piecewise",
@@ -98,6 +101,26 @@ def solve_piecewise(
     target: Term,
 ) -> PiecewiseSolutions:
     return _solve_piecewise(runtime.math, function, variable, target)
+
+
+def solve_diophantine_linear(
+    runtime: Runtime,
+    a: int,
+    b: int,
+    c: int,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """One point and the direction of the integer solutions of ``a*x + b*y = c``.
+
+    The host ring is the unique Euclidean non-field domain of the assembled
+    catalog, so the fragment is stated over the integers without naming them
+    here.
+    """
+    return _solve_diophantine_linear(runtime.math, a, b, c)
+
+
+def integer_roots(runtime: Runtime, term: Term, variable: Sym) -> list[int]:
+    """All integer roots of a univariate integer-coefficient polynomial term."""
+    return _integer_roots_of_term(runtime.math, term, variable)
 
 
 def differentiate(runtime: Runtime, term: Term, variable: Sym) -> Term:

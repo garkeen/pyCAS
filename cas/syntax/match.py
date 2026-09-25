@@ -35,19 +35,18 @@ def _pred_ok(pattern: P.PatternVar, target: T.Term) -> bool:
     return predicate is not None and predicate(target)
 
 
-# OneIdentity: an AC head with an identity element also matches a bare term.
-_ONE_ID: dict[str, T.Term] = {}
-
-
-def _one_identity() -> Mapping[str, T.Term]:
-    if not _ONE_ID:
-        _ONE_ID.update({"Plus": T.ZERO, "Times": T.ONE})
-    return _ONE_ID
+# OneIdentity: signature heads of the ring operations (Plus/Times) absorb their
+# respective identity elements under AC matching. These are language signature
+# heads, not domain-specific elementary functions.
+_ONE_ID: Mapping[str, T.Term] = {
+    "Plus": T.ZERO,
+    "Times": T.ONE,
+}
 
 
 def identity_element(head_name: str) -> T.Term | None:
     """Return the identity element absorbed by ``head_name`` when declared."""
-    return _one_identity().get(head_name)
+    return _ONE_ID.get(head_name)
 
 
 def _bind_identity(
@@ -164,7 +163,7 @@ def _match(
                     list(pattern.args), list(target.args), substitution, state, binds
                 )
             return
-        identity = _one_identity().get(pattern.head.name)
+        identity = identity_element(pattern.head.name)
         if identity is not None:
             yield from _match_one_id(
                 list(pattern.args), identity, target, substitution, state, binds

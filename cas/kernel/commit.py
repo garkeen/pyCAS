@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from cas.errors import BudgetExceeded
 from cas.kernel.context import TrackedContext
 from cas.kernel.evidence import (
     Accepted,
@@ -145,6 +146,38 @@ class NeedsSplit(CommitResult):
 # ---------------------------------------------------------------------------
 
 def commit(
+    store: KernelStore,
+    proposal: StepProposal,
+    context: TrackedContext | None = None,
+    services: KernelServices | None = None,
+    discharge_checker_id: str = "kernel.decide",
+    mode: ExecutionMode | None = None,
+    inherited_reads: ContextReadSet | None = None,
+) -> CommitResult:
+    """The trusted boundary: a budget-exhausted computation is undecided.
+
+    Search layers (rule matching, definition expansion, simplification) raise
+    `BudgetExceeded` when their explicit budget runs out. That is a resource
+    limit, not a refutation, so it must leave through the
+    `Undecided(Reason.BUDGET)` exit instead of escaping as an exception past the
+    trusted boundary (an exception would bypass the three-valued result the rest
+    of the system reasons about).
+    """
+    try:
+        return _commit_checked(
+            store,
+            proposal,
+            context=context,
+            services=services,
+            discharge_checker_id=discharge_checker_id,
+            mode=mode,
+            inherited_reads=inherited_reads,
+        )
+    except BudgetExceeded as error:
+        return Undecided(Reason.BUDGET, f"budget exhausted during commit: {error}")
+
+
+def _commit_checked(
     store: KernelStore,
     proposal: StepProposal,
     context: TrackedContext | None = None,

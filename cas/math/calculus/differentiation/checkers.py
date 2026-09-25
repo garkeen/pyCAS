@@ -32,10 +32,10 @@ from cas.kernel.verdict import (
     unknown,
 )
 from cas.math.base.checkers import (
+    _accepted,
     _defined,
     _expand,
     _is_piecewise,
-    _ok,
     _one_conclusion,
     _payload,
     _premise,
@@ -223,7 +223,7 @@ class DiffChecker:
                         Reason.FRAGMENT,
                         "this branch is outside the projection domain",
                     )
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         result = _cross_diff(self.ctx, pred, content, x)
         if isinstance(result, No):
             return RefutationRejected(result.evidence)
@@ -232,7 +232,7 @@ class DiffChecker:
                 Reason.FRAGMENT,
                 "source is outside the projection domain: no independent channel",
             )
-        return _ok(self.ctx, proposal, context)
+        return _accepted(self.ctx, proposal, context)
 
 
 CHECKERS = (DiffChecker,)

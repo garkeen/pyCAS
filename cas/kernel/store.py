@@ -120,9 +120,6 @@ class KernelStore:
     def all_steps(self) -> tuple[Step, ...]:
         return tuple(self._steps[StepId(i)] for i in range(self._next_step))
 
-    def all_judgments(self) -> tuple[Judgment, ...]:
-        return tuple(self._judgments[JudgmentId(i)] for i in range(self._next_jud))
-
     def requirements_of(self, jid: JudgmentId) -> tuple[RequirementId, ...]:
         return self._judgments[jid].requirements
 

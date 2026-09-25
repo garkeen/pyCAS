@@ -45,6 +45,7 @@ class Runtime:
         self._math = math
         self._aliases = assembly.aliases
         self._binders = assembly.binders
+        self._binder_prints = assembly.binder_prints
         self._checkers = tuple(
             (registration.checker_id, registration.factory(math))
             for registration in assembly.checkers
@@ -104,6 +105,10 @@ class Runtime:
     @property
     def rules(self) -> RuleCatalog:
         return self._assembly.rules
+
+    def binder_print(self, head_name: str) -> str | None:
+        """The declared display symbol of a binder head, if one is declared."""
+        return self._binder_prints.get(head_name)
 
     @property
     def decision_stages(self) -> tuple[DecisionStage, ...]:

@@ -25,7 +25,7 @@ class CommandName(StrEnum):
     SPLIT = "Split"
     SUBST = "Subst"
     DIFF = "Diff"
-    INTEGRATE = "Integrate"
+    INTEGRATE = "Antiderivative"
     USE = "Use"
     TRANS = "Trans"
     VALUATION_CHECK = "ValuationCheck"
@@ -272,7 +272,7 @@ def Integrate(pred: int | None = None, var: Sym | None = None,
         checker_id="calculus.antiderivative",
         premises=_refs(pred, premises),
         payload=IntegratePayload(var, antideriv, bounds),
-        task=TaskSpec("Integrate", var),
+        task=TaskSpec("Antiderivative", var),
     )
 
 

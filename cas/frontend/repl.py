@@ -197,6 +197,7 @@ class REPL:
             "show": lambda _session, text: self.cmd_show(text),
             "focus": lambda _session, text: self.cmd_focus(text),
             "undo": lambda _session, text: self.cmd_undo(text),
+            "redo": lambda _session, text: self.cmd_redo(text),
         }
 
 
@@ -285,7 +286,9 @@ class REPL:
             payload,
             IntegratePayload,
         ):
-            extra += f" ∫d{_fmt(self.session.runtime, payload.var)}"
+            word = self.session.runtime.alias_head("integrate")
+            symbol = self.session.runtime.binder_print(word) if word is not None else None
+            extra += f" {symbol or 'int'}d{_fmt(self.session.runtime, payload.var)}"
             if payload.bounds is not None:
                 extra += (
                     f" [{_fmt(self.session.runtime, payload.bounds[0])},"
@@ -514,7 +517,7 @@ class REPL:
                 f"  region solution: {_fmt(self.session.runtime, condition)} "
                 "(holds identically on that branch)"
             )
-        for conditional in result.conditional:
+        for conditional in result.conditionals:
             rendered = (
                 _fmt(self.session.runtime, conditional.solution)
                 if conditional.solution is not None
@@ -529,7 +532,7 @@ class REPL:
         if not (
             result.points
             or result.regions
-            or result.conditional
+            or result.conditionals
         ):
             print(
                 "  no solution (every branch candidate was refuted by its "
@@ -746,12 +749,16 @@ class REPL:
         except BudgetExceeded as e:
             print(f"  definition expansion refused: {e}")
             return
+        antiderivative_head = self.session.runtime.role_head("antiderivative")
+        if antiderivative_head is None:
+            print("  the antiderivative role is not declared")
+            return
         try:
             G = integrate_term(self.session.runtime, f, var)
         except IntegrateError as e:
             print(f"  integration refused: {e}")
             return
-        content = T.eq(T.mk(S("Integrate"), (T.mk_bound(var, f),)), G)
+        content = T.eq(T.mk(S(antiderivative_head), (T.mk_bound(var, f),)), G)
         s = self.session.workflow.add(content, Integrate(pred=pred.id, var=var,
                                            antideriv=G))
         self._land(s)
@@ -783,7 +790,11 @@ class REPL:
         except IntegrateError as e:
             print(f"  definite integration refused: {e}")
             return
-        content = T.eq(T.mk(S("DefIntegrate"), (T.mk_bound(var, f), a, b)), V)
+        definite_head = self.session.runtime.role_head("definite_integral")
+        if definite_head is None:
+            print("  the definite-integral role is not declared")
+            return
+        content = T.eq(T.mk(S(definite_head), (T.mk_bound(var, f), a, b)), V)
         s = self.session.workflow.add(content, Integrate(pred=pred.id, var=var,
                                            antideriv=G, bounds=(a, b)))
         self._land(s)
@@ -1002,6 +1013,20 @@ class REPL:
         self.session.focus = visible[-1].id
         print(f"  retracted #{last.id}, back at #{self.session.focus}")
         self._show_step(self.session.workflow.get(self.session.focus))
+
+    def cmd_redo(self, _: str) -> None:
+        before = self.session.workflow.events.current_revision()
+        revision = self.session.workflow.redo()
+        if revision == before:
+            print("  nothing to redo")
+            return
+        visible = self.session.workflow.visible_steps()
+        # the focus follows the revision, so it can never point at a step that is
+        # not in view
+        self.session.focus = visible[-1].id if visible else None
+        print(f"  redone, back at revision {revision}")
+        if self.session.focus is not None:
+            self._show_step(self.session.workflow.get(self.session.focus))
 
 
 def main() -> None:

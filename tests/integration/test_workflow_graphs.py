@@ -14,6 +14,7 @@ from cas.runtime import bootstrap, new_workflow
 from cas.syntax import term as T
 from cas.syntax.term import N, S
 from cas.workflow.command import BothSides, Claim, Diff, Solve
+
 RUNTIME = bootstrap()
 
 

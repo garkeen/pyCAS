@@ -151,7 +151,7 @@ def prop_piecewise_solve(rounds, rng):
                           (a2, b2, r, None, True, True)], target)
         if got != want:
             fail("P37 point solutions disagree with the reference", i, to_str(RUNTIME, pw), target, got, want)
-        if res.regions or res.conditional:
+        if res.regions or res.conditionals:
             fail("P37 a linear piecewise should have no region/conditional solution", i, res)
         # constant branch identity -> region solution
         c_pw = piecewise([(T.N(target), parse(RUNTIME, f"x < {r}")),
@@ -193,7 +193,7 @@ def prop_piecewise_solve(rounds, rng):
         if x2 > r:
             want3.append(x2)
         got3 = sorted(T.num_val(solution) for solution in res3.points)
-        if got3 != sorted(want3) or res3.regions or res3.conditional:
+        if got3 != sorted(want3) or res3.regions or res3.conditionals:
             fail("P37 x-bearing target lost or gained solutions", i, k1, m, b, a2v, b2v, r,
                  got3, sorted(want3), res3)
         # identity branch (v == target, difference shape contains x and is identically zero
@@ -203,7 +203,7 @@ def prop_piecewise_solve(rounds, rng):
         res4 = solve_piecewise(_ctx(), id_pw, X, tgt)
         want4 = [x1] if x1 > r else []
         got4 = sorted(T.num_val(solution) for solution in res4.points)
-        if len(res4.regions) != 1 or got4 != sorted(want4) or res4.conditional:
+        if len(res4.regions) != 1 or got4 != sorted(want4) or res4.conditionals:
             fail("P37 identity branch gave no region solution", i, k1, m, b, r, res4, want4)
         # contradiction branch (v = target+1, difference a nonzero constant after projection)
         # -> no contribution
@@ -212,7 +212,7 @@ def prop_piecewise_solve(rounds, rng):
         res5 = solve_piecewise(_ctx(), con_pw, X, tgt)
         want5 = [x1] if x1 > r else []
         got5 = sorted(T.num_val(solution) for solution in res5.points)
-        if got5 != sorted(want5) or res5.regions or res5.conditional:
+        if got5 != sorted(want5) or res5.regions or res5.conditionals:
             fail("P37 contradiction branch did not stay silent", i, k1, m, b, r, res5, want5)
 
 

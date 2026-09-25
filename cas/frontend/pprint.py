@@ -89,21 +89,25 @@ def _call_str(
     return name + "(" + ", ".join(_wrap(values[argument], 0) for argument in arguments) + ")"
 
 
-_BINDER_SYMBOLS = {
-    "Integrate": "∫",
-    "Sum": "Σ",
-    "Product": "Π",
-    "Limit": "lim",
-}
-
-
 def _binder_display(runtime: Runtime, node: Expr, bound: Bound, body: Term) -> str:
-    if node.head.name == "DefIntegrate" and len(node.args) == 3:
-        lower, upper = node.args[1], node.args[2]
-        return f"∫_{to_str(runtime, lower)}^{to_str(runtime, upper)}[{to_str(runtime, body)}] d{bound.hint}"
-    symbol = _BINDER_SYMBOLS.get(node.head.name)
-    if symbol is not None and len(node.args) == 1:
-        return f"{symbol}[{to_str(runtime, body)}] d{bound.hint}"
+    """Render a binder call from its declared symbol and its structure.
+
+    The symbol is declared data (`binder <Head> print "<symbol>"`); the layout
+    follows the argument shape, never the head name: a binder with two extra
+    arguments is a bounded form (`symbol_lo^hi[body] d var`), otherwise
+    `symbol[body] d var`. A binder without a declared symbol falls back to the
+    ordinary call form.
+    """
+    symbol = runtime.binder_print(node.head.name)
+    if symbol is not None:
+        if len(node.args) == 3:
+            lower, upper = node.args[1], node.args[2]
+            return (
+                f"{symbol}_{to_str(runtime, lower)}^{to_str(runtime, upper)}"
+                f"[{to_str(runtime, body)}] d{bound.hint}"
+            )
+        if len(node.args) == 1:
+            return f"{symbol}[{to_str(runtime, body)}] d{bound.hint}"
     parts = [to_str(runtime, body), bound.hint]
     parts.extend(to_str(runtime, argument) for argument in node.args[1:])
     return f"{_name_of(runtime, node.head)}({', '.join(parts)})"

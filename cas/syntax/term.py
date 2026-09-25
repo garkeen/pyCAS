@@ -193,7 +193,7 @@ def DB_(index: int) -> DB:
 
 TRUE = BVal(True)
 FALSE = BVal(False)
-UND = _SPECIALS.setdefault("Undefined", Special("Undefined"))
+UNDEFINED = _SPECIALS.setdefault("Undefined", Special("Undefined"))
 INFINITY = _SPECIALS.setdefault("Infinity", Special("Infinity"))
 EMPTY_SET = _SPECIALS.setdefault("EmptySet", Special("EmptySet"))
 

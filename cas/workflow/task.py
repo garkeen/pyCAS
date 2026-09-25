@@ -65,11 +65,6 @@ class TaskStore:
     def get_task(self, task_id: TaskId) -> Task:
         return self._tasks[task_id]
 
-    def subtasks(self, task_id: TaskId) -> tuple[Task, ...]:
-        return tuple(
-            task for task in self._tasks.values() if task.parent == task_id
-        )
-
     def task_tree_edges(self) -> tuple[tuple[TaskId, TaskId], ...]:
         return tuple(
             (task.parent, task.id)

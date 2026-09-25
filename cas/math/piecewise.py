@@ -93,7 +93,7 @@ def piecewise(pairs: Iterable[Branch]) -> Term:
         if condition is T.TRUE:
             break
     if not kept:
-        return T.SP("Undefined")
+        return T.UNDEFINED
     if len(kept) == 1 and kept[0][1] is T.TRUE:
         return kept[0][0]
     flattened: list[Term] = []
@@ -164,7 +164,7 @@ def select(
             first_unknown = verdict.reason
         survivors.append((value, condition))
     if not survivors:
-        return SelectedValue(T.SP("Undefined"), tuple(refutations))
+        return SelectedValue(T.UNDEFINED, tuple(refutations))
     return ResidualSelection(
         residual=piecewise(survivors),
         reason=Reason.FRAGMENT if first_unknown is None else first_unknown,
@@ -357,7 +357,6 @@ def _and_all(conditions: Sequence[Term]) -> Term:
 # Nested flattening and CAD domain extraction
 # ---------------------------------------------------------------------------
 
-_UNDEF = T.SP("Undefined")
 
 
 def _conj(left: Term, right: Term) -> Term:
@@ -400,7 +399,7 @@ def domain_cells(
     branch_conditions = [condition for _value, condition in branch_list]
     output: list[DomainCell] = []
     for cell, labels in resolve_partition(ctx, branch_conditions, variable):
-        value: Term = _UNDEF
+        value: Term = T.UNDEFINED
         for (branch_value, _condition), holds in zip(branch_list, labels):
             if holds:
                 value = branch_value
@@ -443,7 +442,7 @@ def connected_components(domain: Sequence[DomainCell]) -> list[Component]:
     components: list[Component] = []
     run: list[DomainCell] = []
     for cell, value in domain:
-        if value is _UNDEF:
+        if value is T.UNDEFINED:
             if run:
                 components.append(_mk_component(run))
                 run = []

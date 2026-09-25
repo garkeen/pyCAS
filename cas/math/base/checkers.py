@@ -77,7 +77,7 @@ def _is_piecewise(term: Term) -> TypeGuard[Expr]:
     return is_piecewise(term)
 
 
-def _ok(
+def _accepted(
     ctx: MathContext,
     proposal: ResolvedProposal,
     context: TrackedContext,
@@ -241,7 +241,7 @@ class ClaimChecker:
                 or not cmd.registers_assumption):
             return Rejected(Reason.FRAGMENT,
                             "assumption.entry requires a claim command")
-        return _ok(self.ctx, proposal, context)
+        return _accepted(self.ctx, proposal, context)
 
 
 class BothSidesChecker:
@@ -299,7 +299,7 @@ class BothSidesChecker:
         extra: tuple[T.Term, ...] = ()
         if op in ("mul", "div"):
             extra = (T.mk(S("Ne"), (d.operand, T.ZERO)),)
-        return _ok(self.ctx, proposal, context, extra)
+        return _accepted(self.ctx, proposal, context, extra)
 
 
 class NormalizeChecker:
@@ -329,7 +329,7 @@ class NormalizeChecker:
                         "content is not the domain normal form of the predecessor")
         if bad is not None:
             return bad
-        return _ok(self.ctx, proposal, context)
+        return _accepted(self.ctx, proposal, context)
 
 
 class RuleInstanceChecker:
@@ -388,7 +388,7 @@ class RuleInstanceChecker:
         inst = _expand(context, P.instantiate(rule.template, d.substitution))
         if replace_at(pred, path, inst) is not content:
             return Rejected(Reason.FRAGMENT, "content is not the result of that instance")
-        return _ok(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
+        return _accepted(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
 
 
 class SubstChecker:
@@ -430,7 +430,7 @@ class SubstChecker:
         for expected in (substituted, normal_form(self.ctx, substituted)):
             verdict = identity_verdict(self.ctx, content, expected)
             if verdict.is_yes():
-                return _ok(self.ctx, proposal, context)
+                return _accepted(self.ctx, proposal, context)
             last = verdict
         if last is None:
             return UnknownResult(Reason.FRAGMENT, "substitution identity unavailable")
@@ -468,10 +468,10 @@ class SplitChecker:
         branch = T.not_(cond) if d.negate else cond
         expected = T.mk(S("And"), (_expand(context, pred), branch))
         if content is expected:
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         verdict = identity_verdict(ctx=self.ctx, left=_expand(context, content), right=expected)
         if verdict.is_yes():
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         if isinstance(verdict, No):
             return RefutationRejected(verdict.evidence)
         if not isinstance(verdict, Unknown):
@@ -636,10 +636,10 @@ class ConstraintSatisfiedChecker:
             )
             if bad is not None:
                 return bad
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         verdict = context.decide(inst)
         if verdict.is_yes():
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         if isinstance(verdict, No):
             return RefutationRejected(verdict.evidence)
         if not isinstance(verdict, Unknown):
@@ -683,7 +683,7 @@ class TransChecker:
                             "transitivity evidence payload does not match the premises")
         if _expand(context, content) is not expected:
             return Rejected(Reason.FRAGMENT, "conclusion is not the transitive equality")
-        return _ok(self.ctx, proposal, context)
+        return _accepted(self.ctx, proposal, context)
 
 
 def _path_requirements(target: Term, path: tuple[int, ...]) -> tuple[Term, ...]:
@@ -749,10 +749,12 @@ class CongruenceLiftChecker:
         policy: LiftPolicy
         if isinstance(parent, T.Expr):
             head = parent.head.name
-            if head in ("Derivative", "Quote"):
+            if head == "Quote":
+                # Held data: a quoted expression is data, not a subterm that a
+                # mathematical equality may rewrite.
                 return Rejected(
                     Reason.FRAGMENT,
-                    f"{head} does not admit equality lifting",
+                    "Quote does not admit equality lifting",
                 )
             if head == "Power":
                 if d.path[-1] != 0 or not isinstance(parent.args[1], T.Int):
@@ -760,12 +762,21 @@ class CongruenceLiftChecker:
                         Reason.FRAGMENT,
                         "only an integer exponent permits base lifting",
                     )
-            if head in ("Integrate", "DefIntegrate"):
+            if any(isinstance(argument, T.Bound) for argument in parent.args):
+                # Replacing inside a binder body (an integral's integrand, say)
+                # needs a pointwise condition; the universal form for it is not
+                # built, so the source equality itself is carried as the
+                # condition. The step stays conditional instead of claiming the
+                # lift unconditionally.
                 extra.append(source)
-            if head in ("Plus", "Times", "Eq"):
-                policy = LiftPolicy.CONGRUENT
-            elif head in ("Power", "Piecewise", "Integrate", "DefIntegrate"):
-                policy = LiftPolicy.CONDITIONAL
+            if head in ("Plus", "Times", "Eq", "Piecewise", "Power"):
+                # Signature structure: the container's own lifting default
+                # belongs to the term language, not to a declaration.
+                policy = (
+                    LiftPolicy.CONGRUENT
+                    if head in ("Plus", "Times", "Eq")
+                    else LiftPolicy.CONDITIONAL
+                )
             else:
                 policy = self.ctx.lift_policy(head)
         else:
@@ -787,7 +798,7 @@ class CongruenceLiftChecker:
                         "content is not the selected replacement")
         if bad is not None:
             return bad
-        return _ok(self.ctx, proposal, context, tuple(extra))
+        return _accepted(self.ctx, proposal, context, tuple(extra))
 
 
 CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,

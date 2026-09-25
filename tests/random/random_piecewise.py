@@ -365,7 +365,7 @@ def ref_eval(t, a):
     for v, c in branches(t):
         if eval_prop(c, a):
             return ref_eval(v, a)
-    return T.SP("Undefined")
+    return T.UNDEFINED
 
 
 def _same(u, v):
@@ -405,7 +405,7 @@ def prop_components(rounds, rng):
         dom = domain_cells(_ctx(), t, X)
         comps = connected_components(dom)
         # total cells inside components == number of defined cells (Undefined enters no component)
-        defined = sum(1 for _c, v in dom if v is not T.SP("Undefined"))
+        defined = sum(1 for _c, v in dom if v is not T.UNDEFINED)
         got = sum(len(c.cells) for c in comps)
         if got != defined:
             fail("P30 component cell count mismatch", i, got, defined)
@@ -438,7 +438,7 @@ def prop_gap(rounds, rng):
         # integrate the gap to 0
         for cell, v in dom:
             if cell.kind == "open" and cell.lo is not None \
-                    and cell.hi is not None and v is not T.SP("Undefined"):
+                    and cell.hi is not None and v is not T.UNDEFINED:
                 fail("P31 a gap cell was defined", i, lo, hi)
 
 

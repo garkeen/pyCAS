@@ -456,6 +456,10 @@ class PolyDomain(Domain):
 
 
 _domain_cache: dict[tuple[tuple[Sym, ...], Ring], PolyDomain] = {}
+# Bounded like every other cache: the key is the variable set, so an unbounded
+# table would grow with the session. Reaching the cap drops the whole table
+# (the domains are cheap to rebuild and stateless).
+_DOMAIN_CACHE_CAP = 256
 
 
 def poly_domain(*variables: Sym, ring: Ring) -> PolyDomain:
@@ -465,5 +469,7 @@ def poly_domain(*variables: Sym, ring: Ring) -> PolyDomain:
     domain = _domain_cache.get(key)
     if domain is None:
         domain = PolyDomain(variable_key, ring)
+        if len(_domain_cache) >= _DOMAIN_CACHE_CAP:
+            _domain_cache.clear()
         _domain_cache[key] = domain
     return domain

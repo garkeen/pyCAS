@@ -23,6 +23,7 @@ class RuntimeAssembly:
     binders: frozenset[str]
     roles: Mapping[str, str]
     lifts: Mapping[str, LiftPolicy]
+    binder_prints: Mapping[str, str]
     rules: RuleCatalog
     decision_stages: tuple[DecisionStage, ...]
     domains: tuple[Domain, ...]
@@ -41,6 +42,7 @@ class RuntimeBuilder:
         self._function_names: set[str] = set()
         self._aliases: dict[str, str] = {}
         self._binders: set[str] = set()
+        self._binder_prints: dict[str, str] = {}
         self._roles: dict[str, str] = {}
         self._lifts: dict[str, LiftPolicy] = {}
         self._rule_set = RuleSet()
@@ -85,6 +87,8 @@ class RuntimeBuilder:
             if binder.head in self._binders:
                 raise ValueError(f"binder redeclared: {binder.head}")
             self._binders.add(binder.head)
+            if binder.print_name is not None:
+                self._binder_prints[binder.head] = binder.print_name
         for alias in declarations.aliases:
             if alias.surface in self._aliases:
                 raise ValueError(f"alias redeclared: {alias.surface}")
@@ -105,13 +109,13 @@ class RuntimeBuilder:
             if head not in known_heads:
                 raise ValueError(f"alias {surface!r} targets undeclared head {head!r}")
         for role_name, head in self._roles.items():
-            if head not in self._function_names:
+            if head not in known_heads:
                 raise ValueError(
-                    f"role {role_name!r} targets undeclared function {head!r}"
+                    f"role {role_name!r} targets undeclared head {head!r}"
                 )
         for head in self._lifts:
-            if head not in self._function_names:
-                raise ValueError(f"lift targets undeclared function {head!r}")
+            if head not in known_heads:
+                raise ValueError(f"lift targets undeclared head {head!r}")
         for head in self._binders:
             if not any(alias_head == head for alias_head in self._aliases.values()):
                 raise ValueError(f"binder {head!r} has no declared surface alias")
@@ -160,6 +164,7 @@ class RuntimeBuilder:
             binders=frozenset(self._binders),
             roles=MappingProxyType(dict(self._roles)),
             lifts=MappingProxyType(dict(self._lifts)),
+            binder_prints=MappingProxyType(dict(self._binder_prints)),
             rules=RuleCatalog.from_set(self._rule_set),
             decision_stages=tuple(self._decision_stages),
             domains=tuple(self._domains),

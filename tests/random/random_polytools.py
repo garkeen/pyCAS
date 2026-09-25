@@ -24,7 +24,6 @@ from cas.math.domains.polytools import p_deg, p_monic, resultant, squarefree
 from cas.math.domains.q import Q_RING as R
 from cas.syntax.term import S
 
-
 X = S("x")
 V = (X,)
 

@@ -1,17 +1,26 @@
 # -*- coding: utf-8 -*-
 """Architecture invariant gates.
 
-Everything mechanically checkable is asserted here. A property not yet migrated keeps
-an xfail with the gap written into the reason, so CI shows a visible spectrum rather
-than claims scattered through documentation.
+Everything mechanically checkable is asserted here. Each gate names the
+architectural invariant it protects; a property that is not yet mechanically
+checkable is documented as missing rather than represented by a placeholder test.
 
 The invariants pinned here:
 
-* Term carries no guard/context/proof field
-* Pattern is not a Term
-* a checker does not import its own search algorithm
-* an unverified candidate takes part in no trusted derivation
-* automatic simplification applies no unproved conditional rule
+* Term carries no guard/context/proof field (1)
+* Pattern is not a Term (2)
+* only commit creates a Judgment (3) and writes the ledger (13)
+* an Artifact cannot be a mathematical premise (4)
+* an open requirement never enters Scope.assumptions (5)
+* checker conditions are recorded by the kernel (6)
+* premises must predate the step that uses them, so the dependency graph is acyclic (11)
+* a checker does not import its own search algorithm (14)
+* an unverified candidate takes part in no trusted derivation (16)
+* automatic simplification applies no unproved conditional rule (18)
+
+plus the bounded-cache discipline: the math layer may hold a module-level cache
+only when it is registered in this file and the code shows a cap constant with an
+eviction call, and the hash-consing tables must not pin their entries.
 """
 
 import ast
@@ -243,19 +252,33 @@ def test_invariant2_instantiation_yields_term(runtime: Runtime):
         P.instantiate(tpl, {"a": T.S("x")})   # ?b unbound: a rule defect, raise explicitly
 
 
-def test_rule_no_hardcoded_math_semantics_head():
-    """A mathematical-semantics head (an elementary function) may not appear as a literal
-    in any Python module.
+def _declared_math_heads():
+    """Mathematical-semantics heads, read from the declaration DSL.
 
-    The mechanical criterion is: would changing the function name require changing this
+    Deriving the list from the DSL text instead of copying it here means a newly
+    declared function or binder enters the gate without editing this test.
+    """
+    from cas.math.loader import parse_declarations
+
+    dsl = (_ROOT / "cas" / "math" / "elementary" / "declarations.dsl").read_text(
+        encoding="utf-8")
+    declarations = parse_declarations(dsl)
+    heads = {function.name for function in declarations.functions}
+    heads |= {binder.head for binder in declarations.binders}
+    heads |= {role.head for role in declarations.roles}
+    return heads
+
+
+def test_rule_no_hardcoded_math_semantics_head():
+    """A mathematical-semantics head may not appear as a literal in any Python module.
+
+    The mechanical criterion is: would changing the declared name require changing this
     code? If yes, it is hardcoding. **Signature heads** (Plus/Times/Power/Eq/Lt/And/Or/
     Not/Quote/Piecewise) are outside the gate: they are the term language's own structure
     (an equality decider must know Eq and a differentiator must know Plus). Declaration
-    files are `.dsl` and outside this scan.
+    files are `.dsl` and outside this scan; the head list itself comes from that DSL.
     """
-    import ast
-    heads = {"Sin", "Cos", "Tan", "Atan", "Sinh", "Cosh", "Tanh", "Exp",
-             "Log", "Sqrt", "Abs"}
+    heads = _declared_math_heads()
     bad = []
     for p in sorted((_ROOT / "cas").rglob("*.py")):
         tree = ast.parse(p.read_text(encoding="utf-8"))
@@ -528,3 +551,322 @@ def test_c3_removed_declaration_handles_stay_removed():
             if needle in text:
                 bad.append(f"cas/math/{name}: {needle}")
     assert not bad, "a removed assembly handle is back:\n" + "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# The remaining mechanically checkable ledger invariants: 3 / 4 / 5 / 6 / 11 / 13
+# ---------------------------------------------------------------------------
+
+def _call_sites(name):
+    """The cas/ files that call `name`, as a bare or attribute call."""
+    found = set()
+    for p in sorted((_ROOT / "cas").rglob("*.py")):
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == name:
+                found.add(p.relative_to(_ROOT).as_posix())
+            elif isinstance(func, ast.Attribute) and func.attr == name:
+                found.add(p.relative_to(_ROOT).as_posix())
+    return found
+
+
+def test_invariant3_only_commit_creates_judgments():
+    """Only `kernel.commit` may construct a Judgment.
+
+    A Judgment is the ledger's record of a re-checked conclusion; if any other
+    module could build one, "candidates become conclusions only at the boundary"
+    would be a convention rather than a structural fact.
+    """
+    sites = _call_sites("Judgment") | _call_sites("put_judgment")
+    assert sites == {"cas/kernel/commit.py"}, (
+        "a Judgment is created outside commit: " + ", ".join(sorted(sites)))
+
+
+def test_invariant13_ledger_writes_stay_inside_commit():
+    """No module other than commit writes the ledger (step / judgment /
+    requirement / discharge / refutation) directly."""
+    writers = set()
+    for name in ("put_requirement", "put_step", "put_judgment",
+                 "add_discharge", "add_refutation",
+                 "new_requirement_id", "new_judgment_id", "new_step_id"):
+        writers |= _call_sites(name)
+    outside = writers - {"cas/kernel/commit.py"}
+    assert not outside, "the ledger is written outside commit: " + ", ".join(sorted(outside))
+
+
+def test_invariant4_artifact_cannot_be_a_mathematical_premise():
+    """The premise channel is typed and has no slot an Artifact could enter.
+
+    `Step.premises` is a tuple of JudgmentId, the proposal records carry exactly
+    the fields below (no artifact slot), and the kernel does not know the workflow
+    id types at all (the reference-direction gate covers the names).
+    """
+    import dataclasses
+
+    from cas.kernel.commit import ResolvedProposal, StepProposal
+    from cas.kernel.model import Step
+
+    assert [f.name for f in dataclasses.fields(StepProposal)] == [
+        "scope", "evidence", "premises", "conclusions", "guard_policy"]
+    assert [f.name for f in dataclasses.fields(ResolvedProposal)] == [
+        "scope", "evidence", "premises", "conclusions", "guard_policy",
+        "premise_propositions"]
+    premises = next(f for f in dataclasses.fields(Step) if f.name == "premises")
+    assert "JudgmentId" in str(premises.type)
+    assert "Artifact" not in str(premises.type)
+
+
+def test_invariant5_open_requirements_do_not_become_scope_assumptions(runtime: Runtime):
+    """An open guard stays a Requirement; only the Claim itself becomes an assumption."""
+    from cas.frontend.parser import parse
+    from cas.workflow.command import Claim
+
+    work = new_workflow(runtime)
+    claim = parse(runtime, "1/x")
+    step = work.add(claim, Claim())
+    assert step.judgment is not None
+
+    open_guards = {
+        work.store.get_requirement(rid).proposition
+        for rid in work.store.requirements_of(step.judgment)
+        if not work.store.is_discharged(rid, work.scope)
+    }
+    definedness = parse(runtime, "x != 0")
+    assert definedness in open_guards
+
+    scope_assumptions = {
+        assumption.proposition for assumption in work.store.scopes.assumptions(work.scope)
+    }
+    assert claim in scope_assumptions, "a committed explicit Claim is an assumption"
+    assert not open_guards.intersection(scope_assumptions), (
+        "an open Requirement was promoted into Scope.assumptions"
+    )
+
+
+def test_invariant6_checker_conditions_are_recorded_by_the_kernel(runtime: Runtime):
+    """Conditions a checker reports land in the ledger as Requirements on the
+    committed Judgment, not only in the workflow's presentation record."""
+    from cas.frontend.parser import parse
+    from cas.workflow.command import Claim
+
+    work = new_workflow(runtime)
+    step = work.add(parse(runtime, "1/x"), Claim())
+    assert step.judgment is not None
+    requirement_ids = work.store.requirements_of(step.judgment)
+    assert requirement_ids, "the reported definedness condition was not recorded"
+    propositions = {
+        work.store.get_requirement(rid).proposition for rid in requirement_ids
+    }
+    assert any(str(proposition) in ("Ne(x, 0)", "(x != 0)") for proposition in propositions)
+
+
+def test_budget_exhaustion_leaves_commit_as_undecided():
+    """Resource exhaustion is an honest Unknown, not a refutation or exception."""
+    from cas.errors import BudgetExceeded
+    from cas.kernel.commit import StepProposal, Undecided, commit
+    from cas.kernel.evidence import Evidence
+    from cas.kernel.store import KernelStore
+    from cas.kernel.verdict import Reason
+
+    class BudgetChecker:
+        def check(self, proposal, context, services):
+            raise BudgetExceeded(message="checker search exhausted")
+
+    store = KernelStore()
+    store.checkers.register("budget.exhausted", BudgetChecker())
+    root = store.scopes.create()
+    before = store.stats()
+    result = commit(
+        store,
+        StepProposal(
+            scope=root.id,
+            evidence=Evidence("budget.exhausted"),
+            conclusions=(T.S("x"),),
+        ),
+    )
+
+    assert isinstance(result, Undecided)
+    assert result.reason is Reason.BUDGET
+    assert store.stats() == before
+
+
+def test_invariant11_premises_must_be_committed_before_use():
+    """A dependency edge may only point from an already committed judgment.
+
+    Together with the single ledger write site, this is the structural reason the
+    mathematical dependency graph cannot contain a future premise or a cycle.  Two
+    negative cases distinguish that guarantee from the behaviour of a normal chain:
+    an arbitrary unknown id, and an id already issued by the store but whose
+    judgment has not been committed.
+    """
+    from cas.kernel.commit import Refused, StepProposal, commit
+    from cas.kernel.evidence import Evidence
+    from cas.kernel.ids import JudgmentId
+    from cas.kernel.store import KernelStore
+    from cas.kernel.verdict import Reason
+
+    store = KernelStore()
+    root = store.scopes.create()
+    unissued = JudgmentId(10_000)
+    issued_but_uncommitted = store.new_judgment_id()
+
+    for premise in (unissued, issued_but_uncommitted):
+        before = store.stats()
+        result = commit(
+            store,
+            StepProposal(
+                scope=root.id,
+                evidence=Evidence("checker.never.reached"),
+                premises=(premise,),
+                conclusions=(T.S("x"),),
+            ),
+        )
+
+        assert isinstance(result, Refused)
+        assert result.reason is Reason.FRAGMENT
+        assert store.stats() == before
+
+
+# ---------------------------------------------------------------------------
+# C3 addition: a module-level cache reaches the same effect as a `global`
+# statement without the keyword, so it needs its own registration and a bound.
+# ---------------------------------------------------------------------------
+
+_BOUNDED_CACHES = {
+    "cas/math/simplify.py": {"_MEMO": "_MEMO_CAP"},
+    "cas/math/domains/poly.py": {"_domain_cache": "_DOMAIN_CACHE_CAP"},
+    "cas/math/domains/ratfunc.py": {"_domain_cache": "_DOMAIN_CACHE_CAP"},
+}
+
+
+def _module_level_caches(path):
+    """Module-level mutable containers the same file also writes to inside a
+    function: a static lookup table is read-only and therefore not a cache."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    containers = set()
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        elif isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        else:
+            continue
+        if value is None:
+            continue
+        literal = isinstance(value, (ast.Dict, ast.List, ast.Set,
+                                     ast.DictComp, ast.ListComp, ast.SetComp))
+        factory = (
+            isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+            and value.func.id in ("dict", "list", "set")
+        )
+        if not (literal or factory):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                containers.add(target.id)
+    written = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                    written.add(target.value.id)
+        if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            written.add(node.target.id)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.attr
+            in ("append", "add", "update", "setdefault", "pop", "popitem", "clear")
+        ):
+            written.add(node.func.value.id)
+    return containers & written
+
+
+def test_c3_module_level_caches_are_registered():
+    """Every module-level cache in the math layer is explicitly registered."""
+    found = {}
+    for p in sorted((_ROOT / "cas" / "math").rglob("*.py")):
+        names = _module_level_caches(p)
+        if names:
+            found[p.relative_to(_ROOT).as_posix()] = names
+    registered = {path: set(caches) for path, caches in _BOUNDED_CACHES.items()}
+    assert found == registered, (
+        "the math-layer cache inventory changed; register the new cache and give it "
+        f"a bound:\nfound={found}\nregistered={registered}"
+    )
+
+
+def _cache_has_bound_and_eviction(tree: ast.Module, cache: str, cap: str) -> bool:
+    """Whether insertion into `cache` is guarded by `len(cache) >= cap` and clear."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        comparison = node.test
+        if len(comparison.ops) != 1 or not isinstance(comparison.ops[0], ast.GtE):
+            continue
+        left = comparison.left
+        if not (
+            isinstance(left, ast.Call)
+            and isinstance(left.func, ast.Name)
+            and left.func.id == "len"
+            and len(left.args) == 1
+            and isinstance(left.args[0], ast.Name)
+            and left.args[0].id == cache
+        ):
+            continue
+        if len(comparison.comparators) != 1:
+            continue
+        limit = comparison.comparators[0]
+        if not isinstance(limit, ast.Name) or limit.id != cap:
+            continue
+        if any(
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and isinstance(statement.value.func.value, ast.Name)
+            and statement.value.func.value.id == cache
+            and statement.value.func.attr == "clear"
+            for statement in node.body
+        ):
+            return True
+    return False
+
+
+def test_c3_registered_caches_have_a_bound_and_evict():
+    """Each registered cache is actually guarded by its declared cap and evicts."""
+    for path, caches in _BOUNDED_CACHES.items():
+        source = (_ROOT / path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for cache, cap in caches.items():
+            assert _cache_has_bound_and_eviction(tree, cache, cap), (
+                f"{path}: {cache} is not bounded by {cap} with an eviction"
+            )
+
+
+def test_interned_tables_are_bounded():
+    """Hash-consing tables must not pin their entries: the term tables are weak
+    and every pattern table has its own capacity guard and eviction path."""
+    import weakref
+
+    from cas.syntax import term as term_module
+
+    for name in ("_SYMS", "_CONSTS", "_NUMS", "_SPECIALS", "_EXPRS", "_BOUNDS", "_DBS"):
+        table = getattr(term_module, name)
+        assert isinstance(table, weakref.WeakValueDictionary), (
+            f"cas/syntax/term.py:{name} pins its entries")
+
+    pattern_path = _ROOT / "cas" / "syntax" / "pattern.py"
+    pattern_tree = ast.parse(pattern_path.read_text(encoding="utf-8"))
+    for cache in ("_VARS", "_SEQS", "_CALLS"):
+        assert _cache_has_bound_and_eviction(
+            pattern_tree, cache, "_PATTERN_INTERN_CAP"
+        ), (
+            f"cas/syntax/pattern.py:{cache} is not bounded by "
+            "_PATTERN_INTERN_CAP with an eviction"
+        )

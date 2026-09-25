@@ -3,18 +3,19 @@
 
 Mathematical semantics must be expressed as **DSL text** that can be checked
 mechanically: this file asserts against the text rather than reviewing Python
-registration statements. That is what turns "admit only unconditional identities" and
-"a branch-breaking template is left empty with the reason recorded" into mechanisms
-instead of something a human has to notice in code.
+registration statements. That turns the admission disciplines -- unconditional
+derivative templates, complete rule guards, declared lifting policies, and honest
+Piecewise handling of branch breaking -- into mechanisms instead of review notes.
 """
 
 from pathlib import Path
 
 import pytest
-from cas.runtime import Runtime
 
+from cas.math.decls import LiftPolicy
 from cas.math.loader import load_declarations, parse_declarations
 from cas.math.piecewise import is_piecewise
+from cas.runtime import Runtime
 
 # Walk up to the directory that contains `cas/`: this test may live at any depth
 # under tests/, so a fixed parents[1] would break on a future reclassification.
@@ -59,21 +60,60 @@ def test_algorithm_roles_are_declared(runtime: Runtime):
     assert runtime.role_head("logarithm") == "Log"
 
 
-
-
 def test_lift_policies_are_declared_for_mathematical_heads():
+    """Every head that admits lifting -- function or binder -- declares its policy.
+
+    A head without a declaration defaults to forbidden, so this declaration set
+    is the complete admission list: a new head entering the lifting channel must
+    be declared here first.
+    """
     d = parse_declarations(_text())
     policies = {record.head: record.policy for record in d.lifts}
-    assert set(policies) == {function.name for function in d.functions}
+    declared_heads = {function.name for function in d.functions} | {
+        binder.head for binder in d.binders
+    }
+    assert {function.name for function in d.functions} <= set(policies)
+    assert set(policies) <= declared_heads
     assert {policy.value for policy in policies.values()} <= {
         "congruent", "conditional", "forbidden"}
     assert "lift Sin = congruent" in _text()
+    # a binder body absorbs equality only conditionally, and says so in the DSL
+    assert policies.get("Integrate") is LiftPolicy.CONDITIONAL
+    assert policies.get("DefIntegrate") is LiftPolicy.CONDITIONAL
+
+
+def test_binder_display_symbols_are_declared(runtime: Runtime):
+    """Binder display symbols come from declarations and survive explicit assembly."""
+    d = load_declarations(str(_DSL))
+    prints = {record.head: record.print_name for record in d.binders}
+    assert prints == {
+        "Integrate": "∫",
+        "Sum": "Σ",
+        "Product": "Π",
+        "Limit": "lim",
+        "DefIntegrate": "∫",
+    }
+    for head, symbol in prints.items():
+        assert runtime.binder_print(head) == symbol
+
+
+def test_binder_statement_rejects_malformed_print_clause():
+    """A malformed display declaration is a declaration defect, not ignored data."""
+    from cas.errors import ParseError
+
+    with pytest.raises(ParseError):
+        parse_declarations("binder Foo print")
+    with pytest.raises(ParseError):
+        parse_declarations("binder Foo print bar")
 
 
 def test_lift_parser_rejects_unknown_policy():
     from cas.errors import ParseError
+
     with pytest.raises(ParseError):
         parse_declarations("lift Sin = sometimes")
+
+
 def test_dsl_is_the_only_declaration_source(runtime: Runtime):
     """The DSL file exists and covers every constant and function; what assembly
     registers matches it entry for entry."""
@@ -165,3 +205,4 @@ def test_dsl_templates_parse_with_debruijn_placeholder():
     absolute_template = by["Abs"].deriv
     assert is_piecewise(absolute_template)
     assert any(isinstance(node, T.DB) and node.i == 0 for node in postorder(absolute_template))
+

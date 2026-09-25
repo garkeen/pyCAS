@@ -66,7 +66,7 @@ def has_piecewise(term: Term) -> bool:
 
 def has_undef(term: Term) -> bool:
     """Whether Undefined occurs anywhere in the term."""
-    if term is T.SP("Undefined"):
+    if term is T.UNDEFINED:
         return True
     if isinstance(term, Expr):
         return any(has_undef(argument) for argument in term.args)

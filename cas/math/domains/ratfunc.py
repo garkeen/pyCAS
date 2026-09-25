@@ -336,6 +336,8 @@ class RatFuncDomain(Domain):
 
 
 _domain_cache: dict[tuple[tuple[Sym, ...], Ring], RatFuncDomain] = {}
+# Bounded like every other cache (see the polynomial domain cache).
+_DOMAIN_CACHE_CAP = 256
 
 
 def ratfunc_domain(*variables: Sym, ring: Ring) -> RatFuncDomain:
@@ -345,5 +347,7 @@ def ratfunc_domain(*variables: Sym, ring: Ring) -> RatFuncDomain:
     domain = _domain_cache.get(key)
     if domain is None:
         domain = RatFuncDomain(variable_key, ring)
+        if len(_domain_cache) >= _DOMAIN_CACHE_CAP:
+            _domain_cache.clear()
         _domain_cache[key] = domain
     return domain

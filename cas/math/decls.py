@@ -57,7 +57,10 @@ class AliasDecl:
 
 @dataclass(frozen=True, slots=True)
 class BinderDecl:
+    """A binder head plus its optional display symbol (declared surface data)."""
+
     head: str
+    print_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,7 +25,6 @@ from cas.syntax.termpath import subst
 if TYPE_CHECKING:
     from cas.math.context import MathContext
 
-_UNDEF = T.SP("Undefined")
 
 
 def poly_antideriv(
@@ -193,7 +192,7 @@ def _definite_piecewise(
             point = _rat_iso(cell.iso, "point cell")
             if point is None:
                 continue
-            if lower <= point <= upper and value is _UNDEF:
+            if lower <= point <= upper and value is T.UNDEFINED:
                 raise IntegrateError(
                     "integrand has an undefined point hole in [a, b]; improper "
                     "integration needs a limit layer, not built",
@@ -208,7 +207,7 @@ def _definite_piecewise(
         interval_upper = upper if cell_upper is None else min(upper, cell_upper)
         if interval_lower >= interval_upper:
             continue
-        if value is _UNDEF:
+        if value is T.UNDEFINED:
             raise IntegrateError(
                 "integrand has a gap in [a, b]; refusing to integrate across it",
                 Reason.FRAGMENT,

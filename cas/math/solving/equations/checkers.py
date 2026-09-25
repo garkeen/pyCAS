@@ -16,10 +16,10 @@ from cas.kernel.scope import Assumptions
 from cas.kernel.services import KernelServices
 from cas.kernel.verdict import No, Reason, Unknown
 from cas.math.base.checkers import (
+    _accepted,
     _defined,
     _expand,
     _is_equation,
-    _ok,
     _one_conclusion,
     _payload,
     _premise,
@@ -111,7 +111,7 @@ class SolveChecker:
                 Reason.FRAGMENT,
                 "back-substitution zero test outside the projection",
             )
-        return _ok(self.ctx, proposal, context, extra)
+        return _accepted(self.ctx, proposal, context, extra)
 
 
 CHECKERS = (SolveChecker,)

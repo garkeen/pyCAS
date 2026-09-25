@@ -22,10 +22,10 @@ from cas.kernel.evidence import (
 from cas.kernel.services import KernelServices
 from cas.kernel.verdict import No, Reason, Unknown
 from cas.math.base.checkers import (
+    _accepted,
     _expand,
     _identity,
     _is_piecewise,
-    _ok,
     _one_conclusion,
     _payload,
     _premise,
@@ -82,7 +82,13 @@ class IntegrateChecker:
                 "the differentiation layer cannot decide (no expansion-to-zero channel)",
             )
         if d.bounds is None:
-            want = T.eq(T.mk(S("Integrate"), (T.mk_bound(x, f),)), G)
+            integral_head = self.ctx.role_head("antiderivative")
+            if integral_head is None:
+                return Rejected(
+                    Reason.FRAGMENT,
+                    "the antiderivative role is not declared",
+                )
+            want = T.eq(T.mk(S(integral_head), (T.mk_bound(x, f),)), G)
             bad = _identity(
                 self.ctx,
                 content,
@@ -91,7 +97,7 @@ class IntegrateChecker:
             )
             if bad is not None:
                 return bad
-            return _ok(self.ctx, proposal, context)
+            return _accepted(self.ctx, proposal, context)
         a_t, b_t = d.bounds
         if _is_piecewise(f) or not (T.is_num(a_t) and T.is_num(b_t)):
             return UnknownResult(
@@ -101,8 +107,14 @@ class IntegrateChecker:
         Fa = fold(subst(G, {x: a_t}))
         Fb = fold(subst(G, {x: b_t}))
         val = fold(T.plus(Fb, T.neg(Fa)))
+        definite_head = self.ctx.role_head("definite_integral")
+        if definite_head is None:
+            return Rejected(
+                Reason.FRAGMENT,
+                "the definite-integral role is not declared",
+            )
         want = T.eq(
-            T.mk(S("DefIntegrate"), (T.mk_bound(x, f), a_t, b_t)),
+            T.mk(S(definite_head), (T.mk_bound(x, f), a_t, b_t)),
             val,
         )
         bad = _identity(
@@ -113,7 +125,7 @@ class IntegrateChecker:
         )
         if bad is not None:
             return bad
-        return _ok(self.ctx, proposal, context)
+        return _accepted(self.ctx, proposal, context)
 
 
 CHECKERS = (IntegrateChecker,)

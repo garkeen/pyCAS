@@ -8,11 +8,11 @@ and that autosimplify's narrowed run reaches the same normal form as a
 full-scan reference loop.
 """
 import dataclasses
-from cas.runtime import Runtime
 
 from cas.math.loader import parse_rule_line
 from cas.math.rules import RuleCatalog, RuleSet, apply_rule
 from cas.math.simplify import autosimplify, cost, rebuild
+from cas.runtime import Runtime
 from cas.syntax.match import matches
 from cas.syntax.parse import parse
 from cas.syntax.termpath import all_paths, term_at

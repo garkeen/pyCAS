@@ -10,7 +10,6 @@ from cas.frontend.repl import REPL
 from cas.frontend.session import Session
 from cas.runtime import Runtime
 
-
 _ROOT = next(path for path in Path(__file__).resolve().parents if (path / "cas").is_dir())
 _CAS = _ROOT / "cas"
 _CORE_DIRECTORIES = (
