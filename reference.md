@@ -65,4 +65,5 @@ FriCAS 的**域参数化体系**（Category → Domain → Package）是本系�
 - **expreduce/** — Common Lisp 规则重写 CAS，规则组织方式可参照
 - **mathics-core/** — Mathematica 语法的 Python 实现，语法兼容层参照
 - **yacas/** — C++ 轻量 CAS，工程结构参照
+- **reduce-algebra/** — REDUCE（Common Lisp）。**目标 3（CAD）的语义权威**：`packages/redlog/ofsf/ofsfcad.red`（CAD 主循环）、`ofsfqe.red`（量词消去）、`ofsfdpep.red`（区间隔离与符号判定）、`ofsfexfr.red`（代数扩张）、`ofsfgs.red` + `ofsftfc.red`（符号不变性），作者 Dolzmann / Seidl / Sturm / Kosta。另有 `packages/cgb/`（Comprehensive Gröbner Bases，参数化 GB）、`packages/f5/`、`packages/roots/`（Kameny 根求解）、`packages/wu/`（Wu 特征集法）、`packages/odesolve/zimmer.rlg`（Zimmermann / Rosenlicht 法 ODE）、`packages/crack/`（积分因子与精确方程）、`packages/sum/` + `zeilberg`（Zeilberger 创造性望远镜）、`packages/regressions/`（259 个真实缺陷的回归钉子）。注意：`packages/algint/` 与 `packages/int/` 是**积分测试集**而非积分算法，Liouville 级积分在 `src/` 核内。
 - **SAINT/** — Macsyma 前身，历史价值
