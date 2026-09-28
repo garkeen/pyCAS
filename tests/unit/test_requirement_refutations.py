@@ -81,7 +81,7 @@ def test_reverse_index_recorded_refutations_match_the_full_scan():
     jq = _commit_conditional(st, root.id, S("q"), "t.dneg")
     rids = [st.get_judgment(j).requirements[0] for j in jids + [jq]]
     assert rids == [0, 1, 2, 3]
-    assert st.get_requirement(rids[3]).proposition is not_(c2)
+    assert st.get_requirement(rids[3]).proposition == not_(c2)
 
     # Not(c1) refutes the first requirement, Not(c3) the third, c2 the
     # requirement whose own proposition is Not(c2).

@@ -132,6 +132,12 @@ def _representative_rewrite(
             stack.append(representative)
         if isinstance(current, T.Expr):
             stack.extend(current.args)
+    # The universe is keyed by the object's serial (`_h`), not by structure:
+    # a node and the node it was rebuilt from are two objects that may be
+    # structurally equal, and the fixed point below must be able to hold both
+    # until they actually converge. Equality and hashing are structural, so
+    # using them as keys here would let a rebuild overwrite the entry it is
+    # about to read and would report convergence one pass early.
     values: dict[int, Term] = {current._h: current for current in universe}
     for _ in range(len(universe) + 2):
         changed = False
@@ -141,6 +147,9 @@ def _representative_rewrite(
                 rebuilt = values[representative._h]
             elif isinstance(current, T.Expr):
                 arguments = tuple(values[argument._h] for argument in current.args)
+                # `is`, not `==`: `values` holds the objects this pass produced,
+                # and the point of the test is "did this node get a new object",
+                # which is a question about the walk and not about structure.
                 rebuilt = (
                     T.mk(current.head, arguments)
                     if any(

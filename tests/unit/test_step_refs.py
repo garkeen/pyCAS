@@ -36,7 +36,7 @@ def test_explicit_reference_overrides_the_focus(
     repl.cmd_norm("#0")
     assert repl.session.focus == 2
     assert repl.session.workflow.get(2).command.premises == (0,)
-    assert repl.session.workflow.get(2).content is parse(runtime, "x^2")
+    assert repl.session.workflow.get(2).content == parse(runtime, "x^2")
 
 
 def test_focus_can_be_moved_and_shown(runtime: Runtime, capsys) -> None:

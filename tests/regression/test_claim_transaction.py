@@ -12,11 +12,11 @@ REAL = S("Real")
 
 
 def _has_positive_x(assumptions) -> bool:
-    return any(item.proposition is T.gt(X, T.ZERO) for item in assumptions)
+    return any(item.proposition == T.gt(X, T.ZERO) for item in assumptions)
 
 
 def _has_positive_a(assumptions) -> bool:
-    return any(item.proposition is T.gt(A, T.ZERO) for item in assumptions)
+    return any(item.proposition == T.gt(A, T.ZERO) for item in assumptions)
 
 
 def test_committed_claim_registers_assumption_after_commit(runtime: Runtime) -> None:

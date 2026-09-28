@@ -67,8 +67,8 @@ class SolveChecker:
         expanded_content = _expand(context, content)
         if not (
             _is_equation(expanded_content)
-            and expanded_content.args[0] is payload.var
-            and expanded_content.args[1] is payload.solution
+            and expanded_content.args[0] == payload.var
+            and expanded_content.args[1] == payload.solution
         ):
             return Rejected(
                 Reason.FRAGMENT,
@@ -98,7 +98,7 @@ class SolveChecker:
                     "the declared solve condition is not the linear slope condition",
                 )
             expected = nonzero_condition(form.payload[0])
-            if payload.condition is not expected:
+            if payload.condition != expected:
                 return Rejected(
                     Reason.FRAGMENT,
                     "the declared solve condition is not the linear slope condition",

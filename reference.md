@@ -1,6 +1,6 @@
 # reference.md — 参考实现索引
 
-本项目（CAS/）的算法与架构参考源码位于上级目录 `D:\code\python\pyCAS\`。**主要权威参考：Maxima 与 FriCAS**。查算法语义、判定流程、边界行为时，先读这两个；其余四个为次要参照。
+本项目（pyCAS/）的算法与架构参考源码位于**同级目录** `D:\code\python\CAS\`：`maxima/`、`fricas/`、`expreduce/`、`mathics-core/`、`yacas/`、`reduce-algebra/`、`SAINT/` 均与 `pyCAS/` 平级。**主要权威参考：Maxima 与 FriCAS**。查算法语义、判定流程、边界行为时，先读这两个；其余五个为次要参照。
 
 裁定优先级：**本系统裁定（`cas_v4_arch.md` + `AGENTS.md`）高于参考实现行为**。参考实现里与本系统裁定冲突的做法（如 L0 隐式折叠、数值采样判等），一律以本系统裁定为准。
 

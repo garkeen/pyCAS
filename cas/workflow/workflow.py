@@ -574,7 +574,7 @@ class Workflow:
                     f"branch result #{step.id} answered no request-shaped task"
                 )
             requests.append(self.tasks.get_task(step.task).request)
-        if any(request is not requests[0] for request in requests):
+        if any(request != requests[0] for request in requests):
             raise BranchError("the branches did not answer the same task")
         escaped = scopes.escapes(                         # (4) no symbol escapes
             parent, proposition)

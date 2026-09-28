@@ -386,7 +386,7 @@ class RuleInstanceChecker:
                    for s in matches(rule.pattern, sub_t)):
             return Rejected(Reason.FRAGMENT, "the given substitution is not a match at that position")
         inst = _expand(context, P.instantiate(rule.template, d.substitution))
-        if replace_at(pred, path, inst) is not content:
+        if replace_at(pred, path, inst) != content:
             return Rejected(Reason.FRAGMENT, "content is not the result of that instance")
         return _accepted(self.ctx, proposal, context, _rule_conditions(rule, d.substitution))
 
@@ -572,13 +572,13 @@ class BranchMergeChecker:
         if d is None:
             return Rejected(Reason.FRAGMENT, "branch.merge requires a merge payload")
         coverage = T.or_(*d.conditions)
-        if not any(p is coverage for p in proposal.premise_propositions):
+        if not any(p == coverage for p in proposal.premise_propositions):
             return Rejected(Reason.FRAGMENT, "the premise does not contain this branch group's coverage proposition")
         if len(d.answers) != len(d.conditions):
             return Rejected(Reason.FRAGMENT,
                             f"branch answer count {len(d.answers)} does not match "
                             f"branch count {len(d.conditions)}")
-        if any(a is not content for a in d.answers):
+        if any(a != content for a in d.answers):
             return Rejected(Reason.FRAGMENT, "not every branch answered the same proposition")
         promoted = tuple(T.implies(c, g)
                          for c, gs in zip(d.conditions, d.guards) for g in gs)
@@ -621,7 +621,7 @@ class ConstraintSatisfiedChecker:
             return Rejected(Reason.FRAGMENT, "constraint.satisfied requires a valuation payload")
         rel = _expand(context, d.constraint.relation)
         inst = subst(rel, dict(d.valuation))
-        if _expand(context, content) is not _expand(context, inst):
+        if _expand(context, content) != _expand(context, inst):
             return Rejected(Reason.FRAGMENT, "content is not this constraint's instance under that valuation")
         # The instance is re-checked as an **identity** in the free symbols that
         # remain after the valuation: a construction constraint must vanish as a
@@ -672,7 +672,7 @@ class TransChecker:
         first, second = (_expand(context, proposition) for proposition in proposal.premise_propositions)
         if not _is_equation(first) or not _is_equation(second):
             return Rejected(Reason.FRAGMENT, "transitivity premises must be equalities")
-        if first.args[1] is not second.args[0]:
+        if first.args[1] != second.args[0]:
             return Rejected(Reason.FRAGMENT, "the middle equality terms do not match")
         expected = T.eq(first.args[0], second.args[1])
         d = _payload(proposal, TransPayload)
@@ -681,7 +681,7 @@ class TransChecker:
         if d.value != (first.args[0], first.args[1], second.args[1]):
             return Rejected(Reason.FRAGMENT,
                             "transitivity evidence payload does not match the premises")
-        if _expand(context, content) is not expected:
+        if _expand(context, content) != expected:
             return Rejected(Reason.FRAGMENT, "conclusion is not the transitive equality")
         return _accepted(self.ctx, proposal, context)
 

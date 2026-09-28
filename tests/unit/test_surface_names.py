@@ -100,7 +100,7 @@ def test_binder_words_produce_bound_forms():
         assert _head(t) == head and len(t.args) == 1, word
         assert isinstance(t.args[0], Bound), word
         var, body = T.open_bound(t.args[0])
-        assert var.name == "x" and body is parse(RUNTIME, "x^2"), word
+        assert var.name == "x" and body == parse(RUNTIME, "x^2"), word
         # the canonical spelling is the same declared binder, not a second table
         assert parse(RUNTIME, f"{head}(x^2, x)") == t, word
 
@@ -132,7 +132,7 @@ def test_definite_integral_word_binds_body_and_limits():
     t = parse(RUNTIME, "int(x^2, x, 0, 1)")
     assert _head(t) == "DefIntegrate" and len(t.args) == 3
     var, body = T.open_bound(t.args[0])
-    assert var.name == "x" and body is parse(RUNTIME, "x^2")
+    assert var.name == "x" and body == parse(RUNTIME, "x^2")
     assert t.args[1:] == (N(0), N(1))
 
 
@@ -292,7 +292,7 @@ def test_literal_shapes_reach_the_term_through_the_numeric_folding_layer():
     for t in (N(Fr(3, 4)), mk(S("Power"), (X, N(-2)))):
         s = to_str(RUNTIME, t, src=True)
         assert parse(RUNTIME, s) != t, f"{s!r} re-parsed exactly, so the pin is stale"
-        assert fold(parse(RUNTIME, s)) is t, f"{s!r} did not fold back to the term"
+        assert fold(parse(RUNTIME, s)) == t, f"{s!r} did not fold back to the term"
 
 
 def test_display_form_stays_friendly():

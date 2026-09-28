@@ -67,7 +67,7 @@ def test_closure_refutation_keeps_the_original_claim_and_child_evidence(
     claim = parse(runtime, "x == 2")
     verdict = decide(runtime.math, claim, (parse(runtime, "x == 1"),))
     assert isinstance(verdict, No)
-    assert verdict.evidence.proposition is claim
+    assert verdict.evidence.proposition == claim
     assert verdict.evidence.causes
     assert verdict.evidence.causes[0].proposition == parse(runtime, "1 == 2")
 

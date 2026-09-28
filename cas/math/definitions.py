@@ -51,6 +51,9 @@ def expand(
         elif isinstance(current, T.Bound):
             stack.append(current.body)
 
+    # Keyed by the object's serial, not by structure: the fixed point below
+    # must hold a node and its rebuilt replacement apart until they converge,
+    # and structural keys would collapse them and stop the walk one pass early.
     values: dict[int, Term] = {current._h: current for current in universe}
 
     def rebuild(current: Term) -> Term:

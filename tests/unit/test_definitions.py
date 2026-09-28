@@ -17,7 +17,7 @@ def _lookup(runtime: Runtime):
 
 
 def test_nested_aliases_expand_in_one_pass(runtime: Runtime) -> None:
-    assert expand(_lookup(runtime), parse(runtime, "v")) is parse(runtime, "x^2 + 1")
+    assert expand(_lookup(runtime), parse(runtime, "v")) == parse(runtime, "x^2 + 1")
 
 
 def test_expansion_is_idempotent(runtime: Runtime) -> None:

@@ -78,7 +78,7 @@ def decompose(term: Term, unknowns: Sequence[Sym]) -> Decomposition | None:
             },
             T.times(constant, factor),
         )
-    if name == "Power" and len(term.args) == 2 and term.args[1] is T.ONE:
+    if name == "Power" and len(term.args) == 2 and term.args[1] == T.ONE:
         return decompose(term.args[0], unknown_tuple)
     return None
 

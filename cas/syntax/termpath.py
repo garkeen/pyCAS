@@ -26,20 +26,32 @@ def subst_raw(term: Term, mapping: Mapping[Term, Term]) -> Term:
             stack.extend(current.args)
         elif isinstance(current, T.Bound):
             stack.append(current.body)
-    values: dict[Term, Term] = {}
+    # Keyed by the object's serial. The reconstruction below has to tell
+    # "this node's arguments were rewritten" from "this node was rebuilt and
+    # happens to look the same", and a structural key would collapse the two
+    # and make every node look rewritten.
+    values: dict[int, Term] = {}
     for current in reversed(order):
         replacement = mapping.get(current)
         if replacement is not None:
-            values[current] = replacement
+            values[current._h] = replacement
         elif isinstance(current, T.Expr):
-            values[current] = T.intern_expr(
-                current.head, tuple(values[argument] for argument in current.args))
+            arguments = tuple(values[argument._h] for argument in current.args)
+            values[current._h] = (
+                T.mk(current.head, arguments)
+                if any(new is not old for new, old in zip(arguments, current.args))
+                else current
+            )
         elif isinstance(current, T.Bound):
-            values[current] = T.mk_bound_canon(
-                current.hint, values[current.body])
+            body = values[current.body._h]
+            values[current._h] = (
+                current
+                if body is current.body
+                else T.mk_bound_canon(current.hint, body)
+            )
         else:
-            values[current] = current
-    return values[term]
+            values[current._h] = current
+    return values[term._h]
 
 
 def subst(term: Term, mapping: Mapping[Term, Term]) -> Term:
@@ -59,28 +71,34 @@ def subst(term: Term, mapping: Mapping[Term, Term]) -> Term:
             stack.extend(current.args)
         elif isinstance(current, T.Bound):
             stack.append(current.body)
-    values: dict[Term, Term] = {}
+    values: dict[int, Term] = {}
     for current in reversed(order):
         replacement = mapping.get(current)
         if replacement is not None:
-            values[current] = replacement
+            values[current._h] = replacement
         elif isinstance(current, T.Expr):
             if current.head.name == "Quote":
-                values[current] = T.intern_expr(
+                values[current._h] = T.mk(
                     current.head,
                     tuple(subst_raw(argument, mapping) for argument in current.args),
                 )
             else:
-                values[current] = T.mk(
-                    current.head,
-                    tuple(values[argument] for argument in current.args),
+                arguments = tuple(values[argument._h] for argument in current.args)
+                values[current._h] = (
+                    T.mk(current.head, arguments)
+                    if any(new is not old for new, old in zip(arguments, current.args))
+                    else current
                 )
         elif isinstance(current, T.Bound):
-            values[current] = T.mk_bound_canon(
-                current.hint, values[current.body])
+            body = values[current.body._h]
+            values[current._h] = (
+                current
+                if body is current.body
+                else T.mk_bound_canon(current.hint, body)
+            )
         else:
-            values[current] = current
-    return values[term]
+            values[current._h] = current
+    return values[term._h]
 
 
 def free_vars(term: Term, accumulator: set[Sym] | None = None) -> set[Sym]:

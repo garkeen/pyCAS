@@ -19,7 +19,7 @@ def cost(term: Term) -> int:
 
 
 def rebuild(term: Term, budget: int = 100000) -> Term:
-    """Re-intern a term bottom-up without applying mathematical rules."""
+    """Rebuild a term bottom-up without applying mathematical rules."""
     hit = _MEMO.get(term._h)
     if hit is not None:
         return hit
@@ -27,23 +27,35 @@ def rebuild(term: Term, budget: int = 100000) -> Term:
 
     def rebuild_node(root: Term) -> Term:
         nonlocal spent
-        values: dict[Term, Term] = {}
+        values: dict[int, Term] = {}
         for current in reversed(postorder(root)):
             spent -= 1
             if spent < 0:
                 raise BudgetExceeded()
-            if current in values:
+            if current._h in values:
                 continue
             if isinstance(current, Expr):
-                arguments = tuple(values[argument] for argument in current.args)
-                values[current] = T.mk(current.head, arguments)
+                arguments = tuple(values[argument._h] for argument in current.args)
+                # Return the original node when no argument changed. Without
+                # this the walk never reaches a fixed point: the constructor
+                # allocates a fresh object every call, so a term that is
+                # already canonical would keep producing "new" objects and the
+                # `following is previous` test below would never fire.
+                values[current._h] = (
+                    T.mk(current.head, arguments)
+                    if any(new is not old for new, old in zip(arguments, current.args))
+                    else current
+                )
             elif isinstance(current, T.Bound):
-                values[current] = T.mk_bound_canon(
-                    current.hint, values[current.body]
+                body = values[current.body._h]
+                values[current._h] = (
+                    current
+                    if body is current.body
+                    else T.mk_bound_canon(current.hint, body)
                 )
             else:
-                values[current] = current
-        return values[root]
+                values[current._h] = current
+        return values[root._h]
 
     previous = term
     while True:

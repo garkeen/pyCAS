@@ -94,8 +94,8 @@ def test_definition_body_may_use_earlier_alias(runtime: Runtime) -> None:
     workflow.define(U, T.times(X, X))
     v = S("v")
     workflow.define(v, T.plus(U, X))
-    assert workflow.store.scopes.lookup_definition(workflow.scope, v) is T.plus(U, X)
-    assert workflow.store.scopes.lookup_definition(workflow.scope, U) is T.times(X, X)
+    assert workflow.store.scopes.lookup_definition(workflow.scope, v) == T.plus(U, X)
+    assert workflow.store.scopes.lookup_definition(workflow.scope, U) == T.times(X, X)
 
 
 def test_definition_body_may_not_use_other_scope_local(runtime: Runtime) -> None:

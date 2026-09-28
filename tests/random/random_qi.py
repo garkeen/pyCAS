@@ -128,7 +128,7 @@ def prop_membership(rounds, rng):
         # normalization idempotence: normalizing the output again gives the same interned pointer
         t1 = normalize(project(MATH, parse(RUNTIME, expr)))
         t2 = normalize(project(MATH, t1))
-        if t1 is not t2:
+        if t1 != t2:
             fail("P40 normalization is not idempotent", i, to_str(RUNTIME, t1), to_str(RUNTIME, t2))
         # non-members: pi+i, sin(i), a square root, one with a variable, division by zero
         for bad in ("pi + i", "sin(i)", "2^(1/2)", "x + i", "1/(i*i+1)"):

@@ -102,7 +102,7 @@ def test_constant_cells_keep_their_answers():
         assert hit.element is None, "a constant cell carries no element"
         assert projection.is_zero(hit) is zero, term
         # the normal form is exactly what the domain path itself returns
-        assert projection.normalize(hit) is hit.domain.normalize(term), term
+        assert projection.normalize(hit) == hit.domain.normalize(term), term
 
 
 def test_polynomial_cell_keeps_its_answers():
@@ -110,13 +110,13 @@ def test_polynomial_cell_keeps_its_answers():
     hit = _project(zero_term)
     assert hit is not None and hit.element is not None
     assert projection.is_zero(hit) is True
-    assert projection.normalize(hit) is hit.domain.normalize(zero_term)
+    assert projection.normalize(hit) == hit.domain.normalize(zero_term)
 
     nonzero_term = T.plus(T.pw(X, T.N(2)), T.neg(T.N(3)))       # x^2 - 3
     hit = _project(nonzero_term)
     assert hit is not None and hit.element is not None
     assert projection.is_zero(hit) is False
-    assert projection.normalize(hit) is hit.domain.normalize(nonzero_term)
+    assert projection.normalize(hit) == hit.domain.normalize(nonzero_term)
 
 
 def test_ratfunc_cell_keeps_its_answers():
@@ -125,13 +125,13 @@ def test_ratfunc_cell_keeps_its_answers():
     hit = _project(zero_term)
     assert hit is not None and hit.element is not None
     assert projection.is_zero(hit) is True
-    assert projection.normalize(hit) is hit.domain.normalize(zero_term)
+    assert projection.normalize(hit) == hit.domain.normalize(zero_term)
 
     nonzero_term = T.div(T.ONE, x_minus_one)                    # 1/(x-1)
     hit = _project(nonzero_term)
     assert hit is not None and hit.element is not None
     assert projection.is_zero(hit) is False
-    assert projection.normalize(hit) is hit.domain.normalize(nonzero_term)
+    assert projection.normalize(hit) == hit.domain.normalize(nonzero_term)
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +197,8 @@ def test_new_representation_is_consumed_through_a_caller_supplied_ladder():
 
     assert projection.is_zero(hit_zero) is True
     assert projection.is_zero(hit_two) is False
-    assert projection.normalize(hit_zero) is T.N(0)
-    assert projection.normalize(hit_two) is T.N(2)
+    assert projection.normalize(hit_zero) == T.N(0)
+    assert projection.normalize(hit_two) == T.N(2)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def test_linear_solve_consumes_a_rational_function_through_the_view():
     of the rational function, with no isinstance dispatch in the tactic."""
     x_minus_two = T.plus(X, T.neg(T.TWO))
     solved = solve_linear(_math(), T.eq(T.div(T.ONE, x_minus_two), T.ONE), X)
-    assert solved is T.N(3)
+    assert solved == T.N(3)
     # a zero fraction is an identity through the same view
     zero_fraction = T.times(T.N(0), T.pw(x_minus_two, T.N(-1)))
     with pytest.raises(TacticsError, match="identity"):
@@ -397,7 +397,7 @@ def test_new_representation_is_consumed_through_the_polynomial_view():
     result = _lin_core(ctx, _marker("C8ViewMarker", 0), X)
 
     assert isinstance(result, LinearSolution)
-    assert result.solution is T.N(2)
+    assert result.solution == T.N(2)
 
 
 class _NoViewDomain(Domain):

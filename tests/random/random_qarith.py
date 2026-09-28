@@ -3,8 +3,8 @@ cases: the machine generates the instances and checks the properties).
 
 Four properties, all self-proving with no external ground truth:
   P1 fold fidelity   eval_exact(t, env) == eval_exact(fold(t), env)
-  P2 idempotent pointer  fold(fold(t)) is fold(t) (content addressing implies that the
-                     same structure has the same pointer)
+  P2 idempotent form     fold(fold(t)) == fold(t) (a normal form is a fixed point,
+                     so folding an already folded term changes nothing)
   P3 interval channel  after assuming x>k, the three-valued truth table for queries x>j
   P4 back-substitution judge  an equation built from known roots must evaluate to exactly
                      0 at each root after expansion, and a non-root sample must not
@@ -102,7 +102,7 @@ def prop_fold(rounds, rng):
     for i in range(rounds):
         t = gen_safe(rng.randint(1, 4), rng)
         ft = fold(t)
-        if fold(ft) is not ft:
+        if fold(ft) != ft:
             fail("P2 idempotent pointer", rng.seed if hasattr(rng, "seed") else "?", t)
         for env in envs:
             try:

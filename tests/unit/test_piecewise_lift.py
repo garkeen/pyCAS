@@ -58,9 +58,9 @@ def test_adjacent_same_value_branches_merge_into_one():
     assert len(bs) == 2
     # the two equal-value branches entered the product as one branch, with the
     # disjunction of their conditions
-    assert bs[0][1] == T.or_(c1, c2) and bs[0][1] is T.or_(c1, c2)
-    assert bs[0][0] is T.plus(N(1), N(10))
-    assert bs[1][1] is T.TRUE
+    assert bs[0][1] == T.or_(c1, c2)
+    assert bs[0][0] == T.plus(N(1), N(10))
+    assert bs[1][1] == T.TRUE
 
 
 def test_merged_condition_is_the_disjunction_in_canonical_form():
@@ -68,7 +68,7 @@ def test_merged_condition_is_the_disjunction_in_canonical_form():
     p = piecewise([(N(2), c1), (N(2), c2), (N(3), T.TRUE)])
     bs = branches(lift(T.times, p, N(10)))
     assert bs[0][1] == T.or_(c2, c1)          # same interned node, argument order canonical
-    assert bs[0][0] is T.times(N(2), N(10))
+    assert bs[0][0] == T.times(N(2), N(10))
 
 
 def test_merge_composes_with_a_second_piecewise_argument():
@@ -112,7 +112,7 @@ def test_merged_lift_agrees_pointwise_with_the_selected_values(runtime: Runtime)
         assert isinstance(selected_m, SelectedValue)
         assert (
             T.plus(selected_p.value, selected_q.value)
-            is selected_m.value
+            == selected_m.value
         )
 
 
@@ -165,8 +165,8 @@ def test_budget_stops_a_product_that_merging_cannot_shrink():
 # ---------------------------------------------------------------------------
 
 def test_lift_without_a_piecewise_argument_returns_the_operation():
-    assert lift(T.plus, X, N(2)) is T.plus(X, N(2))
-    assert lift(T.times, X, X) is T.times(X, X)
+    assert lift(T.plus, X, N(2)) == T.plus(X, N(2))
+    assert lift(T.times, X, X) == T.times(X, X)
 
 
 def test_lift_takes_its_budget_as_a_keyword():

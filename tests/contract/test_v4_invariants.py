@@ -207,6 +207,68 @@ def test_invariant1_term_has_no_guard_or_proof_fields():
         assert not bad, f"{cls.__name__} carries an illegal field: {sorted(bad)}"
 
 
+def test_term_hash_is_structural_and_stable():
+    """`hash(term)` is a property of the term's shape, not of its construction.
+
+    The hash is stored in `_sh` and built from the children's `_sh` at
+    construction, so it is O(arity) and never re-derived on lookup. `_h` remains
+    the per-object serial used by the intern tables and the union-find, which
+    need to name one object rather than a shape. Keeping the two apart is what
+    makes the hash independent of interning: two structurally identical terms
+    hash alike even when they are distinct objects.
+    """
+    from fractions import Fraction
+
+    variants = _term_variants()
+    for cls in variants:
+        slots = set(getattr(cls, "__slots__", ()))
+        assert {"_h", "_key", "_sh"} <= slots or slots.isdisjoint({"_h", "_sh"}), (
+            f"{cls.__name__} must either carry all three term fields or none")
+
+    assert set(T.Term.__slots__) == {"_h", "_key", "_sh"}, (
+        "Term must carry exactly the serial, the canonical key and the "
+        f"structural hash, got {sorted(T.Term.__slots__)}")
+
+    x = T.S("x")
+    one = T.N(1)
+    # Same shape, distinct objects: equal by both measures, and the hash agrees
+    # with the equality. This is the property the intern tables already gave us
+    # for terms they build, and structural equality now gives it for every term.
+    a = T.Expr(T.S("Plus"), (x, one), 10_000_001)
+    b = T.Expr(T.S("Plus"), (x, one), 10_000_002)
+    assert a is not b
+    assert a == b, "structurally identical terms must compare equal"
+    assert hash(a) == hash(b), "equal terms must hash alike"
+    assert a._h != b._h, "each object keeps its own serial"
+    assert a._key == b._key, "structurally identical terms share a canonical key"
+
+    # Equality must be reflexive, symmetric, transitive and hash-consistent
+    # across a term built by the intern tables and one built directly.
+    built = T.plus(x, one)
+    direct = T.Expr(T.S("Plus"), (built.args), 10_000_003)
+    assert built == direct and direct == built
+    assert len({built, direct}) == 1, "equal terms occupy one set slot"
+    assert len({built: 1, direct: 2}) == 1, "equal terms occupy one dict slot"
+
+    # A difference anywhere in the tree must make terms unequal.
+    assert T.plus(x, one) != T.plus(x, T.N(2))
+    assert T.plus(x, one) != T.times(x, one)
+    assert T.S("x") != T.S("y")
+    assert T.S("x") != T.N(1), "a symbol is not a number"
+    assert T.N(Fraction(1, 2)) != T.N(1)
+
+    # Distinct shapes must not systematically collide, or dict lookups degrade.
+    shapes = {T.S(f"sym{i}") for i in range(200)}
+    assert len({hash(s) for s in shapes}) == len(shapes), (
+        "distinct symbols produced colliding structural hashes")
+
+    # The hash must survive a round trip through a set, which is where an
+    # identity hash and a structural hash would disagree.
+    pool = {T.times(x, T.N(i)) for i in range(200)}
+    assert len(pool) == 200
+    assert all(hash(t) in {hash(p) for p in pool} for t in pool)
+
+
 def test_invariant2_pattern_is_not_term():
     """PatternVar/PatternSeq/PatternCall are outside the Term hierarchy."""
     for cls in (P.PatternVar, P.PatternSeq, P.PatternCall):
@@ -849,18 +911,49 @@ def test_c3_registered_caches_have_a_bound_and_evict():
             )
 
 
-def test_interned_tables_are_bounded():
-    """Hash-consing tables must not pin their entries: the term tables are weak
-    and every pattern table has its own capacity guard and eviction path."""
-    import weakref
+def test_interning_is_limited_to_the_finite_vocabulary():
+    """Only the bounded vocabulary is interned; expression nodes are not.
 
+    Interning expression nodes used to be a correctness requirement: equality
+    was pointer identity, so a dictionary keyed by a term only collapsed equal
+    terms while the table held them, and a weak table silently dropped
+    entries and split one expression into two keys. Equality and the hash are
+    now both structural, so equal terms collapse correctly whether or not they
+    are the same object, and the expression tables are gone. What remains is the
+    finite vocabulary - symbols, constants, declared specials, de Bruijn
+    indices - whose size is bounded by the program's own declarations, so it
+    cannot grow without limit.
+    """
     from cas.syntax import term as term_module
 
-    for name in ("_SYMS", "_CONSTS", "_NUMS", "_SPECIALS", "_EXPRS", "_BOUNDS", "_DBS"):
+    for name in ("_SYMS", "_CONSTS", "_NUMS", "_SPECIALS", "_DBS"):
         table = getattr(term_module, name)
-        assert isinstance(table, weakref.WeakValueDictionary), (
-            f"cas/syntax/term.py:{name} pins its entries")
+        assert type(table) is dict, (
+            f"cas/syntax/term.py:{name} is not a plain dict")
 
+    for gone in ("_EXPRS", "_BOUNDS"):
+        assert not hasattr(term_module, gone), (
+            f"cas/syntax/term.py:{gone} still interns expression nodes; the "
+            "expression tables must stay removed, because an unbounded "
+            "expression table is what this design gives up")
+
+    # Equal terms collapse to one entry with or without interning.
+    x = term_module.S("contract_vocabulary_probe")
+    built = term_module.plus(x, term_module.N(1))
+    direct = term_module.Expr(
+        term_module.S("Plus"), (built.args), 20_000_001
+    )
+    assert built == direct
+    assert len({built, direct}) == 1, "equal terms occupy one set slot"
+    assert len({built: 1, direct: 2}) == 1, "equal terms occupy one dict slot"
+
+    # The finite tables still share, and clearing them is safe.
+    assert callable(term_module.clear_interning)
+    assert isinstance(term_module.interning_size(), int)
+
+
+def test_pattern_tables_are_bounded():
+    """Pattern interning is a cache, not a correctness mechanism: it is capped."""
     pattern_path = _ROOT / "cas" / "syntax" / "pattern.py"
     pattern_tree = ast.parse(pattern_path.read_text(encoding="utf-8"))
     for cache in ("_VARS", "_SEQS", "_CALLS"):

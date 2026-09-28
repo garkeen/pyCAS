@@ -15,16 +15,16 @@ from cas.syntax import term as T
 
 
 def test_fold_keeps_zero_to_zero_interned(runtime: Runtime) -> None:
-    assert fold(parse(runtime, "0^0")) is parse(runtime, "0^0")
+    assert fold(parse(runtime, "0^0")) == parse(runtime, "0^0")
 
 
 def test_fold_nonzero_numeric_base_to_zero_is_one(runtime: Runtime) -> None:
-    assert fold(parse(runtime, "2^0")) is T.ONE
-    assert fold(parse(runtime, "(1/2)^0")) is T.ONE
+    assert fold(parse(runtime, "2^0")) == T.ONE
+    assert fold(parse(runtime, "(1/2)^0")) == T.ONE
 
 
 def test_fold_symbolic_base_to_zero_stays_interned(runtime: Runtime) -> None:
-    assert fold(parse(runtime, "x^0")) is parse(runtime, "x^0")
+    assert fold(parse(runtime, "x^0")) == parse(runtime, "x^0")
 
 
 def test_eval_exact_refuses_zero_to_zero(runtime: Runtime) -> None:
@@ -66,17 +66,17 @@ def test_projection_misses_zero_to_zero(runtime: Runtime) -> None:
 
 
 def test_normal_form_leaves_zero_to_zero_in_place(runtime: Runtime) -> None:
-    assert domain_normal_form(runtime, parse(runtime, "0^0")) is parse(
+    assert domain_normal_form(runtime, parse(runtime, "0^0")) == parse(
         runtime, "0^0"
     )
-    assert domain_normal_form(runtime, parse(runtime, "x + 0^0")) is parse(
+    assert domain_normal_form(runtime, parse(runtime, "x + 0^0")) == parse(
         runtime, "x + 0^0"
     )
 
 
 def test_normal_form_folds_nonzero_to_zero(runtime: Runtime) -> None:
-    assert domain_normal_form(runtime, parse(runtime, "2^0")) is T.ONE
-    assert domain_normal_form(runtime, parse(runtime, "x^0")) is T.ONE
+    assert domain_normal_form(runtime, parse(runtime, "2^0")) == T.ONE
+    assert domain_normal_form(runtime, parse(runtime, "x^0")) == T.ONE
 
 
 def test_zero_test_is_undecided_for_zero_to_zero_identity(runtime: Runtime) -> None:

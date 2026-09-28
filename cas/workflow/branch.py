@@ -48,7 +48,7 @@ def _is_negation(term: Term, other: Term) -> bool:
         isinstance(term, T.Expr)
         and isinstance(term.head, T.Sym)
         and term.head.name == "Not"
-        and term.args[0] is other
+        and term.args[0] == other
     )
 
 

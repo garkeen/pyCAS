@@ -22,8 +22,8 @@ def test_definition_expands_for_computation_and_keeps_step_form(
         Diff(pred=first.id, var=S("x")),
     )
     assert second.status == "committed"
-    assert first.content is parse(runtime, "u^2")
-    assert second.content is parse(runtime, "4*x^3")
+    assert first.content == parse(runtime, "u^2")
+    assert second.content == parse(runtime, "4*x^3")
 
 
 def test_normal_form_alias_step_is_verified_after_expansion(

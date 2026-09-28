@@ -23,7 +23,7 @@ def test_artifact_separate_from_conclusion_cannot_be_premise():
     wf = new_workflow(RUNTIME)
     s0 = wf.add(parse(RUNTIME, "x^2"), Claim())
     art = wf.artifacts.get(s0.artifact)
-    assert art.value is parse(RUNTIME, "x^2")
+    assert art.value == parse(RUNTIME, "x^2")
     # submitting an ArtifactId as a premise: the kernel finds no such Judgment and refuses
     r = commit(wf.store,
                StepProposal(scope=wf.scope, premises=(art.id,),
@@ -38,7 +38,7 @@ def test_each_step_produces_artifact_attached_to_event():
     wf = new_workflow(RUNTIME)
     s0 = wf.add(parse(RUNTIME, "x^2"), Claim())
     s1 = wf.add(parse(RUNTIME, "2*x"), Diff(pred=s0.id, var=S("x")))
-    assert wf.artifacts.get(s1.artifact).value is parse(RUNTIME, "2*x")
+    assert wf.artifacts.get(s1.artifact).value == parse(RUNTIME, "2*x")
     ev = wf.events.events()[-1]
     assert wf.artifacts.get(s1.artifact).produced_by == ev.id
     kinds = [r.kind for r in ev.outputs]
@@ -81,7 +81,7 @@ def test_task_and_candidate_state_derived_from_data():
     s0 = wf.add(parse(RUNTIME, "x^2"), Claim())
     s1 = wf.add(parse(RUNTIME, "2*x"), Diff(pred=s0.id, var=S("x")))
     task = wf.tasks.get_task(s1.task)
-    assert task.request is T.mk(S("Differentiate"), (parse(RUNTIME, "x^2"), S("x")))
+    assert task.request == T.mk(S("Differentiate"), (parse(RUNTIME, "x^2"), S("x")))
     cands = wf.tasks.candidates_of(task.id)
     assert len(cands) == 1
     c = cands[0]
@@ -183,14 +183,14 @@ def test_split_builds_complementary_pair_with_coverage():
     g = wf.split_on(cond)
     assert len(g.cases) == 2
     assert g.cases[0].condition is cond
-    assert g.cases[1].condition is T.not_(cond)
+    assert g.cases[1].condition == T.not_(cond)
     assert g.cases[0].scope != g.cases[1].scope
     # coverage is registered after an independent checker re-check: what is recorded is
     # the **verified proposition** (the complementary disjunction itself), rather than
     # collapsing c or not-c to true at construction time
     assert g.coverage is not None
     cov = wf.store.get_judgment(g.coverage)
-    assert cov.proposition is T.or_(cond, T.not_(cond))
+    assert cov.proposition == T.or_(cond, T.not_(cond))
 
 
 def test_branch_scope_carries_condition_assumption():

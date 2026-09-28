@@ -229,7 +229,7 @@ def prop_lift(rounds, rng):
                 and isinstance(selected_m, SelectedValue)
             ):
                 fail("P23 lifted container did not hit", i, f"a={a}")
-            if plus(selected_p.value, selected_q.value) is not selected_m.value:
+            if plus(selected_p.value, selected_q.value) != selected_m.value:
                 fail(
                     "P23 pointwise disagreement",
                     i,
@@ -273,7 +273,7 @@ def prop_lift_merge(rounds, rng):
                 and isinstance(selected_m, SelectedValue)
             ):
                 fail("P33 merged container did not hit", i, f"a={a}")
-            if plus(selected_p.value, selected_q.value) is not selected_m.value:
+            if plus(selected_p.value, selected_q.value) != selected_m.value:
                 fail(
                     "P33 merge changed the pointwise value",
                     i,
@@ -307,7 +307,11 @@ def prop_guards(rounds, rng):
             neg = T.FALSE if c is T.TRUE else mk(S("Not"), (c,))
             for g in solo:
                 want.append(mk(S("Or"), (neg, g)))
-        if sorted(x._h for x in got) != sorted(x._h for x in want):
+        # Compare as a multiset of structures. Sorting by the object's serial
+        # would only work while equal terms were the same object, and they no
+        # longer are: interning of expression nodes is gone, so `_h` names an
+        # object rather than a shape.
+        if sorted(map(repr, got)) != sorted(map(repr, want)):
             fail("P24 guarded conditions mismatch", i,
                  f"got={[_render(x) for x in got]}",
                  f"want={[_render(x) for x in want]}")
@@ -388,7 +392,7 @@ def prop_fold_nested(rounds, rng):
             fail("P29 flattened form is not piecewise", i)
         if any(is_piecewise(v) for v, _c in branches(fl)):
             fail("P29 flattening incomplete", i, _render(fl))
-        if fold_nested(fl) is not fl:
+        if fold_nested(fl) != fl:
             fail("P29 flattening is not idempotent", i)
         # pointwise agreement: the nested original and the flattened form take the same value
         for _ in range(12):

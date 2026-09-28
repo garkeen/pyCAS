@@ -44,7 +44,7 @@ def test_source_form_round_trips(runtime: Runtime) -> None:
         "3*x^-2",
     ]:
         term = parse(runtime, source)
-        assert parse(runtime, to_str(runtime, term, src=True)) is term
+        assert parse(runtime, to_str(runtime, term, src=True)) == term
 
 
 def test_times_converges_every_numeric_factor(runtime: Runtime) -> None:
@@ -75,7 +75,7 @@ def test_times_round_trip_preserves_the_folded_value(runtime: Runtime) -> None:
     ]:
         term = parse(runtime, source)
         reparsed = parse(runtime, to_str(runtime, term, src=True))
-        assert fold(reparsed) is fold(term)
+        assert fold(reparsed) == fold(term)
 
 
 def test_syntax_atoms_not_from_declarations(runtime: Runtime) -> None:

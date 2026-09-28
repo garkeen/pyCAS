@@ -204,9 +204,9 @@ def _facts_lookup(
     ctx: MathContext, fact: Expr, assumptions: Assumptions
 ) -> Verdict | None:
     for f in assumptions:
-        if f is fact:
+        if f == fact:
             return YES
-        if f is negate(ctx, fact):
+        if f == negate(ctx, fact):
             return refute(
                 RefutationChannel.ASSUMPTION_FACT, fact, fact, f,
                 detail="the assumption frame contains the syntactic negation")
@@ -214,8 +214,8 @@ def _facts_lookup(
             if f.head.name in _CMP_INV and fact.head.name in _CMP_INV:
                 if (
                     f.head.name == _CMP_INV[fact.head.name]
-                    and f.args[0] is fact.args[1]
-                    and f.args[1] is fact.args[0]
+                    and f.args[0] == fact.args[1]
+                    and f.args[1] == fact.args[0]
                 ):
                     return YES
     return None
@@ -329,7 +329,7 @@ def _interval(
         name = assumption.head.name
         if (
             name == "Attr"
-            and assumption.args[0] is term
+            and assumption.args[0] == term
             and isinstance(assumption.args[1], T.Sym)
             and assumption.args[1].name == "integer"
         ):
@@ -592,10 +592,10 @@ def _nneg(
     if assumptions is not None:
         for f in assumptions:
             if isinstance(f, T.Expr) and f.head.name in ("Gt", "Ge"):
-                if f.args[0] is t and f.args[1] is T.ZERO:
+                if f.args[0] == t and f.args[1] == T.ZERO:
                     return True
             if isinstance(f, T.Expr) and f.head.name in ("Lt", "Le"):
-                if f.args[0] is t and f.args[1] is T.ZERO:
+                if f.args[0] == t and f.args[1] == T.ZERO:
                     return False
     return None
 
@@ -611,10 +611,10 @@ def _pos(
     if assumptions is not None:
         for f in assumptions:
             if isinstance(f, T.Expr) and f.head.name == "Gt":
-                if f.args[0] is t and f.args[1] is T.ZERO:
+                if f.args[0] == t and f.args[1] == T.ZERO:
                     return True
             if isinstance(f, T.Expr) and f.head.name == "Le":
-                if f.args[0] is t and f.args[1] is T.ZERO:
+                if f.args[0] == t and f.args[1] == T.ZERO:
                     return False
     return None
 
@@ -701,7 +701,7 @@ def _rule_cmp_via_eq(
             if (
                 isinstance(g, T.Expr)
                 and g.head.name == "Eq"
-                and g.args[0] is a
+                and g.args[0] == a
                 and T.is_num(g.args[1])
             ):
                 return _cmp_numeric(f.head.name, g.args[1], b)
@@ -1017,7 +1017,7 @@ _RULES: tuple[tuple[str, RuleApplies, ContextRule], ...] = (
     ("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _ctx_free(_rule_eq_times_zero)),
     ("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]), _ctx_free(_rule_sign_num)),
     ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _ctx_free(_rule_eq_num)),
-    ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] is T.ZERO and f.args[1] is not T.ZERO, _ctx_free(_rule_cmp_flip)),
+    ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] == T.ZERO and f.args[1] != T.ZERO, _ctx_free(_rule_cmp_flip)),
 )
 def _derive_layer(
     ctx: MathContext,
@@ -1322,14 +1322,19 @@ def equivalent(
     assumptions: AssumptionFrame = None,
     budget: int = 100000,
 ) -> Verdict:
-    """The unified identity pipeline: pointer -> numeric constants -> normal-form
-    zero test -> registered stage sequence -> honest UNKNOWN.
+    """The unified identity pipeline: structural -> numeric constants ->
+    normal-form zero test -> registered stage sequence -> honest UNKNOWN.
 
     Domain normal-form zeroing goes through autosimplify plus the projection zero
-    test; a tower normal form would attach later as a registered stage."""
+    test; a tower normal form would attach later as a registered stage.
+
+    The leading structural test is the same shortcut the interned constructor
+    used to provide for free, and it is what keeps a term the projection cannot
+    read - a `Piecewise`, a quoted subterm - decidable as itself instead of
+    falling through to an honest UNKNOWN."""
     from cas.math.simplify import autosimplify
 
-    if a is b:
+    if a == b:
         return YES
     if T.is_num(a) and T.is_num(b):
         return _comparison_no(
@@ -1337,14 +1342,14 @@ def equivalent(
             "exact rational values differ")
     a = _qfold(a)
     b = _qfold(b)
-    if a is b:
+    if a == b:
         return YES
     if T.is_num(a) and T.is_num(b):
         return _comparison_no(
             RefutationChannel.EXACT_COMPARISON, "Eq", a, b,
             "exact rational values differ")
     r = autosimplify(ctx, T.plus(a, T.neg(b)), budget)
-    if r is T.ZERO:
+    if r == T.ZERO:
         return YES
     from cas.math.project import zero_of
     z = zero_of(ctx, r)

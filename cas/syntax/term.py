@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import weakref
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
 from typing import Iterable, TypeGuard
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True, order=True, slots=True)
 class SortKey:
     kind: int
     text: str = ""
@@ -27,20 +26,39 @@ def _next_h() -> int:
 
 
 class Term:
-    __slots__ = ("_h", "__weakref__")
+    """A pure-syntax, interned value.
+
+    `_key` is the term's position in the canonical order. It is computed once
+    at construction from the already-built keys of the children, so ordering
+    never re-derives a key tree: comparing two terms reads two existing
+    objects. The canonical order itself is unchanged; only the cost of
+    obtaining it moved from "every comparison" to "every construction".
+
+    `_sh` is the term's structural hash and `_h` its unique serial. They are
+    kept apart on purpose: the hash and the order are properties of a term's
+    shape, while the serial names one particular object, which is what the
+    intern tables and the union-find index by.
+
+    Equality is structural, with the identity test first. The intern tables
+    make structurally equal terms the same object, so the fast path is the
+    overwhelmingly common one; the structural comparison is what keeps the
+    meaning of `==` correct for a term that was built outside them (a
+    reconstructed node, a term crossing a process boundary, a duplicate that
+    interning could not merge). `hash` is the matching structural hash, so the
+    hash/equality contract holds for equal terms whether or not they are the
+    same object.
+    """
+
+    __slots__ = ("_h", "_key", "_sh")
     _h: int
+    _key: SortKey
+    _sh: int
 
     def __hash__(self) -> int:
-        return self._h
-
-    def __eq__(self, other: object) -> bool:
-        return self is other
-
-    def __ne__(self, other: object) -> bool:
-        return self is not other
+        return self._sh
 
     def __lt__(self, other: Term) -> bool:
-        return sort_key(self) < sort_key(other)
+        return self._key < other._key
 
 
 class Sym(Term):
@@ -49,7 +67,18 @@ class Sym(Term):
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self._key = SortKey(0, name)
+        self._sh = hash((0, name))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Sym):
+            return NotImplemented
+        return self.name == other.name
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return self.name
@@ -61,7 +90,18 @@ class Const(Term):
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self._key = SortKey(1, name)
+        self._sh = hash((1, name))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Const):
+            return NotImplemented
+        return self.name == other.name
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return self.name
@@ -73,7 +113,18 @@ class DB(Term):
 
     def __init__(self, i: int) -> None:
         self.i = i
+        self._key = SortKey(3, number=i)
+        self._sh = hash((2, i))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, DB):
+            return NotImplemented
+        return self.i == other.i
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return f"#{self.i}"
@@ -85,7 +136,18 @@ class BVal(Term):
 
     def __init__(self, val: bool) -> None:
         self.val = val
+        self._key = SortKey(2, number=0 if val else 1)
+        self._sh = hash((3, val))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, BVal):
+            return NotImplemented
+        return self.val == other.val
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return "True" if self.val else "False"
@@ -97,7 +159,18 @@ class Int(Term):
 
     def __init__(self, value: int) -> None:
         self.v = value
+        self._key = SortKey(25, number=value)
+        self._sh = hash((4, value))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Int):
+            return NotImplemented
+        return self.v == other.v
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return str(self.v)
@@ -109,7 +182,18 @@ class Rat(Term):
 
     def __init__(self, value: Fraction) -> None:
         self.f = value
+        self._key = SortKey(25, number=value)
+        self._sh = hash((5, value))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Rat):
+            return NotImplemented
+        return self.f == other.f
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return f"{self.f.numerator}/{self.f.denominator}"
@@ -121,7 +205,18 @@ class Special(Term):
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self._key = SortKey(8, name)
+        self._sh = hash((6, name))
         self._h = _next_h()
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Special):
+            return NotImplemented
+        return self.name == other.name
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return self.name
@@ -135,7 +230,23 @@ class Expr(Term):
     def __init__(self, head: Sym, args: tuple[Term, ...], value_hash: int) -> None:
         self.head = head
         self.args = args
+        # Children are already constructed, so their keys and hashes are
+        # already built: this is linear in the arity, not in the subtree.
+        self._key = SortKey(
+            20,
+            children=(head._key, *(argument._key for argument in args)),
+        )
+        self._sh = hash((7, head._sh, tuple(argument._sh for argument in args)))
         self._h = value_hash
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Expr):
+            return NotImplemented
+        return self.head == other.head and self.args == other.args
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         if self.head.name in _INFIX:
@@ -152,7 +263,22 @@ class Bound(Term):
     def __init__(self, hint: str, body: Term, value_hash: int) -> None:
         self.hint = hint
         self.body = body
+        self._key = SortKey(21, children=(body._key,))
+        self._sh = hash((8, body._sh))
         self._h = value_hash
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Bound):
+            return NotImplemented
+        # `hint` is a display-only name for the bound variable; the de Bruijn
+        # body is what carries the meaning, and `mk_bound_canon` interns a body
+        # to one hint, so comparing the body alone is both sufficient and
+        # consistent with what the table already merged.
+        return self.body == other.body
+
+    __hash__ = Term.__hash__
 
     def __repr__(self) -> str:
         return f"bound<{self.hint}>({self.body!r})"
@@ -172,15 +298,50 @@ _INFIX: dict[str, str] = {
     "Or": "||",
 }
 
-_SYMS: weakref.WeakValueDictionary[str, Sym] = weakref.WeakValueDictionary()
-_CONSTS: weakref.WeakValueDictionary[str, Const] = weakref.WeakValueDictionary()
-_NUMS: weakref.WeakValueDictionary[int | Fraction, Int | Rat] = weakref.WeakValueDictionary()
-_SPECIALS: weakref.WeakValueDictionary[str, Special] = weakref.WeakValueDictionary()
-_EXPRS: weakref.WeakValueDictionary[tuple[int, tuple[int, ...]], Expr] = (
-    weakref.WeakValueDictionary()
-)
-_BOUNDS: weakref.WeakValueDictionary[int, Bound] = weakref.WeakValueDictionary()
-_DBS: weakref.WeakValueDictionary[int, DB] = weakref.WeakValueDictionary()
+# Interning tables.
+#
+# Only the finite vocabulary is interned: symbols, constants, declared specials
+# and de Bruijn indices. Those sets are bounded by the program's own vocabulary
+# (the declarations DSL and the variables the user has typed), so they cannot
+# grow without limit and sharing them is free.
+#
+# Expression nodes are NOT interned. They used to be, and the reason is worth
+# recording: `Term.__eq__` was pointer identity, so a dictionary keyed by a
+# term only collapsed equal terms while the table held them, and dropping an
+# entry silently split one expression into two dictionary keys. Equality and
+# the hash are now both structural, which removes that dependency entirely, so
+# the table is no longer buying correctness - only sharing, and that is worth
+# less than an unbounded table costs.
+#
+# Sharing is still real where it matters, because a subtree that is not rebuilt
+# keeps its object: `lift` and the binder walks return the original child when
+# the child is unchanged, so the identity fast path in `__eq__` fires and a
+# rebuild allocates only the nodes it actually changed.
+_SYMS: dict[str, Sym] = {}
+_CONSTS: dict[str, Const] = {}
+_NUMS: dict[int | Fraction, Int | Rat] = {}
+_SPECIALS: dict[str, Special] = {}
+_DBS: dict[int, DB] = {}
+
+
+def clear_interning() -> None:
+    """Drop every interned vocabulary atom. Terms built from them stay valid.
+
+    Only the finite tables are cleared; expression nodes are not tracked, so
+    there is nothing to release for them.
+    """
+    _SYMS.clear()
+    _CONSTS.clear()
+    _NUMS.clear()
+    _SPECIALS.clear()
+    _DBS.clear()
+
+
+def interning_size() -> int:
+    """Number of interned vocabulary atoms, for budget reporting."""
+    return (
+        len(_SYMS) + len(_CONSTS) + len(_NUMS) + len(_SPECIALS) + len(_DBS)
+    )
 
 
 def DB_(index: int) -> DB:
@@ -266,28 +427,13 @@ MONE = N(-1)
 
 
 def sort_key(term: Term) -> SortKey:
-    if isinstance(term, Sym):
-        return SortKey(0, term.name)
-    if isinstance(term, Const):
-        return SortKey(1, term.name)
-    if isinstance(term, BVal):
-        return SortKey(2, number=0 if term.val else 1)
-    if isinstance(term, DB):
-        return SortKey(3, number=term.i)
-    if isinstance(term, Int):
-        return SortKey(25, number=Fraction(term.v))
-    if isinstance(term, Rat):
-        return SortKey(25, number=term.f)
-    if isinstance(term, Special):
-        return SortKey(8, term.name)
-    if isinstance(term, Expr):
-        return SortKey(20, children=(
-            sort_key(term.head),
-            *(sort_key(argument) for argument in term.args),
-        ))
-    if isinstance(term, Bound):
-        return SortKey(21, children=(sort_key(term.body),))
-    return SortKey(22, repr(term))
+    """The term's position in the canonical order.
+
+    The key is built once at construction (`Term._key`), so this is a field
+    read. It stays a function because callers - the pattern layer in
+    particular - treat it as the accessor for a term's canonical key.
+    """
+    return term._key
 
 
 def _flatten_ac(head: Sym, args: Iterable[Term]) -> list[Term]:
@@ -329,13 +475,18 @@ def _fold_bool_ac(head: Sym, args: Iterable[Term]) -> Term | list[Term]:
 
 
 def intern_expr(head: Sym, args: tuple[Term, ...]) -> Expr:
-    key = (head._h, tuple(argument._h for argument in args))
-    term = _EXPRS.get(key)
-    if term is None:
-        value_hash = _next_h()
-        term = Expr(head, args, value_hash)
-        _EXPRS[key] = term
-    return term
+    """Build a call node. The name records the historical role; it no longer
+    consults a table.
+
+    Equality is structural and the hash is structural, so the constructor no
+    longer has to make equal terms the same object for dictionaries, sets and
+    `==` to behave. What it still buys is *sharing*, not correctness: the node
+    is built once and every holder of it observes the same object, so the
+    identity fast path in `__eq__` and the `is` checks in `lift` and friends
+    keep firing on the unchanged parts of a tree. That sharing is what stops
+    a rebuild from allocating a fresh object per node.
+    """
+    return Expr(head, args, _next_h())
 
 
 def mk(head: Sym, args: Iterable[Term]) -> Term:
@@ -345,10 +496,10 @@ def mk(head: Sym, args: Iterable[Term]) -> Term:
         if name in BOOL_HEADS:
             folded = _fold_bool_ac(head, arguments)
             if isinstance(folded, list):
-                return intern_expr(head, tuple(folded))
+                return Expr(head, tuple(folded), _next_h())
             return folded
-        return intern_expr(head, tuple(_flatten_ac(head, arguments)))
-    return intern_expr(head, arguments)
+        return Expr(head, tuple(_flatten_ac(head, arguments)), _next_h())
+    return Expr(head, arguments, _next_h())
 
 
 def call(name: str, *args: Term) -> Term:
@@ -457,12 +608,13 @@ def _abstract(term: Term, variable: Sym, depth: int) -> Term:
 
 
 def mk_bound_canon(hint: str, canonical_body: Term) -> Bound:
-    key = canonical_body._h
-    term = _BOUNDS.get(key)
-    if term is None:
-        term = Bound(hint, canonical_body, _next_h())
-        _BOUNDS[key] = term
-    return term
+    """Bind a canonical (already abstracted) body under a display name.
+
+    Equality ignores `hint` and the hash ignores it too, so two bindings of
+    the same body with different names compare equal; the table that used to
+    collapse them is gone and no longer needed for that.
+    """
+    return Bound(hint, canonical_body, _next_h())
 
 
 def mk_bound(
@@ -486,7 +638,17 @@ def lift(term: Term, variable: Sym, depth: int) -> Term:
         return variable if term.i == depth else term
     if isinstance(term, Expr):
         args = tuple(lift(argument, variable, depth) for argument in term.args)
-        return term if all(new is old for new, old in zip(args, term.args)) else mk(term.head, args)
+        # Share the unchanged children. This is what keeps a rebuild from
+        # allocating a fresh node per subtree, and it is what makes the identity
+        # fast path in `Term.__eq__` fire on the parts that did not change. The
+        # test is `is`, and that is sound here precisely because `lift` returns
+        # its input object for every leaf and for an unchanged child list, so
+        # `new is old` is a real "nothing happened" signal rather than a guess.
+        return (
+            term
+            if all(new is old for new, old in zip(args, term.args))
+            else mk(term.head, args)
+        )
     if isinstance(term, Bound):
         lifted_body = lift(term.body, variable, depth + 1)
         return (
