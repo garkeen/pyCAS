@@ -305,13 +305,18 @@ _INFIX: dict[str, str] = {
 # (the declarations DSL and the variables the user has typed), so they cannot
 # grow without limit and sharing them is free.
 #
-# Expression nodes are NOT interned. They used to be, and the reason is worth
-# recording: `Term.__eq__` was pointer identity, so a dictionary keyed by a
-# term only collapsed equal terms while the table held them, and dropping an
-# entry silently split one expression into two dictionary keys. Equality and
-# the hash are now both structural, which removes that dependency entirely, so
-# the table is no longer buying correctness - only sharing, and that is worth
-# less than an unbounded table costs.
+# Expression nodes are NOT interned, and neither are numeric literals. Both
+# used to be, and the reason is worth recording. Expression interning: `Term.__eq__`
+# was pointer identity, so a dictionary keyed by a term only collapsed equal
+# terms while the table held them, and dropping an entry silently split one
+# expression into two dictionary keys. Numeric interning: a table keyed by value
+# has a key space decided by the computation rather than by the program's
+# declarations, so it grows with every distinct rational a run ever forms -
+# 200k distinct rationals meant 200k permanently held literals. Equality and the
+# hash are now both structural, which removes the correctness dependency
+# entirely, so neither table buys anything but sharing, and an unbounded table
+# costs more than that sharing is worth. `N` therefore builds a fresh literal
+# and equal literals still collapse to one dictionary slot.
 #
 # Sharing is still real where it matters, because a subtree that is not rebuilt
 # keeps its object: `lift` and the binder walks return the original child when
@@ -319,7 +324,6 @@ _INFIX: dict[str, str] = {
 # rebuild allocates only the nodes it actually changed.
 _SYMS: dict[str, Sym] = {}
 _CONSTS: dict[str, Const] = {}
-_NUMS: dict[int | Fraction, Int | Rat] = {}
 _SPECIALS: dict[str, Special] = {}
 _DBS: dict[int, DB] = {}
 
@@ -327,21 +331,18 @@ _DBS: dict[int, DB] = {}
 def clear_interning() -> None:
     """Drop every interned vocabulary atom. Terms built from them stay valid.
 
-    Only the finite tables are cleared; expression nodes are not tracked, so
-    there is nothing to release for them.
+    Only the finite tables are cleared; expression nodes and numeric literals
+    are not tracked, so there is nothing to release for them.
     """
     _SYMS.clear()
     _CONSTS.clear()
-    _NUMS.clear()
     _SPECIALS.clear()
     _DBS.clear()
 
 
 def interning_size() -> int:
     """Number of interned vocabulary atoms, for budget reporting."""
-    return (
-        len(_SYMS) + len(_CONSTS) + len(_NUMS) + len(_SPECIALS) + len(_DBS)
-    )
+    return len(_SYMS) + len(_CONSTS) + len(_SPECIALS) + len(_DBS)
 
 
 def DB_(index: int) -> DB:
@@ -379,20 +380,13 @@ def C(name: str) -> Const:
 
 
 def N(value: int | Fraction) -> Int | Rat:
+    """Build a numeric literal. Deliberately not interned: see the table notes."""
     if isinstance(value, int):
-        term = _NUMS.get(value)
-        if term is None:
-            term = Int(value)
-            _NUMS[value] = term
-        return term
+        return Int(value)
     fraction = Fraction(value)
     if fraction.denominator == 1:
         return N(fraction.numerator)
-    term = _NUMS.get(fraction)
-    if term is None:
-        term = Rat(fraction)
-        _NUMS[fraction] = term
-    return term
+    return Rat(fraction)
 
 
 def SP(name: str) -> Special:
