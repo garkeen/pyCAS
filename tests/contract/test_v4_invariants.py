@@ -484,14 +484,6 @@ def test_invariant16_unverified_candidate_not_trusted(runtime: Runtime):
 # The persistent Scope tree takes over the mutable context
 # ---------------------------------------------------------------------------
 
-def test_phase5_old_mutable_context_removed():
-    """The old mutable context (mutable entries plus marks/rollback) must not come back."""
-    from cas.kernel import context as C
-    for name in ("Context", "Entry", "Branch"):
-        assert not hasattr(C, name), f"the old mutable context survives: {name}"
-    assert hasattr(C, "TrackedContext"), "the checker read channel is missing"
-
-
 def test_assumptions_immutable_and_extend_creates_new():
     """The assumption set is a read-only projection of Scope: `extended` does not write
     in place, so no clone or undo is needed."""
@@ -567,19 +559,6 @@ def test_source_cites_no_design_document():
 
 # ---------------------------------------------------------------------------
 # C3: the declaration surface and the assembly configuration are explicit
-# ---------------------------------------------------------------------------
-
-_REMOVED_ASSEMBLY_HANDLES = {
-    "decide.py": ("_DECLS", "_EQ_STAGES", "bind_runtime", "bind_eq_stages"),
-    "rules.py": ("_DECLS", "bind_runtime"),
-    "diff.py": ("_DECLS", "bind_runtime"),
-    "domcond.py": ("_DECLS", "bind_runtime"),
-    "project.py": ("_STAGES", "register_stage", "clear_stages", "bind_domains"),
-    "domains/base.py": ("_DEFAULT_COEFF_RING", "default_coeff_ring"),
-    "domains/poly.py": ("default_coeff_ring",),
-    "domains/ratfunc.py": ("default_coeff_ring",),
-}
-
 
 def test_c3_no_module_level_assembly_state_in_math():
     """No module in the math layer keeps assembly state in a module handle.
@@ -597,22 +576,6 @@ def test_c3_no_module_level_assembly_state_in_math():
                 bad.append(f"{p.relative_to(_ROOT)}:{node.lineno} -> "
                            + ", ".join(node.names))
     assert not bad, "math layer holds module-level state:\n" + "\n".join(bad)
-
-
-def test_c3_removed_declaration_handles_stay_removed():
-    """The handles assembly used to write into are gone, not merely unused.
-
-    Each name was a second way to reach the declarations, and keeping one around
-    leaves a reader unable to tell which channel is in effect.
-    """
-    math_dir = _ROOT / "cas" / "math"
-    bad = []
-    for name, needles in _REMOVED_ASSEMBLY_HANDLES.items():
-        text = (math_dir / name).read_text(encoding="utf-8")
-        for needle in needles:
-            if needle in text:
-                bad.append(f"cas/math/{name}: {needle}")
-    assert not bad, "a removed assembly handle is back:\n" + "\n".join(bad)
 
 
 # ---------------------------------------------------------------------------
@@ -910,46 +873,6 @@ def test_c3_registered_caches_have_a_bound_and_evict():
                 f"{path}: {cache} is not bounded by {cap} with an eviction"
             )
 
-
-def test_interning_is_limited_to_the_finite_vocabulary():
-    """Only the bounded vocabulary is interned; expression nodes are not.
-
-    Interning expression nodes used to be a correctness requirement: equality
-    was pointer identity, so a dictionary keyed by a term only collapsed equal
-    terms while the table held them, and a weak table silently dropped
-    entries and split one expression into two keys. Equality and the hash are
-    now both structural, so equal terms collapse correctly whether or not they
-    are the same object, and the expression tables are gone. What remains is the
-    finite vocabulary - symbols, constants, declared specials, de Bruijn
-    indices - whose size is bounded by the program's own declarations, so it
-    cannot grow without limit.
-    """
-    from cas.syntax import term as term_module
-
-    for name in ("_SYMS", "_CONSTS", "_NUMS", "_SPECIALS", "_DBS"):
-        table = getattr(term_module, name)
-        assert type(table) is dict, (
-            f"cas/syntax/term.py:{name} is not a plain dict")
-
-    for gone in ("_EXPRS", "_BOUNDS"):
-        assert not hasattr(term_module, gone), (
-            f"cas/syntax/term.py:{gone} still interns expression nodes; the "
-            "expression tables must stay removed, because an unbounded "
-            "expression table is what this design gives up")
-
-    # Equal terms collapse to one entry with or without interning.
-    x = term_module.S("contract_vocabulary_probe")
-    built = term_module.plus(x, term_module.N(1))
-    direct = term_module.Expr(
-        term_module.S("Plus"), (built.args), 20_000_001
-    )
-    assert built == direct
-    assert len({built, direct}) == 1, "equal terms occupy one set slot"
-    assert len({built: 1, direct: 2}) == 1, "equal terms occupy one dict slot"
-
-    # The finite tables still share, and clearing them is safe.
-    assert callable(term_module.clear_interning)
-    assert isinstance(term_module.interning_size(), int)
 
 
 def test_pattern_tables_are_bounded():

@@ -49,9 +49,10 @@
 | 6 | math 模块归入 `cas/math`，显式 `install(builder)` 装配 | 完成 |
 | 6b | 声明查询面与装配配置显式传参（`MathContext`），取代装配期写模块句柄 | 完成 |
 
-不变量 1 / 2 / 14 / 16 / 18 已绿，另有四条依赖与引用方向门禁、两条 C3 门禁
-（math 层不得持有模块级装配状态；被删句柄不得回潮），以及数学语义 head 字面量、
-求解器内嵌验证器、声明 DSL 准入三条全库门禁；无 xfail 项。
+不变量 1 / 2 / 14 / 16 / 18 已绿，另有四条依赖与引用方向门禁、一条 C3 门禁
+（math 层不得持有模块级装配状态），以及数学语义 head 字面量、求解器内嵌验证器、
+声明 DSL 准入三条全库门禁；无 xfail 项。断言「某个名字/某个文件路径不会回来」的门禁
+已按裁定全部删除（见末节）。
 「红灯先挂」策略现在只适用于确有跨阶段迁移待做之处。
 
 ## 实现纪律
@@ -166,9 +167,11 @@
 - `__hash__` 返回结构 hash `_sh`；`__eq__` 改为结构比较（先做身份快路径）。哈希与判等因此
   一致，不再依赖驻留。
 - **表达式节点不再驻留。** 只保留有限词表（符号、常数、声明的 special、de Bruijn 索引），
-  规模由程序自身的声明决定。`_h` 降级为「本对象的唯一序列号」，供 union-find 的代表元
-  tiebreaker 与定点遍历使用；**凡以 `_h` 作键的重建映射仍按对象键入**，因为定点循环需要
-  把「本轮重建出的对象」和「原对象」暂时分开存放。
+  规模由程序自身的声明决定。`_h` 降级为「本对象的唯一序列号」，供定点遍历使用；
+  **凡以 `_h` 作键的重建映射仍按对象键入**，因为定点循环需要把「本轮重建出的对象」和
+  「原对象」暂时分开存放。（本节初稿还写 `_h` 兼作 union-find 代表元的 tiebreaker；
+  那是把分配序号当成了项的性质，已在下一节改为结构性代表元序。数值字面量的驻留表
+  `_NUMS` 同样在本节被记漏，它已随下一节一并去掉——有限词表清单里本来就没有数值。）
 
 **修掉的两个正确性缺陷。**
 
@@ -194,10 +197,19 @@
 medium deg20 8488 → 1110 us（7.6x）；`mk(Plus, 50)` 535 → 42 us。结构判等的代价经实测
 可忽略：身份快路径吃掉绝大多数，元组比较走 C 层，2 元到 50 元基本持平（0.21 → 0.20 us）。
 
-**验收。** 342 项确定性测试（unit/contract/integration/regression）全绿，ruff 与
-mypy(91 文件) 全绿；`random_piecewise` 单跑全通过。**`random_qarith` 与 `random_qi` 的
-P2/P40 断言已由 `is` 改为 `==`，但改动后尚未重跑确认**，需补一次随机套件验收。
-删除驻留后的内存与性能未重测；CAD / Sturm / commit 路径未测。
+**验收（补跑于本轮项层改造之后的同一 HEAD）。** `python -m pytest -m "not random"` 为
+342 passed / 12 deselected；`python -m pytest -m random` 为 12 passed（`random_qarith`、
+`random_qi` 改过的 P2/P40 断言已确认通过）；`ruff check`、`mypy`（91 文件）与
+`mypy --strict cas`（CI 用的是 strict）、`compileall` 全绿。`ruff format --check` 报 91 个
+文件待格式化，HEAD~1 同样如此，是全库既有风格漂移而非本轮引入，故未在本轮处理。
+
+**补测的未测路径与内存曲线**（本机单次最优值，20 次取最小，us；与上节自报值不同机器/负载，
+不可直接比较，本机数值更低）：`differentiate` 40 项和 1205、20 次多项式 614、`mk(Plus,50)` 20；
+Sturm `x^20-x` 隔离 811（实根恰为 0 与 1，隔离区间严格分离且升序）；CAD
+`resolve_partition`（`x^2-2>0` ∧ `x<3`，7 个胞腔）2385，标签含全真胞腔；commit 路径经
+REPL 门面 6 条命令（claim/norm/diff/solve/claim/integrate）3 ms，`norm` 报 committed、
+`integrate x^2` 得 `x^3/3`。内存：项数 50→400 时峰值 105→268→583→1216 KiB，8 倍输入只涨
+11.6 倍，未见二次增长；测量结束仍占 820 KiB（含 runtime、session 与脚本自持的项）。
 
 ## 未实现（下一步）
 
@@ -218,11 +230,74 @@ P2/P40 断言已由 `is` 改为 `==`，但改动后尚未重跑确认**，需补
 阶段 4 已消除旧的 runtime dispatch、隐式 parser/printer/API 和后绑定 handler 接口。仍待
 处理的是上述长期能力缺口与工作流序列化、分支蕴含引入规则。源码与测试不保留旧命令/旧分类兼容包装。
 
-本轮项层改造遗留的待办（均已在上一节列明，此处不重复论证）：
+项层改造遗留的三项待办（随机套件、内存曲线、CAD/Sturm/commit 路径）已在上节补跑完毕，
+结论均为绿。补跑过程中查出一条与该项层改造直接相关的缺陷，已在本轮修掉，见下节。
 
-- `random_qarith` / `random_qi` 的 P2/P40 断言改为结构判等后**尚未重跑确认**。
-- 删除表达式驻留后的**内存曲线与性能未重测**（每次 `mk` 现在都会分配新对象）。
-- CAD / Sturm / commit 路径未纳入本轮性能与正确性回归。
+## 数值字面量不驻留：去掉 `_NUMS` 与它掩盖的身份依赖
+
+**缺陷。** `cas/syntax/term.py` 的 `_NUMS` 是按数值键的强引用 dict，键空间由计算量而非
+程序声明决定：实测构造 20 万个互异有理数后 `_NUMS` 达 200002 项，运行期无任何淘汰
+（`clear_interning` 只有测试门禁调用）。这与 `term.py` 自己的注释、AGENTS.md §四.6
+「驻留表只限有限词表（符号、常数、声明的 special、de Bruijn 索引）」以及「本系统不再有
+无界的项表」这条裁定都不符——数值字面量不在那份清单里。原有门禁只断言 `_NUMS` 是普通
+dict、`_EXPRS`/`_BOUNDS` 不复活，不给它设上界，故表在无界增长时门禁仍绿。
+
+**改动。** `N()` 直接新建字面量，`_NUMS` 删除（连同 `clear_interning`/`interning_size`
+里的对应项），`term.py` 的表注释写明「按值的表键空间由计算决定」这段理由。等值字面量仍是
+不同对象，但结构判等使它们在 set/dict 里折叠为一个槽位——这一条由
+`test_term_hash_is_structural_and_stable` 覆盖，不需要另写「`_NUMS` 不得复活」的钉子。
+
+**去掉驻留顺带暴露的 20 处身份依赖**（原本靠「同一个 `1` 只存在一个对象」成立）。判据仍是
+上一轮定的两类：问形状的用 `==`，定点遍历里问「这轮有没有换新对象」的保留 `is`。全库按此
+扫过一遍，剩下的 `is` 全部属于第二类（`new is old`、`following is previous`、
+`__eq__` 的身份快路径），无需再动。
+
+- `math/decide.py`：10 处 `is T.ZERO`（序规则表 7 处、精确差通道 2 处、投影零测 1 处）、
+  `_same` 与序链 BFS 的同项判等、区间通道 3 处「本事实是否在给 `term` 定点」；两条证据
+  detail 里的「pointer-identical」措辞随之改为「一个项不会严格大于或小于自身」。
+- `syntax/match.py`：6 处模式与目标的比较（字面量模式、恒等元吸收、绑定一致性、head）。
+  字面量模式原先靠驻留才匹配得上 `0`，规则索引与全扫描因此不一致。
+- `math/piecewise.py`：相邻同值支合并与「两支同值」快路径。
+- `math/base/equality.py`：`_Union` 改按结构 hash 建表（并查集的元素是结构等价的项，
+  不是对象），代表元改由 `_representative_order` 选。
+- `math/calculus/differentiation/checkers.py`：交叉验证的差为零判定、分段支条件同一性。
+- `tests/integration/test_constraint_solver.py`：解值断言由 `is` 改为 `==`，所断不变。
+
+**顺带修掉的潜在缺陷：闭包的代表元原来由分配序号决定。** `_Union` 的代表元 tiebreaker 是
+`(子树的 postorder 长度, _h)`，而 `_h` 是**分配序号**，不是项的性质：同一段推导里 `1`
+若恰好先于 `x` 被创建，`x` 就会被归约到 `1`，否则归约到 `x`，闭包输出因此依赖会话历史。
+去掉数值驻留后事实里的 `1` 变成新对象、序号变大，代表元翻成 `x`，「`x == 2` 在 `x == 1`
+下被证否」就从「带子证据（`1 == 2`）的 No」退化成「区间通道给的、cause 为空的 No」——
+随机台架 `random_diff` P13 与 `test_refutation_closure` 立刻变红，正好把这条钉出来。
+代表元改按结构取：闭项优先，其次子树较小，最后规范序。闭项优先有数学理由：闭包存在的
+意义就是把残差方程交给精确/区间通道，框架把变量钉到数值时代表元取数值才判得动。
+
+**验收。** `python -m pytest -m random` 12 passed（`random_diff` P13、
+`random_piecewise_workflow` 两条新暴露的回归已转绿）；`ruff check cas tests`、
+`mypy --strict cas`（91 文件）、`compileall` 全绿。性能代价（本机 20 次取最小，us）：
+`differentiate` 40 项和 1205 → 1327、20 次多项式 614 → 658、`mk(Plus,50)` 20 不变、
+Sturm `x^20-x` 811 → 794、CAD `resolve_partition` 2385 → 2409、commit 路径 3 ms 不变，
+约 7–10% 的换取是每次 `N()` 都要分配。内存：项数 50→400 峰值 131→328→714→1500 KiB
+（去驻留前 105→268→583→1216），仍是 8 倍输入 11.5 倍峰值；有限词表 26 个原子
+（去驻留前 433，其中 400 余个是被驻留的数值）。
+
+**不写「名字/路径不会回来」的门禁。**
+
+裁定：「被删句柄不得回潮」「某变量不得复活」这一类断言只把删除这件事钉一遍：第二次回归
+的价值为零，代价是一份要永远跟着重命名同步的名字清单。设计意图写在 AGENTS.md 与源码
+注释里，由 review 保证，不由测试保证。门禁只保留可机械判定、且不依赖具体标识符的那类：
+结构性质、依赖方向、声明准入、缓存有界。AGENTS.md 末节同步记了这条。
+
+本轮删除：`test_interning_is_limited_to_the_finite_vocabulary`（断言 `_NUMS`/`_EXPRS`/
+`_BOUNDS` 不存在；等值项折叠为一个槽位已由 `test_term_hash_is_structural_and_stable`
+覆盖）、`test_c3_removed_declaration_handles_stay_removed` 及其 `_REMOVED_ASSEMBLY_HANDLES`
+名字表（按文件路径 grep 已删标识符）、`test_phase5_old_mutable_context_removed`
+（`hasattr` 断言 `Context`/`Entry`/`Branch` 不存在）、本轮那根
+`tests/regression/test_numeric_literals_are_not_interned.py`。
+
+保留（不是这一类）：依赖方向与引用方向门禁、`test_term_hash_is_structural_and_stable`、
+math 层无模块级装配状态、math 模块级缓存登记且有界、模式层缓存有界淘汰、数学语义 head
+字面量、求解器不内嵌验证器、声明 DSL 准入、不变量 3/4/5/6/11/13/14/16/18/21。
 
 ## 语言与引用纪律
 
