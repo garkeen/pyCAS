@@ -62,7 +62,7 @@ def _bind_identity(
             result = dict(substitution)
             result[pattern.name] = identity
             return result
-        return substitution if current is identity else None
+        return substitution if current == identity else None
     if isinstance(pattern, P.PatternSeq):
         current = substitution.get(pattern.name)
         if current is None:
@@ -70,7 +70,7 @@ def _bind_identity(
             result[pattern.name] = ()
             return result
         return substitution if current == () else None
-    return substitution if pattern is identity else None
+    return substitution if pattern == identity else None
 
 
 def _all_identity(
@@ -127,7 +127,7 @@ def _match(
     if state[0] < 0:
         raise BudgetExceeded()
     if isinstance(pattern, T.Term):
-        if pattern is target:
+        if pattern == target:
             yield substitution
         return
     if isinstance(pattern, P.PatternVar):
@@ -139,7 +139,7 @@ def _match(
             result = dict(substitution)
             result[pattern.name] = restored
             yield result
-        elif current is restored:
+        elif current == restored:
             yield substitution
         return
     if isinstance(pattern, P.PatternSeq):
@@ -153,7 +153,7 @@ def _match(
             yield substitution
         return
     if isinstance(pattern, P.PatternCall):
-        if isinstance(target, T.Expr) and target.head is pattern.head:
+        if isinstance(target, T.Expr) and target.head == pattern.head:
             if pattern.head.name in T.AC:
                 yield from _match_orderless(
                     list(pattern.args), list(target.args), substitution, state, binds
@@ -276,7 +276,7 @@ def matches(
         if not _pred_ok(pattern, target):
             return
         current = base.get(pattern.name)
-        if current is None or current is target:
+        if current is None or current == target:
             result = dict(base)
             result[pattern.name] = target
             yield result

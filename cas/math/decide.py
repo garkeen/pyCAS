@@ -174,20 +174,20 @@ def _cmp_numeric(op: str, a: Term, b: Term) -> Verdict | None:
 
 
 def _same(op: str, a: Term, b: Term) -> Verdict | None:
-    if a is not b:
+    if a != b:
         return None
     if op in ("Eq", "Le", "Ge"):
         return YES
     return _comparison_no(
         RefutationChannel.EXACT_COMPARISON, op, a, a,
-        "pointer-identical terms refute a strict or unequal comparison")
+        "a term is never strictly above or below itself")
 
 
 def _poly_eq_check(ctx: MathContext, a: Term, b: Term) -> Verdict | None:
     """Projection zero-test channel: when a-b falls inside Q/K[x]/K(x), the domain
     normal form decides it completely."""
     d = _qfold(T.plus(a, T.neg(b)))
-    if d is T.ZERO:
+    if d == T.ZERO:
         return YES
     from cas.math.project import zero_of
     r = zero_of(ctx, d)
@@ -252,12 +252,12 @@ def _chain_query(
                 u, v = v, u
                 opf = "Lt" if opf == "Gt" else "Le"
             adjacency.setdefault(u, []).append((v, opf == "Lt"))
-    if a is b:
+    if a == b:
         if op in ("Le", "Ge", "Eq"):
             return YES
         return _comparison_no(
             RefutationChannel.DERIVATION, op, a, b,
-            "pointer-identical terms refute the comparison")
+            "a term is never strictly above or below itself")
     start, goal = want
     best: dict[int, bool] = {start._h: False}
     queue = deque([(start, False)])
@@ -267,7 +267,7 @@ def _chain_query(
             continue                       # stale state: a better strictness was found
         for nxt, edge_strict in adjacency.get(cur, ()):
             next_strict = evs or edge_strict
-            if nxt is goal and (not strict or next_strict):
+            if nxt == goal and (not strict or next_strict):
                 return YES
             previous = best.get(nxt._h)
             if previous is None or (next_strict and not previous):
@@ -339,7 +339,7 @@ def _interval(
             continue
         if name in ("Lt", "Le", "Gt", "Ge"):
             first, second = assumption.args
-            if first is term and T.is_num(second):
+            if first == term and T.is_num(second):
                 value = T.num_val(second)
                 if name == "Lt":
                     tighten(None, False, value, True)
@@ -349,7 +349,7 @@ def _interval(
                     tighten(value, True, None, False)
                 else:
                     tighten(value, False, None, False)
-            elif second is term and T.is_num(first):
+            elif second == term and T.is_num(first):
                 value = T.num_val(first)
                 if name == "Lt":
                     tighten(value, True, None, False)
@@ -361,8 +361,8 @@ def _interval(
                     tighten(None, False, value, False)
         elif name == "Eq":
             first, second = assumption.args
-            other = second if first is term else (first if second is term else None)
-            if other is not None and other is not term:
+            other = second if first == term else (first if second == term else None)
+            if other is not None and other != term:
                 if T.is_num(other):
                     value = T.num_val(other)
                     tighten(value, False, value, False)
@@ -475,7 +475,7 @@ def _cmp_interval(
             *witnesses,
         )
     if op in ("Eq", "Ne"):
-        if difference is T.ZERO:
+        if difference == T.ZERO:
             if op == "Eq":
                 return YES
             return no("the exact difference is zero")
@@ -490,7 +490,7 @@ def _cmp_interval(
                     return no("the difference interval is bounded away from zero")
                 return YES
         return None
-    if difference is T.ZERO:
+    if difference == T.ZERO:
         if op in ("Le", "Ge"):
             return YES
         return no("the exact difference is zero")
@@ -1008,14 +1008,14 @@ def _ctx_free(fn: ContextFreeRule) -> ContextRule:
 _RULES: tuple[tuple[str, RuleApplies, ContextRule], ...] = (
     ("ne-from-ord", lambda f: f.head.name == "Ne", _ctx_free(_rule_ne_from_ord)),
     ("cmp-via-eq", lambda f: _is_ord(f), _ctx_free(_rule_cmp_via_eq)),
-    ("sign-atom", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_atom),
-    ("sign-times", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_sign_times),
-    ("sign-even-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0, _ctx_free(_rule_sign_even_power)),
-    ("sign-nonneg-zero", lambda f: _is_ord(f) and f.args[1] is T.ZERO, _rule_sign_nonneg_zero),
-    ("sign-power", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1, _ctx_free(_rule_sign_odd_power)),
-    ("sign-sum", lambda f: _is_ord(f) and f.args[1] is T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus", _ctx_free(_rule_sign_sum)),
+    ("sign-atom", lambda f: _is_ord(f) and f.args[1] == T.ZERO, _rule_sign_atom),
+    ("sign-times", lambda f: _is_ord(f) and f.args[1] == T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _rule_sign_times),
+    ("sign-even-power", lambda f: _is_ord(f) and f.args[1] == T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 0, _ctx_free(_rule_sign_even_power)),
+    ("sign-nonneg-zero", lambda f: _is_ord(f) and f.args[1] == T.ZERO, _rule_sign_nonneg_zero),
+    ("sign-power", lambda f: _is_ord(f) and f.args[1] == T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Power" and isinstance(f.args[0].args[1], T.Int) and f.args[0].args[1].v % 2 == 1, _ctx_free(_rule_sign_odd_power)),
+    ("sign-sum", lambda f: _is_ord(f) and f.args[1] == T.ZERO and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Plus", _ctx_free(_rule_sign_sum)),
     ("eq-times-zero", lambda f: f.head.name == "Eq" and isinstance(f.args[0], T.Expr) and f.args[0].head.name == "Times", _ctx_free(_rule_eq_times_zero)),
-    ("sign-num", lambda f: _is_ord(f) and f.args[1] is T.ZERO and T.is_num(f.args[0]), _ctx_free(_rule_sign_num)),
+    ("sign-num", lambda f: _is_ord(f) and f.args[1] == T.ZERO and T.is_num(f.args[0]), _ctx_free(_rule_sign_num)),
     ("eq-num", lambda f: f.head.name in ("Eq", "Ne") and T.is_num(f.args[0]) and T.is_num(f.args[1]), _ctx_free(_rule_eq_num)),
     ("cmp-flip", lambda f: _is_cmp(f) and f.args[0] == T.ZERO and f.args[1] != T.ZERO, _ctx_free(_rule_cmp_flip)),
 )

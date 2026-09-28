@@ -269,7 +269,7 @@ def _agree(
     assumptions: Assumptions,
 ) -> Verdict:
     """Decide value agreement after extending the assumption frame."""
-    if first is second:
+    if first == second:
         return YES
     extended = assumptions.extended(
         *(condition for condition in conditions if condition is not T.TRUE)
@@ -292,7 +292,7 @@ def _merge_runs(branch_list: Sequence[Branch]) -> list[Branch]:
     for value, condition in branch_list:
         if output:
             previous_value, previous_condition = output[-1]
-            if previous_value is value:
+            if previous_value == value:
                 output[-1] = (
                     previous_value,
                     T.or_(previous_condition, condition),

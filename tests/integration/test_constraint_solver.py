@@ -34,8 +34,8 @@ def test_coefficient_sign_kept_with_constant_factor(runtime: Runtime) -> None:
     assert result is not None
     valuation, complete = result
     assert complete
-    assert valuation[u] is N(2)
-    assert valuation[v] is N(-2)
+    assert valuation[u] == N(2)
+    assert valuation[v] == N(-2)
 
 
 def test_solver_honestly_refuses_nonlinear_and_inconsistent(

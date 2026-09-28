@@ -18,7 +18,7 @@ from cas.kernel.verdict import (
 from cas.math.project import normalize as proj_normalize
 from cas.math.project import project
 from cas.syntax import term as T
-from cas.syntax.term import S, Term
+from cas.syntax.term import S, SortKey, Term
 from cas.syntax.termpath import free_vars, postorder
 
 if TYPE_CHECKING:
@@ -54,41 +54,54 @@ def identity_verdict(ctx: MathContext, left: Term, right: Term) -> Verdict:
 _CLOSURE_TERM_BUDGET = 4000
 
 
+def _representative_order(term: Term) -> tuple[int, int, SortKey]:
+    """Order class members so the representative is a property of the term.
+
+    A closed member comes first, then the smaller subtree, then the canonical
+    order. Closed first is what makes the rewrite worth doing: the residual
+    equation the closure hands to the exact and interval channels is decided
+    when the frame pins a variable to a numeral, and stays undecided when the
+    representative is the variable itself. The whole tuple is structural, so
+    the choice does not depend on which object happened to be allocated first.
+    """
+    return (1 if free_vars(term) else 0, len(postorder(term)), term._key)
+
+
 class _Union:
-    """Union-find over interned terms with a well-founded representative order."""
+    """Union-find over terms keyed by structural hash.
+
+    Equality is structural, so the key is the structural hash: a query term and
+    the same term written inside a ledger fact are two objects but one element,
+    and the closure has to treat them as one. The representative of a class is
+    chosen by `_representative_order`, which reads the term's shape.
+    """
 
     def __init__(self) -> None:
         self._up: dict[int, Term] = {}
-        self._size: dict[int, int] = {}
 
     def add(self, term: Term) -> None:
-        if term._h not in self._up:
-            self._up[term._h] = term
-            self._size[term._h] = len(postorder(term))
+        if term._sh not in self._up:
+            self._up[term._sh] = term
 
     def find(self, term: Term) -> Term:
         self.add(term)
         path: list[Term] = []
         current = term
-        while self._up[current._h] is not current:
+        while self._up[current._sh] is not current:
             path.append(current)
-            current = self._up[current._h]
+            current = self._up[current._sh]
         for item in path:
-            self._up[item._h] = current
+            self._up[item._sh] = current
         return current
 
     def union(self, left: Term, right: Term) -> bool:
         left_root = self.find(left)
         right_root = self.find(right)
-        if left_root is right_root:
+        if left_root == right_root:
             return False
-        if (self._size[right_root._h], right_root._h) < (
-            self._size[left_root._h],
-            left_root._h,
-        ):
+        if _representative_order(right_root) < _representative_order(left_root):
             left_root, right_root = right_root, left_root
-        self._up[right_root._h] = left_root
-        self._size[left_root._h] += self._size[right_root._h]
+        self._up[right_root._sh] = left_root
         return True
 
 

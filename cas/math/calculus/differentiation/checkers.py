@@ -128,7 +128,7 @@ def _cross_diff(
     )
     if not variables:
         difference = fold(T.plus(expected, T.neg(result)))
-        if difference is T.ZERO:
+        if difference == T.ZERO:
             return YES
         return refute(
             RefutationChannel.NORMAL_FORM,
@@ -208,7 +208,7 @@ class DiffChecker:
                 result_value,
                 result_condition,
             ) in zip(source_branches, result_branches):
-                if source_condition is not result_condition:
+                if source_condition != result_condition:
                     return UnknownResult(Reason.FRAGMENT, "branch conditions differ")
                 result = _cross_diff(
                     self.ctx,
