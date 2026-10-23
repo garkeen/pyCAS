@@ -1,28 +1,23 @@
-"""Test fixtures and test classification."""
+"""Shared fixtures and directory-based classification for the v5 suite.
+
+Every test gets a fresh runtime. The kernel ledger is append-only, so sharing one
+assembled world across tests would leak judgments between them.
+"""
 
 import pytest
 
-from cas.frontend.repl import REPL
-from cas.frontend.session import Session
-from cas.runtime import Runtime, bootstrap
+from cas.runtime.bootstrap import Runtime, bootstrap
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def runtime() -> Runtime:
     return bootstrap()
 
 
-@pytest.fixture
-def session(runtime: Runtime) -> Session:
-    return REPL(runtime).session
-
-
 _KIND_BY_DIR = {
     "unit": "unit",
-    "contract": "contract",
     "integration": "integration",
-    "regression": "regression",
-    "random": "random",
+    "property": "property",
 }
 
 

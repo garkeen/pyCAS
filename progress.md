@@ -3,111 +3,160 @@
 当前实现状态与下一步。设计裁定以 `cas_v5_arch.md` 为准，工程纪律以 `AGENTS.md` 为准。
 本文只记状态，不重复设计。
 
-**文档语言约定：本文档与 `AGENTS.md`、`cas_v5_arch.md` 一律用中文；源码（`.py` / `.dsl`）用英文。**
+**文档语言约定：本文档与 `AGENTS.md`、`cas_v5_arch.md` 一律用中文；源码（`.py` / `.dsl`）与测试源码用英文。**
 
 ## 当前阶段：v5 彻底重构（进行中）
 
-工作树处于重构中间态：新地基已落地，旧层尚未替换，因此 `pytest` 目前无法收集。
-这是预期状态，不用兼容层掩盖。
+v5 的新层（foundation / syntax / language / algebra / semantics / kernel / 求导 /
+workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码树已全部删除。
+全库 `mypy --strict cas`、`ruff`、`compileall` 与测试均转绿。当前唯一的数学能力是
+Q 上的单变量多项式求导，其余数学层将按 v5 架构重新落地。
 
 ### 已完成
 
 | 层 | 内容 |
 |---|---|
-| 文档 | v4 架构文档删除；不可判定协议、根与序的可判定性地图、Unknown 三出口并入 v5 §11.8–§11.10 |
+| 文档 | v4 架构文档删除；不可判定协议、根与序可判定性地图、Unknown 三出口并入 v5 §11.8–§11.10 |
 | 纪律 | `AGENTS.md` 重写：只允许类型/行为/性质三类验收，禁止关键字与 AST 名字门禁 |
-| 测试 | 删除 4 个门禁文件；其余 45 个测试文件恢复为"行为规格参考与待改对象" |
-| foundation | `cas/foundation/ids.py`：13 个互不混用的身份类型 + 单调 issuer |
-| syntax | `term.py`：新项模型（字面量/符号引用/绑定变量/应用/binder/Quote），结构相等、hash、序，构造后不可变，纯语法不排序不化简 |
-| syntax | `binding.py`：`shift` / `instantiate` / `abstract` / `substitute_free` / `free_symbols` / `well_scoped`，Quote 完全惰性 |
-| language | `sorts.py`：Sort 封闭层次、NumberSystem 嵌入序、`join`、`is_ordered`（sort ≠ 表示） |
-| language | `signatures.py`：结构 head 的封闭集合、Arity、BindingSignature、按 SymbolId 绑定的 LanguageSignature |
-| language | `typing.py`：`infer` 返回 `Typed / NeedsDeclaration / Unsupported / IllTyped`，不复用裸 `None` |
-| language | `propositions.py`：`Proposition` 只能经 `check` 发行，必须良作用域、命题 sort，并携带 `MeaningKey(world, frame)` |
-| language | `problems.py`：ProblemSpec 固定操作、输入、目标、区域、结果语言、参数模式、覆盖要求；完整解请求不得外置前提 |
-| algebra | `protocols.py`：Ring / Field / Euclidean / Ordered / IntegerEmbedding / Derivation 分离；无"默认零导子" |
-| algebra | `parents.py`：ParentSpec（结构相等即身份，options 强制排序）+ ParentRegistry（同一描述一个 ParentId；同描述不同结构拒绝） |
-| algebra | `rationals.py` / `integers.py`：Q 为域（有序、整数嵌入、显式零导子）；Z 为欧几里得整环（gcd 非负归一） |
-| algebra | `polynomial.py`：多元多项式 K[x₁…xₙ]；元素由环签发（私有封印），跨环运算拒绝；系数环是判等权威；形式偏导用 `mul_int`，不假设整数嵌入；`UnivariatePolynomialRing` 才提供 divmod/gcd（gcd 首一归一） |
-| algebra | `rational.py`：K(x) 既约分式域（分母非零且首一、分子分母互素、零为 0/1）；域运算、求逆、形式导数 `(n'd−nd')/d²`；元素同样私有封印 |
-| kernel | `frames.py`：World/Frame 不可变版本；祖先可见性；声明/定义/假设的构造期校验；局部符号逃逸检查 |
-| kernel | `model.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability（Applicable / Conditional / OutOfScope） |
-| kernel | `evidence.py`：CheckRequest 与 Verified / Refuted / Unverified / InvalidEvidence；装配期校验 checker id 与 version 的冻结注册表 |
-| kernel | `store.py`：唯一写入点 `publish`（整批校验后插入）；`support` 传递闭包；显式 `discharge` 带环检测；`applicability` 查询 |
-| kernel | `commit.py`：checker 实际验证的规格必须等于请求；继承义务与新义务受同一 `ConditionPolicy`；一次整批发行 |
-| semantics | `frames.py`（由 kernel 移入）：World/Frame、祖先可见性、构造期校验、逃逸检查、别名环拒绝 |
-| semantics | `symbols.py`：会话符号表（一个名字一个稳定 id，`fresh` 用于遮蔽）+ `standard_language` |
-| semantics | `definitions.py`：唯一的自动代换通道，展开到不动点；环在 frame 构造期已被拒绝 |
-| semantics | `bridge.py`：Term ↔ K[x₁…xₙ] 的显式片段（字面量、生成元、和、积、非负整数幂）；片段外返回 `None` |
-| semantics | `differential.py`：`DifferentialStructure`（parent + 选定导子），构造器封印；K[x] 偏导与 K(x) 形式导数 |
-| semantics | `elaborate.py`：先展开别名再定型/发行命题；存下的命题是 alias-free 的 |
-| language | `signatures.py` 扩展：`OperatorSignature` + `operators` 表，声明算子（谓词/函数）可被定型；数学意义仍在 math |
-| language | `typing.py`：声明算子检查元数与参数 sort 的嵌入关系 |
-| math | `differentiation/specification.py`：`HasDerivative(U,f,x,g)` 词表、构造与解析（谓词身份是 SymbolId） |
-| math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative`，因此不会自我认证 |
-| math | `differentiation/checker.py`：证书必须与规格逐项一致；片段外 `Unverified`；错误候选 `Refuted` 并带见证 |
-| workflow | `records.py`：Expression / Candidate / VerificationLink / Event / Revision / OperationStatus |
-| workflow | `workspace.py`：intake（只落表达式对象，不发行判断）、differentiate（候选 → 精确规格 → commit → 验证关联）、undo/redo（只移指针，账本不回滚） |
-| runtime | `bootstrap.py`：显式装配 Q、K[x]、选定导子、`HasDerivative` 谓词与 checker、声明 `x : Real` 的 frame、账本；`new_workspace` |
+| foundation | `ids.py`：13 个互不混用的身份类型 + 单调 issuer |
+| syntax | `term.py`：不可变项模型（字面量/符号引用/绑定变量/应用/binder/Quote），结构相等、hash、序，无介入、无 AC 排序、无化简 |
+| syntax | `binding.py`：`shift` / `instantiate` / `abstract` / `substitute_free` / `free_symbols` / `well_scoped`，捕获规避，Quote 完全惰性 |
+| language | `sorts.py`：Sort 封闭层次、数值嵌入塔、`join`、`is_ordered`（sort ≠ 表示） |
+| language | `signatures.py`：结构 head 封闭集合、Arity、BindingSignature、按 SymbolId 绑定的 LanguageSignature |
+| language | `typing.py`：`Typed / NeedsDeclaration / Unsupported / IllTyped` |
+| language | `propositions.py`：`Proposition` 只能经 `check` 发行，必须良作用域、命题 sort，并携带 `MeaningKey` |
+| language | `problems.py`：ProblemSpec 固定操作、输入、目标、区域、结果语言、参数模式、覆盖要求 |
+| language | `decisions.py`：三值 Verdict；No 必带见证；Unknown 必带四类理由；不可转 bool |
+| algebra | `protocols.py`：Ring / Field / Euclidean / Ordered / IntegerEmbedding / RationalEmbedding / Derivation 分离，无默认零导子 |
+| algebra | `parents.py`：ParentSpec 结构身份 + ParentRegistry（同描述一个 id，不同结构拒绝） |
+| algebra | `rationals.py` / `integers.py`：Q 为有序域；Z 为欧几里得整环，gcd 非负归一 |
+| algebra | `polynomial.py`：K[x₁…xₙ]，元素私有封印、跨环拒绝、系数环判等权威、形式偏导；一元域上才有 divmod/gcd |
+| algebra | `rational.py`：K(x) 既约分式域，分母非零且首一，分子分母互素；形式导数与求逆 |
+| semantics | `symbols.py` / `frames.py`：符号表；不可变 World/Frame，祖先可见、新鲜性、逃逸检查、别名环拒绝 |
+| semantics | `definitions.py`：唯一自动代换通道，展开到不动点，预算出口 `DefinitionError` |
+| semantics | `bridge.py`：Term ↔ 多项式显式片段；片段外返回 None，不猜表示 |
+| semantics | `differential.py`：`DifferentialStructure` 把 parent 与选定导子显式配对 |
+| semantics | `elaborate.py`：先展开别名再定型/发行命题，存下的命题 alias-free |
+| kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；Checker 协议与四种 outcome |
+| kernel | `store.py`：唯一原子写入 `publish`；support 传递闭包；显式 `discharge` 带环检测；适用性查询 |
+| kernel | `commit.py`：实际验证规格必须等于请求；继承义务 + 新义务受同一 ConditionPolicy；一次整批发行 |
+| math | `differentiation/specification.py`：`HasDerivative(region, f, x, g)` 词表与解析 |
+| math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative` |
+| math | `differentiation/checker.py`：证书逐项匹配；只有全域可证；片段外 Unverified；错误候选 Refuted 带见证 |
+| workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图 |
+| runtime | `bootstrap.py`：显式装配 Q、K[x]、选定导子、HasDerivative 词表与 checker、`x : Real`、账本 |
+| frontend | `parser.py`：文本 → Term，名称解析到稳定 SymbolId，结构 head 驱动，无化简、无数学语义 |
+| frontend | `pprint.py`：可读形式 + 全应用 source 形式；source 对可解析项逐项往返，binder/自由索引/非符号算子显式拒答 |
+| frontend | `session.py`：对象标签、焦点、intake/diff/show/list/undo/redo；只经 Workspace 与 kernel；旧 `cas/api.py` 已删除，Session 是唯一前端门面 |
+| frontend | `repl.py`：逐行 REPL，仅分派与打印；前端错误报告，诚实拒答仍是结果 |
 
 ### 第一条纵线：已贯通
 
-表达式 → 求导 → `HasDerivative` 规格 → 独立验证 → kernel 发行 → 工作流记录 → 撤销/重做，
-通过运行时脚本验证：
+文本 → 解析为 Term → 求导 → `HasDerivative` 规格 → 独立验证 → kernel 发行 → 工作流记录 →
+会话显示 → 撤销/重做。
 
-- intake 不产生任何 Judgment；
-- `x³−3x` 求导得到 `3x²−3`，checker 独立复核后发行判断，Applicability 为 Applicable；
-- 规格可反解析回 `(region, source, variable, candidate)`，候选与链接一致；
-- undo 后视图中只剩源表达式、账本判断仍在；redo 恢复；撤销后做新操作会截断 redo 分支；
-- `1/x` 求导返回 UNSUPPORTED，账本零写入、无结果对象。
+`x³−3x` 求导得到 `3x²−3` 并通过独立验证后发行；`1/x` 求导诚实返回 UNSUPPORTED，
+账本零写入。纵线现在由 `tests/integration/test_vertical_slice.py` 与
+`tests/integration/test_frontend_slice.py` 正式覆盖，`python repl.py` 可直接使用。
 
-仍是脚本验收，尚未变成 `tests/` 下的正式验收。
+### 测试套件（本轮重写）
 
-### 已知的语义层缺口
+本轮删除全部 v4 测试（45 个文件、273 个用例）。它们引用已删除的 v4 API，且所测能力中
+CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
+v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-- 声明 DSL（函数签名、导数定律、常数）尚未建：目前没有初等函数消费者，等 `math/elementary` 落地时再加。
-- binder 的类型规则仍未建，`infer` 对 `Binder` 诚实返回 `Unsupported`。
+新套件共 394 个用例：
+
+- `tests/unit`（含参数化展开，363 个）：ids、term、binding、sorts、signatures、typing、
+  propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
+  symbols、frames、definitions、bridge、differential、elaborate；
+  evidence、store、commit；specification、verify、differentiation checker；
+  bootstrap、workspace；parser、pprint、session、repl。
+- `tests/integration`（9）：纵线端到端与前端纵线。intake 不产生 Judgment；一次发行
+  一条判断；inference/certificate 与请求逐项一致；undo 不回滚账本；片段外零写入；
+  二阶导是新判断；文本经 parser/session 走到同一 `HasDerivative` 验证边界。
+- `tests/property`（22，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
+  绑定往返、shift 可逆、同时代换、Quote 惰性；
+  Q/Z/K[x]/K(x) 的域与环定律、导子加性与 Leibniz；
+  随机求导的独立验证、checker 接受正确候选并以见证否证扰动候选、workspace 随机求导。
+
+前端行为另有明确覆盖：运算优先级/结合性、`1+1` 不化简、有理字面量折叠、名称稳定 id、
+链式比较与空输入等解析拒答（带列号）、可读打印、source 形式往返、标签唯一性、
+焦点随 revision、隐藏对象不可引用、undo 后新操作截断 redo、unsupported 不是前端错误。
+
+测试只做行为与性质验收；没有任何按标识符、AST 名字或 import 面判断设计的门禁。
+
+测试暴露并修掉的两处实现缺陷：
+
+1. `semantics/definitions.expand` 在最后一轮恰好完成展开时仍报 `DefinitionError`：
+   预算边界把「已到达不动点」误报为「预算耗尽」。现在循环结束后再检查一次可见别名。
+   （由 `test_expansion_reports_when_it_cannot_reach_a_fixed_point` 钉住。）
+2. `RationalFunctionField` 原先接受非一元多项式环，直到首次 `gcd` 才抛 `AttributeError`。
+   现在构造期拒绝 `TypeError`。（由 `test_k_x_requires_a_univariate_polynomial_ring` 钉住。）
+
+### v4 遗留树清理
+
+删除的内容：
+
+- `cas/errors.py` 与 `cas/syntax/{abstract,match,parse,pattern}.py`；
+- `cas/math/` 下除 `calculus/differentiation/` 以外的全部旧模块：`base/`、`domains/`、
+  `elementary/`、`solving/`、`calculus/integration/`，以及 `cad`、`realroot`、`tactics`、
+  `rules`、`loader`、`decide`、`definitions`、`diff`、`integrate`、`piecewise`、
+  `constraints`、`project` 等。
+
+这些实现全部依赖已删除的 v4 内核/语法 API，与 v5 不兼容。git 历史保留它们作为重新
+实现时的参考，当前树中不保留兼容层。`README.md` 与 CI 已同步为 v5 验收
+（`mypy --strict`、`ruff`、`compileall`、`pytest`）；旧的门禁式测试分类
+（`contract` / `regression` / `random` 标记与 `tests/random` 路径）一并移除。
+
+### v5 边界收口
+
+对照 v5 审计发现并修复的实现偏差：
+
+1. **Power 的 sort 规则**：非负整数字面指数保持底数 sort；负整数或符号整数指数把
+   Integer 底数放宽为 Rational，Real/Complex 保持；分数指数返回 Complex（底数
+   Unknown 时保持 Unknown）。不再把 `2^-1` 或 `2^(1/2)` 定型为 Integer。
+2. **账本写入闭合**：唯一写入点改为私有 `_publish`，只由 `commit` 与 `discharge`
+   调用。写入前验证重复 id、引用闭合（judgment↔inference、premise/conclusion/
+   obligation 必须存在且互相一致）、帧存在、proposition 在其存储帧可读，以及
+   discharge 的证明/目标帧可见。公开 API 不再提供直接写账本的入口；存储层测试
+   全部经 `commit` 建账。
+3. **前提来源**：`Verified.used_premises` 是 checker 报告的实际使用前提索引；
+   `commit` 只把这些前提写进 `InferenceRecord`，并且只从它们继承条件。调用方给了
+   但 checker 未使用的前提，不进入支持集，也不携带条件。
+4. **义务帧可见性**：`commit` 检查新报告与继承的 obligation proposition 在提交帧
+   可读；`_publish` 再校验一次。
+5. **清偿证明闭合**：`discharge` 只接受 applicable 的证明；证明自身还有未决条件
+   时拒绝，而不是把原条件标记为已闭合（v5 §14.3）。
+6. **Quote 定型惰性**：`Quote(...)` 的实参不再参与定型；parser 区分
+   `quote(...)`（held-data term）与 `Quote(...)`（结构应用），source 形式可区分
+   并能逐项往返。
+
+### 验收（本轮）
+
+- `python -m pytest -q`：394 passed。
+- `python -m mypy --strict cas`：49 source files，无问题（全库）。
+- `python -m ruff check cas tests`：All checks passed。
+- `python -m compileall -q cas`：通过。
+
+### 已知语义缺口
+
+- 声明 DSL（函数签名、导数定律、常数）尚未建；等 `math/elementary` 落地时再加。
+- binder 的类型规则未建，`infer` 对 `Binder` 诚实返回 Unsupported；前端也还没有 binder
+  的输入语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
-
-### 已知的内核缺口
-
 - 义务清偿目前是显式操作；自动解析/决策服务（inspect/resolve）尚未接入。
 - 否定导致的 Blocked 变体尚未接入（需要 refutation 记录）。
-- 定义展开与定义性分析属于 semantics，尚未接入 commit。
-
-### 已知的语言层缺口
-
-- binder 的类型规则属于 elaboration：`infer` 对 `Binder` 返回 `Unsupported`，不猜变量类型。
-- 声明的数学函数签名表尚未接入；`infer` 对未登记的结构外 head 返回 `NeedsDeclaration`。
-
-### 静态检查
-
-新文件通过 `ruff` 与 `mypy`。全库 mypy 暂不可用：旧层仍引用已删除的 `cas.syntax.termpath`。
-
-### 已自检的语义（运行时脚本，不是测试套件）
-
-- 独立构造的同构项相等、同 hash、不同对象；
-- 构造后不可变；
-- binder 开/闭往返；跨嵌套 binder 的捕获规避正确；
-- 注解按外层深度处理；
-- Quote 对所有绑定操作与自由符号完全惰性；
-- 同时代换不重访插入项；
-- arity 不匹配被拒绝。
+- 条件被否证时的 Rejected 分支依赖未来的判定服务；当前只区分未决条件的三种策略。
+- 前端当前只覆盖纵线：无声明/定义命令、无隐式标量默认（未声明名字可以进入对象，但
+  求导会诚实拒答）、`@LABEL` 只作为命令目标，不能嵌入公式、只对 `x` 求导、无持久化。
 
 ### 下一步
 
-1. 第 11 步：把纵线脚本变成正式 v5 验收——行为测试（正例 + 诚实拒绝例）+ 性质测试（随机多项式求导与独立验证）。
-2. 前端重写：parser/printer/session，把输入接到新 API；不再兼容 v4 命令面。
-3. 清理旧 v4 树：未迁移的算法（CAD、实根隔离、结式等）逐项迁移后删除，不留兼容层。
-
-### 旧测试的处置
-
-- 保留并逐层指向新 API：`tests/random/*`、`test_judge`、`test_decide_*`、
-  `test_projected_consumption`、`test_piecewise_lift`、`test_printing`、
-  `test_definitions`、`test_rule_*`、`test_solve_parametric`、`test_surface_names`、
-  `test_abstract`、`contract/test_declarations_dsl`、`contract/test_domain_registry`。
-- 按新内核/工作流 API 改写：`test_kernel_model`、`test_scope_*`、`test_step_refs`、
-  `test_undo_redo`、`test_requirement_refutations`、`test_refutation_closure`、
-  `tests/integration/*`、`tests/regression/*`。
-- 其中断言已否决行为的用例改写而不迁就：对裸表达式 `Claim`、分支合并相信载荷答案、
-  点等式穿过绑定体。
+1. 语义层补齐：binder 类型规则与表面语法、声明 DSL、K(x) 桥接、义务自动清偿与否证。
+2. 新的数学层：按 v5 架构重新落地被删除的能力。先做 `elementary` 声明（函数/常数/
+   导数定律）与 K(x) 桥接，再按目标顺序推进积分、方程、实代数与 CAD。
+3. 前端下一层：声明/定义命令、对象引用嵌入公式、source/serialization 形式、
+   新的数学操作命令；每项都配「正例 + 诚实拒绝」行为测试。
+4. 测试随能力增长：每个新数学层同时补行为测试与种子固定的性质测试；不恢复按名字
+   扫描的门禁。

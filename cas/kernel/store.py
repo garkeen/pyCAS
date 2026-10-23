@@ -82,7 +82,7 @@ class KernelStore:
 
     # --- the single write site ---
 
-    def publish(
+    def _publish(
         self,
         *,
         obligations: tuple[Obligation, ...] = (),
@@ -92,8 +92,11 @@ class KernelStore:
     ) -> None:
         """Insert one validated batch, or nothing.
 
-        Duplicate ids inside the batch and ids already in the ledger are refused
-        before any insertion; after that, insertion cannot fail.
+        This is the only insertion point; it is called by `commit` and
+        `discharge`, never by a frontend. Duplicate ids and dangling references
+        are refused before any insertion, and every stored proposition must be
+        readable in the frame that stores it. After validation, insertion cannot
+        fail.
         """
         self._reject_duplicates(
             "obligation", [record.id for record in obligations], self._obligations
@@ -104,6 +107,119 @@ class KernelStore:
         self._reject_duplicates(
             "inference", [record.id for record in inferences], self._inferences
         )
+        pending_obligations = {record.id: record for record in obligations}
+        pending_judgments = {record.id: record for record in judgments}
+        pending_inferences = {record.id: record for record in inferences}
+        obligation_ids = set(self._obligations) | set(pending_obligations)
+        judgment_ids = set(self._judgments) | set(pending_judgments)
+
+        def obligation_of(identifier: ObligationId) -> Obligation | None:
+            return pending_obligations.get(identifier) or self._obligations.get(
+                identifier
+            )
+
+        def judgment_of(identifier: JudgmentId) -> Judgment | None:
+            return pending_judgments.get(identifier) or self._judgments.get(
+                identifier
+            )
+
+        def inference_of(identifier: InferenceId) -> InferenceRecord | None:
+            return pending_inferences.get(identifier) or self._inferences.get(
+                identifier
+            )
+
+        for inference in inferences:
+            self._require_frame(inference.frame)
+            for premise in inference.premises:
+                if premise not in judgment_ids:
+                    raise KernelError(f"premise does not exist: {premise!r}")
+            for conclusion in inference.conclusions:
+                if conclusion not in judgment_ids:
+                    raise KernelError(
+                        f"conclusion does not exist: {conclusion!r}"
+                    )
+                known = judgment_of(conclusion)
+                if known is None or known.inference != inference.id:
+                    raise KernelError(
+                        "an inference and its judgment disagree about support"
+                    )
+        for obligation in obligations:
+            self._require_frame(obligation.frame)
+            introducer = inference_of(obligation.introduced_by)
+            if introducer is None:
+                raise KernelError(
+                    f"introducing inference does not exist: "
+                    f"{obligation.introduced_by!r}"
+                )
+            if introducer.frame != obligation.frame:
+                raise KernelError(
+                    "an obligation is stored outside its inference frame"
+                )
+            if not self.frames.is_visible(
+                obligation.proposition.meaning.frame, obligation.frame
+            ):
+                raise KernelError(
+                    "an obligation proposition is not readable in its frame"
+                )
+        for judgment in judgments:
+            self._require_frame(judgment.frame)
+            owner = inference_of(judgment.inference)
+            if owner is None:
+                raise KernelError(
+                    f"inference does not exist: {judgment.inference!r}"
+                )
+            if owner.frame != judgment.frame:
+                raise KernelError(
+                    "a judgment is stored outside its inference frame"
+                )
+            if judgment.id not in owner.conclusions:
+                raise KernelError(
+                    "an inference does not list its own judgment"
+                )
+            for obligation_id in judgment.obligations:
+                if obligation_id not in obligation_ids:
+                    raise KernelError(
+                        f"obligation does not exist: {obligation_id!r}"
+                    )
+            if not self.frames.is_visible(
+                judgment.proposition.meaning.frame, judgment.frame
+            ):
+                raise KernelError(
+                    "a judgment proposition is not readable in its frame"
+                )
+        seen_discharges: set[tuple[ObligationId, JudgmentId, FrameId]] = set()
+        for discharge in discharges:
+            self._require_frame(discharge.frame)
+            key = (
+                discharge.obligation,
+                discharge.by_judgment,
+                discharge.frame,
+            )
+            if key in seen_discharges:
+                raise KernelError("a publication repeats a discharge")
+            seen_discharges.add(key)
+            if any(
+                known.by_judgment == discharge.by_judgment
+                and known.frame == discharge.frame
+                for known in self._discharges.get(discharge.obligation, ())
+            ):
+                raise KernelError("this discharge is already recorded")
+            target = obligation_of(discharge.obligation)
+            proof = judgment_of(discharge.by_judgment)
+            if target is None:
+                raise KernelError(
+                    f"obligation does not exist: {discharge.obligation!r}"
+                )
+            if proof is None:
+                raise KernelError(
+                    f"judgment does not exist: {discharge.by_judgment!r}"
+                )
+            if proof.proposition != target.proposition:
+                raise KernelError("the discharge proof states another proposition")
+            if not self.frames.is_visible(proof.frame, discharge.frame):
+                raise KernelError("the discharge proof is outside its frame")
+            if not self.frames.is_visible(target.frame, discharge.frame):
+                raise KernelError("the discharged obligation is outside its frame")
         for obligation in obligations:
             self._obligations[obligation.id] = obligation
         for judgment in judgments:
@@ -112,6 +228,12 @@ class KernelStore:
             self._inferences[inference.id] = inference
         for discharge in discharges:
             self._discharges.setdefault(discharge.obligation, []).append(discharge)
+
+    def _require_frame(self, identifier: FrameId) -> None:
+        try:
+            self.frames.get(identifier)
+        except KeyError:
+            raise KernelError(f"frame does not exist: {identifier!r}") from None
 
     @staticmethod
     def _reject_duplicates(
@@ -198,16 +320,23 @@ class KernelStore:
             raise KernelError("the proof is outside the discharge frame")
         if not self.frames.is_visible(target.frame, frame):
             raise KernelError("the obligation is outside the discharge frame")
+        if not self.applicability(by_judgment, frame).is_applicable():
+            raise KernelError(
+                "the discharging proof still has open conditions"
+            )
         for used in self.support(by_judgment) | {by_judgment}:
-            if obligation in self._judgments[used].obligations:
+            if (
+                obligation in self._judgments[used].obligations
+                and not self.is_discharged(obligation, frame)
+            ):
                 raise KernelError(
-                    "cyclic discharge: the proof depends on the obligation"
+                    "cyclic discharge: the proof depends on the open obligation"
                 )
         for known in self._discharges.get(obligation, ()):
             if known.by_judgment == by_judgment and known.frame == frame:
                 raise KernelError("this discharge is already recorded")
         discharge = Discharge(obligation, by_judgment, frame)
-        self.publish(discharges=(discharge,))
+        self._publish(discharges=(discharge,))
         return discharge
 
     # --- size ---

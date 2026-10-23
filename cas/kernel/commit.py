@@ -112,8 +112,8 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
     if checker is None:
         return Deferred(Reason.FRAGMENT, f"checker not registered: {proposal.checker_id}")
 
-    inherited: list[ObligationId] = []
-    premises: list[Proposition] = []
+    premise_propositions: list[Proposition] = []
+    premises_by_id: dict[JudgmentId, Judgment] = {}
     for premise_id in proposal.premises:
         try:
             premise = store.get_judgment(premise_id)
@@ -121,15 +121,14 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
             return Rejected(f"premise does not exist: {premise_id}")
         if not store.frames.is_visible(premise.frame, frame.id):
             return Rejected("a premise is outside the submission frame")
-        inherited.extend(premise.obligations)
-        premises.append(premise.proposition)
-    inherited_ids = list(dict.fromkeys(inherited))
+        premise_propositions.append(premise.proposition)
+        premises_by_id[premise_id] = premise
 
     outcome = checker.check(
         CheckRequest(
             frame=frame.id,
             conclusions=proposal.conclusions,
-            premises=tuple(premises),
+            premises=tuple(premise_propositions),
             certificate=proposal.certificate,
         )
     )
@@ -144,8 +143,34 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
     if outcome.checked != proposal.conclusions:
         return Rejected("the checker verified a different specification")
 
+    used_indices = outcome.used_premises
+    if any(
+        not isinstance(index, int)
+        or index < 0
+        or index >= len(proposal.premises)
+        for index in used_indices
+    ):
+        return Rejected("the checker reported an invalid premise index")
+    used_premises = tuple(
+        dict.fromkeys(proposal.premises[index] for index in used_indices)
+    )
+    inherited: list[ObligationId] = []
+    for premise_id in used_premises:
+        inherited.extend(premises_by_id[premise_id].obligations)
+    inherited_ids = list(dict.fromkeys(inherited))
+    inherited_obligations = [
+        store.get_obligation(identifier) for identifier in inherited_ids
+    ]
+    for obligation in inherited_obligations:
+        if not store.frames.is_visible(
+            obligation.proposition.meaning.frame, frame.id
+        ):
+            return Rejected(
+                "an inherited obligation was read outside the submission frame"
+            )
+
     inherited_propositions = {
-        store.get_obligation(identifier).proposition for identifier in inherited_ids
+        obligation.proposition for obligation in inherited_obligations
     }
     reported: list[ObligationReport] = []
     for report in outcome.obligations:
@@ -153,12 +178,16 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
             continue
         if any(report.proposition == known.proposition for known in reported):
             continue
+        if not store.frames.is_visible(report.proposition.meaning.frame, frame.id):
+            return Rejected(
+                "an obligation was read outside the submission frame"
+            )
         reported.append(report)
 
     pending = [
-        store.get_obligation(identifier).proposition
-        for identifier in inherited_ids
-        if not store.is_discharged(identifier, frame.id)
+        obligation.proposition
+        for obligation in inherited_obligations
+        if not store.is_discharged(obligation.id, frame.id)
     ] + [report.proposition for report in reported]
     if pending:
         if proposal.policy is ConditionPolicy.REQUIRE_PROVED:
@@ -204,12 +233,12 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
         frame.id,
         checker.id,
         checker.version,
-        proposal.premises,
+        used_premises,
         tuple(judgment_ids),
         proposal.certificate,
         outcome.reads,
     )
-    store.publish(
+    store._publish(
         obligations=tuple(new_obligations),
         judgments=tuple(judgments),
         inferences=(inference,),

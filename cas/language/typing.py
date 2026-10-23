@@ -127,6 +127,11 @@ def _apply(
     arity = signature.arity_of(head)
     if not arity.accepts(len(term.arguments)):
         return IllTyped(f"{head.value} takes {arity.describe()}")
+    if head is StructuralHead.QUOTE:
+        # Quoted syntax is held data: its content has no sort in this context.
+        return Typed(S.SYNTAX)
+    if head is StructuralHead.POWER:
+        return _power(term.arguments[0], term.arguments[1], signature, environment)
     sorts: list[S.Sort] = []
     for argument in term.arguments:
         result = infer(argument, signature, environment)
@@ -134,6 +139,37 @@ def _apply(
             return result
         sorts.append(result.sort)
     return _apply_sorted(head, sorts)
+
+
+def _power(
+    base_term: T.Term,
+    exponent_term: T.Term,
+    signature: LanguageSignature,
+    environment: SortEnvironment,
+) -> Typing:
+    """Type a power soundly with respect to the sign and kind of the exponent."""
+    base = infer(base_term, signature, environment)
+    if not isinstance(base, Typed):
+        return base
+    exponent = infer(exponent_term, signature, environment)
+    if not isinstance(exponent, Typed):
+        return exponent
+    if not S.is_scalar(base.sort):
+        return IllTyped("Power is defined on a scalar base")
+    if exponent.sort not in (S.INTEGER, S.RATIONAL):
+        return IllTyped("Power needs an exponent of exact rational type")
+    if base.sort is S.UNKNOWN_SCALAR:
+        return Typed(base.sort)
+    if exponent.sort is S.RATIONAL:
+        # An exact root may leave the real line (and the base's own field).
+        return Typed(S.COMPLEX)
+    if isinstance(exponent_term, T.IntLit) and exponent_term.value >= 0:
+        return Typed(base.sort)
+    # A symbolic or negative integer exponent may need an inverse, so an
+    # integer base is no longer promised to stay integral.
+    if base.sort is S.INTEGER:
+        return Typed(S.RATIONAL)
+    return Typed(base.sort)
 
 
 def _apply_declared(
@@ -162,13 +198,6 @@ def _apply_declared(
 def _apply_sorted(head: StructuralHead, sorts: list[S.Sort]) -> Typing:
     if head in (StructuralHead.PLUS, StructuralHead.TIMES):
         return _common_scalar(head, sorts)
-    if head is StructuralHead.POWER:
-        base, exponent = sorts
-        if not S.is_scalar(base):
-            return IllTyped("Power is defined on a scalar base")
-        if exponent not in (S.INTEGER, S.RATIONAL):
-            return IllTyped("Power needs an exponent of exact rational type")
-        return Typed(base)
     if head in _COMPARISONS:
         common = S.join(sorts[0], sorts[1])
         if common is None:
@@ -200,8 +229,6 @@ def _apply_sorted(head: StructuralHead, sorts: list[S.Sort]) -> Typing:
         if any(condition != S.PROPOSITION for condition in conditions):
             return IllTyped("every Piecewise branch needs a proposition condition")
         return _common_scalar(head, sorts[0::2])
-    if head is StructuralHead.QUOTE:
-        return Typed(S.SYNTAX)
     return Unsupported(f"no typing rule for {head.value}")
 
 

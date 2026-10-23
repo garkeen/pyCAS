@@ -1,211 +1,137 @@
 # pyCAS
 
-一个**纯符号**的计算机代数系统（Python 实现，运行时零第三方依赖），提供**自动**与
-**交互**两条通道。
+一个**纯符号**的计算机代数系统（Python 实现，运行时零第三方依赖）。
 
-方法论一句话：**只做可判定的内容，片段外诚实未决。**
+方法论：**只做可判定的内容，片段外诚实拒答。** 求解器只产生候选，独立验证器复核，
+可信结论只在一次边界提交中发行；未决永远不会被静默当成 Yes 或 No。
 
-- 自动化通道一律经 `Verdict` 出口：`Yes / No / Unknown(FRAGMENT | GUARDED |
-  UNDECIDABLE | BUDGET)`。未决永远不会被静默当成 Yes 或 No，能力缺失时宁可可
-  证地拒答（`raise ...Error`），也不给一个看起来像结论的猜测。
-- **求解器与验证器分家**：求解器（tactics / integrate / cad）只产出候选，验证器
-  （judge / calculus/*/verify）独立复核后才允许成为可信结论；checker 不得导入它
-  所验证的搜索算法。
-- 计算一律降为**域元素上的显式代数运算**（±×÷、gcd、求导、结式、投影判等），
-  不做数值采样冒充证明、不做形状猜测。
-
-> **项目仍在长期更新中。** 接口会随架构演进而调整（例如数学上下文现在是每个算
-> 法的显式首参数），当前不承诺 API 稳定；以 `progress.md` 与 `cas_v4_arch.md`
-> 为准。
+项目正在按 v5 架构彻底重构。设计裁定见 `cas_v5_arch.md`，工程纪律见 `AGENTS.md`，
+当前进度见 `progress.md`。
 
 ---
 
-## 一、能力现状（速览）
+## 当前状态
 
-**已经能做的事**
+第一条纵线已贯通：
 
-| 领域 | 内容 |
-|---|---|
-| 项与模式 | 驻留（hash-consing）项层 + AC 规范形；模式元语言与项层分离（`PatternVar`/`PatternSeq` 不是项）；基于 de Bruijn 索引的绑定与实例化 |
-| 数域 | ℤ、ℚ、ℚ(i)、K[x]、K(x)，带能力字段（`is_field` / `is_ordered` / `is_euclidean` / 导子…）与投影阶梯；精确有理字面算术 |
-| 判定 | 三值判定管线：指针/数值 → 账本 → 投影判零 → 区间传播 → 序链推理 → 派生规则 → 声明引理 |
-| 内核 | 追加式账本；作用域**版本链**（Γ 冻结、谱系与版本分离）；条件生命周期（清偿与否证）；十步 `commit` 及其可证明的四步特化；真 undo/redo（只移指针、不删历史） |
-| 符号计算 | 声明化规则引擎（行式 DSL，auto 规则无守卫并按成本严格下降终止）；微分（含分段谨慎通道，分段点显式标注未验证）；多项式片段积分与三值独立验证；一维 CAD（Sturm 实根隔离）；线性方程组/线性代数（行阶梯、秩、核、Bareiss 行列式）；结式与 Yun 无平方分解；线性丢番图碎片与整数根 |
-| 分段 | 有序首中语义的分段容器、逐支投影、提升（带预算与相邻同值支合并）、覆盖/冲突检查、分段方程求解、定义域条件 |
-| 交互 | REPL：断言/化简/求解/代入/手动等式代换（`use`/`trans`）/分支（`split`/`enter`/`merge`）/diff/integrate/check/steps/undo |
+```text
+文本 → Term → 求导候选 → HasDerivative 规格 → 独立系数级验证
+     → kernel 原子发行 → 工作流记录 → 会话显示 / undo / redo
+```
 
-**尚未实现（遇到就诚实拒答，不是 bug）**
+当前可用的数学能力只有 **Q 上的单变量多项式求导**（变量为 `x`）。代数层另提供
+ℤ、ℚ、K[x₁…xₙ]、K(x) 的精确结构供程序化使用。片段外（例如 `1/x`）一律诚实拒答，
+不会伪造答案，也不会写入账本。
 
-完整 Risch 积分（参数与超越数积分）、完整 CAD（多变量实代数投影 + 胞腔分解）、
-Gröbner 基方法、三角/指数展开与同类项收集、部分分式与 Hermite 归约、Zassenhaus
-因式分解、超越根对象与条件答案容器、工作流序列化与回放。
-
-> 举例：`∫exp(x)·sin(x)dx` 这样的循环积分目前会停在「未决」——微分层能验证它，
-> 但判零通道还不能把差值展开为零。这类能力缺口会如实报告为 `Unknown(FRAGMENT)`。
+v4 的 CAD、积分、方程求解、实根隔离、规则引擎等实现已删除；它们会在 v5 地基上
+重新落地，而不是以兼容层迁回。旧代码仍可从 git 历史中查阅。
 
 ---
 
-## 二、快速上手
-
-### 环境
-
-- **Python ≥ 3.11**（开发用 3.12）；
-- **运行时零第三方依赖**（只用标准库）；
-- 跑测试需要 `pytest`（`pytest.ini` 里配置了 `timeout`，因此还需 `pytest-timeout`）。
-
-不需要安装，直接在仓库根目录运行即可（`cas` 是普通包）。
-
-### 交互使用
+## 快速开始
 
 ```console
 $ python repl.py
-pyCAS REPL. Type 'help' for commands.
-> x^2 - 1 == 0        # 直接输入表达式/方程 = 断言进账本（Claim）
-> u := x^2           # 定义：只展开定义，不把方程当定义
-> A : Real           # 声明符号的类
-> solve x             # 参数线性求解；其它符号显式作为参数，斜率条件会保留
-> use #2 -> at (0) #0  # 用 #2 的等式在 #0 的指定路径做一次显式代换
-> trans #2 #3        # 用两个等式前提做传递
-> split x > 0        # 建立真实分支作用域
-> enter +             # 进入正分支；merge #a #b 合并两个分支结果
-> check #1            # 对当前解做回代验证
-> diff x              # 求导（域层导数交叉验证）
-> integrate x         # 多项式片段不定积分（独立验证 d/dx F = f）
-> int x 0 1           # 定积分（端点差 + 独立复核）
-> norm #1             # 域标准形
-> steps               # 列出当前视图中的步骤
-> undo / redo        # 真 undo / redo：移动事件历史指针（记录不删）
-> rules / apply <id>  # 列出声明规则；无路径时列出全部匹配位置
-> help / quit
+pyCAS v5 — polynomial differentiation. Type help for commands.
+cas> x^3 - 3*x
+@E0: x^3 - 3*x
+cas> diff
+verified @E1: -3 + 3*x^2
+cas> undo
+undo: @E0
+cas> list
+> @E0: x^3 - 3*x
+cas> 1/x
+@E2: x^-1
+cas> diff
+unsupported: the source is outside the polynomial fragment
 ```
 
-要点：
+命令：
 
-- 每一步都会显示状态（`committed` / `refused` / `undecided`）与步骤号；`refused`
-  表示被独立验证器否证，`undecided` 表示验证通道覆盖不到（**不是**「错」）。
-- 除上面的命令外还有：`both add|sub|mul|div <expr>`（两边同时操作）、
-  `subst <var> = <expr>`、`use #S (->|<-) at (0,1) [#T]`、`trans #A #B`。
+| 命令 | 作用 |
+|---|---|
+| `<expr>` | 存入一个表达式对象（不产生判断） |
+| `expr LABEL := <expr>` | 带标签存入 |
+| `diff [@LABEL]` | 对焦点或指定对象求导，候选须通过独立验证 |
+| `show [@LABEL]` | 显示对象 |
+| `list` | 列出当前 revision 中的对象 |
+| `undo` / `redo` | 移动视图指针；账本不回滚 |
+| `help` / `quit` | 帮助 / 退出 |
 
-### 程序化使用
+程序化使用：
 
 ```python
+from cas.frontend import Session
 from cas.runtime import bootstrap
 
-runtime = bootstrap()         # 显式装配：import 期不修改任何全局状态
-
-import cas.api as api
-from cas.frontend.parser import parse
-
-api.differentiate(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
-api.solve_linear(runtime, parse(runtime, "2*x + 3 == 7"), parse(runtime, "x"))
-api.solve_linear_with_condition(runtime, parse(runtime, "a*x + b == 0"), parse(runtime, "x"))
-api.solve_diophantine_linear(runtime, [2, 3], 7)
-api.integer_roots(runtime, parse(runtime, "x^2 - 4"), parse(runtime, "x"))
-api.integrate_term(runtime, parse(runtime, "x^2"), parse(runtime, "x"))
-api.guard_report(runtime, [parse(runtime, "x > 0")], parse(runtime, "x"), parse(runtime, "2"))
+runtime = bootstrap()
+session = Session(runtime)
+session.execute("expr F := x^3 - 3*x")
+result = session.differentiate(session.object("F"))
+assert result.verification is not None
+assert result.verification.judgment is not None
 ```
 
-三点约定：
-
-1. **`cas/api.py` 是前端门面**：前端（含 REPL）只经 `api` / `workflow` / `runtime`
-   触达计算，不直接 import `cas.math`。
-2. **算法层一律以数学上下文为第一参数**（`MathContext`，含声明查询面与装配期配置）。
-   门面会替你注入；直接调 math 层时显式传：
-   ```python
-   from cas.kernel.scope import Assumptions
-   from cas.math.decide import decide
-
-   decide(runtime.math, parse(runtime, "x > 0"), Assumptions())
-   ```
-   这样调用点就写出装配来源，不会把“忘了装配”变成深层算法里的运行时惊喜。
-3. **Runtime / Session 都显式传递**：`bootstrap()` 返回不可变 Runtime；REPL 构造
-   Session 时绑定完整 command handler 表，缺项会在启动阶段拒绝。
+`Workspace` 也可以直接使用：`workspace.intake(term)` 只记录对象，
+`workspace.differentiate(expression, runtime.variable)` 负责候选、规格、提交与关联。
 
 ---
 
-## 三、目录结构
+## 目录
 
-| 路径 | 内容 | 依赖方向 |
-|---|---|---|
-| `cas/syntax/` | 驻留项、模式元语言、匹配、项路径、抽象 | 只依赖标准库 |
-| `cas/kernel/` | `Verdict`、模型（Judgment/Scope/…）、证据、`commit`、账本、检查器注册表 | 只依赖 `syntax` |
-| `cas/workflow/` | 工作流、命令、Artifact/Task/Event 三图、分支 | 依赖 `syntax` + `kernel` |
-| `cas/math/domains/` | ℤ、ℚ、ℚ(i)、K[x]、K(x) 与域协议、线性代数 | 依赖 `syntax` |
-| `cas/math/` | `context`、`project`、`decide`、`diff`、`integrate`、`cad`、`tactics`、`piecewise`、`domcond`、`rules`、`simplify`、`judge`、`constraints`、`loader` 与 `base/` `elementary/` `calculus/` `solving/` | 依赖 `syntax`+`kernel`+`workflow`+`math.domains`；**永不**导入 runtime |
-| `cas/runtime/` | 装配：`registry`（Builder）→ `runtime`（只读 Runtime）→ `bootstrap`；无全局 dispatch | 唯一装配者 |
-| `cas/frontend/` + `cas/api.py` | 解析器、打印器、Session、REPL；计算门面 | 只经 `api` / `runtime` / `workflow` |
+| 路径 | 内容 |
+|---|---|
+| `cas/foundation/` | 互不混用的身份类型与 issuer |
+| `cas/syntax/` | 不可变 Term、结构相等/hash/序、de Bruijn 绑定原语 |
+| `cas/language/` | Sort、结构签名、定型、Proposition、ProblemSpec、三值 Verdict |
+| `cas/algebra/` | 结构协议、parent 描述、ℤ、ℚ、多项式环、有理函数域 |
+| `cas/semantics/` | World/Frame、符号表、定义展开、Term↔元素桥、微分结构 |
+| `cas/kernel/` | Judgment/Obligation/InferenceRecord、checker 协议、原子账本、commit |
+| `cas/math/` | 数学规格与独立 checker（当前仅多项式求导） |
+| `cas/workflow/` | 表达式对象、候选、验证关联、事件与 revision |
+| `cas/runtime/` | 显式装配的 Runtime 与 workspace 入口 |
+| `cas/frontend/` | parser、printer、Session、REPL |
 
-依赖方向由 CI 门禁机械检查（`tests/contract/test_v4_invariants.py`），不靠人工审查。
+依赖方向：`syntax → language → algebra → semantics → kernel → workflow → frontend`；
+装配只在 `runtime/bootstrap.py` 发生，import 期不修改全局状态。
 
 ---
 
-## 四、测试
+## 验收
 
 ```console
-pytest tests                 # 全部：确定性钉子 + 随机自证台架
-pytest -m random             # 只跑随机台架（数学性质是否出错）
-pytest -m "not random"       # 只跑确定性钉子（结构与契约是否退化）
-pytest tests/contract        # 架构门禁：依赖方向、不变量、DSL 准入、语言纪律
-pytest tests/unit -q         # 单模块行为
+python -m pytest -q                 # 行为测试 + 固定种子性质测试
+python -m mypy --strict cas         # 类型检查
+python -m ruff check cas tests      # 静态风格与未使用导入
+python -m compileall -q cas         # 字节码编译
 ```
 
-测试按种类分目录、按 marker 可筛（`unit` / `contract` / `integration` /
-`regression` / `random`）：
-
-- `tests/random/` 是**自证性质的随机台架**：机器生成实例、机器验证数学性质
-  （无外部真值），直接 `python tests/random/random_diff.py [rounds] [seed]` 也能
-  单独跑，失败会打印最小反例与种子。
-- `tests/regression/` 是「钉子」：每个文件钉一个曾经出过的缺陷。
-- `tests/contract/` 是架构门禁，例如：内核不含数学 head 字面量、checker 不导入
-  自己的求解器、math 层不得持有模块级装配状态、被删的装配句柄不得回潮、源码
-  只写英文且不得引用设计文档。
+测试按 `tests/unit`、`tests/integration`、`tests/property` 分类，只做行为与性质验收；
+没有按标识符、字符串、import 面或 AST 名字判断设计的门禁。
 
 ---
 
-## 五、文档地图
+## 文档
 
 | 文件 | 作用 |
 |---|---|
-| `progress.md` | **当前进度与下一步**：已实现地基、未实现清单、已知缺陷 |
-| `cas_v4_arch.md` | **设计裁定**：对象模型、依赖方向、算法语义（有争议时以此为准） |
-| `AGENTS.md` | **工程纪律**：六条硬约束与各章门限（实现前先读） |
-| `reference.md` | 参考实现索引（主要权威：Maxima、FriCAS） |
-| `risch.md` | **目标 1 的地基清单**：完整 Risch 所需的独立工具（不是 Risch 主循环内联逻辑）、可核对的参考源码路径、参考实现自身的缺口 |
-| `maple.md` / `mathematica.md` | 参考系统笔记 |
+| `cas_v5_arch.md` | 架构裁定：对象模型、依赖方向、数学与工作流语义 |
+| `AGENTS.md` | 工程纪律：六条硬约束与验收边界 |
+| `progress.md` | 当前进度、已知缺口、下一步 |
+| `reference.md` | 参考实现索引（Maxima、FriCAS 等） |
+| `risch.md` / `cad.md` / `maple.md` / `mathematica.md` | 目标与参考系统笔记 |
 
 ---
 
-## 六、长期更新中
+## 目标
 
-本项目是长期工程，按「先地基、后功能」的节奏推进。**三项终极目标**各配一个已知的
-终极形态：
+三项地基目标：
 
-1. **最好的积分求解算法** —— 终极形态是**完整 Risch**（初等 / 超越 / 代数函数的
-   不定积分与定积分，参照 FriCAS、Maxima）；
-2. **最完整的多元多项式方程组求解** —— 终极形态是**完整 Gröbner 基方法**（多元
-   多项式理想论：理想属员、方程组、消元、代数预处理）；
-3. **最完整的多项式不等式求解** —— 终极形态是**完整 CAD**（多变量实代数投影 +
-   胞腔分解 + 量化消去；当前的一维实代数胞腔只是它的地基）。
+1. **完整 Risch 积分**（参数与超越数积分，参照 FriCAS）；
+2. **完整 Gröbner 基**（多元多项式理想论：属员、方程组、消元）；
+3. **完整 CAD**（多变量实代数投影 + 胞腔分解 + 量化消去）。
 
-另有两项目标方向**方法尚未裁定，暂定占位，不作为承诺**：
+方法尚未裁定的占位方向：ODE/PDE 符号求解、丢番图整数解。裁定前不立项。
 
-- **ODE / PDE 的符号求解**：最好的符号方法待定；
-- **丢番图方程求解**（即多项式方程的整数解）：最好的方法待定，候选方法见
-  `mathematica.md` 的丢番图条目，裁定前不立项。
-
-其余功能（定积分与反常积分求值、极限与级数、求和与差分等）建立在这三项地基之上。
-
-持续开发中的纪律（也是提 issue / 提 PR 的判据）：
-
-- **禁止硬编码、禁止特判**：数学语义（常数、函数、规则、导数模板、定义域条件）
-  一律以**数据 + 声明（DSL）+ 注册**表达，不写死在代码里，也不为个别输入开专用
-  分支绕过通用算法；能力缺失时拒绝是正确行为。
-- **严格域分发**：按域协议的能力字段分派，不按 Python 类型、不按节点名字嗅探。
-- **诚实拒答**：自动化结论一律经 `Verdict`；`Unknown` 不得被当作 `Yes`/`No`。
-- **单一定义处**：数学语义住在 `cas/math/**`，经 `install(builder)` 装配；内核不认
-  识任何数学函数名；import 期不修改全局状态。
-- **文档中文、源码英文**：代码与注释不得引用设计文档，理由直述。
-- **提交前两步**：`pytest -m random` 与其余 `tests/`。
-
-因此，README 里的能力清单会随 `progress.md` 一起更新；**看到「未实现」条目请不要
-当成 bug**——那是刻意的边界，而不是遗漏。
+节奏：先让一条纵线完整贯通，再横向长能力；能力缺失时拒答，不用猜测填充。

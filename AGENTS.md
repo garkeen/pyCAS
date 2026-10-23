@@ -111,7 +111,7 @@
 4. 判定用三值 ADT；No 必带证据；Unknown 必带四类理由之一。**Unknown 绝不被静默消解。**
 5. 验证器与求解器独立：checker 不得导入对应求解器；只能依赖微分器、域标准形、恒等判定、定义域分析等独立设施。
 6. 中间产物走 Artifact；可信结论只在边界提交一次。
-7. 提交前只跑三件事：`python -m mypy cas`、`python -m ruff check cas`、v5 验收（见下）。旧测试已恢复，作为**行为规格参考与待改对象**：数学性质与算法测试保留，逐层指向新 API；只断言 v4 已否决行为的测试改写或删除，**不得为了让测试变绿而恢复 v4 语义**。
+7. 提交前跑三件事：`python -m mypy --strict cas`、`python -m ruff check cas tests`、`python -m pytest -q`。测试已按 v5 重写为行为与性质验收，不保留 v4 用例，也不得为了让测试变绿而恢复 v4 语义。
 
 ---
 

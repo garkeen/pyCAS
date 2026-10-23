@@ -22,6 +22,19 @@ class DefinitionError(Exception):
     """Alias expansion did not terminate, which marks a broken invariant."""
 
 
+def _visible_definitions(
+    frames: FrameStore,
+    frame: FrameId,
+    term: T.Term,
+) -> dict[SymbolId, T.Term]:
+    mapping: dict[SymbolId, T.Term] = {}
+    for symbol_id in B.free_symbols(term):
+        definition = frames.lookup_definition(frame, symbol_id)
+        if definition is not None:
+            mapping[symbol_id] = definition.body
+    return mapping
+
+
 def expand(
     frames: FrameStore,
     frame: FrameId,
@@ -31,14 +44,13 @@ def expand(
     """Replace every visible alias by its body, to a fixed point."""
     current = term
     for _ in range(limit):
-        mapping: dict[SymbolId, T.Term] = {}
-        for symbol_id in B.free_symbols(current):
-            definition = frames.lookup_definition(frame, symbol_id)
-            if definition is not None:
-                mapping[symbol_id] = definition.body
+        mapping = _visible_definitions(frames, frame, current)
         if not mapping:
             return current
         current = B.substitute_free(current, mapping)
+    # The last rewrite may have been the one that finished the job.
+    if not _visible_definitions(frames, frame, current):
+        return current
     raise DefinitionError("alias expansion did not reach a fixed point")
 
 

@@ -45,11 +45,17 @@ class CheckOutcome:
 
 @dataclass(frozen=True, slots=True)
 class Verified(CheckOutcome):
-    """The checker verified `checked`, which must equal the request."""
+    """The checker verified `checked`, which must equal the request.
+
+    `used_premises` are indices into the request's premises that the checker
+    actually used. The kernel records only those; a premise the caller supplied
+    but the checker ignored does not become claimed support.
+    """
 
     checked: tuple[Proposition, ...]
     obligations: tuple[ObligationReport, ...] = ()
     reads: tuple[tuple[str, str], ...] = ()
+    used_premises: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

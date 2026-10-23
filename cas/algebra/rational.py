@@ -50,6 +50,8 @@ class RationalFunctionField(Field[RationalFunction[E]], Generic[E]):
     __slots__ = ("_polynomials",)
 
     def __init__(self, polynomials: UnivariatePolynomialRing[E]) -> None:
+        if not isinstance(polynomials, UnivariatePolynomialRing):
+            raise TypeError("K(x) needs a univariate polynomial ring")
         self._polynomials = polynomials
 
     @property
