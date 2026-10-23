@@ -146,6 +146,14 @@ class IntegerEmbedding(ABC, Generic[E]):
         """Embed an integer."""
 
 
+class RationalEmbedding(ABC, Generic[E]):
+    """An exact embedding of the rationals, for structures that contain Q."""
+
+    @abstractmethod
+    def of_rational(self, numerator: int, denominator: int) -> E:
+        """Embed `numerator/denominator`; raises on a zero denominator."""
+
+
 class Derivation(ABC, Generic[E]):
     """A derivation on the members of a structure."""
 
@@ -160,5 +168,6 @@ __all__ = [
     "Field",
     "IntegerEmbedding",
     "Ordered",
+    "RationalEmbedding",
     "Ring",
 ]

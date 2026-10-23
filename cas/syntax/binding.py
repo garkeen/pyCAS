@@ -155,24 +155,32 @@ def substitute_free(
     term: T.Term,
     mapping: Mapping[SymbolId, T.Term],
 ) -> T.Term:
-    """Simultaneously replace free symbols; inserted terms are not revisited."""
+    """Simultaneously replace free symbols; inserted terms are not revisited.
+
+    An inserted term lives in the outer context, so at binder depth `depth` it
+    is shifted by `depth` before insertion. Without that shift a replacement
+    mentioning an outer bound variable would be captured by an inner binder.
+    """
     if not mapping:
         return term
-    if isinstance(term, T.SymbolRef):
-        return mapping.get(term.symbol_id, term)
-    if isinstance(term, T.Apply):
-        operator = substitute_free(term.operator, mapping)
-        arguments = tuple(
-            substitute_free(argument, mapping) for argument in term.arguments
-        )
-        return _rebuild_apply(term, operator, arguments)
-    if isinstance(term, T.Binder):
-        body = substitute_free(term.body, mapping)
-        annotations = tuple(
-            substitute_free(annotation, mapping) for annotation in term.annotations
-        )
-        return _rebuild_binder(term, body, annotations)
-    return term
+
+    def walk(current: T.Term, depth: int) -> T.Term:
+        if isinstance(current, T.SymbolRef):
+            replacement = mapping.get(current.symbol_id)
+            return current if replacement is None else shift(replacement, depth)
+        if isinstance(current, T.Apply):
+            operator = walk(current.operator, depth)
+            arguments = tuple(walk(argument, depth) for argument in current.arguments)
+            return _rebuild_apply(current, operator, arguments)
+        if isinstance(current, T.Binder):
+            body = walk(current.body, depth + current.arity)
+            annotations = tuple(
+                walk(annotation, depth) for annotation in current.annotations
+            )
+            return _rebuild_binder(current, body, annotations)
+        return current
+
+    return walk(term, 0)
 
 
 def free_symbols(term: T.Term) -> frozenset[SymbolId]:

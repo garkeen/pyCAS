@@ -13,6 +13,7 @@ from cas.algebra.protocols import (
     Field,
     IntegerEmbedding,
     Ordered,
+    RationalEmbedding,
 )
 
 
@@ -20,6 +21,7 @@ class RationalField(
     Field[Fraction],
     Ordered[Fraction],
     IntegerEmbedding[Fraction],
+    RationalEmbedding[Fraction],
     Derivation[Fraction],
 ):
     """Exact rational arithmetic over `Fraction`."""
@@ -52,6 +54,11 @@ class RationalField(
 
     def of_int(self, value: int) -> Fraction:
         return Fraction(value)
+
+    def of_rational(self, numerator: int, denominator: int) -> Fraction:
+        if denominator == 0:
+            raise ZeroDivisionError("a rational needs a nonzero denominator")
+        return Fraction(numerator, denominator)
 
     def of_fraction(self, value: Fraction) -> Fraction:
         return Fraction(value)

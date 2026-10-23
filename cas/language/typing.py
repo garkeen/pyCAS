@@ -21,7 +21,7 @@ from typing import Protocol
 
 from cas.foundation.ids import SymbolId
 from cas.language import sorts as S
-from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.language.signatures import LanguageSignature, OperatorSignature, StructuralHead
 from cas.syntax import term as T
 
 
@@ -120,7 +120,10 @@ def _apply(
         return Unsupported("an applied expression must have a symbol operator")
     head = signature.head_of(term.operator.symbol_id)
     if head is None:
-        return NeedsDeclaration(term.operator.symbol_id)
+        declared = signature.operator_of(term.operator.symbol_id)
+        if declared is None:
+            return NeedsDeclaration(term.operator.symbol_id)
+        return _apply_declared(declared, term, signature, environment)
     arity = signature.arity_of(head)
     if not arity.accepts(len(term.arguments)):
         return IllTyped(f"{head.value} takes {arity.describe()}")
@@ -131,6 +134,29 @@ def _apply(
             return result
         sorts.append(result.sort)
     return _apply_sorted(head, sorts)
+
+
+def _apply_declared(
+    declared: OperatorSignature,
+    term: T.Apply,
+    signature: LanguageSignature,
+    environment: SortEnvironment,
+) -> Typing:
+    """Type one application of a declared (non-structural) operator."""
+    if len(term.arguments) != len(declared.arguments):
+        return IllTyped(
+            f"declared operator takes {len(declared.arguments)} arguments, "
+            f"got {len(term.arguments)}"
+        )
+    for argument, expected in zip(term.arguments, declared.arguments):
+        result = infer(argument, signature, environment)
+        if not isinstance(result, Typed):
+            return result
+        if not result.sort.embeds_into(expected):
+            return IllTyped(
+                f"argument sort {result.sort!r} does not embed into {expected!r}"
+            )
+    return Typed(declared.result)
 
 
 def _apply_sorted(head: StructuralHead, sorts: list[S.Sort]) -> Typing:

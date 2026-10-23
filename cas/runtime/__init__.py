@@ -1,21 +1,5 @@
-"""Explicit runtime assembly and query surface.
+"""Explicit runtime assembly and the workspace entry point."""
 
-`bootstrap()` returns an immutable `Runtime`; consumers receive that value
-explicitly. There is no process-global runtime slot or compatibility dispatch.
-"""
+from cas.runtime.bootstrap import Runtime, bootstrap, new_workspace
 
-from cas.math.builder import CommandSpec
-from cas.math.decls import ConstantDecl, FunctionDecl
-from cas.runtime.bootstrap import bootstrap
-from cas.runtime.registry import RuntimeBuilder
-from cas.runtime.runtime import Runtime, new_workflow
-
-__all__ = (
-    "bootstrap",
-    "RuntimeBuilder",
-    "Runtime",
-    "CommandSpec",
-    "ConstantDecl",
-    "FunctionDecl",
-    "new_workflow",
-)
+__all__ = ["Runtime", "bootstrap", "new_workspace"]

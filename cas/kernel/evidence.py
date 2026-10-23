@@ -1,119 +1,128 @@
-"""Typed evidence values and the checker registry."""
+"""Checker protocol and the closed set of check outcomes.
+
+A checker receives exactly what the kernel resolved — the submission frame, the
+requested conclusions, the premise propositions — plus the certificate. It must
+return the specifications it actually verified. The kernel compares them with
+the request; a checker may not verify one thing while the caller claims another.
+
+`InvalidEvidence` marks a malformed certificate, which is not a refutation.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, TypeAlias
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping, Protocol
 
-from cas.kernel.model import ContextReadSet
-from cas.kernel.verdict import Reason, Refutation
-from cas.syntax.term import Term
-
-if TYPE_CHECKING:
-    from cas.kernel.commit import ResolvedProposal
-    from cas.kernel.context import TrackedContext
-    from cas.kernel.services import KernelServices
-
-EvidencePayload: TypeAlias = object
+from cas.foundation.ids import FrameId
+from cas.kernel.model import ObligationReason
+from cas.language.decisions import Reason
+from cas.language.propositions import Proposition
+from cas.syntax import term as T
 
 
 @dataclass(frozen=True, slots=True)
-class Evidence:
-    """Checker identity plus an opaque payload decoded only by that checker."""
+class CheckRequest:
+    """What a checker is asked to verify."""
 
-    checker_id: str
-    payload: EvidencePayload = None
+    frame: FrameId
+    conclusions: tuple[Proposition, ...]
+    premises: tuple[Proposition, ...]
+    certificate: object
 
 
-class CheckResult:
-    """Closed checker-result hierarchy."""
+@dataclass(frozen=True, slots=True)
+class ObligationReport:
+    """A condition the checker declares; the reason is explanation only."""
 
+    proposition: Proposition
+    reason: ObligationReason
+
+
+class CheckOutcome:
     __slots__ = ()
 
-    def is_accepted(self) -> bool:
-        return isinstance(self, Accepted)
 
-    def is_rejected(self) -> bool:
-        return isinstance(self, (Rejected, RefutationRejected))
+@dataclass(frozen=True, slots=True)
+class Verified(CheckOutcome):
+    """The checker verified `checked`, which must equal the request."""
 
-    def is_refutation_rejected(self) -> bool:
-        return isinstance(self, RefutationRejected)
-
-    def is_unknown(self) -> bool:
-        return isinstance(self, UnknownResult)
+    checked: tuple[Proposition, ...]
+    obligations: tuple[ObligationReport, ...] = ()
+    reads: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class Accepted(CheckResult):
-    """Accepted with the conditions and context reads established by a checker."""
+class Refuted(CheckOutcome):
+    """The requested specification is false, with witnesses."""
 
-    direct_requirements: tuple[Term, ...] = ()
-    reads: ContextReadSet = field(default_factory=ContextReadSet)
+    proposition: Proposition
+    witnesses: tuple[T.Term, ...]
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not self.witnesses:
+            raise ValueError("a refutation needs at least one witness")
+        if not self.detail:
+            raise ValueError("a refutation needs an explanation")
 
 
 @dataclass(frozen=True, slots=True)
-class Rejected(CheckResult):
-    """Malformed or operationally unsupported checker input."""
+class Unverified(CheckOutcome):
+    """The checker could not decide; this is not a refutation."""
 
-    reason: Reason = Reason.FRAGMENT
+    reason: Reason
     detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
-class RefutationRejected(CheckResult):
-    """A checker has a mathematical refutation with its evidence intact."""
+class InvalidEvidence(CheckOutcome):
+    """The certificate is malformed or belongs to another request."""
 
-    refutation: Refutation
-
-    @property
-    def reason(self) -> Reason:
-        """Mathematical refutations are inapplicable, hence guarded at commit."""
-
-        return Reason.GUARDED
-
-    @property
-    def detail(self) -> str:
-        """Expose the explanation without replacing the structured evidence."""
-
-        return self.refutation.detail
-
-
-@dataclass(frozen=True, slots=True)
-class UnknownResult(CheckResult):
-    """Neither assertion nor refutation is currently justified."""
-
-    reason: Reason = Reason.FRAGMENT
-    detail: str = ""
+    detail: str
 
 
 class Checker(Protocol):
-    """Context-bound candidate verifier."""
+    """A registered verification procedure."""
 
-    def check(
-        self,
-        proposal: ResolvedProposal,
-        context: TrackedContext,
-        services: KernelServices,
-    ) -> CheckResult:
-        ...
+    id: str
+    version: str
+
+    def check(self, request: CheckRequest) -> CheckOutcome:
+        """Re-verify the request and report exactly what was verified."""
 
 
 class CheckerRegistry:
-    """ID-to-checker registry with duplicate rejection."""
+    """A frozen checker table built during assembly."""
 
-    def __init__(self) -> None:
-        self._checkers: dict[str, Checker] = {}
+    __slots__ = ("_checkers",)
 
-    def register(self, checker_id: str, checker: Checker) -> None:
-        if checker_id in self._checkers:
-            raise ValueError(f"checker already registered: {checker_id}")
-        self._checkers[checker_id] = checker
+    def __init__(self, checkers: Mapping[str, Checker]) -> None:
+        table = dict(checkers)
+        for key, checker in table.items():
+            if checker.id != key:
+                raise ValueError(
+                    f"checker registered as {key!r} reports id {checker.id!r}"
+                )
+            if not checker.version:
+                raise ValueError(f"checker {key!r} has no version")
+        self._checkers = MappingProxyType(table)
 
     def get(self, checker_id: str) -> Checker | None:
         return self._checkers.get(checker_id)
 
-    def ids(self) -> tuple[str, ...]:
-        return tuple(self._checkers)
+    def __len__(self) -> int:
+        return len(self._checkers)
 
-    def __contains__(self, checker_id: str) -> bool:
-        return checker_id in self._checkers
+
+__all__ = [
+    "CheckOutcome",
+    "CheckRequest",
+    "Checker",
+    "CheckerRegistry",
+    "InvalidEvidence",
+    "ObligationReport",
+    "Refuted",
+    "Unverified",
+    "Verified",
+]

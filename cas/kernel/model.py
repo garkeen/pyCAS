@@ -1,211 +1,130 @@
-"""Kernel data model.
+"""Kernel records: judgments, obligations, inferences, discharge, applicability.
 
-The kernel's basic object is not a transformed expression but a conditional,
-scope-qualified proposition:
+A `Judgment` is the trusted form of a proposition:
 
-    Gamma |- P [Delta]
+    frame |- proposition [obligations]
 
-· Gamma = Scope (declarations / definitions / assumptions)
-· P     = Judgment.proposition
-· Delta = Judgment.requirements (open conditions)
+The obligations are open conditions; the judgment is not an unconditional truth
+because they exist. `InferenceRecord` is the single record of how the judgment
+was issued: which checker, which premises, which certificate.
 
-Conclusions and decision results are expressed as a closed variant hierarchy
-(`Applicability`) so illegal states cannot be represented; value objects are
-frozen with slots. `Step` has no subclasses: what a step did is described by
-its conclusion propositions and its evidence.
-
-The kernel knows no mathematical head: this module depends on syntax only and
-imports no concrete mathematical module.
+Records are immutable values. Later events (a discharge, a refutation, a new
+frame) never rewrite them; applicability is a relation between a judgment and a
+query frame, computed on demand.
 """
-
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from enum import StrEnum
 
-if TYPE_CHECKING:
-    from cas.kernel.evidence import Evidence
-from enum import Enum
-
-from cas.kernel.ids import JudgmentId, RequirementId, ScopeId, StepId
-from cas.syntax import term as T
-from cas.syntax.termpath import well_scoped
-
-# ---------------------------------------------------------------------------
-# Scope entries
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True, slots=True)
-class Declaration:
-    """A declaration: `x : Real`, `n : Integer`, `c : Parameter independent of
-    x`, `y : Function(Real, Real)`."""
-    symbol: T.Term
-    sort: T.Term
+from cas.foundation.ids import FrameId, InferenceId, JudgmentId, ObligationId
+from cas.language.propositions import Proposition
 
 
-@dataclass(frozen=True, slots=True)
-class Definition:
-    """A definition: `u := x^2`. A local alias, not an equation the user must
-    prove."""
-    symbol: T.Term
-    body: T.Term
+class ObligationReason(StrEnum):
+    """Why a condition was introduced; explanation, not truth."""
 
-
-@dataclass(frozen=True, slots=True)
-class Assumption:
-    """An assumption: `x > 0`, `a != 0`, `continuous(f, I)`. A condition the
-    user or a branch explicitly accepts.
-
-    An open guard must never be written into assumptions automatically; that is
-    what Requirement is for.
-    """
-    proposition: T.Term
-
-    def __post_init__(self) -> None:
-        if not T.is_proposition(self.proposition) or not well_scoped(self.proposition):
-            raise ValueError("an assumption must be a well-bound proposition")
-
-
-# ---------------------------------------------------------------------------
-# Requirement: an open condition
-# ---------------------------------------------------------------------------
-
-class RequirementReason(Enum):
-    """Why the condition was introduced. Distinct from verdict.Reason, which
-    says why a decision failed."""
     DEFINEDNESS = "definedness"
     RULE_GUARD = "rule_guard"
     ALGORITHM_PRECONDITION = "algorithm_precondition"
     BRANCH_COVERAGE = "branch_coverage"
-    DOMAIN_MEMBERSHIP = "domain_membership"
+    MEMBERSHIP = "membership"
+    REGULARITY = "regularity"
 
 
 @dataclass(frozen=True, slots=True)
-class Requirement:
-    id: RequirementId
-    scope: ScopeId
-    proposition: T.Term
-    introduced_by: StepId
-    reason: RequirementReason
+class Obligation:
+    """A condition a judgment depends on."""
 
+    id: ObligationId
+    frame: FrameId
+    proposition: Proposition
+    reason: ObligationReason
+    introduced_by: InferenceId
 
-# ---------------------------------------------------------------------------
-# Judgment / Step
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Judgment:
-    """A dependable mathematical conclusion: Gamma |- proposition
-    [requirements].
+    """A scoped conclusion with its open obligations."""
 
-    `producer` is the Step that produced it. A Judgment can only be created by
-    `kernel.commit`.
-    """
     id: JudgmentId
-    scope: ScopeId
-    proposition: T.Term
-    requirements: tuple[RequirementId, ...]
-    producer: StepId
+    frame: FrameId
+    proposition: Proposition
+    obligations: tuple[ObligationId, ...]
+    inference: InferenceId
 
 
 @dataclass(frozen=True, slots=True)
-class ContextReadSet:
-    """Context facts read by a step.
+class InferenceRecord:
+    """The record of one trusted inference.
 
-    Every implicit use must leave a read dependency, otherwise "this step
-    depends on an assumption not recorded in the step" happens silently.
+    `certificate` is opaque here: only the checker that produced it interprets
+    it, and only after the checker was selected by `checker_id`/version.
     """
-    entries: tuple[tuple[str, str], ...] = ()
 
-    def merge(self, other: ContextReadSet) -> ContextReadSet:
-        """Union with per-item deduplication: a read dependency is a set, so
-        reading the same item twice counts once.
-
-        The key is the whole `(kind, key)` pair; merging on kind alone would
-        collapse multiple reads of the same kind into one.
-        """
-        return ContextReadSet(tuple(sorted(set(self.entries)
-                                              | set(other.entries))))
-
-    def __bool__(self) -> bool:
-        return bool(self.entries)
-
-
-@dataclass(frozen=True, slots=True)
-class Step:
-    """A mathematical dependency edge. No subclasses; dispatch goes through the
-    checker registry.
-
-    `premises` / `conclusions` are Judgment ids. An Artifact can never be a
-    premise.
-    """
-    id: StepId
-    scope: ScopeId
+    id: InferenceId
+    frame: FrameId
+    checker_id: str
+    checker_version: str
     premises: tuple[JudgmentId, ...]
     conclusions: tuple[JudgmentId, ...]
-    evidence: Evidence
-    reads: ContextReadSet = field(default_factory=ContextReadSet)
+    certificate: object
+    reads: tuple[tuple[str, str], ...] = ()
 
-
-# ---------------------------------------------------------------------------
-# Discharge and applicability
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class Discharge:
-    """A discharge: `requirement` is proved by `by_judgment` in `scope`.
+    """`obligation` is proved by `by_judgment` in `frame`."""
 
-    Discharge never modifies the original Judgment. The conditional conclusion
-    still holds; a query in this scope simply reports it as directly
-    applicable.
-    """
-    requirement: RequirementId
+    obligation: ObligationId
     by_judgment: JudgmentId
-    scope: ScopeId
+    frame: FrameId
 
 
 class Applicability:
-    """Closed hierarchy of applicability.
+    """Closed result of asking whether a judgment can be used in a frame."""
 
-    When a condition is refuted the original conclusion is not destroyed, it is
-    marked Inapplicable: as a conditional proposition it remains correct, and
-    it is not cascade-deleted along dependency edges.
-    """
     __slots__ = ()
 
     def is_applicable(self) -> bool:
-        return self.__class__ is Applicable
+        return isinstance(self, Applicable)
 
     def is_conditional(self) -> bool:
-        return self.__class__ is Conditional
-
-    def is_inapplicable(self) -> bool:
-        return self.__class__ is Inapplicable
+        return isinstance(self, Conditional)
 
     def is_out_of_scope(self) -> bool:
         return isinstance(self, OutOfScope)
 
 
 @dataclass(frozen=True, slots=True)
-class OutOfScope(Applicability):
-    origin: ScopeId
-    requested: ScopeId
-
-
-@dataclass(frozen=True, slots=True)
 class Applicable(Applicability):
-    """Directly applicable: every condition has been discharged."""
+    """Every obligation is discharged in the query frame."""
 
 
 @dataclass(frozen=True, slots=True)
 class Conditional(Applicability):
-    """Conditional: some requirement is still undischarged."""
-    requirements: tuple[RequirementId, ...] = ()
+    """Some obligation is still open in the query frame."""
+
+    obligations: tuple[ObligationId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class Inapplicable(Applicability):
-    """Not applicable in this scope: a condition was refuted. The original
-    conclusion is not deleted."""
-    refutations: tuple[JudgmentId, ...] = ()
+class OutOfScope(Applicability):
+    """The judgment's frame is not visible from the query frame."""
+
+    origin: FrameId
+    requested: FrameId
+
+
+__all__ = [
+    "Applicability",
+    "Applicable",
+    "Conditional",
+    "Discharge",
+    "InferenceRecord",
+    "Judgment",
+    "Obligation",
+    "ObligationReason",
+    "OutOfScope",
+]

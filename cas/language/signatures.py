@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from cas.foundation.ids import SymbolId
+from cas.language import sorts as S
 
 
 class StructuralHead(StrEnum):
@@ -63,6 +64,18 @@ class Arity:
         if self.minimum == self.maximum:
             return f"exactly {self.minimum} arguments"
         return f"{self.minimum}..{self.maximum} arguments"
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorSignature:
+    """The declared type of a non-structural operator (a predicate or function).
+
+    Mathematical meaning stays in the math module; this record only says how the
+    symbol may be applied, so a predicate can be typed by the language.
+    """
+
+    arguments: tuple[S.Sort, ...]
+    result: S.Sort
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,21 +129,31 @@ class LanguageSignature:
     heads: Mapping[SymbolId, StructuralHead]
     arities: Mapping[StructuralHead, Arity]
     binders: Mapping[str, BindingSignature]
+    operators: Mapping[SymbolId, OperatorSignature]
 
     @classmethod
     def build(
         cls,
         heads: Mapping[SymbolId, StructuralHead],
         binders: Mapping[str, BindingSignature] | None = None,
+        operators: Mapping[SymbolId, OperatorSignature] | None = None,
     ) -> LanguageSignature:
         return cls(
             MappingProxyType(dict(heads)),
             MappingProxyType(dict(DEFAULT_ARITIES)),
             MappingProxyType(dict(binders or {})),
+            MappingProxyType(dict(operators or {})),
         )
 
     def head_of(self, symbol_id: SymbolId) -> StructuralHead | None:
         return self.heads.get(symbol_id)
+
+    def symbol_of(self, head: StructuralHead) -> SymbolId | None:
+        """The id this world uses for a structural head, if it has one."""
+        for symbol_id, known in self.heads.items():
+            if known is head:
+                return symbol_id
+        return None
 
     def arity_of(self, head: StructuralHead) -> Arity:
         return self.arities[head]
@@ -138,11 +161,16 @@ class LanguageSignature:
     def binder_of(self, name: str) -> BindingSignature | None:
         return self.binders.get(name)
 
+    def operator_of(self, symbol_id: SymbolId) -> OperatorSignature | None:
+        """The declared signature of a non-structural operator, if any."""
+        return self.operators.get(symbol_id)
+
 
 __all__ = [
     "Arity",
     "BindingSignature",
     "DEFAULT_ARITIES",
     "LanguageSignature",
+    "OperatorSignature",
     "StructuralHead",
 ]
