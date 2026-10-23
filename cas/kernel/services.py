@@ -27,12 +27,24 @@ class KernelServices(Protocol):
     def decide(self, proposition: Term, scope_id: ScopeId) -> Verdict:
         ...
 
+    def definedness(self, term: Term, scope_id: ScopeId) -> tuple[Term, ...] | None:
+        ...
+
+    def supports_scope(self, scope_id: ScopeId) -> bool:
+        ...
+
 
 class NullServices:
     """No mathematics is wired; every query is honestly unknown."""
 
     def decide(self, proposition: Term, scope_id: ScopeId) -> Verdict:
         return unknown()
+
+    def definedness(self, term: Term, scope_id: ScopeId) -> tuple[Term, ...] | None:
+        return None
+
+    def supports_scope(self, scope_id: ScopeId) -> bool:
+        return False
 
     def lookup_definition(self, scope_id: ScopeId, symbol: Term) -> Term | None:
         return None

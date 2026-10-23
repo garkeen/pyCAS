@@ -30,6 +30,7 @@ from enum import Enum
 
 from cas.kernel.ids import JudgmentId, RequirementId, ScopeId, StepId
 from cas.syntax import term as T
+from cas.syntax.termpath import well_scoped
 
 # ---------------------------------------------------------------------------
 # Scope entries
@@ -60,6 +61,10 @@ class Assumption:
     what Requirement is for.
     """
     proposition: T.Term
+
+    def __post_init__(self) -> None:
+        if not T.is_proposition(self.proposition) or not well_scoped(self.proposition):
+            raise ValueError("an assumption must be a well-bound proposition")
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +182,15 @@ class Applicability:
 
     def is_inapplicable(self) -> bool:
         return self.__class__ is Inapplicable
+
+    def is_out_of_scope(self) -> bool:
+        return isinstance(self, OutOfScope)
+
+
+@dataclass(frozen=True, slots=True)
+class OutOfScope(Applicability):
+    origin: ScopeId
+    requested: ScopeId
 
 
 @dataclass(frozen=True, slots=True)

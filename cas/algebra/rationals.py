@@ -1,0 +1,63 @@
+"""The rationals as a field.
+
+Q is ordered, embeds the integers, and carries the explicit zero derivation of a
+constant structure. It is not a representation of all reals.
+"""
+
+from __future__ import annotations
+
+from fractions import Fraction
+
+from cas.algebra.protocols import (
+    Derivation,
+    Field,
+    IntegerEmbedding,
+    Ordered,
+)
+
+
+class RationalField(
+    Field[Fraction],
+    Ordered[Fraction],
+    IntegerEmbedding[Fraction],
+    Derivation[Fraction],
+):
+    """Exact rational arithmetic over `Fraction`."""
+
+    def zero(self) -> Fraction:
+        return Fraction(0)
+
+    def one(self) -> Fraction:
+        return Fraction(1)
+
+    def add(self, left: Fraction, right: Fraction) -> Fraction:
+        return left + right
+
+    def neg(self, value: Fraction) -> Fraction:
+        return -value
+
+    def mul(self, left: Fraction, right: Fraction) -> Fraction:
+        return left * right
+
+    def equal(self, left: Fraction, right: Fraction) -> bool:
+        return left == right
+
+    def inv(self, value: Fraction) -> Fraction:
+        if value == 0:
+            raise ZeroDivisionError("zero has no inverse in Q")
+        return Fraction(1, 1) / value
+
+    def sign(self, value: Fraction) -> int:
+        return (value > 0) - (value < 0)
+
+    def of_int(self, value: int) -> Fraction:
+        return Fraction(value)
+
+    def of_fraction(self, value: Fraction) -> Fraction:
+        return Fraction(value)
+
+    def deriv(self, value: Fraction) -> Fraction:
+        return Fraction(0)
+
+
+__all__ = ["RationalField"]

@@ -67,10 +67,10 @@ from cas.kernel.store import KernelStore
 from cas.kernel.verdict import Refutation
 from cas.syntax import term as T
 from cas.syntax.term import Expr, S, Sym, Term
-from cas.syntax.termpath import free_vars, subst
+from cas.syntax.termpath import free_vars, subst, well_scoped
 from cas.workflow.artifact import Artifact, ArtifactStore
 from cas.workflow.branch import BranchCase, BranchGroup, BranchStore, promote_guard
-from cas.workflow.command import Command, MergeBranches, ValuationCheck
+from cas.workflow.command import Claim, Command, MergeBranches, ValuationCheck
 from cas.workflow.constraint import Constraint, ConstraintSource, ConstraintStore
 from cas.workflow.event import Event, EventLog, Ref, RefKind
 from cas.workflow.ids import ArtifactId, EventId, RevisionId, TaskId
@@ -129,7 +129,7 @@ class WorkflowAlgorithms(Protocol):
         relations: tuple[Term, ...],
         unknowns: tuple[Sym, ...],
     ) -> tuple[dict[Sym, Term], bool] | None:
-        """Return a candidate valuation and completeness flag."""
+        """Return a candidate valuation and uniqueness flag."""
 
     def expand_definitions(
         self,
@@ -208,10 +208,29 @@ class Workflow:
         note: str = "",
         target: Sequence[int] = (),
     ) -> WorkflowStep:
-        # The context a step is submitted in is the current scope version. A
-        # committed claim afterwards grows the scope by appending the
-        # assumption, and this step keeps the version it was checked in.
         submitted = self.scope
+        if command.registers_assumption:
+            if command != Claim() or not T.is_proposition(content) or not well_scoped(content):
+                return self._record(content, command, StepStatus.REFUSED,
+                                    "an assumption must be a well-bound proposition submitted as Claim",
+                                    target, (), scope=submitted)
+            if self.store.scopes.escapes(submitted, content):
+                return self._record(content, command, StepStatus.REFUSED,
+                                    "assumption contains an escaped symbol", target, (), scope=submitted)
+            conditions = self.services.definedness(content, submitted)
+            if conditions is None or any(
+                not self.services.decide(condition, submitted).is_yes()
+                for condition in conditions
+            ):
+                return self._record(content, command, StepStatus.UNDECIDED,
+                                    "prove assumption definedness in the parent scope first",
+                                    target, (), scope=submitted)
+            if self.services.decide(content, submitted).is_no():
+                return self._record(content, command, StepStatus.REFUSED,
+                                    "assumption is refuted in the parent scope", target, (), scope=submitted)
+            submitted = self._grow_scope(
+                submitted, assumptions=(Assumption(content),)
+            ).id
         # Every referenced step contributes its judgment as a premise; the kernel
         # records the premises as a tuple, so a command may name several (a
         # two-premise rule such as transitivity needs exactly that).
@@ -234,12 +253,6 @@ class Workflow:
                 premise_ids.append(pstep.judgment)
             premises = tuple(premise_ids)
 
-        # The proposal is committed first; a claim's proposition becomes a scope
-        # assumption only once the commit succeeds. Registering before commit
-        # would leave a refused or undecided claim polluting later decisions in
-        # this scope. The checker verifies the claim from the command payload
-        # (registers_assumption), not from the scope, so it does not need the
-        # assumption to be present at check time.
         proposal = StepProposal(scope=submitted, premises=premises,
                                 conclusions=(content,),
                                 evidence=Evidence(command.checker_id, command),
@@ -249,11 +262,7 @@ class Workflow:
 
         if isinstance(res, Committed):
             if command.registers_assumption:
-                # The conclusion keeps the context it was checked in; later
-                # submissions see the assumption because the scope grows into a
-                # new version rather than the old id changing under its readers.
-                self.scope = self._grow_scope(
-                    submitted, assumptions=(Assumption(content),)).id
+                self.scope = submitted
             j = self.store.get_judgment(res.judgments[0])
             guards = tuple(self.store.get_requirement(r).proposition
                            for r in j.requirements)
@@ -457,7 +466,16 @@ class Workflow:
         checks. This method only lands the coverage part (the law of excluded
         middle, a syntactic tautology decided on the verification side).
         """
+        if not T.is_proposition(condition) or not well_scoped(condition):
+            raise BranchError("branch condition must be a well-bound proposition")
+        conditions = self.services.definedness(condition, self.scope)
+        if conditions is None or any(
+            not self.services.decide(guard, self.scope).is_yes() for guard in conditions
+        ):
+            raise BranchError("prove branch-condition definedness before splitting")
         scopes = self.store.scopes
+        if scopes.escapes(self.scope, condition):
+            raise BranchError("branch condition contains an escaped symbol")
         parent = scopes.get(self.scope)
         cases: list[BranchCase] = []
         for cond, label in ((condition, "+"), (T.not_(condition), "-")):
@@ -485,17 +503,8 @@ class Workflow:
         return self.branches.get(group.id)
 
     def enter(self, scope: int) -> ScopeId:
-        """Enter a scope lineage at its current version: later submissions
-        happen in that context.
-
-        An id naming an older version resolves to the lineage's head, since
-        entries only ever append on top of the current version. Entering is an
-        operation of its own and is recorded in the event view -- it produces
-        no conclusion, task or artifact; what it changes is the context later
-        submissions use. Undo and redo therefore move through it like through
-        any other operation.
-        """
-        self.scope = self.store.scopes.head_of(ScopeId(scope))
+        """Enter exactly the immutable scope snapshot named by the caller."""
+        self.scope = self.store.scopes.get(ScopeId(scope)).id
         self._append_event(command="Enter")
         return self.scope
 
@@ -821,7 +830,7 @@ class Workflow:
         scopes = self.store.scopes
         if scopes.lookup_definition(self.scope, symbol) is not None:
             raise ScopeError(f"{what} symbol already defined along the chain: {symbol!r}")
-        if any(d.symbol is symbol for d in scopes.declarations(self.scope)):
+        if any(d.symbol == symbol for d in scopes.declarations(self.scope)):
             raise ScopeError(f"{what} symbol already declared along the chain: {symbol!r}")
 
     # --- undo / redo: the view, the visible steps and the scope version move

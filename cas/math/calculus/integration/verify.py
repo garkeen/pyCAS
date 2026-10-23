@@ -20,10 +20,8 @@ from typing import TYPE_CHECKING
 
 from cas.kernel.verdict import (
     YES,
-    No,
     Reason,
     RefutationChannel,
-    Unknown,
     Verdict,
     refute,
     unknown,
@@ -38,19 +36,6 @@ from cas.syntax.termpath import free_vars
 
 if TYPE_CHECKING:
     from cas.math.context import MathContext
-
-
-def _mismatch(
-    proposition: Term,
-    detail: str,
-    *witnesses: Term,
-) -> No:
-    return refute(
-        RefutationChannel.DERIVATION,
-        proposition,
-        *witnesses,
-        detail=detail,
-    )
 
 
 def _judge_zero_diff(
@@ -114,43 +99,15 @@ def verify_antideriv(
     is a mathematical certificate refutation; a channel that cannot decide is
     still returned as Unknown.
     """
-    from cas.math.piecewise import branches, fold_nested, is_piecewise
+    from cas.math.piecewise import is_piecewise
 
     if is_piecewise(integrand) or is_piecewise(antiderivative):
-        flattened_integrand = fold_nested(integrand)
-        flattened_antiderivative = fold_nested(antiderivative)
-        integrand_branches = branches(flattened_integrand)
-        antiderivative_branches = branches(flattened_antiderivative)
-        proposition = T.eq(antiderivative, integrand)
-        if len(integrand_branches) != len(antiderivative_branches):
-            return _mismatch(
-                proposition,
-                "the antiderivative and integrand have different branch counts",
-                antiderivative,
-                integrand,
-            )
-        undecided = False
-        for (value, condition), (candidate, candidate_condition) in zip(
-            integrand_branches,
-            antiderivative_branches,
-        ):
-            if condition is not candidate_condition:
-                return _mismatch(
-                    proposition,
-                    "the antiderivative and integrand branch conditions differ",
-                    condition,
-                    candidate_condition,
-                )
-            verdict = _judge_zero_diff(
-                ctx,
-                differentiate(ctx, candidate, variable),
-                value,
-            )
-            if isinstance(verdict, No):
-                return verdict
-            if isinstance(verdict, Unknown):
-                undecided = True
-        return unknown(Reason.FRAGMENT) if undecided else YES
+        # Branch-by-branch derivative agreement does not establish the junction
+        # points: a piecewise F can jump at a breakpoint while every branch
+        # derivative still matches. Region and boundary regularity have no
+        # representation here, so this stays honestly undecided instead of
+        # claiming YES.
+        return unknown(Reason.GUARDED)
     return _judge_zero_diff(
         ctx,
         differentiate(ctx, antiderivative, variable),

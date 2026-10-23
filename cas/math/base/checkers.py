@@ -23,7 +23,7 @@ The shared helpers here are also reused by the calculus and equation checkers.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, TypeGuard, TypeVar
 
 from cas.kernel.commit import ResolvedProposal
@@ -37,22 +37,20 @@ from cas.kernel.evidence import (
 )
 from cas.kernel.services import KernelServices
 from cas.kernel.verdict import No, Reason, Unknown, Verdict
-from cas.math.base.equality import identity_verdict, normal_form
+from cas.math.base.equality import identity_verdict, normal_form, pointwise_lift_allowed
 from cas.math.builder import CheckerRegistration, MathBuilder
-from cas.math.decls import LiftPolicy
 from cas.math.domcond import dom_condition
 from cas.syntax import pattern as P
 from cas.syntax import term as T
 from cas.syntax.match import matches
 from cas.syntax.pattern import PatternSubstitution
-from cas.syntax.term import Expr, S, Sym, Term
+from cas.syntax.term import Expr, S, Term
 from cas.syntax.termpath import free_vars, replace_at, subst, term_at
 from cas.workflow.command import (
     BothSidesPayload,
     ClaimPayload,
     Command,
     Direction,
-    MergePayload,
     RewritePayload,
     SplitPayload,
     SubstPayload,
@@ -96,11 +94,7 @@ def _accepted(
 
 
 def _is_equation(term: Term) -> TypeGuard[Expr]:
-    return (
-        isinstance(term, Expr)
-        and isinstance(term.head, Sym)
-        and term.head.name == "Eq"
-    )
+    return T.is_eq(term)
 
 
 def _one_conclusion(proposal: ResolvedProposal) -> Term | Rejected:
@@ -175,25 +169,7 @@ def _same_subst(
     first: PatternSubstitution,
     second: PatternSubstitution,
 ) -> bool:
-    """Compare pattern substitutions by variable and interned term identity."""
-    if set(first) != set(second):
-        return False
-    for name, first_value in first.items():
-        second_value = second[name]
-        if isinstance(first_value, tuple) or isinstance(second_value, tuple):
-            if not (
-                isinstance(first_value, tuple)
-                and isinstance(second_value, tuple)
-            ):
-                return False
-            if len(first_value) != len(second_value) or any(
-                left is not right
-                for left, right in zip(first_value, second_value)
-            ):
-                return False
-        elif first_value is not second_value:
-            return False
-    return True
+    return first == second
 
 
 def _rule_conditions(
@@ -211,17 +187,7 @@ def _rule_conditions(
 # ---------------------------------------------------------------------------
 
 class ClaimChecker:
-    """Assert into the ledger: the command declares `registers_assumption`, so
-    the workflow registers the proposition as a scope assumption once this commit
-    succeeds.
-
-    The checker verifies the claim from the command payload (the only legitimate
-    route to the assumption.entry checker is a claim command), not from the
-    scope: registration now happens after a successful commit, so a refused or
-    undecided claim never pollutes the scope's assumptions. It reports the
-    expression's own definedness conditions, so asserting `x/x` carries `x != 0`
-    and later rewrites inherit it through the kernel.
-    """
+    """Issue a judgment only for an existing scope hypothesis."""
     id = "assumption.entry"
 
     def __init__(self, ctx: MathContext) -> None:
@@ -241,6 +207,8 @@ class ClaimChecker:
                 or not cmd.registers_assumption):
             return Rejected(Reason.FRAGMENT,
                             "assumption.entry requires a claim command")
+        if content not in context.assumptions():
+            return Rejected(Reason.FRAGMENT, "conclusion is not a hypothesis of this scope")
         return _accepted(self.ctx, proposal, context)
 
 
@@ -382,6 +350,8 @@ class RuleInstanceChecker:
             sub_t = term_at(pred, path)
         except IndexError:
             return Rejected(Reason.FRAGMENT, f"path out of range: {path}")
+        if not _pointwise_path(self.ctx, pred, path):
+            return UnknownResult(Reason.FRAGMENT, "replacement needs a context-specific lifting proof")
         if not any(_same_subst(s, d.substitution)
                    for s in matches(rule.pattern, sub_t)):
             return Rejected(Reason.FRAGMENT, "the given substitution is not a match at that position")
@@ -392,8 +362,7 @@ class RuleInstanceChecker:
 
 
 class SubstChecker:
-    """Substitution: replace a variable in the predecessor with a value, a purely
-    syntactic operation."""
+    """Transport a proposition along an established pointwise equality."""
     id = "substitute"
 
     def __init__(self, ctx: MathContext) -> None:
@@ -425,7 +394,17 @@ class SubstChecker:
         if d.var not in free_vars(pred):
             return Rejected(Reason.FRAGMENT,
                             f"the substituted variable does not occur in the predecessor: {d.var}")
-        substituted = subst(pred, {d.var: d.value})
+        value = _expand(context, d.value)
+        equality = T.eq(d.var, value)
+        reverse = T.eq(value, d.var)
+        equality_premises = tuple(_expand(context, p) for p in proposal.premise_propositions)
+        if equality not in equality_premises and reverse not in equality_premises:
+            if not context.decide(equality).is_yes():
+                return UnknownResult(Reason.GUARDED, "substitution requires a proved equality")
+        if any(not _pointwise_path(self.ctx, pred, path)
+               for path in _occurrences(pred, d.var)):
+            return UnknownResult(Reason.FRAGMENT, "substitution crosses a protected context")
+        substituted = subst(pred, {d.var: value})
         last: Verdict | None = None
         for expected in (substituted, normal_form(self.ctx, substituted)):
             verdict = identity_verdict(self.ctx, content, expected)
@@ -466,8 +445,10 @@ class SplitChecker:
             return Rejected(Reason.FRAGMENT, "branch.split requires a split payload")
         cond = d.condition
         branch = T.not_(cond) if d.negate else cond
+        if not context.decide(branch).is_yes():
+            return UnknownResult(Reason.GUARDED, "branch condition is not established in this scope")
         expected = T.mk(S("And"), (_expand(context, pred), branch))
-        if content is expected:
+        if content == expected:
             return _accepted(self.ctx, proposal, context)
         verdict = identity_verdict(ctx=self.ctx, left=_expand(context, content), right=expected)
         if verdict.is_yes():
@@ -492,11 +473,12 @@ def _is_tautology(term: Term) -> bool:
         return term.val
     if not (isinstance(term, T.Expr) and term.head.name == "Or"):
         return False
-    disjuncts = {argument._h for argument in term.args}
+    disjuncts = set(term.args)
     return any(
         isinstance(argument, T.Expr)
         and argument.head.name == "Not"
-        and argument.args[0]._h in disjuncts
+        and len(argument.args) == 1
+        and argument.args[0] in disjuncts
         for argument in term.args
     )
 
@@ -526,34 +508,11 @@ class BranchCoverageChecker:
         if isinstance(content, Rejected):
             return content
         if _is_tautology(content):
-            return Accepted()
+            return _accepted(self.ctx, proposal, context)
         return UnknownResult(Reason.FRAGMENT, "coverage is not a syntactic tautology; a real coverage proof is needed")
 
 
 class BranchMergeChecker:
-    """Branch merge: reason by cases.
-
-    Each branch concludes the same proposition P in its own scope and the
-    disjunction of the branch conditions covers the parent problem, so P holds in
-    the parent scope; each branch's open guards are promoted to `C_i => G_i`.
-
-    **Boundary that must be known**: a branch conclusion cannot be a premise of
-    the parent scope, because commit's second step forbids using a child-scope
-    conclusion upward, so the only premise here is the coverage conclusion in the
-    parent. The "each branch really answered P" loop is therefore checked by the
-    workflow against the kernel record (`Judgment.scope` and
-    `Judgment.proposition`) rather than recomputed independently by this checker;
-    what this checker re-checks is that premise, payload and conclusion agree,
-    namely that the coverage proposition equals the disjunction of the payload's
-    branch conditions (so the payload is pinned by the committed coverage
-    conclusion), that the number of answers equals the number of branches, and
-    that every answer is exactly the conclusion P.
-
-    Making that loop independently re-checked by the kernel would need commit to
-    support implication introduction, from Gamma plus C proving P to Gamma
-    proving C implies P, which is a new kernel rule and a design decision not yet
-    taken.
-    """
     id = "branch.merge"
 
     def __init__(self, ctx: MathContext) -> None:
@@ -565,25 +524,10 @@ class BranchMergeChecker:
         context: TrackedContext,
         services: KernelServices,
     ) -> CheckResult:
-        content = _one_conclusion(proposal)
-        if isinstance(content, Rejected):
-            return content
-        d = _payload(proposal, MergePayload)
-        if d is None:
-            return Rejected(Reason.FRAGMENT, "branch.merge requires a merge payload")
-        coverage = T.or_(*d.conditions)
-        if not any(p == coverage for p in proposal.premise_propositions):
-            return Rejected(Reason.FRAGMENT, "the premise does not contain this branch group's coverage proposition")
-        if len(d.answers) != len(d.conditions):
-            return Rejected(Reason.FRAGMENT,
-                            f"branch answer count {len(d.answers)} does not match "
-                            f"branch count {len(d.conditions)}")
-        if any(a != content for a in d.answers):
-            return Rejected(Reason.FRAGMENT, "not every branch answered the same proposition")
-        promoted = tuple(T.implies(c, g)
-                         for c, gs in zip(d.conditions, d.guards) for g in gs)
-        return Accepted(direct_requirements=tuple(dom_condition(self.ctx, content)) + promoted,
-                        reads=context.read_set())
+        return UnknownResult(
+            Reason.FRAGMENT,
+            "branch merge requires checked proof references and scope export; answer payloads are not proofs",
+        )
 
 
 class ConstraintSatisfiedChecker:
@@ -686,15 +630,34 @@ class TransChecker:
         return _accepted(self.ctx, proposal, context)
 
 
-def _path_requirements(target: Term, path: tuple[int, ...]) -> tuple[Term, ...]:
-    """Return branch conditions for a replacement inside a Piecewise value."""
+def _pointwise_path(ctx: MathContext, target: Term, path: tuple[int, ...]) -> bool:
     current = target
-    requirements: list[Term] = []
     for index in path:
-        if _is_piecewise(current) and index % 2 == 0:
-            requirements.append(current.args[index + 1])
+        if not pointwise_lift_allowed(ctx, current, index):
+            return False
         current = term_at(current, (index,))
-    return tuple(requirements)
+    return True
+
+
+def _occurrences(
+    term: Term,
+    target: Term,
+    base: tuple[int, ...] = (),
+) -> Iterator[tuple[int, ...]]:
+    """Explicit paths where `target` occurs, one per outermost site.
+
+    A local walk rather than the traversal helper: a checker may not depend on a
+    search routine, and the descent stops at a match because substituting the
+    whole subterm makes deeper occurrences inside that site irrelevant.
+    """
+    if term == target:
+        yield base
+        return
+    if isinstance(term, Expr):
+        for index, argument in enumerate(term.args):
+            yield from _occurrences(argument, target, base + (index,))
+    elif isinstance(term, T.Bound):
+        yield from _occurrences(term.body, target, base + (0,))
 
 
 class CongruenceLiftChecker:
@@ -741,64 +704,14 @@ class CongruenceLiftChecker:
             return bad
         if not d.path:
             return Rejected(Reason.FRAGMENT, "an empty path cannot select a replacement site")
-        try:
-            parent = term_at(target, tuple(d.path[:-1]))
-        except (IndexError, TypeError):
-            return Rejected(Reason.FRAGMENT, "use path is outside the target")
-        extra: list[Term] = []
-        policy: LiftPolicy
-        if isinstance(parent, T.Expr):
-            head = parent.head.name
-            if head == "Quote":
-                # Held data: a quoted expression is data, not a subterm that a
-                # mathematical equality may rewrite.
-                return Rejected(
-                    Reason.FRAGMENT,
-                    "Quote does not admit equality lifting",
-                )
-            if head == "Power":
-                if d.path[-1] != 0 or not isinstance(parent.args[1], T.Int):
-                    return Rejected(
-                        Reason.FRAGMENT,
-                        "only an integer exponent permits base lifting",
-                    )
-            if any(isinstance(argument, T.Bound) for argument in parent.args):
-                # Replacing inside a binder body (an integral's integrand, say)
-                # needs a pointwise condition; the universal form for it is not
-                # built, so the source equality itself is carried as the
-                # condition. The step stays conditional instead of claiming the
-                # lift unconditionally.
-                extra.append(source)
-            if head in ("Plus", "Times", "Eq", "Piecewise", "Power"):
-                # Signature structure: the container's own lifting default
-                # belongs to the term language, not to a declaration.
-                policy = (
-                    LiftPolicy.CONGRUENT
-                    if head in ("Plus", "Times", "Eq")
-                    else LiftPolicy.CONDITIONAL
-                )
-            else:
-                policy = self.ctx.lift_policy(head)
-        else:
-            policy = (
-                LiftPolicy.CONGRUENT
-                if isinstance(parent, T.Bound)
-                else LiftPolicy.FORBIDDEN
-            )
-        extra.extend(_path_requirements(target, tuple(d.path)))
-        if policy is LiftPolicy.FORBIDDEN:
-            detail = (
-                f"no lifting policy is declared for {parent.head.name}"
-                if isinstance(parent, T.Expr)
-                else "only expression subterms are liftable"
-            )
-            return Rejected(Reason.FRAGMENT, detail)
+        if not _pointwise_path(self.ctx, target, tuple(d.path)):
+            return UnknownResult(Reason.FRAGMENT, "replacement needs a context-specific lifting proof")
         expected = replace_at(target, tuple(d.path), after)
         bad = _identity(self.ctx, content, expected,
                         "content is not the selected replacement")
         if bad is not None:
             return bad
-        return _accepted(self.ctx, proposal, context, tuple(extra))
+        return _accepted(self.ctx, proposal, context)
 
 
 CHECKERS = (ClaimChecker, BothSidesChecker, NormalizeChecker,

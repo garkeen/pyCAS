@@ -39,7 +39,7 @@ class Algorithms:
         relations: tuple[Term, ...],
         unknowns: tuple[Sym, ...],
     ) -> tuple[dict[Sym, Term], bool] | None:
-        """Return a linear valuation and completeness flag, or ``None``."""
+        """Return a linear candidate and uniqueness flag, or ``None``."""
         from cas.math.constraints import solve_linear_constraints
 
         return solve_linear_constraints(self._math, relations, unknowns)

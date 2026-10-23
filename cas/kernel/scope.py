@@ -260,7 +260,7 @@ class ScopeStore:
         undefined symbol.
         """
         from cas.syntax.termpath import free_vars
-        fv = free_vars(term)
+        fv = free_vars(term, include_heads=True)
         if not fv:
             return ()
         chain = {s.id for s in self.chain(sid)}

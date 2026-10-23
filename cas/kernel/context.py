@@ -27,6 +27,9 @@ class TrackedContext:
         self._mode = DEFAULT_MODE if mode is None else mode
         self._reads: list[tuple[str, str]] = []
 
+    def matches(self, scopes: ScopeStore, services: KernelServices, scope: ScopeId) -> bool:
+        return self._scopes is scopes and self._services is services and self._scope_id == scope
+
     def _record(self, kind: str, key: str) -> None:
         if self._mode.records_reads():
             self._reads.append((kind, key))

@@ -25,10 +25,11 @@ from cas.math.base.checkers import (
     _premise,
 )
 from cas.math.builder import CheckerRegistration, MathBuilder
+from cas.math.domcond import dom_condition
 from cas.math.judge import back_substitute
 from cas.math.linearform import linear_form, nonzero_condition
 from cas.syntax import term as T
-from cas.syntax.term import Term
+from cas.syntax.termpath import free_vars, subst
 from cas.workflow.command import SolvePayload
 
 if TYPE_CHECKING:
@@ -68,42 +69,36 @@ class SolveChecker:
         if not (
             _is_equation(expanded_content)
             and expanded_content.args[0] == payload.var
-            and expanded_content.args[1] == payload.solution
+            and expanded_content.args[1] == _expand(context, payload.solution)
         ):
             return Rejected(
                 Reason.FRAGMENT,
                 "conclusion is not that variable equal to that solution",
             )
+        solution = _expand(context, payload.solution)
+        if payload.var in free_vars(solution, include_heads=True):
+            return Rejected(Reason.FRAGMENT, "candidate must be independent of the solved variable")
+        if not self.ctx.coeff_ring.is_field:
+            return UnknownResult(Reason.FRAGMENT, "linear isolation requires field coefficients")
+        form = linear_form(
+            self.ctx,
+            T.plus(expanded_premise.args[0], T.neg(expanded_premise.args[1])),
+            payload.var,
+        )
+        if form.kind != "linear" or not isinstance(form.payload, tuple):
+            return UnknownResult(
+                Reason.FRAGMENT,
+                "a candidate root does not imply x equals that root; only linear isolation is supported",
+            )
+        condition = nonzero_condition(form.payload[0])
+        if payload.condition is not None and _expand(context, payload.condition) != condition:
+            return Rejected(Reason.FRAGMENT, "the declared solve condition is not the linear slope condition")
         frame = Assumptions(tuple(context.assumptions()))
         substitution = back_substitute(
-            self.ctx,
-            expanded_premise,
-            payload.var,
-            payload.solution,
-            frame,
+            self.ctx, expanded_premise, payload.var, solution, frame,
         )
-        extra: tuple[Term, ...] = ()
-        if payload.condition is not None:
-            form = linear_form(
-                self.ctx,
-                T.plus(
-                    expanded_premise.args[0],
-                    T.neg(expanded_premise.args[1]),
-                ),
-                payload.var,
-            )
-            if form.kind != "linear" or not isinstance(form.payload, tuple):
-                return Rejected(
-                    Reason.FRAGMENT,
-                    "the declared solve condition is not the linear slope condition",
-                )
-            expected = nonzero_condition(form.payload[0])
-            if payload.condition != expected:
-                return Rejected(
-                    Reason.FRAGMENT,
-                    "the declared solve condition is not the linear slope condition",
-                )
-            extra = (payload.condition,)
+        instance = subst(expanded_premise, {payload.var: solution})
+        extra = (condition, *dom_condition(self.ctx, instance))
         if isinstance(substitution.verdict, No):
             return RefutationRejected(substitution.verdict.evidence)
         if isinstance(substitution.verdict, Unknown):

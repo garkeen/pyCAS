@@ -1,31 +1,4 @@
-"""`commit`: the single trusted submission entry point.
-
-**`commit` is a boundary operation, not a gate on the inner loop.** It promotes
-a candidate conclusion into a dependable fact: it re-checks the evidence,
-collects conditions, attempts discharge, and atomically writes Step /
-Judgment / Requirement. A guard-free rewrite with no scope change does not need
-to pass through it at all: rule soundness was settled when the rule was
-admitted. Treating it as a mandatory gate on every computation step turns the
-kernel back into an interpreter and the CAS into a theorem prover.
-
-The ten-step flow:
-
-    1  check scope validity and term binding legality
-    2  check that premises are accessible in the current scope
-    3  call the checker
-    4  the checker verifies the conclusion and returns direct conditions
-    5  collect undischarged conditions inherited from premises
-    6  attempt to discharge conditions using the current context
-    7  Proved   -> record the discharge
-    8  Refuted  -> this application is inapplicable, refuse submission
-    9  Unknown  -> handle according to the guard policy
-    10 atomically write Step, Judgment, Requirement
-
-The typical case with no premises and no conditions degenerates to four steps
-(scope check -> checker call -> record conclusion -> atomic write), which is a
-provable subset of the full flow.
-"""
-
+"""Validate conditional propositions and publish one complete ledger batch."""
 
 from __future__ import annotations
 
@@ -54,15 +27,14 @@ from cas.kernel.model import (
 from cas.kernel.services import KernelServices, NullServices
 from cas.kernel.store import KernelStore
 from cas.kernel.verdict import No, Reason, Refutation, Unknown
-from cas.syntax.term import Term
+from cas.syntax.term import Term, is_proposition
+from cas.syntax.termpath import well_scoped
 
 
 class GuardPolicy(Enum):
-    """Guard policy. How Unknown is handled is the one switch that may never be
-    turned off."""
-    REQUIRE_PROVED = "require_proved"        # automatic simplification default: undecided does not land
-    ALLOW_CONDITIONAL = "allow_conditional"  # explicit manual application: land with conditions
-    REQUEST_SPLIT = "request_split"          # ask for a case split
+    REQUIRE_PROVED = "require_proved"
+    ALLOW_CONDITIONAL = "allow_conditional"
+    REQUEST_SPLIT = "request_split"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +48,6 @@ class StepProposal:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedProposal:
-    """A proposal after kernel premise resolution.
-
-    Only the kernel creates this value. A checker receives resolved premises,
-    never caller-supplied premise propositions.
-    """
     scope: ScopeId
     evidence: Evidence
     premises: tuple[JudgmentId, ...]
@@ -88,10 +55,6 @@ class ResolvedProposal:
     guard_policy: GuardPolicy
     premise_propositions: tuple[Term, ...]
 
-
-# ---------------------------------------------------------------------------
-# Commit results: a closed hierarchy, so consumers must exhaust the branches
-# ---------------------------------------------------------------------------
 
 class CommitResult:
     __slots__ = ()
@@ -119,31 +82,21 @@ class Committed(CommitResult):
 
 @dataclass(frozen=True, slots=True)
 class Refused(CommitResult):
-    """The conclusion does not hold, a premise is inaccessible, or a condition
-    was refuted: this application is inapplicable."""
-
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
     refutation: Refutation | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class Undecided(CommitResult):
-    """Re-checking was undecided and the policy requires proof: nothing is
-    written, because an unverified candidate must not enter trusted reasoning."""
     reason: Reason = Reason.FRAGMENT
     detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class NeedsSplit(CommitResult):
-    """The policy requests a case split: hand the pending condition back to the
-    workflow to open branches."""
     conditions: tuple[Term, ...] = ()
 
-
-# ---------------------------------------------------------------------------
-# Commit
-# ---------------------------------------------------------------------------
 
 def commit(
     store: KernelStore,
@@ -154,24 +107,9 @@ def commit(
     mode: ExecutionMode | None = None,
     inherited_reads: ContextReadSet | None = None,
 ) -> CommitResult:
-    """The trusted boundary: a budget-exhausted computation is undecided.
-
-    Search layers (rule matching, definition expansion, simplification) raise
-    `BudgetExceeded` when their explicit budget runs out. That is a resource
-    limit, not a refutation, so it must leave through the
-    `Undecided(Reason.BUDGET)` exit instead of escaping as an exception past the
-    trusted boundary (an exception would bypass the three-valued result the rest
-    of the system reasons about).
-    """
     try:
         return _commit_checked(
-            store,
-            proposal,
-            context=context,
-            services=services,
-            discharge_checker_id=discharge_checker_id,
-            mode=mode,
-            inherited_reads=inherited_reads,
+            store, proposal, context, services, discharge_checker_id, mode, inherited_reads
         )
     except BudgetExceeded as error:
         return Undecided(Reason.BUDGET, f"budget exhausted during commit: {error}")
@@ -180,210 +118,174 @@ def commit(
 def _commit_checked(
     store: KernelStore,
     proposal: StepProposal,
-    context: TrackedContext | None = None,
-    services: KernelServices | None = None,
-    discharge_checker_id: str = "kernel.decide",
-    mode: ExecutionMode | None = None,
-    inherited_reads: ContextReadSet | None = None,
+    context: TrackedContext | None,
+    services: KernelServices | None,
+    discharge_checker_id: str,
+    mode: ExecutionMode | None,
+    inherited_reads: ContextReadSet | None,
 ) -> CommitResult:
     selected_mode = DEFAULT_MODE if mode is None else mode
-    selected_services: KernelServices = (
-        NullServices() if services is None else services)
-
-    # --- 1. scope validity and term binding legality ---
+    selected_services: KernelServices = NullServices() if services is None else services
     try:
         store.scopes.get(proposal.scope)
     except KeyError:
         return Refused(Reason.FRAGMENT, f"scope does not exist: {proposal.scope}")
-    # A local symbol must not leak into a conclusion outside its scope: a
-    # symbol introduced in a scope (declaration or definition left-hand side)
-    # is meaningful only in that scope and its descendants.
-    for prop in proposal.conclusions:
-        escaped = store.scopes.escapes(proposal.scope, prop)
-        if escaped:
-            return Refused(Reason.FRAGMENT,
-                           f"local symbol escapes into this scope's conclusion: {escaped!r}")
-    ctx = TrackedContext(store.scopes, selected_services, proposal.scope, selected_mode) \
-        if context is None else context
+    if not isinstance(proposal.guard_policy, GuardPolicy):
+        return Refused(Reason.FRAGMENT, "invalid guard policy")
+    if not proposal.conclusions:
+        return Refused(Reason.FRAGMENT, "a submission needs a proposition")
+    if context is not None and not context.matches(store.scopes, selected_services, proposal.scope):
+        return Refused(Reason.FRAGMENT, "verification context does not match the submission")
+    ctx = TrackedContext(store.scopes, selected_services, proposal.scope, selected_mode)
+    for proposition in proposal.conclusions:
+        if not is_proposition(proposition) or not well_scoped(proposition):
+            return Refused(Reason.FRAGMENT, "conclusion is not a well-bound proposition")
+        if store.scopes.escapes(proposal.scope, proposition):
+            return Refused(Reason.FRAGMENT, "a local symbol escapes in the conclusion")
+    if not selected_services.supports_scope(proposal.scope):
+        return Undecided(Reason.FRAGMENT, "the mathematical services do not interpret this scope's declarations")
 
-    # --- 2. premise visibility (a child conclusion may not be used upward;
-    #        sibling branches cannot see each other) ---
     inherited: list[RequirementId] = []
     premise_props: list[Term] = []
-    for pid in proposal.premises:
+    for identifier in proposal.premises:
         try:
-            pj = store.get_judgment(pid)
+            premise = store.get_judgment(identifier)
         except KeyError:
-            return Refused(Reason.FRAGMENT, f"premise does not exist: {pid}")
-        if not store.scopes.is_visible(pj.scope, proposal.scope):
-            return Refused(Reason.FRAGMENT,
-                           f"premise {pid} is not visible in scope {proposal.scope}")
-        inherited.extend(pj.requirements)
-        premise_props.append(pj.proposition)
-    # The checker sees only the kernel-resolved premise propositions. The
-    # public proposal remains unchanged and carries no trusted premise data.
+            return Refused(Reason.FRAGMENT, f"premise does not exist: {identifier}")
+        if not store.scopes.is_visible(premise.scope, proposal.scope):
+            return Refused(Reason.FRAGMENT, "premise is outside the submission scope")
+        inherited.extend(premise.requirements)
+        premise_props.append(premise.proposition)
+    inherited = list(dict.fromkeys(inherited))
     resolved = ResolvedProposal(
-        scope=proposal.scope,
-        evidence=proposal.evidence,
-        premises=proposal.premises,
-        conclusions=proposal.conclusions,
-        guard_policy=proposal.guard_policy,
-        premise_propositions=tuple(premise_props),
+        proposal.scope, proposal.evidence, proposal.premises, proposal.conclusions,
+        proposal.guard_policy, tuple(premise_props),
     )
-
-    # --- 3. checker ---
     checker = store.checkers.get(proposal.evidence.checker_id)
     if checker is None:
-        return Undecided(Reason.FRAGMENT,
-                         f"checker not registered: {proposal.evidence.checker_id}")
-
+        return Undecided(Reason.FRAGMENT, f"checker not registered: {proposal.evidence.checker_id}")
     result = checker.check(resolved, ctx, selected_services)
     if isinstance(result, RefutationRejected):
-        return Refused(
-            result.reason,
-            result.detail,
-            refutation=result.refutation,
-        )
+        return Refused(result.reason, result.detail, result.refutation)
     if isinstance(result, Rejected):
         return Refused(result.reason, result.detail)
     if isinstance(result, UnknownResult):
         return Undecided(result.reason, result.detail or "conclusion not re-checked")
     if not isinstance(result, Accepted):
         raise TypeError("checker returned an unsupported result")
-    direct = result.direct_requirements
 
-    # --- 5/6. condition collection and discharge attempt (Proved / Refuted /
-    #          Unknown) ---
-    proved_terms: list[Term] = []
-    for term in direct:
-        verdict = ctx.decide(term)
-        if verdict.is_yes():
-            proved_terms.append(term)
-        elif isinstance(verdict, No):
-            return Refused(
-                Reason.GUARDED,
-                f"condition refuted: {term!r}; {verdict.evidence.detail}",
-                refutation=verdict.evidence,
-            )
-        else:
-            if not isinstance(verdict, Unknown):
-                raise TypeError("decision service returned a non-decision verdict")
-            if proposal.guard_policy is GuardPolicy.REQUIRE_PROVED:
-                return Undecided(
-                    verdict.reason,
-                    f"condition undecided, REQUIRE_PROVED refuses to land: {term!r}",
-                )
-            if proposal.guard_policy is GuardPolicy.REQUEST_SPLIT:
-                return NeedsSplit((term,))
+    required: dict[Term, list[RequirementId]] = {}
+    for requirement_id in inherited:
+        if store.is_refuted(requirement_id, proposal.scope):
+            return Refused(Reason.GUARDED, "an inherited condition has been refuted")
+        requirement = store.get_requirement(requirement_id)
+        required.setdefault(requirement.proposition, []).append(requirement_id)
+    for condition in result.direct_requirements:
+        required.setdefault(condition, [])
+    for proposition in proposal.conclusions:
+        definedness = selected_services.definedness(proposition, proposal.scope)
+        if definedness is None:
+            return Undecided(Reason.FRAGMENT, "definedness analysis unavailable")
+        for condition in definedness:
+            required.setdefault(condition, [])
 
-    for rid in inherited:
-        if store.is_refuted(rid, proposal.scope):
-            return Refused(Reason.GUARDED, f"premise condition already refuted: {rid}")
+    dependencies: dict[Term, tuple[Term, ...]] = {}
+    pending = list(required)
+    while pending:
+        condition = pending.pop()
+        if condition in dependencies:
+            continue
+        if not is_proposition(condition) or not well_scoped(condition):
+            return Refused(Reason.FRAGMENT, "checker produced an invalid condition")
+        if store.scopes.escapes(proposal.scope, condition):
+            return Refused(Reason.FRAGMENT, "a local symbol escapes in a condition")
+        definedness = selected_services.definedness(condition, proposal.scope)
+        if definedness is None:
+            return Undecided(Reason.FRAGMENT, "condition definedness unavailable")
+        dependencies[condition] = definedness
+        for prerequisite in definedness:
+            required.setdefault(prerequisite, [])
+            if prerequisite not in dependencies:
+                pending.append(prerequisite)
 
-    # --- 10. atomic write ---
-    step_id = store.new_step_id()
+    proved: set[Term] = set()
+    for condition, identifiers in required.items():
+        verdict = ctx.decide(condition)
+        if isinstance(verdict, No):
+            return Refused(Reason.GUARDED, f"condition refuted: {condition!r}", verdict.evidence)
+        if verdict.is_yes() or any(store.is_discharged(rid, proposal.scope) for rid in identifiers):
+            proved.add(condition)
+            continue
+        if not isinstance(verdict, Unknown):
+            raise TypeError("decision service returned an unsupported verdict")
+        if proposal.guard_policy is GuardPolicy.REQUIRE_PROVED:
+            return Undecided(verdict.reason, f"condition undecided: {condition!r}")
+        if proposal.guard_policy is GuardPolicy.REQUEST_SPLIT:
+            return NeedsSplit((condition,))
+
+    closed: set[Term] = set()
+    while True:
+        newly_closed = {term for term in proved - closed if all(dep in closed for dep in dependencies[term])}
+        if not newly_closed:
+            break
+        closed.update(newly_closed)
+    unresolved = tuple(term for term in required if term not in closed)
+    if unresolved and proposal.guard_policy is GuardPolicy.REQUIRE_PROVED:
+        return Undecided(Reason.GUARDED, "condition support is not closed")
+    if unresolved and proposal.guard_policy is GuardPolicy.REQUEST_SPLIT:
+        return NeedsSplit(unresolved)
 
     direct_ids: dict[Term, RequirementId] = {}
-    all_req = list(inherited)
-    for t in direct:
-        rid = store.new_requirement_id()
-        store.put_requirement(Requirement(
-            id=rid, scope=proposal.scope, proposition=t,
-            introduced_by=step_id, reason=RequirementReason.RULE_GUARD))
-        direct_ids[t] = rid
-        all_req.append(rid)
-    # A conclusion depends on all direct and inherited conditions; whether they
-    # are discharged is a separate matter (discharge does not modify the
-    # original conclusion, it only makes queries report direct applicability).
-    carried = tuple(inherited) + tuple(direct_ids[t] for t in direct)
-
-    jids: list[JudgmentId] = []
-    for prop in proposal.conclusions:
-        jid = store.new_judgment_id()
-        store.put_judgment(Judgment(
-            id=jid, scope=proposal.scope, proposition=prop,
-            requirements=carried, producer=step_id))
-        jids.append(jid)
-    step_reads = ctx.read_set(dedupe=not selected_mode.raw_reads())
-    if inherited_reads is not None:
-        # Inherited read dependencies, e.g. a branch merge whose conclusion
-        # depends on facts read in each branch. Merging and deduplication
-        # follow read_set; granularity is still decided by the mode.
-        step_reads = inherited_reads.merge(step_reads)
-    store.put_step(Step(id=step_id, scope=proposal.scope,
-                        premises=tuple(proposal.premises),
-                        conclusions=tuple(jids),
-                        evidence=proposal.evidence,
-                        # Read dependencies come from the TrackedContext record;
-                        # granularity follows the mode, so audit keeps every
-                        # occurrence.
-                        reads=step_reads))
-
-    # --- 7. Proved -> record the discharge basis ---
-    # interactive defers discharge registration: conditions are still decided
-    # above (otherwise a refuted guard would slip through), but a proved
-    # condition is not recorded as a Discharge yet.
-    if not selected_mode.defers_discharge():
-        for term in proved_terms:
-            decided = _commit_decided(
-                store, proposal.scope, term, ctx, selected_services,
-                discharge_checker_id, selected_mode,
-            )
-            if decided is not None:
-                store.add_discharge(Discharge(
-                    requirement=direct_ids[term],
-                    by_judgment=decided,
-                    scope=proposal.scope,
-                ))
-
-    # 10d. refutation registration: when a conclusion is exactly the negation
-    # of a pending condition, mark the original conclusion Inapplicable
-    # without deleting it.
-    for jid, prop in zip(jids, proposal.conclusions):
-        _record_refutations(store, proposal.scope, prop, jid)
-
-    return Committed(step=step_id, judgments=tuple(jids),
-                     requirements=tuple(all_req), reads=step_reads)
-
-
-def _commit_decided(
-    store: KernelStore,
-    scope: ScopeId,
-    proposition: Term,
-    ctx: TrackedContext,
-    services: KernelServices,
-    checker_id: str,
-    mode: ExecutionMode | None = None,
-) -> JudgmentId | None:
-    """Land an already-decided condition through the same protocol, to serve as
-    a discharge basis.
-
-    Recursion-safe: the decide checker accepts no direct conditions, so it can
-    never trigger discharge again.
-    """
-    if store.checkers.get(checker_id) is None:
-        return None
-    prop = StepProposal(scope=scope, premises=(), conclusions=(proposition,),
-                        evidence=Evidence(checker_id, proposition),
-                        guard_policy=GuardPolicy.REQUIRE_PROVED)
-    res = commit(store, prop, context=ctx, services=services,
-                 discharge_checker_id=checker_id, mode=mode)
-    return res.judgments[0] if isinstance(res, Committed) else None
-
-
-def _record_refutations(
-    store: KernelStore,
-    scope: ScopeId,
-    proposition: Term,
-    jid: JudgmentId,
-) -> None:
-    """When a conclusion is the syntactic negation of a pending condition,
-    register a refutation. Syntactic negation only, no semantic guessing.
-
-    Candidates come from the store's reverse index over requirement
-    propositions, so no scan over the whole ledger happens per commit.
-    """
-    for rid in store.requirements_refuted_by(proposition):
-        if store.is_discharged(rid, scope):
+    for condition, identifiers in required.items():
+        if not identifiers:
+            requirement_id = store.new_requirement_id()
+            direct_ids[condition] = requirement_id
+            identifiers.append(requirement_id)
+    carried = tuple(identifier for identifiers in required.values() for identifier in identifiers)
+    judgments: list[Judgment] = []
+    steps: list[Step] = []
+    discharges: list[Discharge] = []
+    discharge_checker = store.checkers.get(discharge_checker_id)
+    for condition in required:
+        if condition not in closed:
             continue
-        store.add_refutation(rid, jid)
+        discharge_ids = tuple(rid for rid in required[condition] if not store.is_discharged(rid, proposal.scope))
+        if not discharge_ids:
+            continue
+        if discharge_checker is None:
+            return Undecided(Reason.FRAGMENT, "condition proof checker is not registered")
+        evidence = Evidence(discharge_checker_id, condition)
+        proof = ResolvedProposal(
+            proposal.scope, evidence, (), (condition,), GuardPolicy.REQUIRE_PROVED, (),
+        )
+        checked = discharge_checker.check(proof, ctx, selected_services)
+        if not isinstance(checked, Accepted) or checked.direct_requirements:
+            return Undecided(Reason.GUARDED, "a condition proof could not be independently closed")
+        proof_step = store.new_step_id()
+        proof_judgment = store.new_judgment_id()
+        judgments.append(Judgment(proof_judgment, proposal.scope, condition, (), proof_step))
+        steps.append(Step(proof_step, proposal.scope, (), (proof_judgment,), evidence, ctx.read_set()))
+        discharges.extend(Discharge(rid, proof_judgment, proposal.scope) for rid in discharge_ids)
+
+    step_id = store.new_step_id()
+    requirements = tuple(
+        Requirement(identifier, proposal.scope, term, step_id, RequirementReason.RULE_GUARD)
+        for term, identifier in direct_ids.items()
+    )
+    conclusion_ids: list[JudgmentId] = []
+    for proposition in proposal.conclusions:
+        identifier = store.new_judgment_id()
+        judgments.append(Judgment(identifier, proposal.scope, proposition, carried, step_id))
+        conclusion_ids.append(identifier)
+    reads = ctx.read_set(dedupe=not selected_mode.raw_reads())
+    if inherited_reads is not None:
+        reads = inherited_reads.merge(reads)
+    steps.append(Step(step_id, proposal.scope, proposal.premises, tuple(conclusion_ids), proposal.evidence, reads))
+    refutations = tuple(
+        (rid, identifier)
+        for identifier, proposition in zip(conclusion_ids, proposal.conclusions)
+        for rid in store.requirements_refuted_by(proposition)
+        if not unresolved
+    )
+    store.publish(requirements, tuple(judgments), tuple(steps), tuple(discharges), refutations)
+    return Committed(step_id, tuple(conclusion_ids), carried, reads)

@@ -190,40 +190,13 @@ class DiffChecker:
                 f"cannot differentiate with respect to a defined symbol: {x}",
             )
         if _is_piecewise(pred):
-            from cas.math.piecewise import branches, fold_nested
-
-            if not _is_piecewise(content):
-                return UnknownResult(
-                    Reason.FRAGMENT,
-                    "piecewise source with a non-piecewise result: no independent channel",
-                )
-            source_branches = branches(fold_nested(pred))
-            result_branches = branches(fold_nested(content))
-            if len(source_branches) != len(result_branches):
-                return UnknownResult(
-                    Reason.FRAGMENT,
-                    "different branch counts; not pretending to refute",
-                )
-            for (source_value, source_condition), (
-                result_value,
-                result_condition,
-            ) in zip(source_branches, result_branches):
-                if source_condition != result_condition:
-                    return UnknownResult(Reason.FRAGMENT, "branch conditions differ")
-                result = _cross_diff(
-                    self.ctx,
-                    source_value,
-                    result_value,
-                    x,
-                )
-                if isinstance(result, No):
-                    return RefutationRejected(result.evidence)
-                if isinstance(result, Unknown):
-                    return UnknownResult(
-                        Reason.FRAGMENT,
-                        "this branch is outside the projection domain",
-                    )
-            return _accepted(self.ctx, proposal, context)
+            # Branch-by-branch agreement does not establish the junction points,
+            # so a piecewise derivative claim has no sound channel here.
+            return UnknownResult(
+                Reason.GUARDED,
+                "piecewise differentiation needs junction-point regularity, "
+                "which has no representation here",
+            )
         result = _cross_diff(self.ctx, pred, content, x)
         if isinstance(result, No):
             return RefutationRejected(result.evidence)

@@ -68,30 +68,23 @@ def _representative_order(term: Term) -> tuple[int, int, SortKey]:
 
 
 class _Union:
-    """Union-find over terms keyed by structural hash.
-
-    Equality is structural, so the key is the structural hash: a query term and
-    the same term written inside a ledger fact are two objects but one element,
-    and the closure has to treat them as one. The representative of a class is
-    chosen by `_representative_order`, which reads the term's shape.
-    """
+    """Union-find with collision-safe structural keys."""
 
     def __init__(self) -> None:
-        self._up: dict[int, Term] = {}
+        self._up: dict[Term, Term] = {}
 
     def add(self, term: Term) -> None:
-        if term._sh not in self._up:
-            self._up[term._sh] = term
+        self._up.setdefault(term, term)
 
     def find(self, term: Term) -> Term:
         self.add(term)
         path: list[Term] = []
         current = term
-        while self._up[current._sh] is not current:
+        while self._up[current] is not current:
             path.append(current)
-            current = self._up[current._sh]
+            current = self._up[current]
         for item in path:
-            self._up[item._sh] = current
+            self._up[item] = current
         return current
 
     def union(self, left: Term, right: Term) -> bool:
@@ -101,22 +94,39 @@ class _Union:
             return False
         if _representative_order(right_root) < _representative_order(left_root):
             left_root, right_root = right_root, left_root
-        self._up[right_root._sh] = left_root
+        self._up[right_root] = left_root
         return True
 
 
-def _congruence(union: _Union, terms: list[Term]) -> None:
+def pointwise_lift_allowed(ctx: MathContext, term: Term, index: int) -> bool:
+    from cas.math.decls import LiftPolicy
+
+    if not isinstance(term, T.Expr) or not 0 <= index < len(term.args):
+        return False
+    if any(isinstance(argument, T.Bound) for argument in term.args):
+        return False
+    if term.head.name in ("Plus", "Times", "Eq", "Ne", "Lt", "Le", "Gt", "Ge"):
+        return True
+    if term.head.name == "Power":
+        return len(term.args) == 2 and index == 0 and isinstance(term.args[1], T.Int)
+    return ctx.lift_policy(term.head.name) is LiftPolicy.CONGRUENT
+
+
+def _congruence(ctx: MathContext, union: _Union, terms: list[Term]) -> None:
     """Merge terms whose head and argument classes agree."""
     changed = True
     while changed:
         changed = False
-        signatures: dict[tuple[int, tuple[int, ...]], Term] = {}
+        signatures: dict[tuple[T.Sym, tuple[Term, ...]], Term] = {}
         for term in terms:
             if not isinstance(term, T.Expr):
                 continue
             key = (
-                term.head._h,
-                tuple(union.find(argument)._h for argument in term.args),
+                term.head,
+                tuple(
+                    union.find(argument) if pointwise_lift_allowed(ctx, term, index) else argument
+                    for index, argument in enumerate(term.args)
+                ),
             )
             previous = signatures.get(key)
             if previous is None:
@@ -126,6 +136,7 @@ def _congruence(union: _Union, terms: list[Term]) -> None:
 
 
 def _representative_rewrite(
+    ctx: MathContext,
     union: _Union,
     terms: list[Term],
     term: Term,
@@ -159,7 +170,10 @@ def _representative_rewrite(
             if representative is not current:
                 rebuilt = values[representative._h]
             elif isinstance(current, T.Expr):
-                arguments = tuple(values[argument._h] for argument in current.args)
+                arguments = tuple(
+                    values[argument._h] if pointwise_lift_allowed(ctx, current, index) else argument
+                    for index, argument in enumerate(current.args)
+                )
                 # `is`, not `==`: `values` holds the objects this pass produced,
                 # and the point of the test is "did this node get a new object",
                 # which is a question about the walk and not about structure.
@@ -211,11 +225,11 @@ def closure_decide(
     union = _Union()
     for fact in facts:
         union.union(fact.args[0], fact.args[1])
-    _congruence(union, terms)
+    _congruence(ctx, union, terms)
     if union.find(left) is union.find(right):
         return YES
-    normal_left = _representative_rewrite(union, terms, left)
-    normal_right = _representative_rewrite(union, terms, right)
+    normal_left = _representative_rewrite(ctx, union, terms, left)
+    normal_right = _representative_rewrite(ctx, union, terms, right)
     claim = T.mk(S("Eq"), (left, right))
     if normal_left is not left or normal_right is not right:
         verdict = identity_verdict(ctx, normal_left, normal_right)

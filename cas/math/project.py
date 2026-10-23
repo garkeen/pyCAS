@@ -140,7 +140,10 @@ def is_zero(hit: Projected) -> bool:
     """Let the producing domain decide element vanishing."""
 
     if hit.element is None:
-        return hit.domain.equal(hit.term, T.ZERO) is True
+        result = hit.domain.equal(hit.term, T.ZERO)
+        if result is None:
+            raise ValueError("a projected domain must decide equality for its members")
+        return result
     element = hit.element
     return hit.domain.element_is_zero(element)
 

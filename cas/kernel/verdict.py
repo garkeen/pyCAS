@@ -69,8 +69,11 @@ class Verdict:
 
     __slots__ = ()
 
+    def __bool__(self) -> bool:
+        raise TypeError("handle Yes, No, and Unknown explicitly")
+
     def is_yes(self) -> bool:
-        return self is YES
+        return isinstance(self, Yes)
 
     def is_no(self) -> bool:
         return isinstance(self, No)
