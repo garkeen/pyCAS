@@ -1,9 +1,19 @@
 """Runtime assembly: everything is explicit and nothing leaks between worlds."""
 
+import pytest
+
 from cas.foundation.ids import SymbolId
 from cas.language import sorts as S
+from cas.language.problems import ParameterMode
 from cas.language.signatures import StructuralHead
-from cas.runtime.bootstrap import Runtime, bootstrap, new_workspace
+from cas.runtime.bootstrap import (
+    Runtime,
+    bootstrap,
+    bootstrap_parameterized,
+    new_workspace,
+)
+from cas.semantics.bridge import ParameterPolynomialBridge
+from cas.semantics.request import Interpretation, Role
 from cas.workflow.workspace import Workspace
 
 
@@ -29,6 +39,54 @@ def test_bootstrap_wires_the_world_explicitly():
     assert runtime.checker.id == "calculus.derivative"
     assert runtime.store.stats()["judgments"] == 0
     assert runtime.signature.symbol_of(StructuralHead.PLUS) is not None
+    assert runtime.request.parameters == ()
+    assert runtime.request.target == runtime.variable
+    assert runtime.request.parameter_ring is None
+    assert runtime.request.parameter_mode is ParameterMode.SPECIFIED_VALUES
+    assert runtime.request.interpretation is Interpretation.FORMAL
+    assert runtime.request.role_of(runtime.variable) is Role.TARGET
+
+
+def test_parameterized_bootstrap_separates_roles():
+    runtime = bootstrap_parameterized()
+    parameter = runtime.request.parameters[0]
+    assert runtime.table.name_of(parameter) == "a"
+    assert runtime.variable not in runtime.request.parameters
+    assert runtime.ring.generators == (runtime.variable,)
+    assert set(runtime.ring.generators).isdisjoint(runtime.request.parameters)
+    assert runtime.request.target == runtime.variable
+    assert runtime.request.parameter_mode is ParameterMode.GENERIC_PARAMETERS
+    assert runtime.request.interpretation is Interpretation.PARAMETER_FAMILY
+    assert runtime.request.role_of(runtime.variable) is Role.TARGET
+    assert runtime.request.role_of(parameter) is Role.PARAMETER
+    assert runtime.frames.sort_of(runtime.frame.id, parameter) is S.REAL
+    assert isinstance(runtime.bridge, ParameterPolynomialBridge)
+    assert runtime.parent.ring is runtime.ring
+    assert runtime.differential.parent is runtime.parent
+    assert runtime.store.stats()["judgments"] == 0
+
+
+def test_multiple_parameters_keep_the_target_separate():
+    runtime = bootstrap_parameterized(("a", "b"))
+    assert len(runtime.request.parameters) == 2
+    assert runtime.ring.generators == (runtime.variable,)
+    for parameter in runtime.request.parameters:
+        assert runtime.frames.sort_of(runtime.frame.id, parameter) is S.REAL
+        assert runtime.request.role_of(parameter) is Role.PARAMETER
+    assert runtime.request.role_of(runtime.variable) is Role.TARGET
+
+
+def test_parameterized_bootstrap_validates_names():
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(())
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(("a", "a"))
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(("x",))
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(("Plus",))
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(("HasDerivative",))
 
 
 def test_separate_assemblies_share_no_state():

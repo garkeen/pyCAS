@@ -15,7 +15,7 @@ it is not displayed as a result.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cas.foundation.ids import (
     CandidateId,
@@ -40,14 +40,12 @@ from cas.language import propositions as Pr
 from cas.language import sorts as S
 from cas.language.problems import (
     Coverage,
-    ParameterMode,
     ProblemSpec,
     ResultLanguage,
 )
 from cas.math.calculus.differentiation.checker import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.semantics import elaborate
-from cas.semantics.bridge import to_polynomial, to_term
 from cas.syntax import term as T
 from cas.workflow.records import (
     Candidate,
@@ -66,7 +64,7 @@ if TYPE_CHECKING:
 class Workspace:
     """One session over an assembled runtime."""
 
-    def __init__(self, runtime: Runtime) -> None:
+    def __init__(self, runtime: Runtime[Any]) -> None:
         self._runtime = runtime
         self._objects = IdIssuer()
         self._versions = IdIssuer()
@@ -138,9 +136,7 @@ class Workspace:
                 None,
                 "this runtime differentiates with respect to x only",
             )
-        source_polynomial = to_polynomial(
-            runtime.ring, source.term, runtime.signature
-        )
+        source_polynomial = runtime.bridge.to_value(source.term)
         if source_polynomial is None:
             return DerivativeResult(
                 OperationStatus.UNSUPPORTED,
@@ -149,12 +145,8 @@ class Workspace:
                 None,
                 "the source is outside the polynomial fragment",
             )
-        candidate_term = to_term(
-            runtime.ring,
-            runtime.differential.deriv(source_polynomial),
-            runtime.signature,
-            runtime.table.name_of,
-            T.number,
+        candidate_term = runtime.bridge.to_term(
+            runtime.differential.deriv(source_polynomial)
         )
         if candidate_term is None:
             return DerivativeResult(
@@ -197,7 +189,7 @@ class Workspace:
                 target_sort=S.REAL,
                 region=None,
                 result_language=ResultLanguage.EXPRESSION,
-                parameter_mode=ParameterMode.SPECIFIED_VALUES,
+                parameter_mode=runtime.request.parameter_mode,
                 coverage=Coverage.ONE_VERIFIED,
             ),
             candidate_term,

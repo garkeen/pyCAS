@@ -11,10 +11,11 @@ Outside the fragment it returns `Unverified`, never a refutation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from cas.algebra.polynomial import PolynomialRing
+from cas.algebra.polynomial import Polynomial, PolynomialRing
 from cas.foundation.ids import SymbolId
 from cas.kernel.evidence import (
     CheckOutcome,
@@ -58,12 +59,19 @@ class DerivativeChecker(Generic[E]):
         ring: PolynomialRing[E],
         signature: LanguageSignature,
         vocabulary: DerivativeVocabulary,
+        to_value: Callable[[T.Term], Polynomial[E] | None] | None = None,
     ) -> None:
         if len(ring.generators) != 1:
             raise TypeError("the derivative fragment is univariate")
         self._ring = ring
         self._signature = signature
         self._vocabulary = vocabulary
+        self._to_value = to_value
+
+    def _convert(self, term: T.Term) -> Polynomial[E] | None:
+        if self._to_value is not None:
+            return self._to_value(term)
+        return to_polynomial(self._ring, term, self._signature)
 
     def check(self, request: CheckRequest) -> CheckOutcome:
         for conclusion in request.conclusions:
@@ -94,10 +102,8 @@ class DerivativeChecker(Generic[E]):
                     Reason.FRAGMENT,
                     "the claim is not stated in this ring's variable",
                 )
-            source = to_polynomial(self._ring, claim.source, self._signature)
-            candidate = to_polynomial(
-                self._ring, claim.candidate, self._signature
-            )
+            source = self._convert(claim.source)
+            candidate = self._convert(claim.candidate)
             if source is None or candidate is None:
                 return Unverified(
                     Reason.FRAGMENT,

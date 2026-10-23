@@ -13,6 +13,8 @@ operators are printed by their display name.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.syntax import term as T
 
@@ -143,16 +145,31 @@ class _Printer:
                 parts.append("+ " + text)
         return " ".join(parts), _PLUS
 
+    def _factors(self, term: T.Apply) -> Iterator[T.Term]:
+        """Flatten nested products for display; multiplication is associative."""
+        for argument in term.arguments:
+            nested = None
+            if isinstance(argument, T.Apply) and isinstance(
+                argument.operator, T.SymbolRef
+            ):
+                nested = self._signature.head_of(argument.operator.symbol_id)
+            if nested is StructuralHead.TIMES:
+                assert isinstance(argument, T.Apply)
+                yield from self._factors(argument)
+            else:
+                yield argument
+
     def _times(self, term: T.Apply) -> _Rendered:
         if len(term.arguments) < 2:
             return self._call(term)
-        first = term.arguments[0]
+        arguments = tuple(self._factors(term))
+        first = arguments[0]
         negative_one = isinstance(first, T.IntLit) and first.value == -1
         start = 1 if negative_one else 0
-        remaining = len(term.arguments) - start
+        remaining = len(arguments) - start
         minimum = _TIMES if negative_one else _TIMES + 1
         parts: list[str] = []
-        for argument in term.arguments[start:]:
+        for argument in arguments[start:]:
             if (
                 isinstance(argument, T.IntLit)
                 and argument.value == 1

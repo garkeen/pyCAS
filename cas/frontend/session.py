@@ -8,7 +8,7 @@ kernel. Undo and redo move the visible revision; the ledger is untouched.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cas.foundation.ids import ObjectVersionId
 from cas.frontend.errors import SessionError
@@ -41,7 +41,7 @@ _HELP = """commands:
 class Session:
     """A labelled, focused view over a Workspace."""
 
-    def __init__(self, runtime: Runtime) -> None:
+    def __init__(self, runtime: Runtime[Any]) -> None:
         self._runtime = runtime
         self.workspace = Workspace(runtime)
         self._labels: dict[ObjectVersionId, str] = {}
@@ -51,7 +51,7 @@ class Session:
         self.closed = False
 
     @property
-    def runtime(self) -> Runtime:
+    def runtime(self) -> Runtime[Any]:
         return self._runtime
 
     @property

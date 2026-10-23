@@ -10,7 +10,7 @@
 v5 的新层（foundation / syntax / language / algebra / semantics / kernel / 求导 /
 workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码树已全部删除。
 全库 `mypy --strict cas`、`ruff`、`compileall` 与测试均转绿。当前唯一的数学能力是
-Q 上的单变量多项式求导，其余数学层将按 v5 架构重新落地。
+Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数学层将按 v5 架构重新落地。
 
 ### 已完成
 
@@ -35,20 +35,41 @@ Q 上的单变量多项式求导，其余数学层将按 v5 架构重新落地�
 | semantics | `symbols.py` / `frames.py`：符号表；不可变 World/Frame，祖先可见、新鲜性、逃逸检查、别名环拒绝 |
 | semantics | `definitions.py`：唯一自动代换通道，展开到不动点，预算出口 `DefinitionError` |
 | semantics | `bridge.py`：Term ↔ 多项式显式片段；片段外返回 None，不猜表示 |
+| semantics | `request.py`：`AlgebraRequest` 固定系数 parent、参数环、参数、目标与参数模式；角色属于请求，不属于符号 |
+| semantics | `bridge.py`：项 ↔ 多项式元素；新增参数桥，参数映射到系数环生成元、目标映射到外层生成元 |
 | semantics | `differential.py`：`DifferentialStructure` 把 parent 与选定导子显式配对 |
 | semantics | `elaborate.py`：先展开别名再定型/发行命题，存下的命题 alias-free |
 | kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；Checker 协议与四种 outcome |
-| kernel | `store.py`：唯一原子写入 `publish`；support 传递闭包；显式 `discharge` 带环检测；适用性查询 |
+| kernel | `store.py`：唯一原子写入 `_publish`（仅 commit/discharge 调用）；support 传递闭包；显式 `discharge` 带环检测；适用性查询 |
 | kernel | `commit.py`：实际验证规格必须等于请求；继承义务 + 新义务受同一 ConditionPolicy；一次整批发行 |
 | math | `differentiation/specification.py`：`HasDerivative(region, f, x, g)` 词表与解析 |
 | math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative` |
 | math | `differentiation/checker.py`：证书逐项匹配；只有全域可证；片段外 Unverified；错误候选 Refuted 带见证 |
 | workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图 |
-| runtime | `bootstrap.py`：显式装配 Q、K[x]、选定导子、HasDerivative 词表与 checker、`x : Real`、账本 |
+| runtime | `bootstrap.py`：显式装配 Q[x]（无参数）与 Q[a…][x]（形式参数作为系数）；`bootstrap_parameterized` 把参数角色固定为目标之外的系数生成元 |
 | frontend | `parser.py`：文本 → Term，名称解析到稳定 SymbolId，结构 head 驱动，无化简、无数学语义 |
 | frontend | `pprint.py`：可读形式 + 全应用 source 形式；source 对可解析项逐项往返，binder/自由索引/非符号算子显式拒答 |
 | frontend | `session.py`：对象标签、焦点、intake/diff/show/list/undo/redo；只经 Workspace 与 kernel；旧 `cas/api.py` 已删除，Session 是唯一前端门面 |
 | frontend | `repl.py`：逐行 REPL，仅分派与打印；前端错误报告，诚实拒答仍是结果 |
+
+### 参数域与系数域（首个切片）
+
+参数符号与目标变量的角色现在由 `AlgebraRequest` 显式固定，而不是由符号名或全局域猜测：
+
+- `AlgebraRequest`（`semantics/request.py`）携带系数 parent、参数环、参数元组、目标、
+  `ParameterMode` 与 `Interpretation`；目标与参数必须不相交，参数环必须扩展系数
+  parent，且其生成元必须恰好是声明的参数。角色是请求局部的：同一个符号可以在另一个
+  请求中成为目标。
+- `bootstrap_parameterized(("a",))` 装配 Q[a][x]：`a` 是系数参数，`x` 是目标；
+  `ParameterPolynomialBridge` 把参数映射到系数环生成元、目标映射到外层生成元。
+  `DerivativeChecker` 与 `Workspace` 使用同一个桥，因此验证与候选计算看到同一
+  角色划分。
+- 已支持 `a*x^2 → 2*a*x`、参数常量 `a → 0` 的验证；`a` 不作为求导目标
+  （Workspace 拒绝），`1/a` 在多项式片段外诚实拒答。问题规格记录
+  `GenericParameters` 模式。
+- 尚未实现：参数特化、局部化/异常集、`AllParameterValues` 覆盖、参数关系与
+  参数分支；当前只承诺形式参数作为多项式系数的泛参数结果，不声称对所有参数值
+  成立。
 
 ### 第一条纵线：已贯通
 
@@ -65,20 +86,22 @@ Q 上的单变量多项式求导，其余数学层将按 v5 架构重新落地�
 CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
 v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-新套件共 394 个用例：
+新套件共 425 个用例：
 
-- `tests/unit`（含参数化展开，363 个）：ids、term、binding、sorts、signatures、typing、
+- `tests/unit`（含参数化展开，388 个）：ids、term、binding、sorts、signatures、typing、
   propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
-  symbols、frames、definitions、bridge、differential、elaborate；
+  symbols、frames、definitions、bridge、differential、elaborate、algebra request；
   evidence、store、commit；specification、verify、differentiation checker；
-  bootstrap、workspace；parser、pprint、session、repl。
-- `tests/integration`（9）：纵线端到端与前端纵线。intake 不产生 Judgment；一次发行
-  一条判断；inference/certificate 与请求逐项一致；undo 不回滚账本；片段外零写入；
-  二阶导是新判断；文本经 parser/session 走到同一 `HasDerivative` 验证边界。
-- `tests/property`（22，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
+  bootstrap、workspace；parser、pprint、session、repl；参数桥与参数 checker。
+- `tests/integration`（13）：纵线端到端、前端纵线与参数化纵线。intake 不产生
+  Judgment；一次发行一条判断；inference/certificate 与请求逐项一致；undo 不回滚
+  账本；片段外零写入；二阶导是新判断；文本经 parser/session 走到同一
+  `HasDerivative` 验证边界；参数化 Q[a][x] 的角色分离与验证。
+- `tests/property`（24，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
   绑定往返、shift 可逆、同时代换、Quote 惰性；
   Q/Z/K[x]/K(x) 的域与环定律、导子加性与 Leibniz；
-  随机求导的独立验证、checker 接受正确候选并以见证否证扰动候选、workspace 随机求导。
+  随机求导的独立验证、checker 接受正确候选并以见证否证扰动候选、workspace 随机求导；
+  随机参数化多项式的独立验证与 checker 接受/否证。
 
 前端行为另有明确覆盖：运算优先级/结合性、`1+1` 不化简、有理字面量折叠、名称稳定 id、
 链式比较与空输入等解析拒答（带列号）、可读打印、source 形式往返、标签唯一性、
@@ -134,8 +157,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 验收（本轮）
 
-- `python -m pytest -q`：394 passed。
-- `python -m mypy --strict cas`：49 source files，无问题（全库）。
+- `python -m pytest -q`：425 passed。
+- `python -m mypy --strict cas`：50 source files，无问题（全库）。
 - `python -m ruff check cas tests`：All checks passed。
 - `python -m compileall -q cas`：通过。
 
@@ -145,6 +168,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 - binder 的类型规则未建，`infer` 对 `Binder` 诚实返回 Unsupported；前端也还没有 binder
   的输入语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
+- 参数层只完成首个切片：形式参数作为系数生成元与 `GenericParameters` 记录；特化、
+  局部化/异常集、`AllParameterValues`、参数关系与参数分支尚未实现。
 - 义务清偿目前是显式操作；自动解析/决策服务（inspect/resolve）尚未接入。
 - 否定导致的 Blocked 变体尚未接入（需要 refutation 记录）。
 - 条件被否证时的 Rejected 分支依赖未来的判定服务；当前只区分未决条件的三种策略。
@@ -153,10 +178,12 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 下一步
 
-1. 语义层补齐：binder 类型规则与表面语法、声明 DSL、K(x) 桥接、义务自动清偿与否证。
-2. 新的数学层：按 v5 架构重新落地被删除的能力。先做 `elementary` 声明（函数/常数/
-   导数定律）与 K(x) 桥接，再按目标顺序推进积分、方程、实代数与 CAD。
-3. 前端下一层：声明/定义命令、对象引用嵌入公式、source/serialization 形式、
-   新的数学操作命令；每项都配「正例 + 诚实拒绝」行为测试。
-4. 测试随能力增长：每个新数学层同时补行为测试与种子固定的性质测试；不恢复按名字
+1. 参数层继续：参数特化、局部化/异常集、`AllParameterValues` 覆盖与参数关系；
+   每个新语义都配正例、拒答和性质测试。
+2. 语义层补齐：binder 类型规则与表面语法、声明 DSL、K(x) 桥接、义务自动清偿与否证。
+3. 新的数学层：按 v5 架构重新落地被删除的能力。先做 `elementary` 声明（函数/常数/
+   导数定律），再按目标顺序推进积分、方程、实代数与 CAD。
+4. 前端下一层：声明/定义命令、对象引用嵌入公式、参数化会话入口、source/serialization
+   形式、新的数学操作命令；每项都配「正例 + 诚实拒绝」行为测试。
+5. 测试随能力增长：每个新数学层同时补行为测试与种子固定的性质测试；不恢复按名字
    扫描的门禁。

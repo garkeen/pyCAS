@@ -11,8 +11,11 @@ so by returning `None` instead of inventing spines.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TypeVar, cast
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from fractions import Fraction
+from types import MappingProxyType
+from typing import Generic, Protocol, TypeVar, cast
 
 from cas.algebra.polynomial import Polynomial, PolynomialRing
 from cas.algebra.protocols import RationalEmbedding
@@ -21,6 +24,155 @@ from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.syntax import term as T
 
 E = TypeVar("E")
+
+
+class PolynomialBridge(Protocol[E]):
+    """An explicit conversion between terms and one polynomial ring."""
+
+    def to_value(self, term: T.Term) -> Polynomial[E] | None:
+        """Convert a term into a member of the target ring, or None."""
+
+    def to_term(self, value: Polynomial[E]) -> T.Term | None:
+        """Render a member as a term, or None without the structural heads."""
+
+
+@dataclass(frozen=True, slots=True)
+class SimplePolynomialBridge(Generic[E]):
+    """The bridge for a ring whose coefficients are base literals."""
+
+    ring: PolynomialRing[E]
+    signature: LanguageSignature
+    name_of: Callable[[SymbolId], str]
+    render_coefficient: Callable[[E], T.Term]
+
+    def to_value(self, term: T.Term) -> Polynomial[E] | None:
+        return to_polynomial(self.ring, term, self.signature)
+
+    def to_term(self, value: Polynomial[E]) -> T.Term | None:
+        return to_term(
+            self.ring,
+            value,
+            self.signature,
+            self.name_of,
+            self.render_coefficient,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterPolynomialBridge(Generic[E]):
+    """A bridge for `K[parameters][target]`.
+
+    Parameter symbols become constants of the target ring (elements of the
+    coefficient ring), while target symbols become target generators. The two
+    maps are explicit and disjoint; no symbol is guessed to be a coefficient or
+    a variable from its name or position.
+    """
+
+    ring: PolynomialRing[Polynomial[E]]
+    coefficient_ring: PolynomialRing[E]
+    parameters: Mapping[SymbolId, int]
+    signature: LanguageSignature
+    name_of: Callable[[SymbolId], str]
+    embed_rational: Callable[[Fraction], Polynomial[E]]
+    render_base: Callable[[E], T.Term]
+
+    def __post_init__(self) -> None:
+        parameters = MappingProxyType(dict(self.parameters))
+        object.__setattr__(self, "parameters", parameters)
+        if set(parameters) & set(self.ring.generators):
+            raise ValueError("a symbol cannot be both a target and a parameter")
+        for index in parameters.values():
+            if not 0 <= index < len(self.coefficient_ring.generators):
+                raise ValueError("a parameter index is outside the coefficient ring")
+
+    def to_value(self, term: T.Term) -> Polynomial[Polynomial[E]] | None:
+        target = self.ring
+        coefficient_ring = self.coefficient_ring
+        target_indices = {
+            symbol_id: index
+            for index, symbol_id in enumerate(target.generators)
+        }
+        parameters = dict(self.parameters)
+
+        def convert(current: T.Term) -> Polynomial[Polynomial[E]] | None:
+            if isinstance(current, T.IntLit):
+                return target.constant(
+                    self.embed_rational(Fraction(current.value))
+                )
+            if isinstance(current, T.RatLit):
+                return target.constant(self.embed_rational(current.value))
+            if isinstance(current, T.SymbolRef):
+                index = target_indices.get(current.symbol_id)
+                if index is not None:
+                    return target.generator(index)
+                parameter = parameters.get(current.symbol_id)
+                if parameter is not None:
+                    return target.constant(
+                        coefficient_ring.generator(parameter)
+                    )
+                return None
+            if not isinstance(current, T.Apply) or not isinstance(
+                current.operator, T.SymbolRef
+            ):
+                return None
+            head = self.signature.head_of(current.operator.symbol_id)
+            if head is StructuralHead.PLUS:
+                total = target.zero()
+                for argument in current.arguments:
+                    converted = convert(argument)
+                    if converted is None:
+                        return None
+                    total = target.add(total, converted)
+                return total
+            if head is StructuralHead.TIMES:
+                product = target.one()
+                for argument in current.arguments:
+                    converted = convert(argument)
+                    if converted is None:
+                        return None
+                    product = target.mul(product, converted)
+                return product
+            if head is StructuralHead.POWER:
+                if len(current.arguments) != 2:
+                    return None
+                base_term, exponent_term = current.arguments
+                if (
+                    not isinstance(exponent_term, T.IntLit)
+                    or exponent_term.value < 0
+                ):
+                    return None
+                base = convert(base_term)
+                return (
+                    None
+                    if base is None
+                    else target.pow(base, exponent_term.value)
+                )
+            return None
+
+        return convert(term)
+
+    def to_term(self, value: Polynomial[Polynomial[E]]) -> T.Term | None:
+        def render_coefficient(coefficient: Polynomial[E]) -> T.Term:
+            rendered = to_term(
+                self.coefficient_ring,
+                coefficient,
+                self.signature,
+                self.name_of,
+                self.render_base,
+            )
+            if rendered is None:
+                raise ValueError(
+                    "a coefficient cannot be rendered in this language"
+                )
+            return rendered
+
+        return to_term(
+            self.ring,
+            value,
+            self.signature,
+            self.name_of,
+            render_coefficient,
+        )
 
 
 def to_polynomial(
@@ -127,4 +279,10 @@ def to_term(
     return rendered[0] if len(rendered) == 1 else T.app(plus, *rendered)
 
 
-__all__ = ["to_polynomial", "to_term"]
+__all__ = [
+    "ParameterPolynomialBridge",
+    "PolynomialBridge",
+    "SimplePolynomialBridge",
+    "to_polynomial",
+    "to_term",
+]
