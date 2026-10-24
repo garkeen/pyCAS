@@ -89,8 +89,8 @@ runtime = bootstrap()
 session = Session(runtime)
 session.execute("expr F := x^3 - 3*x")
 result = session.differentiate(session.object("F"))
-assert result.verification is not None
-assert result.verification.judgment is not None
+assert result.verifications
+assert result.verifications[0].judgment is not None
 ```
 
 `Workspace` 也可以直接使用：`workspace.intake(term)` 只记录对象，
@@ -225,14 +225,15 @@ specification 种类、验证函数与可信依赖。可信依赖用 `BasisRef` 
 | `cas/language/` | Sort、结构签名、定型（含 binder）、Proposition、ProblemSpec、三值 Verdict、声明 DSL |
 | `cas/algebra/` | 结构协议、parent 描述、ℤ、ℚ、多项式环、有理函数域 |
 | `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、参数特化/覆盖、条件求值、注入的求导服务、Term↔元素桥（含参数系数）、微分结构 |
-| `cas/kernel/` | Judgment/Obligation/InferenceRecord、BasisRef/CheckerSpec、假设与矛盾规则、条件 checker、一致性状态、原子账本、commit、Blocked/适用性解析 |
-| `cas/math/` | 数学声明与独立 checker：多项式求导、data-only 初等函数声明与符号求导 |
-| `cas/workflow/` | 表达式对象、候选、验证关联、事件、revision、frame 作用域假设 |
+| `cas/kernel/` | Judgment/Obligation/InferenceRecord、BasisRef/CheckerSpec、假设与矛盾规则、条件 checker、一致性状态、原子账本、单批 commit（含 discharge）、Blocked/适用性解析 |
+| `cas/operations/` | 开放操作协议、`OperationRequest`/`MathematicalProposal`、`CheckerBinding` 与冻结注册表 |
+| `cas/math/` | 数学声明与独立 checker：多项式/初等求导的候选服务、操作构造器与特化 view |
+| `cas/workflow/` | 通用 `apply`、`OperationResult`、表达式对象、候选、验证关联、事件、revision、frame 作用域假设 |
 | `cas/runtime/` | 显式装配的 Runtime（Q[x]、参数化 Q[a…][x]、Q[x] 特化视图与初等函数片段）与 workspace 入口 |
 | `cas/frontend/` | parser、printer、Session、REPL |
 
-依赖方向：`syntax → language → algebra → semantics → kernel → workflow → frontend`；
-装配只在 `runtime/bootstrap.py` 发生，import 期不修改全局状态。
+依赖方向：`syntax → language → algebra → semantics → {kernel, operations} → math → workflow → runtime → frontend`；
+workflow 不导入具体 math 实现；装配只在 `runtime/bootstrap.py` 发生，import 期不修改全局状态。
 
 ---
 
