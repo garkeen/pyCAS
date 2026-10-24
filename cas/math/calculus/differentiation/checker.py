@@ -12,11 +12,9 @@ Outside the fragment it returns `Unverified`, never a refutation.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from cas.algebra.polynomial import Polynomial, PolynomialRing
-from cas.foundation.ids import SymbolId
 from cas.kernel.evidence import (
     CheckOutcome,
     CheckRequest,
@@ -27,6 +25,9 @@ from cas.kernel.evidence import (
 )
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature
+from cas.math.calculus.differentiation.certificate import (
+    DerivativeCertificate,
+)
 from cas.math.calculus.differentiation.specification import (
     DerivativeVocabulary,
     parse_has_derivative,
@@ -36,16 +37,6 @@ from cas.semantics.bridge import to_polynomial
 from cas.syntax import term as T
 
 E = TypeVar("E")
-
-
-@dataclass(frozen=True, slots=True)
-class DerivativeCertificate:
-    """The instance the caller asks to be verified."""
-
-    region: T.Term
-    source: T.Term
-    variable: SymbolId
-    candidate: T.Term
 
 
 class DerivativeChecker(Generic[E]):
@@ -123,4 +114,4 @@ class DerivativeChecker(Generic[E]):
         return Verified(tuple(request.conclusions))
 
 
-__all__ = ["DerivativeCertificate", "DerivativeChecker"]
+__all__ = ["DerivativeChecker"]

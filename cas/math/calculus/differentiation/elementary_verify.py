@@ -16,14 +16,14 @@ from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.math.calculus.differentiation import terms as B
-from cas.math.elementary.conditions import (
-    application_condition,
-    application_defined,
-)
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     FunctionSymbol,
     LawOrigin,
+)
+from cas.math.elementary.law_conditions import (
+    application_condition,
+    application_defined,
 )
 from cas.semantics.conditions import and_all
 from cas.semantics.services import (
@@ -160,9 +160,9 @@ class ElementaryVerifier:
         if not isinstance(inner, Derived):
             return inner
         if exponent.value == 0:
-            return self._result(
-                T.number(0), inner.defined, inner.defined
-            )
+            nonzero = B.ne_zero(self.signature, base)
+            defined = and_all(self.signature, inner.defined, nonzero)
+            return self._result(T.number(0), defined, defined)
         return self._result(
             B.times(
                 self.signature,
@@ -221,7 +221,11 @@ class ElementaryVerifier:
                 inner.defined,
                 self.signature,
             )
-            return self._result(T.number(0), defined, defined)
+            return self._result(
+                T.number(0),
+                and_all(self.signature, inner.condition, defined),
+                defined,
+            )
         outer = self.library.instantiate(
             law.body, law.argument, argument, self.signature
         )

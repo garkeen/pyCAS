@@ -19,6 +19,7 @@ from typing import Generic, TypeVar
 
 from cas.algebra.polynomial import Polynomial, UnivariatePolynomialRing
 from cas.algebra.protocols import Field
+from cas.foundation.ids import SymbolId
 
 E = TypeVar("E")
 
@@ -58,8 +59,12 @@ class RationalFunctionField(Field[RationalFunction[E]], Generic[E]):
     def polynomials(self) -> UnivariatePolynomialRing[E]:
         return self._polynomials
 
-    def contains(self, value: RationalFunction[E]) -> bool:
-        return value.owner is self
+    @property
+    def generators(self) -> tuple[SymbolId, ...]:
+        return self._polynomials.generators
+
+    def contains(self, value: object) -> bool:
+        return isinstance(value, RationalFunction) and value.owner is self
 
     def _own(self, value: RationalFunction[E]) -> None:
         if value.owner is not self:

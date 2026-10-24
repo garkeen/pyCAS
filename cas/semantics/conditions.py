@@ -746,7 +746,7 @@ def _power(
     exponent = arguments[1]
     if not isinstance(base, Fraction) or not isinstance(exponent, T.IntLit):
         return None
-    if exponent.value < 0 and base == 0:
+    if base == 0 and exponent.value <= 0:
         return None
     return base**exponent.value
 

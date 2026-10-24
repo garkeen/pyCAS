@@ -172,6 +172,14 @@ class KernelStore:
                 raise KernelError(
                     "an obligation proposition is not readable in its frame"
                 )
+            escaped = self.frames.escapes(
+                obligation.frame, obligation.proposition.term
+            )
+            if escaped:
+                raise KernelError(
+                    "an obligation proposition contains a symbol outside "
+                    "its frame"
+                )
         for judgment in judgments:
             self._require_frame(judgment.frame)
             owner = inference_of(judgment.inference)
@@ -197,6 +205,14 @@ class KernelStore:
             ):
                 raise KernelError(
                     "a judgment proposition is not readable in its frame"
+                )
+            escaped = self.frames.escapes(
+                judgment.frame, judgment.proposition.term
+            )
+            if escaped:
+                raise KernelError(
+                    "a judgment proposition contains a symbol outside "
+                    "its frame"
                 )
         seen_discharges: set[tuple[ObligationId, JudgmentId, FrameId]] = set()
         for discharge in discharges:
@@ -291,6 +307,22 @@ class KernelStore:
             seen.add(current)
             stack.extend(self.inference_of(current).premises)
         return frozenset(seen)
+
+    def find_obligation(
+        self, proposition: Proposition, frame: FrameId
+    ) -> ObligationId | None:
+        """An existing obligation with the same proposition in `frame`.
+
+        Propositions carry their meaning environment, so exact equality is the
+        semantic identity key for the current immutable-frame model.
+        """
+        for obligation in self._obligations.values():
+            if (
+                obligation.frame == frame
+                and obligation.proposition == proposition
+            ):
+                return obligation.id
+        return None
 
     def is_discharged(self, obligation: ObligationId, frame: FrameId) -> bool:
         """Whether a discharge performed in `frame` or an ancestor is visible."""
@@ -413,7 +445,7 @@ class KernelStore:
         self._consistency[frame] = state
         return state
 
-    def record_consistent_for_fragment(
+    def record_consistency_claim(
         self,
         frame: FrameId,
         fragment: str,
@@ -452,51 +484,6 @@ class KernelStore:
         state = ConsistentForFragment(fragment, evidence, basis)
         self._consistency[frame] = state
         return state
-
-    # --- discharge (an explicit kernel operation) ---
-
-    def discharge(
-        self,
-        obligation: ObligationId,
-        by_judgment: JudgmentId,
-        frame: FrameId,
-    ) -> Discharge:
-        """Record that `by_judgment` proves `obligation`, checked for cycles.
-
-        The proof must state exactly the obligation's proposition, be visible in
-        `frame`, and not itself depend — directly or transitively — on any
-        judgment that carries this obligation.
-        """
-        target = self._obligations.get(obligation)
-        if target is None:
-            raise KernelError(f"obligation does not exist: {obligation!r}")
-        proof = self._judgments.get(by_judgment)
-        if proof is None:
-            raise KernelError(f"judgment does not exist: {by_judgment!r}")
-        if proof.proposition != target.proposition:
-            raise KernelError("the proof states a different proposition")
-        if not self.frames.is_visible(proof.frame, frame):
-            raise KernelError("the proof is outside the discharge frame")
-        if not self.frames.is_visible(target.frame, frame):
-            raise KernelError("the obligation is outside the discharge frame")
-        if not self.applicability(by_judgment, frame).is_applicable():
-            raise KernelError(
-                "the discharging proof still has open conditions"
-            )
-        for used in self.support(by_judgment) | {by_judgment}:
-            if (
-                obligation in self._judgments[used].obligations
-                and not self.is_discharged(obligation, frame)
-            ):
-                raise KernelError(
-                    "cyclic discharge: the proof depends on the open obligation"
-                )
-        for known in self._discharges.get(obligation, ()):
-            if known.by_judgment == by_judgment and known.frame == frame:
-                raise KernelError("this discharge is already recorded")
-        discharge = Discharge(obligation, by_judgment, frame)
-        self._publish(discharges=(discharge,))
-        return discharge
 
     # --- size ---
 

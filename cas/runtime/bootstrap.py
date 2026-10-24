@@ -32,26 +32,36 @@ from cas.kernel.evidence import Checker, CheckerRegistry, CheckerSpec
 from cas.kernel.model import BasisKind, BasisRef, CertificateSchema
 from cas.kernel.store import KernelStore
 from cas.language import sorts as S
-from cas.language.decisions import Reason
 from cas.language.problems import ParameterMode
 from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.math.calculus.differentiation.checker import (
+from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
-    DerivativeChecker,
 )
+from cas.math.calculus.differentiation.checker import DerivativeChecker
 from cas.math.calculus.differentiation.elementary import (
     ElementaryDifferentiator,
 )
 from cas.math.calculus.differentiation.elementary_checker import (
-    ElementaryDerivativeCertificate,
     ElementaryDerivativeChecker,
 )
+from cas.math.calculus.differentiation.operation import (
+    DifferentiationOperation,
+)
+from cas.math.calculus.differentiation.services import (
+    ElementaryDerivativeService,
+    PolynomialDerivativeService,
+)
+from cas.math.calculus.differentiation.specialization_operation import (
+    SpecializationOperation,
+)
 from cas.math.calculus.differentiation.specification import DerivativeVocabulary
+from cas.math.calculus.differentiation.view import SpecializationView
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     build_elementary,
     default_elementary_source,
 )
+from cas.operations.registry import OperationRegistry
 from cas.semantics.bridge import (
     ParameterPolynomialBridge,
     PolynomialBridge,
@@ -60,92 +70,12 @@ from cas.semantics.bridge import (
 from cas.semantics.differential import DifferentialStructure, polynomial_structure
 from cas.semantics.frames import Declaration, Frame, FrameStore, World
 from cas.semantics.request import AlgebraRequest, Interpretation
-from cas.semantics.services import (
-    DerivationInvalid,
-    DerivationOutcome,
-    DerivationUnsupported,
-    DerivativeService,
-    Derived,
-)
+from cas.semantics.services import DerivativeService
 from cas.semantics.symbols import SymbolTable, standard_language
 from cas.syntax import term as T
 from cas.workflow.workspace import Workspace
 
 E = TypeVar("E")
-
-
-@dataclass(frozen=True, slots=True, eq=False)
-class SpecializationRuntime:
-    """The concrete `Q[x]` view used to specialize a parameter family.
-
-    A specialization is a new algebra request, not a field homomorphism: the
-    parameter ring disappears, and the target parent takes plain rational
-    coefficients. The checker is independent of the family checker, so a
-    specialized answer is verified in the specialized structure.
-    """
-
-    ring: UnivariatePolynomialRing[Fraction]
-    parent: Parent[Polynomial[Fraction]]
-    differential: DifferentialStructure[Polynomial[Fraction]]
-    bridge: SimplePolynomialBridge[Fraction]
-    checker: DerivativeChecker[Fraction]
-    request: AlgebraRequest
-
-
-@dataclass(frozen=True, slots=True)
-class PolynomialDerivativeService(Generic[E]):
-    """Candidate generation through a polynomial bridge and derivation."""
-
-    bridge: PolynomialBridge[E]
-    differential: DifferentialStructure[Polynomial[E]]
-    checker_id: str
-    specification_kind: str
-
-    def candidate(self, term: T.Term) -> DerivationOutcome:
-        value = self.bridge.to_value(term)
-        if value is None:
-            return DerivationUnsupported(
-                Reason.FRAGMENT,
-                "the source is outside the polynomial fragment",
-            )
-        rendered = self.bridge.to_term(self.differential.deriv(value))
-        if rendered is None:
-            return DerivationInvalid(
-                "the derivative cannot be rendered in this language"
-            )
-        return Derived(rendered)
-
-    def certificate(
-        self,
-        region: T.Term,
-        source: T.Term,
-        variable: SymbolId,
-        candidate: T.Term,
-    ) -> object:
-        return DerivativeCertificate(region, source, variable, candidate)
-
-
-@dataclass(frozen=True, slots=True)
-class ElementaryDerivativeService:
-    """Candidate generation through the declared elementary differentiator."""
-
-    differentiator: ElementaryDifferentiator
-    checker_id: str
-    specification_kind: str
-
-    def candidate(self, term: T.Term) -> DerivationOutcome:
-        return self.differentiator.derive(term)
-
-    def certificate(
-        self,
-        region: T.Term,
-        source: T.Term,
-        variable: SymbolId,
-        candidate: T.Term,
-    ) -> object:
-        return ElementaryDerivativeCertificate(
-            region, source, variable, candidate
-        )
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -167,7 +97,8 @@ class Runtime(Generic[E]):
     bridge: PolynomialBridge[E]
     request: AlgebraRequest
     derivative: DerivativeService
-    specialization: SpecializationRuntime | None = None
+    operations: OperationRegistry
+    specialization: SpecializationView | None = None
     elementary: ElementaryLibrary | None = None
 
 
@@ -178,21 +109,24 @@ def _core_specs(
     return {
         ConditionChecker.id: CheckerSpec(
             ConditionChecker(signature),
-            CertificateSchema("condition", "1"),
+            CertificateSchema("condition", "1", type(None)),
             frozenset({"discharge"}),
             frozenset({"Condition"}),
+            frames.world.id,
         ),
         HypothesisChecker.id: CheckerSpec(
             HypothesisChecker(frames),
-            CertificateSchema("hypothesis", "1"),
+            CertificateSchema("hypothesis", "1", type(None)),
             frozenset({"assume"}),
             frozenset({"Hypothesis"}),
+            frames.world.id,
         ),
         ContradictionChecker.id: CheckerSpec(
             ContradictionChecker(frames, signature),
-            CertificateSchema("contradiction", "1"),
+            CertificateSchema("contradiction", "1", type(None)),
             frozenset({"consistency"}),
             frozenset({"Contradiction"}),
+            frames.world.id,
         ),
     }
 
@@ -241,9 +175,10 @@ def bootstrap() -> Runtime[Fraction]:
     specs = {
         checker.id: CheckerSpec(
             checker,
-            CertificateSchema("derivative", "1"),
+            CertificateSchema("derivative", "1", DerivativeCertificate),
             frozenset({"differentiate"}),
             frozenset({"HasDerivative"}),
+            world.id,
         ),
         **_core_specs(frames, signature),
     }
@@ -255,6 +190,21 @@ def bootstrap() -> Runtime[Fraction]:
         target=variable,
         parameter_mode=ParameterMode.SPECIFIED_VALUES,
         interpretation=Interpretation.FORMAL,
+    )
+    service = PolynomialDerivativeService(
+        bridge, differential, checker.id, "HasDerivative"
+    )
+    differentiation = DifferentiationOperation(
+        signature,
+        frames,
+        vocabulary,
+        variable,
+        table.name_of,
+        service,
+        request.parameter_mode,
+    )
+    operations = OperationRegistry(
+        {differentiation.id: differentiation}
     )
     return Runtime(
         table,
@@ -271,9 +221,8 @@ def bootstrap() -> Runtime[Fraction]:
         store,
         bridge,
         request,
-        derivative=PolynomialDerivativeService(
-            bridge, differential, checker.id, "HasDerivative"
-        ),
+        derivative=service,
+        operations=operations,
     )
 
 
@@ -388,15 +337,17 @@ def bootstrap_parameterized(
     specs = {
         checker.id: CheckerSpec(
             checker,
-            CertificateSchema("derivative", "1"),
+            CertificateSchema("derivative", "1", DerivativeCertificate),
             frozenset({"differentiate"}),
             frozenset({"HasDerivative"}),
+            world.id,
         ),
         base_checker.id: CheckerSpec(
             base_checker,
-            CertificateSchema("derivative", "1"),
+            CertificateSchema("derivative", "1", DerivativeCertificate),
             frozenset({"specialize"}),
             frozenset({"HasDerivative"}),
+            world.id,
         ),
         **_core_specs(frames, signature),
     }
@@ -417,13 +368,40 @@ def bootstrap_parameterized(
         parameter_mode=ParameterMode.SPECIFIED_VALUES,
         interpretation=Interpretation.EMBEDDED,
     )
-    specialization = SpecializationRuntime(
+    specialization_view = SpecializationView(
         base_ring,
         base_parent,
         base_differential,
         base_bridge,
         base_checker,
         specialized_request,
+    )
+    service = PolynomialDerivativeService(
+        bridge, differential, checker.id, "HasDerivative"
+    )
+    differentiation = DifferentiationOperation(
+        signature,
+        frames,
+        vocabulary,
+        variable,
+        table.name_of,
+        service,
+        request.parameter_mode,
+    )
+    specialization_operation = SpecializationOperation(
+        signature,
+        frames,
+        vocabulary,
+        variable,
+        table.name_of,
+        specialization_view,
+        request,
+    )
+    operations = OperationRegistry(
+        {
+            differentiation.id: differentiation,
+            specialization_operation.id: specialization_operation,
+        }
     )
     return Runtime(
         table,
@@ -440,10 +418,9 @@ def bootstrap_parameterized(
         store,
         bridge,
         request,
-        derivative=PolynomialDerivativeService(
-            bridge, differential, checker.id, "HasDerivative"
-        ),
-        specialization=specialization,
+        derivative=service,
+        operations=operations,
+        specialization=specialization_view,
     )
 
 
@@ -507,9 +484,10 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     specs = {
         checker.id: CheckerSpec(
             checker,
-            CertificateSchema("elementary_derivative", "1"),
+            CertificateSchema("derivative", "1", DerivativeCertificate),
             frozenset({"differentiate"}),
             frozenset({"HasDerivative"}),
+            world.id,
             (basis,),
         ),
         **_core_specs(frames, signature),
@@ -526,6 +504,21 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         parameter_mode=ParameterMode.SPECIFIED_VALUES,
         interpretation=Interpretation.FORMAL,
     )
+    service = ElementaryDerivativeService(
+        differentiator, checker.id, "HasDerivative"
+    )
+    differentiation = DifferentiationOperation(
+        signature,
+        frames,
+        vocabulary,
+        variable,
+        table.name_of,
+        service,
+        request.parameter_mode,
+    )
+    operations = OperationRegistry(
+        {differentiation.id: differentiation}
+    )
     return Runtime(
         table,
         signature,
@@ -541,9 +534,8 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         store,
         bridge,
         request,
-        derivative=ElementaryDerivativeService(
-            differentiator, checker.id, "HasDerivative"
-        ),
+        derivative=service,
+        operations=operations,
         elementary=library,
     )
 
@@ -555,7 +547,6 @@ def new_workspace(runtime: Runtime[Any]) -> Workspace:
 
 __all__ = [
     "Runtime",
-    "SpecializationRuntime",
     "bootstrap",
     "bootstrap_elementary",
     "bootstrap_parameterized",

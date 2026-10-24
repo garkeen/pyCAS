@@ -92,6 +92,8 @@ def times(
         else:
             coefficient *= value
     if coefficient == 0:
+        # Callers must carry the definedness of the removed factors in the
+        # result condition; the derivative paths do so explicitly.
         return T.number(0)
     parts: list[T.Term] = []
     if coefficient != 1:
@@ -102,6 +104,13 @@ def times(
     if len(parts) == 1:
         return parts[0]
     return T.app(_head(signature, StructuralHead.TIMES), *parts)
+
+
+def ne_zero(signature: LanguageSignature, term: T.Term) -> T.Term:
+    """`term != 0`, used where a zero base is not in the defined fragment."""
+    return T.app(
+        _head(signature, StructuralHead.NE), term, T.number(0)
+    )
 
 
 def power(
@@ -126,4 +135,4 @@ def _operator_id(term: T.Apply) -> SymbolId:
     return term.operator.symbol_id
 
 
-__all__ = ["numeric", "plus", "power", "times"]
+__all__ = ["ne_zero", "numeric", "plus", "power", "times"]

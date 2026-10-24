@@ -8,14 +8,14 @@ every operation refuses an element from another ring. Comparison of elements
 goes through the coefficient ring's `equal`, which is the authority — comparing
 coefficients with Python `==` would bypass it.
 
-Storage order is the canonical lexicographic order of exponent tuples. That is a
-storage invariant, not a claim about which monomial order an algorithm uses;
-monomial-order-dependent algorithms take their order as an explicit parameter.
+Storage order is the ring's declared monomial order. It is part of the parent's
+representation choice, not a hidden default of an algorithm.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Generic, TypeVar, cast
 
 from cas.algebra.protocols import Euclidean, Field, Ring
@@ -26,6 +26,22 @@ E = TypeVar("E")
 Exponents = tuple[int, ...]
 
 _SEAL = object()
+
+
+class MonomialOrder(StrEnum):
+    """A declared ordering of monomials with a fixed number of variables."""
+
+    LEX = "lex"
+    GRLEX = "grlex"
+    GREVLEX = "grevlex"
+
+    def key(self, exponents: Exponents) -> tuple[object, ...]:
+        if self is MonomialOrder.LEX:
+            return (exponents,)
+        degree = sum(exponents)
+        if self is MonomialOrder.GRLEX:
+            return (degree, exponents)
+        return (degree, tuple(-exponent for exponent in reversed(exponents)))
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -53,12 +69,13 @@ class Polynomial(Generic[E]):
 class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
     """`K[x₁,…,xₙ]` for a fixed coefficient ring `K`."""
 
-    __slots__ = ("_generators", "_coefficients")
+    __slots__ = ("_generators", "_coefficients", "_order")
 
     def __init__(
         self,
         generators: tuple[SymbolId, ...],
         coefficients: Ring[E],
+        order: MonomialOrder = MonomialOrder.LEX,
     ) -> None:
         if not generators:
             raise ValueError("a polynomial ring needs at least one generator")
@@ -66,6 +83,7 @@ class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
             raise ValueError("polynomial generators must be distinct")
         self._generators = tuple(generators)
         self._coefficients = coefficients
+        self._order = order
 
     @property
     def generators(self) -> tuple[SymbolId, ...]:
@@ -75,10 +93,18 @@ class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
     def coefficients(self) -> Ring[E]:
         return self._coefficients
 
+    @property
+    def monomial_order(self) -> MonomialOrder:
+        return self._order
+
+    @property
+    def parent_options(self) -> tuple[tuple[str, str], ...]:
+        return (("monomial_order", self._order.value),)
+
     # --- ownership ---
 
-    def contains(self, value: Polynomial[E]) -> bool:
-        return value.owner is self
+    def contains(self, value: object) -> bool:
+        return isinstance(value, Polynomial) and value.owner is self
 
     def _own(self, value: Polynomial[E]) -> None:
         if value.owner is not self:
@@ -99,7 +125,9 @@ class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
     def _make(self, terms: dict[Exponents, E]) -> Polynomial[E]:
         kept = tuple(
             (exponents, coefficient)
-            for exponents, coefficient in sorted(terms.items())
+            for exponents, coefficient in sorted(
+                terms.items(), key=lambda item: self._order.key(item[0])
+            )
             if not self._coefficients.is_zero(coefficient)
         )
         return Polynomial(self, kept, _SEAL)
@@ -231,10 +259,15 @@ class UnivariatePolynomialRing(PolynomialRing[E], Euclidean[Polynomial[E]]):
 
     __slots__ = ()
 
-    def __init__(self, generator: SymbolId, coefficients: Field[E]) -> None:
+    def __init__(
+        self,
+        generator: SymbolId,
+        coefficients: Field[E],
+        order: MonomialOrder = MonomialOrder.LEX,
+    ) -> None:
         if not isinstance(coefficients, Field):
             raise TypeError("univariate division needs a field of coefficients")
-        super().__init__((generator,), coefficients)
+        super().__init__((generator,), coefficients, order)
 
     @property
     def coefficients(self) -> Field[E]:

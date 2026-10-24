@@ -196,6 +196,16 @@ class ElementaryLibrary:
     operators: Mapping[SymbolId, OperatorSignature]
     basis: BasisRef | None = None
 
+    def __post_init__(self) -> None:
+        if self.basis is not None:
+            return
+        for function in self.functions.values():
+            law = function.law
+            if law is not None and law.origin is LawOrigin.BASIS:
+                raise ValueError(
+                    "a BASIS derivative law requires an admitted BasisRef"
+                )
+
     def is_constant(self, symbol_id: SymbolId) -> bool:
         return symbol_id in self.constants_by_id
 

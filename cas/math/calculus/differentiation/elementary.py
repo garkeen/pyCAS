@@ -17,14 +17,14 @@ from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.math.calculus.differentiation import terms as B
-from cas.math.elementary.conditions import (
-    application_condition,
-    application_defined,
-)
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     FunctionSymbol,
     LawOrigin,
+)
+from cas.math.elementary.law_conditions import (
+    application_condition,
+    application_defined,
 )
 from cas.semantics.conditions import and_all
 from cas.semantics.services import (
@@ -159,9 +159,9 @@ class ElementaryDifferentiator:
         if not isinstance(outcome, Derived):
             return outcome
         if exponent.value == 0:
-            return self._result(
-                T.number(0), outcome.defined, outcome.defined
-            )
+            nonzero = B.ne_zero(self.signature, base)
+            defined = and_all(self.signature, outcome.defined, nonzero)
+            return self._result(T.number(0), defined, defined)
         return self._result(
             B.times(
                 self.signature,
@@ -222,7 +222,14 @@ class ElementaryDifferentiator:
                 inner.defined,
                 self.signature,
             )
-            return self._result(T.number(0), defined, defined)
+            # The inner derivative is zero only where its own condition says
+            # so. Keeping that condition is what makes the constant-inner case
+            # a consequence of the chain rule rather than a syntactic shortcut.
+            return self._result(
+                T.number(0),
+                and_all(self.signature, inner.condition, defined),
+                defined,
+            )
         body = self.library.instantiate(
             law.body, law.argument, argument, self.signature
         )

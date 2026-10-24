@@ -65,12 +65,18 @@ class CertificateSchema:
 
     name: str
     version: str
+    certificate_type: type
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("a certificate schema needs a name")
         if not self.version:
             raise ValueError("a certificate schema needs a version")
+        if not isinstance(self.certificate_type, type):
+            raise TypeError("a certificate schema needs a certificate type")
+
+    def accepts(self, certificate: object) -> bool:
+        return isinstance(certificate, self.certificate_type)
 
 
 class ObligationReason(StrEnum):

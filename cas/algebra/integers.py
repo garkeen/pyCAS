@@ -37,6 +37,9 @@ class IntegerRing(
     def mul(self, left: int, right: int) -> int:
         return left * right
 
+    def contains(self, value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
     def equal(self, left: int, right: int) -> bool:
         return left == right
 

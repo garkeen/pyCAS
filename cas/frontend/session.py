@@ -17,8 +17,8 @@ from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
 from cas.syntax import term as T
 from cas.workflow.records import (
-    DerivativeResult,
     Expression,
+    OperationResult,
     OperationStatus,
 )
 from cas.workflow.workspace import Workspace
@@ -102,7 +102,7 @@ class Session:
 
     def differentiate(
         self, source: Expression | None = None
-    ) -> DerivativeResult:
+    ) -> OperationResult:
         if source is None:
             source = self._focus
         if source is None:
@@ -211,9 +211,9 @@ class Session:
             return "verified " + self._line(result.result)
         if result.status is OperationStatus.CONDITIONAL:
             assert result.result is not None
-            assert result.condition is not None
+            assert result.region is not None
             region = to_str(
-                result.condition.term, self._runtime.signature
+                result.region.term, self._runtime.signature
             )
             return "verified on " + region + " " + self._line(result.result)
         return f"{result.status.value}: {result.detail}"

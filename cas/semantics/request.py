@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 from cas.algebra.parents import Parent
-from cas.algebra.polynomial import PolynomialRing
+from cas.algebra.protocols import GeneratorRing
 from cas.foundation.ids import SymbolId
 from cas.language.problems import ParameterMode
 
@@ -62,16 +62,19 @@ class AlgebraRequest:
             raise ValueError("a parameter ring needs at least one parameter")
         if self.parameter_ring is not None:
             ring = self.parameter_ring.ring
-            if isinstance(ring, PolynomialRing):
-                if tuple(ring.generators) != self.parameters:
-                    raise ValueError(
-                        "the parameter ring generators must be the declared "
-                        "parameters"
-                    )
-                if self.parameter_ring.spec.base != self.coefficient.spec:
-                    raise ValueError(
-                        "the parameter ring must extend the coefficient parent"
-                    )
+            if not isinstance(ring, GeneratorRing):
+                raise ValueError(
+                    "the parameter ring must expose its generators"
+                )
+            if tuple(ring.generators) != self.parameters:
+                raise ValueError(
+                    "the parameter ring generators must be the declared "
+                    "parameters"
+                )
+            if self.parameter_ring.spec.base != self.coefficient.spec:
+                raise ValueError(
+                    "the parameter ring must extend the coefficient parent"
+                )
         if (
             self.parameter_mode is not ParameterMode.SPECIFIED_VALUES
             and not self.parameters

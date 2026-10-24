@@ -145,6 +145,10 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
             f"checker {spec.checker.id} is not admitted for specification "
             f"kind {proposal.specification_kind!r}"
         )
+    if not spec.certificate_schema.accepts(proposal.certificate):
+        return Rejected(
+            "invalid evidence: certificate does not match the declared schema"
+        )
     checker = spec.checker
 
     premise_propositions: list[Proposition] = []
@@ -219,11 +223,24 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
             )
         reported.append(report)
 
+    reused_ids: list[ObligationId] = []
+    new_reports: list[ObligationReport] = []
+    for report in reported:
+        existing = store.find_obligation(report.proposition, frame.id)
+        if existing is not None and existing not in inherited_ids:
+            reused_ids.append(existing)
+        else:
+            new_reports.append(report)
+
     pending = [
         obligation.proposition
         for obligation in inherited_obligations
         if not store.is_discharged(obligation.id, frame.id)
-    ] + [report.proposition for report in reported]
+    ] + [
+        store.get_obligation(identifier).proposition
+        for identifier in reused_ids
+        if not store.is_discharged(identifier, frame.id)
+    ] + [report.proposition for report in new_reports]
     refuted_conditions = tuple(
         proposition
         for proposition in dict.fromkeys(pending)
@@ -251,7 +268,7 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
     inference_id = store.new_inference_id()
     new_obligations = []
     new_obligation_ids: list[ObligationId] = []
-    for report in reported:
+    for report in new_reports:
         obligation_id = store.new_obligation_id()
         new_obligation_ids.append(obligation_id)
         new_obligations.append(
@@ -263,7 +280,13 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
                 inference_id,
             )
         )
-    carried = tuple(inherited_ids) + tuple(new_obligation_ids)
+    carried = tuple(
+        dict.fromkeys(
+            tuple(inherited_ids)
+            + tuple(reused_ids)
+            + tuple(new_obligation_ids)
+        )
+    )
 
     judgments = []
     judgment_ids: list[JudgmentId] = []
@@ -315,6 +338,8 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
                     "the discharged obligation proposition is outside the "
                     "submission frame"
                 )
+            if store.is_discharged(obligation_id, frame.id):
+                return Rejected("the obligation is already discharged")
             proof = next(
                 (
                     judgment

@@ -96,16 +96,24 @@ class Revision:
 
 
 @dataclass(frozen=True, slots=True)
-class DerivativeResult:
-    """The outcome of one differentiation request."""
+class OperationResult:
+    """The generic outcome of one registered operation.
 
+    `verifications` has one link per proposed specification; a candidate may be
+    verified against more than one exact specification. `region` is the region
+    on which the result is stated, and `trace` carries operation diagnostics
+    such as whether a generic formula or a recomputation produced the result.
+    """
+
+    operation: str
     status: OperationStatus
     candidate: Candidate | None
-    verification: VerificationLink | None
+    verifications: tuple[VerificationLink, ...]
     result: Expression | None
     detail: str = ""
+    region: Proposition | None = None
     generic: GenericResult | None = None
-    condition: Proposition | None = None
+    trace: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,34 +128,13 @@ class AssumptionResult:
     consistency: FrameConsistency = Unassessed()
 
 
-class SpecializationPath(StrEnum):
-    """Which computation produced a specialized candidate."""
-
-    GENERIC_FORMULA = "generic_formula"
-    RECOMPUTED = "recomputed"
-
-
-@dataclass(frozen=True, slots=True)
-class SpecializationResult:
-    """The outcome of specializing a verified parameter family."""
-
-    status: OperationStatus
-    candidate: Candidate | None
-    verification: VerificationLink | None
-    result: Expression | None
-    path: SpecializationPath | None
-    detail: str = ""
-
-
 __all__ = [
     "AssumptionResult",
     "Candidate",
-    "DerivativeResult",
     "Event",
     "Expression",
+    "OperationResult",
     "OperationStatus",
     "Revision",
-    "SpecializationPath",
-    "SpecializationResult",
     "VerificationLink",
 ]

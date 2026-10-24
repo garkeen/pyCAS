@@ -25,6 +25,7 @@ from cas.kernel.store import KernelStore
 from cas.language import propositions as Pr
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.semantics.conditions import condition_truth
 from cas.semantics.frames import FrameSorts, FrameStore
 from cas.syntax import term as T
 
@@ -56,7 +57,10 @@ class ContradictionChecker:
             proposition.term
             for proposition in self._frames.assumptions(request.frame)
         ]
-        if any(term == T.FALSE for term in terms):
+        if any(
+            condition_truth(term, self._signature) is False
+            for term in terms
+        ):
             return Verified(tuple(request.conclusions))
         not_symbol = self._signature.symbol_of(StructuralHead.NOT)
         if not_symbol is None:

@@ -16,6 +16,7 @@ from typing import Any, Generic, TypeVar, cast
 
 from cas.algebra.protocols import (
     Derivation,
+    DescribedRing,
     Euclidean,
     Field,
     IntegerEmbedding,
@@ -84,6 +85,26 @@ class Parent(Generic[E]):
     def embeds_integers(self) -> bool:
         return isinstance(self.ring, IntegerEmbedding)
 
+    def contains(self, value: object) -> bool:
+        return self.ring.contains(value)
+
+    def value(self, representation: E) -> AlgebraValue[E]:
+        return AlgebraValue(self, representation)
+
+
+@dataclass(frozen=True, slots=True)
+class AlgebraValue(Generic[E]):
+    """A representation paired with the parent that accepts it."""
+
+    parent: Parent[E]
+    representation: E
+
+    def __post_init__(self) -> None:
+        if not self.parent.contains(self.representation):
+            raise ValueError(
+                "the representation is not a member of the parent"
+            )
+
 
 class ParentRegistry:
     """Issues one stable id per complete description."""
@@ -111,6 +132,13 @@ class ParentRegistry:
                     f"parent {spec.kind!r} was registered with a different structure"
                 )
             return cast(Parent[E], known)
+        if isinstance(ring, DescribedRing):
+            actual = dict(ring.parent_options)
+            for name, value in spec.options:
+                if actual.get(name) != value:
+                    raise ValueError(
+                        f"parent option {name!r} does not match the structure"
+                    )
         identifier = ParentId(self._issuer.issue())
         created = Parent(identifier, spec, ring)
         self._ids[spec] = identifier
@@ -126,4 +154,4 @@ class ParentRegistry:
         return self._issuer.issued
 
 
-__all__ = ["Parent", "ParentRegistry", "ParentSpec"]
+__all__ = ["AlgebraValue", "Parent", "ParentRegistry", "ParentSpec"]

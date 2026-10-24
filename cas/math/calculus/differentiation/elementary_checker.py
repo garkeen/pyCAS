@@ -10,7 +10,6 @@ not a mathematical refutation.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 
 from cas.foundation.ids import SymbolId
 from cas.kernel.evidence import (
@@ -22,6 +21,9 @@ from cas.kernel.evidence import (
 )
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature
+from cas.math.calculus.differentiation.certificate import (
+    DerivativeCertificate,
+)
 from cas.math.calculus.differentiation.elementary_verify import (
     verify_elementary_derivative,
 )
@@ -33,16 +35,6 @@ from cas.math.elementary.declarations import ElementaryLibrary
 from cas.semantics.conditions import equivalent
 from cas.semantics.services import DerivationUnsupported, Derived
 from cas.syntax import term as T
-
-
-@dataclass(frozen=True, slots=True)
-class ElementaryDerivativeCertificate:
-    """The exact instance the caller asks to be verified."""
-
-    region: T.Term
-    source: T.Term
-    variable: SymbolId
-    candidate: T.Term
 
 
 class ElementaryDerivativeChecker:
@@ -77,11 +69,9 @@ class ElementaryDerivativeChecker:
                     "the conclusion is not a HasDerivative specification"
                 )
             certificate = request.certificate
-            if not isinstance(
-                certificate, ElementaryDerivativeCertificate
-            ):
+            if not isinstance(certificate, DerivativeCertificate):
                 return InvalidEvidence(
-                    "an elementary derivative certificate is required"
+                    "a derivative certificate is required"
                 )
             if certificate.region != claim.region:
                 return InvalidEvidence(
@@ -133,7 +123,4 @@ class ElementaryDerivativeChecker:
         return Verified(tuple(request.conclusions))
 
 
-__all__ = [
-    "ElementaryDerivativeCertificate",
-    "ElementaryDerivativeChecker",
-]
+__all__ = ["ElementaryDerivativeChecker"]

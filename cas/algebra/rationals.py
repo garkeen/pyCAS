@@ -41,6 +41,9 @@ class RationalField(
     def mul(self, left: Fraction, right: Fraction) -> Fraction:
         return left * right
 
+    def contains(self, value: object) -> bool:
+        return isinstance(value, Fraction)
+
     def equal(self, left: Fraction, right: Fraction) -> bool:
         return left == right
 

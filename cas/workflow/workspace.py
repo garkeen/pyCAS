@@ -1,25 +1,21 @@
-"""Workspace: expression objects, candidates, verification links and undo.
+"""Workspace: generic operation application, records and history.
 
-The workspace owns presentation and history, never mathematics.
+The workspace owns presentation and history, never mathematics. It resolves
+current object versions, asks the registered operation for a problem and a
+proposal, commits the proposal through the declared checker binding, and records
+the resulting expression, verification links, event and revision.
 
-- Intake stores an expression object and creates no judgment.
-- Differentiation computes a candidate, builds the exact specification, and asks
-  the kernel to commit it. The verification link records the judgment id only
-  when the kernel actually issued one.
-- Undo and redo move a revision pointer over immutable snapshots. The ledger is
-  append-only and is never rolled back.
-
-A failed verification keeps its candidate and its reason; it is not deleted and
-it is not displayed as a result.
+Differentiation and specialisation are registered operations, not branches in
+this module. Adding another operation does not change this file.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any
 
-from cas.algebra.polynomial import Polynomial
 from cas.foundation.ids import (
     CandidateId,
     EventId,
@@ -42,44 +38,30 @@ from cas.kernel.consistency import assess_consistency
 from cas.kernel.context_rules import HypothesisChecker
 from cas.kernel.model import Applicability, Inconsistent
 from cas.language import propositions as Pr
-from cas.language import sorts as S
-from cas.language.problems import (
-    Coverage,
-    ProblemSpec,
-    ResultLanguage,
+from cas.operations.protocols import (
+    GenericResultInput,
+    OperationInput,
+    OperationRequest,
+    ProblemBuilt,
+    ProblemInvalid,
+    ProblemUnsupported,
+    ProposalInvalid,
+    ProposalUnsupported,
+    Proposed,
+    ValueMappingInput,
 )
-from cas.math.calculus.differentiation.checker import DerivativeCertificate
-from cas.math.calculus.differentiation.specification import has_derivative
 from cas.semantics import elaborate
 from cas.semantics.frames import Hypothesis
-from cas.semantics.services import (
-    DerivationInvalid,
-    DerivationUnsupported,
-    Derived,
-)
-from cas.semantics.specialization import (
-    Applied,
-    GenericResult,
-    InvalidSpecialization,
-    NeedsRecomputation,
-    OutsideValidity,
-    Specialization,
-)
-from cas.semantics.specialization import (
-    specialize as specialize_family,
-)
-from cas.syntax import binding as B
+from cas.semantics.specialization import GenericResult
 from cas.syntax import term as T
 from cas.workflow.records import (
     AssumptionResult,
     Candidate,
-    DerivativeResult,
     Event,
     Expression,
+    OperationResult,
     OperationStatus,
     Revision,
-    SpecializationPath,
-    SpecializationResult,
     VerificationLink,
 )
 
@@ -240,422 +222,122 @@ class Workspace:
             consistency,
         )
 
-    def differentiate(
+    def apply(
         self,
-        source: Expression,
-        variable: SymbolId,
-    ) -> DerivativeResult:
-        """Differentiate one expression and try to publish the specification."""
-        runtime = self._runtime
-        consistency = runtime.store.consistency(self.frame)
-        if consistency.is_inconsistent():
-            return DerivativeResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                "the current frame is inconsistent",
-            )
-        if variable != runtime.variable:
-            return DerivativeResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                "this runtime differentiates with respect to x only",
-            )
-        if not runtime.frames.is_visible(source.frame, self.frame):
-            return DerivativeResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                "the source is outside the current frame",
-            )
-        derivation = runtime.derivative.candidate(source.term)
-        if isinstance(derivation, DerivationUnsupported):
-            return DerivativeResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                derivation.detail,
-            )
-        if isinstance(derivation, DerivationInvalid):
-            return DerivativeResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                derivation.detail,
-            )
-        if not isinstance(derivation, Derived):
-            raise RuntimeError(
-                f"unknown derivation outcome: {type(derivation).__name__}"
-            )
-        candidate_term = derivation.term
-        condition_proposition: Pr.Proposition | None = None
-        if derivation.condition is not None:
-            issued_condition = elaborate.proposition(
-                derivation.condition,
-                runtime.frames,
-                self.frame,
-                runtime.signature,
-            )
-            if not isinstance(issued_condition, Pr.Proposition):
-                return DerivativeResult(
-                    OperationStatus.INVALID,
-                    None,
-                    None,
-                    None,
-                    "the differentiability region is not a proposition",
-                )
-            condition_proposition = issued_condition
-        region_term = (
-            T.TRUE
-            if condition_proposition is None
-            else condition_proposition.term
-        )
-
-        variable_reference = T.symbol(variable, runtime.table.name_of(variable))
-        specification_term = has_derivative(
-            runtime.vocabulary,
-            region_term,
-            source.term,
-            variable_reference,
-            candidate_term,
-        )
-        issued = elaborate.proposition(
-            specification_term,
-            runtime.frames,
-            self.frame,
-            runtime.signature,
-        )
-        if not isinstance(issued, Pr.Proposition):
-            return DerivativeResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                "the derivative specification is not a proposition",
-            )
-
-        generic: GenericResult | None = None
-        if runtime.request.parameters:
-            if condition_proposition is not None:
-                valid_on = condition_proposition
-            else:
-                issued_validity = elaborate.proposition(
-                    T.TRUE,
-                    runtime.frames,
-                    self.frame,
-                    runtime.signature,
-                )
-                if not isinstance(issued_validity, Pr.Proposition):
-                    return DerivativeResult(
-                        OperationStatus.INVALID,
-                        None,
-                        None,
-                        None,
-                        "the parameter validity region is not a proposition",
-                    )
-                valid_on = issued_validity
-            generic = GenericResult.assemble(
-                result=candidate_term,
-                valid_on=valid_on,
-                excluded_cases=(),
-                correctness_specification=issued,
-                parameter_mode=runtime.request.parameter_mode,
-            )
-
-        candidate = Candidate(
-            CandidateId(self._candidate_ids.issue()),
-            ProblemSpec(
-                operation="differentiate",
-                inputs=(source.term,),
-                target=variable,
-                target_sort=S.REAL,
-                region=condition_proposition,
-                result_language=ResultLanguage.EXPRESSION,
-                parameter_mode=runtime.request.parameter_mode,
-                coverage=Coverage.ONE_VERIFIED,
-            ),
-            candidate_term,
-            self.frame,
-        )
-        self._candidates[candidate.id] = candidate
-
-        outcome = commit(
-            runtime.store,
-            CommitProposal(
-                self.frame,
-                (issued,),
-                runtime.derivative.checker_id,
-                "differentiate",
-                runtime.derivative.specification_kind,
-                certificate=runtime.derivative.certificate(
-                    region_term, source.term, variable, candidate_term
-                ),
-            ),
-        )
-        judgment: JudgmentId | None = None
-        conditional = condition_proposition is not None
-        if isinstance(outcome, Committed):
-            status = (
-                OperationStatus.CONDITIONAL
-                if conditional
-                else OperationStatus.VERIFIED
-            )
-            judgment = outcome.judgments[0]
-            detail = ""
-        elif isinstance(outcome, Rejected):
-            status = (
-                OperationStatus.REFUTED
-                if outcome.refutation is not None
-                else OperationStatus.INVALID
-            )
-            detail = outcome.detail
-        elif isinstance(outcome, Deferred):
-            status = OperationStatus.UNSUPPORTED
-            detail = outcome.detail
-        else:
-            raise RuntimeError(f"unknown commit result: {type(outcome).__name__}")
-
-        result: Expression | None = None
-        if status in (OperationStatus.VERIFIED, OperationStatus.CONDITIONAL):
-            result = self._record_expression(
-                candidate_term, f"d/dx {source.label or source.id}"
-            )
-            if generic is not None:
-                self._generic_results[source.version] = generic
-        else:
-            generic = None
-            condition_proposition = None
-        link_status = (
-            OperationStatus.VERIFIED
-            if status in (
-                OperationStatus.VERIFIED,
-                OperationStatus.CONDITIONAL,
-            )
-            else status
-        )
-        link = VerificationLink(
-            candidate.id,
-            issued,
-            judgment,
-            link_status,
-            detail,
-            condition_proposition,
-        )
-        event = self._record_event(
-            "Differentiate",
-            objects=() if result is None else (result.version,),
-            candidates=(candidate.id,),
-            judgments=() if judgment is None else (judgment,),
-            note=detail,
-        )
-        self._append_revision(f"differentiate {source.id}", event, (link,))
-        return DerivativeResult(
-            status,
-            candidate,
-            link,
-            result,
-            detail,
-            generic,
-            condition_proposition,
-        )
-
-    def generic_result(self, source: Expression) -> GenericResult | None:
-        """The verified parameter-family result associated with `source`."""
-        return self._generic_results.get(source.version)
-
-    def specialize(
-        self,
-        source: Expression,
-        values: Mapping[SymbolId, Fraction],
+        operation_id: str,
+        inputs: tuple[Expression, ...],
         *,
-        generic: GenericResult | None = None,
-    ) -> SpecializationResult:
-        """Apply an exact parameter point to a verified parameter family.
-
-        The recorded family is used by default. A caller may pass the family
-        explicitly; it only chooses which candidate to try, because the
-        specialized instance is verified independently before publication.
-        """
+        target: SymbolId | None = None,
+        region: Pr.Proposition | None = None,
+        parameters: tuple[tuple[str, OperationInput], ...] = (),
+    ) -> OperationResult:
+        """Apply one registered operation to fixed current object versions."""
         runtime = self._runtime
         consistency = runtime.store.consistency(self.frame)
         if consistency.is_inconsistent():
-            return SpecializationResult(
+            return self._failure(
+                operation_id,
                 OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
                 "the current frame is inconsistent",
             )
-        view = runtime.specialization
-        if view is None or not runtime.request.parameters:
-            return SpecializationResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                None,
-                "this runtime has no formal parameters",
+        if not inputs:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "an operation needs at least one input",
             )
-        if source.version not in {
+        visible = {
             expression.version for expression in self.expressions()
-        }:
-            return SpecializationResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                None,
-                "the source is not visible in the current revision",
-            )
-        if not runtime.frames.is_visible(source.frame, self.frame):
-            return SpecializationResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                None,
-                "the source is outside the current frame",
-            )
-        family = (
-            generic
-            if generic is not None
-            else self._generic_results.get(source.version)
-        )
-        if family is None:
-            return SpecializationResult(
-                OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                None,
-                "differentiate the source first so a verified parameter "
-                "family exists",
-            )
-        try:
-            specialization = Specialization(values)
-        except (TypeError, ValueError) as error:
-            return SpecializationResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
-                f"invalid specialization: {error}",
-            )
-
-        outcome = specialize_family(
-            family,
-            runtime.request,
-            specialization,
-            runtime.signature,
-        )
-        if isinstance(outcome, InvalidSpecialization):
-            return SpecializationResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
-                outcome.detail,
-            )
-
-        mapping = {
-            symbol_id: T.number(value)
-            for symbol_id, value in specialization.values.items()
         }
-        substituted_source = B.substitute_free(source.term, mapping)
-        source_value = view.bridge.to_value(substituted_source)
-        if source_value is None:
-            return SpecializationResult(
+        for expression in inputs:
+            if not runtime.frames.is_visible(expression.frame, self.frame):
+                return self._failure(
+                    operation_id,
+                    OperationStatus.UNSUPPORTED,
+                    "an input is outside the current frame",
+                )
+            if expression.version not in visible:
+                return self._failure(
+                    operation_id,
+                    OperationStatus.INVALID,
+                    "an input is not visible in the current revision",
+                )
+
+        operation = runtime.operations.get(operation_id)
+        if operation is None:
+            return self._failure(
+                operation_id,
                 OperationStatus.UNSUPPORTED,
-                None,
-                None,
-                None,
-                None,
-                "the specialized source is outside the polynomial fragment",
+                f"operation not registered: {operation_id}",
             )
-        specialized_source = view.bridge.to_term(source_value)
-        if specialized_source is None:
-            return SpecializationResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
-                "the specialized source cannot be rendered",
-            )
-
-        path: SpecializationPath
-        candidate_value: Polynomial[Fraction] | None = None
-        if isinstance(outcome, Applied):
-            candidate_value = view.bridge.to_value(outcome.result)
-        elif not isinstance(outcome, (NeedsRecomputation, OutsideValidity)):
-            raise RuntimeError(
-                f"unknown specialization outcome: {type(outcome).__name__}"
-            )
-        if candidate_value is None:
-            candidate_value = view.differential.deriv(source_value)
-            path = SpecializationPath.RECOMPUTED
-        else:
-            path = SpecializationPath.GENERIC_FORMULA
-        rendered = view.bridge.to_term(candidate_value)
-        if rendered is None:
-            return SpecializationResult(
-                OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
-                "the specialized derivative cannot be rendered",
-            )
-        candidate_term = rendered
-
-        variable_reference = T.symbol(
-            runtime.variable, runtime.table.name_of(runtime.variable)
-        )
-        specification_term = has_derivative(
-            runtime.vocabulary,
-            T.TRUE,
-            specialized_source,
-            variable_reference,
-            candidate_term,
-        )
-        issued = elaborate.proposition(
-            specification_term,
-            runtime.frames,
+        request = OperationRequest(
             self.frame,
-            runtime.signature,
+            tuple(expression.term for expression in inputs),
+            target,
+            region,
+            tuple(parameters),
         )
-        if not isinstance(issued, Pr.Proposition):
-            return SpecializationResult(
+        problem_outcome = operation.build_problem(request)
+        if isinstance(problem_outcome, ProblemUnsupported):
+            return self._failure(
+                operation_id,
+                OperationStatus.UNSUPPORTED,
+                problem_outcome.detail,
+            )
+        if isinstance(problem_outcome, ProblemInvalid):
+            return self._failure(
+                operation_id,
                 OperationStatus.INVALID,
-                None,
-                None,
-                None,
-                None,
-                "the specialized specification is not a proposition",
+                problem_outcome.detail,
+            )
+        if not isinstance(problem_outcome, ProblemBuilt):
+            raise TypeError(
+                "an operation returned an unknown problem outcome"
+            )
+        problem = problem_outcome.problem
+
+        proposal_outcome = operation.propose(request, problem)
+        if isinstance(proposal_outcome, ProposalUnsupported):
+            return self._failure(
+                operation_id,
+                OperationStatus.UNSUPPORTED,
+                proposal_outcome.detail,
+            )
+        if isinstance(proposal_outcome, ProposalInvalid):
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                proposal_outcome.detail,
+            )
+        if not isinstance(proposal_outcome, Proposed):
+            raise TypeError(
+                "an operation returned an unknown proposal outcome"
+            )
+        proposal = proposal_outcome.proposal
+        binding = next(
+            (
+                item
+                for item in operation.checker_bindings
+                if item.specification_kind == proposal.specification_kind
+            ),
+            None,
+        )
+        if binding is None:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the operation has no checker for the proposed specification",
             )
 
+        candidate_problem = (
+            problem
+            if proposal.result_region is None
+            else replace(problem, region=proposal.result_region)
+        )
         candidate = Candidate(
             CandidateId(self._candidate_ids.issue()),
-            ProblemSpec(
-                operation="specialize",
-                inputs=(specialized_source,),
-                target=runtime.variable,
-                target_sort=S.REAL,
-                region=None,
-                result_language=ResultLanguage.EXPRESSION,
-                parameter_mode=view.request.parameter_mode,
-                coverage=Coverage.ONE_VERIFIED,
-            ),
-            candidate_term,
+            candidate_problem,
+            proposal.result,
             self.frame,
         )
         self._candidates[candidate.id] = candidate
@@ -664,19 +346,21 @@ class Workspace:
             runtime.store,
             CommitProposal(
                 self.frame,
-                (issued,),
-                view.checker.id,
-                "specialize",
-                "HasDerivative",
-                certificate=DerivativeCertificate(
-                    T.TRUE, specialized_source, runtime.variable, candidate_term
-                ),
+                proposal.specifications,
+                binding.checker_id,
+                binding.problem_kind,
+                proposal.specification_kind,
+                certificate=proposal.certificate,
             ),
         )
-        judgment: JudgmentId | None = None
+        judgments: tuple[JudgmentId, ...] = ()
         if isinstance(committed, Committed):
-            status = OperationStatus.VERIFIED
-            judgment = committed.judgments[0]
+            status = (
+                OperationStatus.CONDITIONAL
+                if proposal.result_region is not None
+                else OperationStatus.VERIFIED
+            )
+            judgments = committed.judgments
             detail = ""
         elif isinstance(committed, Rejected):
             status = (
@@ -689,28 +373,124 @@ class Workspace:
             status = OperationStatus.UNSUPPORTED
             detail = committed.detail
         else:
-            raise RuntimeError(
-                f"unknown commit result: {type(committed).__name__}"
-            )
+            raise TypeError("commit returned an unknown result")
 
         result: Expression | None = None
-        if status is OperationStatus.VERIFIED:
+        generic: GenericResult | None = None
+        if status in (OperationStatus.VERIFIED, OperationStatus.CONDITIONAL):
             result = self._record_expression(
-                candidate_term, f"specialize {source.label or source.id}"
+                proposal.result,
+                f"{operation_id} {inputs[0].label or inputs[0].id}",
             )
-        link = VerificationLink(
-            candidate.id, issued, judgment, status, detail
+            if proposal.coverage is not None:
+                if proposal.valid_on is None:
+                    raise AssertionError(
+                        "a coverage claim without a validity region"
+                    )
+                generic = GenericResult(
+                    result=proposal.result,
+                    valid_on=proposal.valid_on,
+                    excluded_cases=proposal.excluded_cases,
+                    correctness_specification=proposal.specifications[0],
+                    coverage_claim=proposal.coverage,
+                )
+                self._generic_results[inputs[0].version] = generic
+
+        link_status = (
+            OperationStatus.VERIFIED
+            if status in (
+                OperationStatus.VERIFIED,
+                OperationStatus.CONDITIONAL,
+            )
+            else status
+        )
+        links = tuple(
+            VerificationLink(
+                candidate.id,
+                specification,
+                judgments[index] if index < len(judgments) else None,
+                link_status,
+                detail,
+                proposal.result_region,
+            )
+            for index, specification in enumerate(proposal.specifications)
         )
         event = self._record_event(
-            "Specialize",
+            operation_id,
             objects=() if result is None else (result.version,),
             candidates=(candidate.id,),
-            judgments=() if judgment is None else (judgment,),
-            note=path.value,
+            judgments=judgments,
+            note=detail,
         )
-        self._append_revision(f"specialize {source.id}", event, (link,))
-        return SpecializationResult(
-            status, candidate, link, result, path, detail
+        self._append_revision(
+            f"{operation_id} {inputs[0].id}", event, links
+        )
+        return OperationResult(
+            operation_id,
+            status,
+            candidate,
+            links,
+            result,
+            detail,
+            proposal.result_region,
+            generic,
+            proposal.trace,
+        )
+
+    def differentiate(
+        self,
+        source: Expression,
+        variable: SymbolId,
+    ) -> OperationResult:
+        """Convenience entry for the registered differentiation operation."""
+        return self.apply("differentiate", (source,), target=variable)
+
+    def generic_result(self, source: Expression) -> GenericResult | None:
+        """The verified parameter-family result associated with `source`."""
+        return self._generic_results.get(source.version)
+
+    def specialize(
+        self,
+        source: Expression,
+        values: Mapping[SymbolId, Fraction],
+        *,
+        generic: GenericResult | None = None,
+    ) -> OperationResult:
+        """Convenience entry for the registered specialisation operation."""
+        if not self._runtime.request.parameters:
+            return self._failure(
+                "specialize",
+                OperationStatus.UNSUPPORTED,
+                "this runtime has no formal parameters",
+            )
+        family = (
+            generic
+            if generic is not None
+            else self._generic_results.get(source.version)
+        )
+        if family is None:
+            return self._failure(
+                "specialize",
+                OperationStatus.UNSUPPORTED,
+                "differentiate the source first so a verified parameter "
+                "family exists",
+            )
+        try:
+            mapping = ValueMappingInput(values)
+        except (TypeError, ValueError) as error:
+            return self._failure(
+                "specialize",
+                OperationStatus.INVALID,
+                f"invalid specialization: {error}",
+            )
+        return self.apply(
+            "specialize",
+            (source,),
+            target=self._runtime.variable,
+            parameters=(
+                ("family", GenericResultInput(family)),
+                ("values", mapping),
+            ),
         )
 
     # --- history ---
@@ -730,6 +510,19 @@ class Workspace:
         return True
 
     # --- record keeping ---
+
+    def _failure(
+        self,
+        operation: str,
+        status: OperationStatus,
+        detail: str,
+        *,
+        region: Pr.Proposition | None = None,
+        trace: tuple[str, ...] = (),
+    ) -> OperationResult:
+        return OperationResult(
+            operation, status, None, (), None, detail, region, None, trace
+        )
 
     def _record_expression(self, term: T.Term, label: str) -> Expression:
         expression = Expression(

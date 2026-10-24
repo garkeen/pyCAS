@@ -81,22 +81,29 @@ class GenericResult:
         parameter_mode: ParameterMode,
     ) -> GenericResult:
         """Build the record while deriving the claim from the request mode."""
-        unconditional = valid_on.term == T.TRUE and not excluded_cases
-        if parameter_mode is ParameterMode.SPECIFIED_VALUES:
-            claim = CoverageClaim.SPECIFIED
-        elif parameter_mode is ParameterMode.GENERIC_PARAMETERS:
-            claim = CoverageClaim.GENERIC
-        elif unconditional:
-            claim = CoverageClaim.ALL_VALUES
-        else:
-            claim = CoverageClaim.PARTIAL
         return cls(
             result,
             valid_on,
             tuple(excluded_cases),
             correctness_specification,
-            claim,
+            coverage_claim(parameter_mode, valid_on, excluded_cases),
         )
+
+
+def coverage_claim(
+    parameter_mode: ParameterMode,
+    valid_on: Proposition,
+    excluded_cases: tuple[Proposition, ...],
+) -> CoverageClaim:
+    """The strongest claim justified by the request mode and validity data."""
+    unconditional = valid_on.term == T.TRUE and not excluded_cases
+    if parameter_mode is ParameterMode.SPECIFIED_VALUES:
+        return CoverageClaim.SPECIFIED
+    if parameter_mode is ParameterMode.GENERIC_PARAMETERS:
+        return CoverageClaim.GENERIC
+    if unconditional:
+        return CoverageClaim.ALL_VALUES
+    return CoverageClaim.PARTIAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,5 +232,6 @@ __all__ = [
     "Specialization",
     "SpecializationOutcome",
     "SpecializationOutcomeType",
+    "coverage_claim",
     "specialize",
 ]

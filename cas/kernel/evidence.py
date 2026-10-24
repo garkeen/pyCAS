@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
-from cas.foundation.ids import FrameId
+from cas.foundation.ids import FrameId, WorldId
 from cas.kernel.model import BasisRef, CertificateSchema, ObligationReason
 from cas.language.decisions import Reason
 from cas.language.propositions import Proposition
@@ -111,6 +111,7 @@ class CheckerSpec:
     certificate_schema: CertificateSchema
     accepted_problem_kinds: frozenset[str]
     accepted_specification_kinds: frozenset[str]
+    world: WorldId
     trusted_dependencies: tuple[BasisRef, ...] = ()
 
     def __post_init__(self) -> None:
@@ -142,6 +143,12 @@ class CheckerSpec:
             raise ValueError(
                 f"checker {self.checker.id!r} repeats a trusted dependency"
             )
+        for basis in self.trusted_dependencies:
+            if basis.world != self.world:
+                raise ValueError(
+                    f"checker {self.checker.id!r} trusts a basis from "
+                    "another world"
+                )
 
 
 class CheckerRegistry:
