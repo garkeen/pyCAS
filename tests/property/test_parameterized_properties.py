@@ -6,10 +6,19 @@ from fractions import Fraction
 from support import runtime_proposition, variable
 
 from cas.kernel.evidence import CheckRequest, Refuted, Verified
+from cas.language.problems import ParameterMode
 from cas.math.calculus.differentiation.checker import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.math.calculus.differentiation.verify import verify_derivative
 from cas.runtime import bootstrap_parameterized
+from cas.semantics.specialization import (
+    Applied,
+    CoverageClaim,
+    GenericResult,
+    Specialization,
+    specialize,
+)
+from cas.syntax import binding as B
 from cas.syntax import term as T
 
 SEED = 20261027
@@ -101,3 +110,48 @@ def test_the_checker_accepts_and_refutes_parameterized_candidates():
             )
         )
         assert isinstance(wrong_outcome, Refuted)
+
+
+def test_specialization_commutes_with_differentiation():
+    runtime = bootstrap_parameterized()
+    specialization = runtime.specialization
+    assert specialization is not None
+    parameter = runtime.request.parameters[0]
+    true = runtime_proposition(runtime, T.TRUE)
+    rng = random.Random(SEED + 2)
+    for _ in range(100):
+        source = random_target_polynomial(rng, runtime)
+        candidate = runtime.ring.derivative(source, 0)
+        source_term = runtime.bridge.to_term(source)
+        candidate_term = runtime.bridge.to_term(candidate)
+        assert source_term is not None
+        assert candidate_term is not None
+        family = GenericResult.assemble(
+            result=candidate_term,
+            valid_on=true,
+            excluded_cases=(),
+            correctness_specification=true,
+            parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
+        )
+        assert family.coverage_claim is CoverageClaim.ALL_VALUES
+
+        value = Fraction(rng.randint(-4, 4), rng.randint(1, 4))
+        outcome = specialize(
+            family,
+            runtime.request,
+            Specialization({parameter: value}),
+            runtime.signature,
+        )
+        assert isinstance(outcome, Applied)
+        assert not B.free_symbols(outcome.result) & {parameter}
+
+        specialized_source = B.substitute_free(
+            source_term, {parameter: T.number(value)}
+        )
+        source_value = specialization.bridge.to_value(specialized_source)
+        result_value = specialization.bridge.to_value(outcome.result)
+        assert source_value is not None
+        assert result_value is not None
+        assert specialization.ring.equal(
+            result_value, specialization.differential.deriv(source_value)
+        )

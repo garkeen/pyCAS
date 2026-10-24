@@ -37,7 +37,8 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 | semantics | `definitions.py`：唯一自动代换通道，展开到不动点，预算出口 `DefinitionError` |
 | semantics | `bridge.py`：Term ↔ 多项式显式片段；片段外返回 None，不猜表示 |
 | semantics | `request.py`：`AlgebraRequest` 固定系数 parent、参数环、参数、目标与参数模式；角色属于请求，不属于符号 |
-| semantics | `bridge.py`：项 ↔ 多项式元素；新增参数桥，参数映射到系数环生成元、目标映射到外层生成元 |
+| semantics | `bridge.py`：项 ↔ 多项式元素；参数桥把参数映射到系数环生成元、目标映射到外层生成元 |
+| semantics | `specialization.py`：`GenericResult`（有效区域/异常集/正确性规格/覆盖声明）、精确点 `Specialization`、条件求值与特化结果 |
 | semantics | `differential.py`：`DifferentialStructure` 把 parent 与选定导子显式配对 |
 | semantics | `elaborate.py`：先展开别名再定型/发行命题，存下的命题 alias-free |
 | kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；Checker 协议与四种 outcome |
@@ -46,14 +47,14 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 | math | `differentiation/specification.py`：`HasDerivative(region, f, x, g)` 词表与解析 |
 | math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative` |
 | math | `differentiation/checker.py`：证书逐项匹配；只有全域可证；片段外 Unverified；错误候选 Refuted 带见证 |
-| workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图 |
-| runtime | `bootstrap.py`：显式装配 Q[x]（无参数）与 Q[a…][x]（形式参数作为系数）；`bootstrap_parameterized` 把参数角色固定为目标之外的系数生成元 |
+| workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图；参数族记录与精确点特化 |
+| runtime | `bootstrap.py`：显式装配 Q[x]（无参数）、Q[a…][x]（形式参数作为系数）与 Q[x] 特化视图（独立 parent/导子/桥/checker）；`bootstrap_parameterized` 把参数角色固定为目标之外的系数生成元 |
 | frontend | `parser.py`：文本 → Term，名称解析到稳定 SymbolId，结构 head 驱动，无化简、无数学语义 |
 | frontend | `pprint.py`：可读形式 + 全应用 source 形式；source 对可解析项逐项往返，binder/自由索引/非符号算子显式拒答 |
-| frontend | `session.py`：对象标签、焦点、intake/diff/show/list/undo/redo；只经 Workspace 与 kernel；旧 `cas/api.py` 已删除，Session 是唯一前端门面 |
+| frontend | `session.py`：对象标签、焦点、intake/diff/specialize/show/list/undo/redo；只经 Workspace 与 kernel；旧 `cas/api.py` 已删除，Session 是唯一前端门面 |
 | frontend | `repl.py`：逐行 REPL，仅分派与打印；前端错误报告，诚实拒答仍是结果 |
 
-### 参数域与系数域（首个切片）
+### 参数域与系数域
 
 参数符号与目标变量的角色现在由 `AlgebraRequest` 显式固定，而不是由符号名或全局域猜测：
 
@@ -66,11 +67,38 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
   `DerivativeChecker` 与 `Workspace` 使用同一个桥，因此验证与候选计算看到同一
   角色划分。
 - 已支持 `a*x^2 → 2*a*x`、参数常量 `a → 0` 的验证；`a` 不作为求导目标
-  （Workspace 拒绝），`1/a` 在多项式片段外诚实拒答。问题规格记录
-  `GenericParameters` 模式。
-- 尚未实现：参数特化、局部化/异常集、`AllParameterValues` 覆盖、参数关系与
-  参数分支；当前只承诺形式参数作为多项式系数的泛参数结果，不声称对所有参数值
-  成立。
+  （Workspace 拒绝），`1/a` 在多项式片段外诚实拒答。问题规格记录请求的参数模式。
+- 尚未实现：参数关系（多项式等式/不等式/整数约束）、参数分支，以及会真正产生
+  非空异常集的局部化算法；当前多项式求导不引入分母或分支。
+
+### 参数特化、局部化与覆盖
+
+- `semantics/specialization.py` 定义 `GenericResult`：结果、`valid_on`、异常集、
+  正确性规格与 `CoverageClaim`（`SPECIFIED` / `GENERIC` / `PARTIAL` /
+  `ALL_VALUES`）。`assemble` 从 `ParameterMode` 与有效性推导覆盖；声称
+  `ALL_VALUES` 时构造期拒绝非空异常集或非 `true` 的有效区域。
+- `Specialization` 要求请求的**全部**参数且只接受精确有理值。语义特化不是
+  Q(a)→Q 的域同态：它先在点上求值有效区域，再逐个检查异常集；条件不可判定或命中
+  异常即返回 `NeedsRecomputation`，绝不把未决条件当成成立；落在有效区域外返回
+  `OutsideValidity`。
+- 参数模式的默认值改为 `AllParameterValues`（符合 §8.2）；多项式求导无分母与分支，
+  其 `GenericResult` 为无条件，覆盖 `ALL_VALUES`。显式传
+  `parameter_mode=GENERIC_PARAMETERS` 可只声明形式族；`SPECIFIED_VALUES` 在形式
+  参数运行时被拒绝。
+- `bootstrap_parameterized` 额外装配 Q[x] 特化视图：独立的 parent、导子、桥与
+  checker（id 为 `calculus.derivative.specialized`），与参数族 checker 同时注册在
+  同一冻结 registry 中。
+- `Workspace.differentiate` 为已验证的参数族记录 `GenericResult`；
+  `Workspace.specialize` 先做语义特化，能代入时走泛参数公式，否则回到原问题在
+  Q[x] 中重算；两条路径都把源与候选经 Q[x] 桥规范化并用独立 checker 复核后才提交。
+  特化失败（无效点、缺失/多余参数、片段外）不写账本。
+- 前端命令 `specialize [@LABEL] a=VALUE ...`：只接受精确有理字面量，缺失、重复、
+  未知参数或非字面量值都是前端拒答；非参数化运行时返回 `unsupported`。
+- 测试覆盖：语义层的有效区域/异常集/未决条件/覆盖声明；workflow 的泛公式路径、
+  重算路径、伪造候选被否证、可见性与无写入拒答；端到端的多次特化与独立 checker
+  记录；固定种子的“特化与求导可交换”性质（100 组随机多项式与有理点）。
+- 尚未实现：参数关系与分支、会生成异常集的真实局部化算法；当前特化点只支持精确
+  有理值，实代数点尚未接入。
 
 ### 绑定与声明 DSL（首个切片）
 
@@ -104,23 +132,24 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
 v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-新套件共 454 个用例：
+新套件共 484 个用例：
 
-- `tests/unit`（含参数化展开，417 个）：ids、term、binding、sorts、signatures、typing、
+- `tests/unit`（含参数化展开，440 个）：ids、term、binding、sorts、signatures、typing、
   propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
   symbols、frames、definitions、bridge、differential、elaborate、algebra request；
   evidence、store、commit；specification、verify、differentiation checker；
   bootstrap、workspace；parser、pprint、session、repl；参数桥与参数 checker；
-  binder 定型与声明 DSL。
-- `tests/integration`（13）：纵线端到端、前端纵线与参数化纵线。intake 不产生
+  binder 定型、声明 DSL、参数特化语义与特化 workflow。
+- `tests/integration`（19）：纵线端到端、前端纵线与参数化纵线。intake 不产生
   Judgment；一次发行一条判断；inference/certificate 与请求逐项一致；undo 不回滚
   账本；片段外零写入；二阶导是新判断；文本经 parser/session 走到同一
-  `HasDerivative` 验证边界；参数化 Q[a][x] 的角色分离与验证。
-- `tests/property`（24，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
+  `HasDerivative` 验证边界；参数化 Q[a][x] 的角色分离与验证；泛参数覆盖声明、
+  精确有理点特化与 Q[x] 独立复核。
+- `tests/property`（25，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
   绑定往返、shift 可逆、同时代换、Quote 惰性；
   Q/Z/K[x]/K(x) 的域与环定律、导子加性与 Leibniz；
   随机求导的独立验证、checker 接受正确候选并以见证否证扰动候选、workspace 随机求导；
-  随机参数化多项式的独立验证与 checker 接受/否证。
+  随机参数化多项式的独立验证与 checker 接受/否证；特化与求导可交换。
 
 前端行为另有明确覆盖：运算优先级/结合性、`1+1` 不化简、有理字面量折叠、名称稳定 id、
 链式比较与空输入等解析拒答（带列号）、可读打印、source 形式往返、标签唯一性、
@@ -176,8 +205,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 验收（本轮）
 
-- `python -m pytest -q`：454 passed。
-- `python -m mypy --strict cas`：51 source files，无问题（全库）。
+- `python -m pytest -q`：484 passed。
+- `python -m mypy --strict cas`：52 source files，无问题（全库）。
 - `python -m ruff check cas tests`：All checks passed。
 - `python -m compileall -q cas`：通过。
 
@@ -188,17 +217,19 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 - binder 类型规则首个切片已完成（声明参数 sort、函数值/值 binder、嵌套索引、注解外层
   定型）；尚未完成注解驱动的参数 sort、量化/全称引入、前端 binder 语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
-- 参数层只完成首个切片：形式参数作为系数生成元与 `GenericParameters` 记录；特化、
-  局部化/异常集、`AllParameterValues`、参数关系与参数分支尚未实现。
+- 参数层已完成角色分离、`AllParameterValues`/`GenericParameters` 覆盖声明、
+  精确有理点特化与异常集协议；尚未实现参数关系（多项式等式/不等式/整数约束）、
+  参数分支、会生成非空异常集的真实局部化算法，以及精确有理值之外的特化点。
 - 义务清偿目前是显式操作；自动解析/决策服务（inspect/resolve）尚未接入。
 - 否定导致的 Blocked 变体尚未接入（需要 refutation 记录）。
 - 条件被否证时的 Rejected 分支依赖未来的判定服务；当前只区分未决条件的三种策略。
 - 前端当前只覆盖纵线：无声明/定义命令、无隐式标量默认（未声明名字可以进入对象，但
-  求导会诚实拒答）、`@LABEL` 只作为命令目标，不能嵌入公式、只对 `x` 求导、无持久化。
+  求导会诚实拒答）、`@LABEL` 只作为命令目标，不能嵌入公式、只对 `x` 求导、无持久化；
+  `specialize` 只接受精确有理字面量。
 
 ### 下一步
 
-1. 参数层继续：参数特化、局部化/异常集、`AllParameterValues` 覆盖与参数关系；
+1. 参数层继续：参数关系、参数分支，以及让新的局部化算法真正产生异常集；
    每个新语义都配正例、拒答和性质测试。
 2. 语义层补齐：binder 表面语法与注解驱动 sort、量化/全称引入、K(x) 桥接、
    义务自动清偿与否证；扩展声明 DSL 到导数定律、定义域与别名/角色。

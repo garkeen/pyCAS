@@ -8,14 +8,19 @@ kernel. Undo and redo move the visible revision; the ledger is untouched.
 from __future__ import annotations
 
 import re
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any
 
-from cas.foundation.ids import ObjectVersionId
+from cas.foundation.ids import ObjectVersionId, SymbolId
 from cas.frontend.errors import SessionError
 from cas.frontend.parser import parse
 from cas.frontend.pprint import to_str
 from cas.syntax import term as T
-from cas.workflow.records import DerivativeResult, Expression, OperationStatus
+from cas.workflow.records import (
+    DerivativeResult,
+    Expression,
+    OperationStatus,
+)
 from cas.workflow.workspace import Workspace
 
 if TYPE_CHECKING:
@@ -30,6 +35,8 @@ _HELP = """commands:
   <expression>          store an expression object
   expr LABEL := EXPR    store an expression object with a label
   diff [@LABEL]         differentiate the focused or named expression
+  specialize [@LABEL] a=VALUE ...
+                        apply exact parameter values to a verified family
   show [@LABEL]         show an expression
   list                  list the visible expressions
   undo                  move one revision back
@@ -162,6 +169,8 @@ class Session:
             return self._show(argument)
         if command == "diff":
             return self._differentiate(argument)
+        if command == "specialize":
+            return self._specialize(argument)
         if command == "expr":
             return self._assign(text)
         expression = self.intake(text)
@@ -185,6 +194,65 @@ class Session:
         result = self.differentiate(source)
         if result.status is OperationStatus.VERIFIED:
             assert result.result is not None
+            return "verified " + self._line(result.result)
+        return f"{result.status.value}: {result.detail}"
+
+    def _specialize(self, argument: str) -> str:
+        runtime = self._runtime
+        if not runtime.request.parameters:
+            return "unsupported: this runtime has no formal parameters"
+        parts = argument.split()
+        source: Expression | None
+        if parts and parts[0].startswith("@"):
+            source = self.object(parts[0][1:])
+            parts = parts[1:]
+        else:
+            source = self._focus
+        if source is None:
+            raise SessionError(
+                "there is no focused expression; enter one or name it with "
+                "@LABEL"
+            )
+        if not parts:
+            raise SessionError("usage: specialize [@LABEL] NAME=VALUE ...")
+
+        parameters = set(runtime.request.parameters)
+        values: dict[SymbolId, Fraction] = {}
+        for token in parts:
+            name, separator, text = token.partition("=")
+            if not separator or not name or not text:
+                raise SessionError(f"expected NAME=VALUE, got {token!r}")
+            symbol_id = runtime.table.lookup(name)
+            if symbol_id is None or symbol_id not in parameters:
+                raise SessionError(
+                    f"{name!r} is not a parameter of this runtime"
+                )
+            if symbol_id in values:
+                raise SessionError(f"parameter {name!r} is assigned twice")
+            term = self.parse(text)
+            if isinstance(term, T.IntLit):
+                values[symbol_id] = Fraction(term.value)
+            elif isinstance(term, T.RatLit):
+                values[symbol_id] = term.value
+            else:
+                raise SessionError(
+                    "a parameter value must be an exact rational literal"
+                )
+        missing = [
+            runtime.table.name_of(symbol_id)
+            for symbol_id in runtime.request.parameters
+            if symbol_id not in values
+        ]
+        if missing:
+            raise SessionError(
+                "missing parameter values: " + ", ".join(missing)
+            )
+
+        result = self.workspace.specialize(source, values)
+        if result.status is OperationStatus.VERIFIED:
+            assert result.result is not None
+            self._register(result.result, self._choose_label(None))
+            self._focus = result.result
             return "verified " + self._line(result.result)
         return f"{result.status.value}: {result.detail}"
 

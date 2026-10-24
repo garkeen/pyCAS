@@ -23,6 +23,7 @@ from cas.foundation.ids import (
 )
 from cas.language.problems import ProblemSpec
 from cas.language.propositions import Proposition
+from cas.semantics.specialization import GenericResult
 from cas.syntax import term as T
 
 
@@ -100,6 +101,26 @@ class DerivativeResult:
     verification: VerificationLink | None
     result: Expression | None
     detail: str = ""
+    generic: GenericResult | None = None
+
+
+class SpecializationPath(StrEnum):
+    """Which computation produced a specialized candidate."""
+
+    GENERIC_FORMULA = "generic_formula"
+    RECOMPUTED = "recomputed"
+
+
+@dataclass(frozen=True, slots=True)
+class SpecializationResult:
+    """The outcome of specializing a verified parameter family."""
+
+    status: OperationStatus
+    candidate: Candidate | None
+    verification: VerificationLink | None
+    result: Expression | None
+    path: SpecializationPath | None
+    detail: str = ""
 
 
 __all__ = [
@@ -109,5 +130,7 @@ __all__ = [
     "Expression",
     "OperationStatus",
     "Revision",
+    "SpecializationPath",
+    "SpecializationResult",
     "VerificationLink",
 ]

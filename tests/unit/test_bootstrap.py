@@ -55,7 +55,7 @@ def test_parameterized_bootstrap_separates_roles():
     assert runtime.ring.generators == (runtime.variable,)
     assert set(runtime.ring.generators).isdisjoint(runtime.request.parameters)
     assert runtime.request.target == runtime.variable
-    assert runtime.request.parameter_mode is ParameterMode.GENERIC_PARAMETERS
+    assert runtime.request.parameter_mode is ParameterMode.ALL_PARAMETER_VALUES
     assert runtime.request.interpretation is Interpretation.PARAMETER_FAMILY
     assert runtime.request.role_of(runtime.variable) is Role.TARGET
     assert runtime.request.role_of(parameter) is Role.PARAMETER
@@ -64,6 +64,42 @@ def test_parameterized_bootstrap_separates_roles():
     assert runtime.parent.ring is runtime.ring
     assert runtime.differential.parent is runtime.parent
     assert runtime.store.stats()["judgments"] == 0
+    assert runtime.specialization is not None
+
+
+def test_parameterized_bootstrap_assembles_the_concrete_view():
+    runtime = bootstrap_parameterized()
+    specialization = runtime.specialization
+    assert specialization is not None
+    assert specialization.ring.generators == (runtime.variable,)
+    assert specialization.parent.ring is specialization.ring
+    assert specialization.differential.parent is specialization.parent
+    assert specialization.request.parameters == ()
+    assert specialization.request.parameter_ring is None
+    assert specialization.request.parameter_mode is ParameterMode.SPECIFIED_VALUES
+    assert specialization.request.interpretation is Interpretation.EMBEDDED
+    assert specialization.request.target == runtime.variable
+    assert specialization.checker.id == "calculus.derivative.specialized"
+    assert runtime.store.checkers.get(runtime.checker.id) is runtime.checker
+    assert (
+        runtime.store.checkers.get(specialization.checker.id)
+        is specialization.checker
+    )
+
+
+def test_a_generic_request_keeps_the_formal_family_claim():
+    runtime = bootstrap_parameterized(
+        parameter_mode=ParameterMode.GENERIC_PARAMETERS
+    )
+    assert runtime.request.parameter_mode is ParameterMode.GENERIC_PARAMETERS
+    assert runtime.specialization is not None
+
+
+def test_a_formal_family_cannot_claim_specified_values():
+    with pytest.raises(ValueError):
+        bootstrap_parameterized(
+            parameter_mode=ParameterMode.SPECIFIED_VALUES
+        )
 
 
 def test_multiple_parameters_keep_the_target_separate():

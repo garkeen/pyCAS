@@ -60,9 +60,14 @@ class DerivativeChecker(Generic[E]):
         signature: LanguageSignature,
         vocabulary: DerivativeVocabulary,
         to_value: Callable[[T.Term], Polynomial[E] | None] | None = None,
+        *,
+        identifier: str = "calculus.derivative",
     ) -> None:
         if len(ring.generators) != 1:
             raise TypeError("the derivative fragment is univariate")
+        if not identifier:
+            raise ValueError("a checker needs an identifier")
+        self.id = identifier
         self._ring = ring
         self._signature = signature
         self._vocabulary = vocabulary

@@ -48,6 +48,24 @@ E = TypeVar("E")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class SpecializationRuntime:
+    """The concrete `Q[x]` view used to specialize a parameter family.
+
+    A specialization is a new algebra request, not a field homomorphism: the
+    parameter ring disappears, and the target parent takes plain rational
+    coefficients. The checker is independent of the family checker, so a
+    specialized answer is verified in the specialized structure.
+    """
+
+    ring: UnivariatePolynomialRing[Fraction]
+    parent: Parent[Polynomial[Fraction]]
+    differential: DifferentialStructure[Polynomial[Fraction]]
+    bridge: SimplePolynomialBridge[Fraction]
+    checker: DerivativeChecker[Fraction]
+    request: AlgebraRequest
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class Runtime(Generic[E]):
     """One assembled world, its algebra view, ledger and supported operation."""
 
@@ -65,6 +83,7 @@ class Runtime(Generic[E]):
     store: KernelStore
     bridge: PolynomialBridge[E]
     request: AlgebraRequest
+    specialization: SpecializationRuntime | None = None
 
 
 def _world(
@@ -137,12 +156,21 @@ def bootstrap() -> Runtime[Fraction]:
 
 def bootstrap_parameterized(
     parameters: tuple[str, ...] = ("a",),
+    *,
+    parameter_mode: ParameterMode = ParameterMode.ALL_PARAMETER_VALUES,
 ) -> Runtime[Polynomial[Fraction]]:
     """Assemble Q[parameters][x] with formal parameters as coefficients.
 
     Parameters are ordinary declared symbols, but their role in this request is
     coefficient generator; `x` is the target. The bridge maps each role
     explicitly, so the two namespaces cannot be confused.
+
+    The ordinary parameter-family request asks for all declared parameter
+    values. The polynomial derivative introduces no denominator or branch, so
+    its generic result is unconditional and can meet that request. A caller may
+    still ask for `GENERIC_PARAMETERS`, in which case the result claims only the
+    formal family. `SPECIFIED_VALUES` is rejected: this assembly has no exact
+    values to fix.
     """
     if not parameters:
         raise ValueError("a parameterized runtime needs at least one parameter")
@@ -150,6 +178,13 @@ def bootstrap_parameterized(
         raise ValueError("parameter names must be distinct")
     if "x" in parameters:
         raise ValueError("the target name x cannot also be a parameter")
+    if parameter_mode not in {
+        ParameterMode.GENERIC_PARAMETERS,
+        ParameterMode.ALL_PARAMETER_VALUES,
+    }:
+        raise ValueError(
+            "a formal parameter family needs generic or all-values coverage"
+        )
     reserved = {head.value for head in StructuralHead} | {"HasDerivative"}
     for name in parameters:
         if name in reserved:
@@ -206,14 +241,54 @@ def bootstrap_parameterized(
     checker = DerivativeChecker(
         target_ring, signature, vocabulary, bridge.to_value
     )
-    store = KernelStore(frames, CheckerRegistry({checker.id: checker}))
+
+    base_ring = UnivariatePolynomialRing(variable, rationals)
+    base_parent = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=coefficient.spec,
+            generators=(variable,),
+        ),
+        base_ring,
+    )
+    base_differential = polynomial_structure(base_parent, 0)
+    base_bridge = SimplePolynomialBridge(
+        base_ring, signature, table.name_of, T.number
+    )
+    base_checker = DerivativeChecker(
+        base_ring,
+        signature,
+        vocabulary,
+        base_bridge.to_value,
+        identifier="calculus.derivative.specialized",
+    )
+    store = KernelStore(
+        frames,
+        CheckerRegistry({checker.id: checker, base_checker.id: base_checker}),
+    )
     request = AlgebraRequest(
         coefficient=coefficient,
         parameter_ring=parameter_parent,
         parameters=parameter_ids,
         target=variable,
-        parameter_mode=ParameterMode.GENERIC_PARAMETERS,
+        parameter_mode=parameter_mode,
         interpretation=Interpretation.PARAMETER_FAMILY,
+    )
+    specialized_request = AlgebraRequest(
+        coefficient=coefficient,
+        parameter_ring=None,
+        parameters=(),
+        target=variable,
+        parameter_mode=ParameterMode.SPECIFIED_VALUES,
+        interpretation=Interpretation.EMBEDDED,
+    )
+    specialization = SpecializationRuntime(
+        base_ring,
+        base_parent,
+        base_differential,
+        base_bridge,
+        base_checker,
+        specialized_request,
     )
     return Runtime(
         table,
@@ -230,6 +305,7 @@ def bootstrap_parameterized(
         store,
         bridge,
         request,
+        specialization=specialization,
     )
 
 
@@ -240,6 +316,7 @@ def new_workspace(runtime: Runtime[Any]) -> Workspace:
 
 __all__ = [
     "Runtime",
+    "SpecializationRuntime",
     "bootstrap",
     "bootstrap_parameterized",
     "new_workspace",
