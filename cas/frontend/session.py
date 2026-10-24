@@ -34,6 +34,7 @@ _ASSIGNMENT = re.compile(
 _HELP = """commands:
   <expression>          store an expression object
   expr LABEL := EXPR    store an expression object with a label
+  assume FORMULA        add a hypothesis in a child frame
   diff [@LABEL]         differentiate the focused or named expression
   specialize [@LABEL] a=VALUE ...
                         apply exact parameter values to a verified family
@@ -169,6 +170,8 @@ class Session:
             return self._show(argument)
         if command == "diff":
             return self._differentiate(argument)
+        if command == "assume":
+            return self._assume(argument)
         if command == "specialize":
             return self._specialize(argument)
         if command == "expr":
@@ -189,12 +192,30 @@ class Session:
         expression = self._resolve(argument, "show")
         return self._line(expression)
 
+    def _assume(self, argument: str) -> str:
+        if not argument:
+            raise SessionError("usage: assume FORMULA")
+        result = self.workspace.assume(self.parse(argument))
+        if result.status is OperationStatus.VERIFIED:
+            assert result.proposition is not None
+            return "assumed: " + to_str(
+                result.proposition.term, self._runtime.signature
+            )
+        return f"{result.status.value}: {result.detail}"
+
     def _differentiate(self, argument: str) -> str:
         source = self._resolve(argument, "diff")
         result = self.differentiate(source)
         if result.status is OperationStatus.VERIFIED:
             assert result.result is not None
             return "verified " + self._line(result.result)
+        if result.status is OperationStatus.CONDITIONAL:
+            assert result.result is not None
+            assert result.condition is not None
+            region = to_str(
+                result.condition.term, self._runtime.signature
+            )
+            return "verified on " + region + " " + self._line(result.result)
         return f"{result.status.value}: {result.detail}"
 
     def _specialize(self, argument: str) -> str:
