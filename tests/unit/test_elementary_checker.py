@@ -120,7 +120,7 @@ def test_the_conclusion_must_be_a_derivative_specification():
     assert isinstance(outcome, InvalidEvidence)
 
 
-def test_only_the_whole_domain_region_is_verified():
+def test_a_different_region_is_unverified():
     runtime = setup()
     source = term(runtime, "sin(x)")
     candidate = term(runtime, "cos(x)")
@@ -131,7 +131,8 @@ def test_only_the_whole_domain_region_is_verified():
         certificate(runtime, source, candidate, region=region),
     )
     assert isinstance(outcome, Unverified)
-    assert outcome.reason is Reason.GUARDED
+    assert outcome.reason is Reason.FRAGMENT
+    assert "region" in outcome.detail
 
 
 def test_the_claim_must_use_this_fragments_variable():
@@ -148,15 +149,44 @@ def test_the_claim_must_use_this_fragments_variable():
     assert outcome.reason is Reason.FRAGMENT
 
 
-def test_conditional_laws_are_unverified():
+def test_conditional_claims_are_verified_on_their_region():
     runtime = setup()
     source = term(runtime, "sqrt(x)")
-    candidate = T.number(0)
+    candidate = term(runtime, "1/2*sqrt(x)^-1")
+    region = term(runtime, "x >= 0 and x > 0")
     outcome = check(
+        runtime,
+        claim(runtime, source, candidate, region=region),
+        certificate(runtime, source, candidate, region=region),
+    )
+    assert isinstance(outcome, Verified)
+
+    without_region = check(
         runtime,
         claim(runtime, source, candidate),
         certificate(runtime, source, candidate),
     )
+    assert isinstance(without_region, Unverified)
+    assert without_region.reason is Reason.FRAGMENT
+    assert "region" in without_region.detail
+
+    wrong_candidate = check(
+        runtime,
+        claim(runtime, source, T.number(0), region=region),
+        certificate(runtime, source, T.number(0), region=region),
+    )
+    assert isinstance(wrong_candidate, Unverified)
+
+
+def test_a_weaker_region_is_unverified():
+    runtime = setup()
+    source = term(runtime, "sqrt(x)")
+    candidate = term(runtime, "1/2*sqrt(x)^-1")
+    region = term(runtime, "x >= 0")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate, region=region),
+        certificate(runtime, source, candidate, region=region),
+    )
     assert isinstance(outcome, Unverified)
-    assert outcome.reason is Reason.GUARDED
-    assert "conditional" in outcome.detail
+    assert "region" in outcome.detail

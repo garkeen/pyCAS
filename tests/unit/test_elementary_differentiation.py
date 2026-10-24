@@ -155,16 +155,94 @@ def test_a_constant_argument_collapses_to_zero():
     assert deriver.derive(call(table, signature, "sin", pi)).term == T.number(0)
 
 
-def test_conditional_laws_are_refused():
+def test_conditional_laws_carry_a_restricted_region():
     table, _, signature, variable, deriver = setup()
     x = T.symbol(variable, "x")
-    for name in ("sqrt", "log"):
-        outcome = deriver.derive(call(table, signature, name, x))
-        assert isinstance(outcome, DerivationUnsupported)
-        assert outcome.reason is Reason.GUARDED
-        assert "conditional" in outcome.detail
+
+    square = deriver.derive(call(table, signature, "sqrt", x))
+    assert isinstance(square, Derived)
+    assert square.term == times(
+        signature,
+        T.number(Fraction(1, 2)),
+        power(signature, call(table, signature, "sqrt", x), -1),
+    )
+    domain = head_app(signature, StructuralHead.GE, x, T.number(0))
+    interior = head_app(signature, StructuralHead.GT, x, T.number(0))
+    assert square.condition == interior
+    assert square.defined == domain
+
+    logarithm = deriver.derive(call(table, signature, "log", x))
+    assert isinstance(logarithm, Derived)
+    assert logarithm.term == power(signature, x, -1)
+    assert logarithm.condition == interior
+    assert logarithm.defined == interior
+
+
+def test_a_zero_power_uses_definedness_only():
+    table, _, signature, variable, deriver = setup()
+    x = T.symbol(variable, "x")
     powered = power(signature, call(table, signature, "sqrt", x), 0)
     outcome = deriver.derive(powered)
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(0)
+    assert outcome.condition == head_app(
+        signature, StructuralHead.GE, x, T.number(0)
+    )
+    assert outcome.defined == outcome.condition
+
+
+def test_ground_conditions_collapse_or_refuse():
+    table, _, signature, variable, deriver = setup()
+    square_one = call(table, signature, "sqrt", T.number(1))
+    outcome = deriver.derive(square_one)
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(0)
+    assert outcome.condition is None
+
+    log_one = call(table, signature, "log", T.number(1))
+    outcome = deriver.derive(log_one)
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(0)
+    assert outcome.condition is None
+
+    for term in (
+        call(table, signature, "sqrt", T.number(-1)),
+        call(table, signature, "log", T.number(0)),
+    ):
+        outcome = deriver.derive(term)
+        assert isinstance(outcome, DerivationUnsupported)
+        assert outcome.reason is Reason.GUARDED
+
+
+def test_conditions_are_composed_through_the_chain_rule():
+    table, _, signature, variable, deriver = setup()
+    x = T.symbol(variable, "x")
+    inner = call(table, signature, "sin", x)
+    outcome = deriver.derive(call(table, signature, "log", inner))
+    assert isinstance(outcome, Derived)
+    expected = head_app(signature, StructuralHead.GT, inner, T.number(0))
+    assert outcome.condition == expected
+    assert outcome.defined == expected
+
+
+def test_an_empty_symbolic_domain_or_condition_is_refused():
+    domain_text = (
+        "function F : Real -> Real on u > 0 and u < 0\n"
+        "derivative F(u) = 1\n"
+    )
+    table, _, signature, variable, deriver = setup(domain_text)
+    x = T.symbol(variable, "x")
+    outcome = deriver.derive(call(table, signature, "F", x))
+    assert isinstance(outcome, DerivationUnsupported)
+    assert outcome.reason is Reason.GUARDED
+
+    law_text = (
+        "function F : Real -> Real\n"
+        "derivative F(u) = 1 on u > 0 and u < 0\n"
+    )
+    table, _, signature, variable, deriver = setup(law_text)
+    x = T.symbol(variable, "x")
+    outcome = deriver.derive(call(table, signature, "F", x))
     assert isinstance(outcome, DerivationUnsupported)
     assert outcome.reason is Reason.GUARDED
 
@@ -223,7 +301,7 @@ def test_a_function_without_a_law_is_refused():
     assert "no derivative law" in outcome.detail
 
 
-def test_an_undischarged_function_domain_is_refused():
+def test_a_function_domain_becomes_a_condition():
     text = (
         "function F : Real -> Real on u >= 0\n"
         "derivative F(u) = 1\n"
@@ -231,9 +309,11 @@ def test_an_undischarged_function_domain_is_refused():
     table, _, signature, variable, deriver = setup(text)
     x = T.symbol(variable, "x")
     outcome = deriver.derive(call(table, signature, "F", x))
-    assert isinstance(outcome, DerivationUnsupported)
-    assert outcome.reason is Reason.GUARDED
-    assert "conditional" in outcome.detail
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(1)
+    expected = head_app(signature, StructuralHead.GE, x, T.number(0))
+    assert outcome.condition == expected
+    assert outcome.defined == expected
 
 
 def test_the_same_symbol_is_not_a_target_by_accident():

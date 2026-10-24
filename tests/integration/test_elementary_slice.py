@@ -38,6 +38,8 @@ def test_declared_function_laws_are_used_and_independently_checked():
     assert isinstance(
         inference.certificate, ElementaryDerivativeCertificate
     )
+    assert runtime.elementary is not None
+    assert inference.basis == (runtime.elementary.basis,)
     assert runtime.store.applicability(
         link.judgment, runtime.frame.id
     ).is_applicable()
@@ -63,17 +65,64 @@ def test_constants_are_constants_not_undeclared_names():
     assert session.execute("diff") == "verified @E3: 0"
 
 
-def test_conditional_laws_are_refused_without_writing():
+def test_conditional_laws_are_verified_on_their_region():
     runtime = bootstrap_elementary()
     session = Session(runtime)
-    for source in ("sqrt(x)", "log(x)"):
-        session.execute(source)
-        before = runtime.store.stats()
-        output = session.execute("diff")
-        assert output.startswith("unsupported:")
-        assert "conditional" in output
-        assert runtime.store.stats() == before
-    assert session.workspace.links() == ()
+    session.execute("sqrt(x)")
+    assert session.execute("diff") == (
+        "verified on x > 0 @E1: 1/2*sqrt(x)^-1"
+    )
+    session.execute("log(x)")
+    assert session.execute("diff") == "verified on x > 0 @E3: x^-1"
+
+    assert runtime.store.stats()["judgments"] == 2
+    assert runtime.store.stats()["obligations"] == 0
+    links = session.workspace.links()
+    assert len(links) == 2
+    for link in links:
+        assert link.status is OperationStatus.VERIFIED
+        assert link.condition is not None
+        assert link.judgment is not None
+        claim = parse_has_derivative(
+            runtime.vocabulary, link.specification.term
+        )
+        assert claim is not None
+        assert claim.region == link.condition.term
+        candidate = session.workspace.candidate(link.candidate)
+        assert candidate.problem.region == link.condition
+        assert runtime.store.applicability(
+            link.judgment, runtime.frame.id
+        ).is_applicable()
+
+
+def test_a_conditional_result_has_a_restricted_problem():
+    runtime = bootstrap_elementary()
+    session = Session(runtime)
+    session.execute("sqrt(x)")
+    result = session.differentiate(session.object("E0"))
+    assert result.status is OperationStatus.CONDITIONAL
+    assert result.condition is not None
+    assert result.verification is not None
+    assert result.verification.condition == result.condition
+    assert result.candidate is not None
+    assert result.candidate.problem.region == result.condition
+    assert result.result is not None
+    assert runtime.store.stats()["judgments"] == 1
+
+
+def test_definedness_only_cases_and_empty_regions():
+    runtime = bootstrap_elementary()
+    session = Session(runtime)
+    session.execute("sqrt(0)")
+    assert session.execute("diff") == "verified @E1: 0"
+    session.execute("sqrt(-1)")
+    before = runtime.store.stats()
+    output = session.execute("diff")
+    assert output.startswith("unsupported:")
+    assert runtime.store.stats() == before
+    session.execute("log(0)")
+    assert session.execute("diff").startswith("unsupported:")
+    assert runtime.store.stats() == before
 
 
 def test_negative_powers_and_unknown_symbols_are_refused():

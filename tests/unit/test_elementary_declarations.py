@@ -317,3 +317,48 @@ def test_numeric_value_is_exact():
         Product((Num(1), Power(Num(2), Num(-1))))
     ) == Fraction(1, 2)
     assert numeric_value(Name("u")) is None
+
+
+def test_a_basis_reference_must_match_the_loaded_source():
+    from cas.foundation.ids import WorldId
+    from cas.kernel.model import BasisKind, BasisRef
+
+    text = "function F : Real -> Real\nderivative F(u) = 1\n"
+    source = load_elementary(
+        text, origin=LawOrigin.BASIS, source_name="test.dsl"
+    )
+    assert source.name == "test.dsl"
+    assert len(source.digest) == 64
+    basis = BasisRef(
+        source.name,
+        BasisKind.DECLARATION_FILE,
+        "1",
+        source.digest,
+        WorldId(0),
+    )
+    table = SymbolTable()
+    library = build_elementary(table.intern, source, basis=basis)
+    assert library.basis is basis
+
+    wrong = BasisRef(
+        source.name,
+        BasisKind.DECLARATION_FILE,
+        "1",
+        "0" * 64,
+        WorldId(0),
+    )
+    with pytest.raises(ValueError):
+        build_elementary(table.intern, source, basis=wrong)
+
+
+def test_a_source_without_a_digest_cannot_become_a_basis():
+    from cas.foundation.ids import WorldId
+    from cas.kernel.model import BasisKind, BasisRef
+
+    source = ElementarySource((), (), ())
+    basis = BasisRef(
+        "test.dsl", BasisKind.DECLARATION_FILE, "1", "digest", WorldId(0)
+    )
+    table = SymbolTable()
+    with pytest.raises(ValueError):
+        build_elementary(table.intern, source, basis=basis)

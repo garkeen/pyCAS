@@ -42,5 +42,5 @@ def test_the_repl_runs_the_elementary_runtime():
     assert output[0] == "@E0: sin(x)"
     assert output[1] == "verified @E1: cos(x)"
     assert output[2] == "@E2: sqrt(x)"
-    assert output[3].startswith("unsupported:")
-    assert "conditional" in output[3]
+    assert output[3].startswith("verified on x > 0 ")
+    assert output[3].endswith("@E3: 1/2*sqrt(x)^-1")

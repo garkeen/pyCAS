@@ -1,7 +1,7 @@
 """The ledger through its only write boundary: commit, support, discharge."""
 
 import pytest
-from support import equation, variable
+from support import equation, head_app, runtime_proposition, variable
 
 from cas.foundation.ids import InferenceId, JudgmentId
 from cas.kernel.commit import (
@@ -10,9 +10,22 @@ from cas.kernel.commit import (
     ConditionPolicy,
     commit,
 )
-from cas.kernel.evidence import CheckerRegistry, ObligationReport, Verified
-from cas.kernel.model import Conditional, Discharge, ObligationReason, OutOfScope
+from cas.kernel.evidence import (
+    CheckerRegistry,
+    CheckerSpec,
+    ObligationReport,
+    Verified,
+)
+from cas.kernel.model import (
+    Blocked,
+    CertificateSchema,
+    Conditional,
+    Discharge,
+    ObligationReason,
+    OutOfScope,
+)
 from cas.kernel.store import KernelError, KernelStore
+from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
 
 
@@ -38,7 +51,15 @@ class StubChecker:
 
 def setup(runtime):
     checker = StubChecker()
-    store = KernelStore(runtime.frames, CheckerRegistry({checker.id: checker}))
+    registration = CheckerSpec(
+        checker,
+        CertificateSchema("test", "1"),
+        frozenset({"test.problem"}),
+        frozenset({"test.specification"}),
+    )
+    store = KernelStore(
+        runtime.frames, CheckerRegistry({checker.id: registration})
+    )
     return store, checker
 
 
@@ -61,6 +82,8 @@ def commit_one(
             frame=frame,
             conclusions=(proposition,),
             checker_id=checker.id,
+            problem_kind="test.problem",
+            specification_kind="test.specification",
             premises=tuple(premises),
             certificate=None,
             policy=policy,
@@ -276,3 +299,125 @@ def test_unknown_ids_are_reported(runtime):
         store.get_judgment(JudgmentId(10_000))
     with pytest.raises(KeyError):
         store.get_inference(InferenceId(10_000))
+
+
+def negate(runtime, proposition, frame):
+    return runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.NOT,
+            proposition.term,
+        ),
+        frame,
+    )
+
+
+def test_a_refuted_obligation_blocks_applicability(runtime):
+    store, checker = setup(runtime)
+    base = runtime.frame.id
+    x = variable(runtime)
+    condition = equation(runtime, x, T.number(0))
+    _, target = commit_one(
+        store,
+        checker,
+        base,
+        equation(runtime, x, T.number(1)),
+        conditions=(condition,),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    _, refutation = commit_one(
+        store, checker, base, negate(runtime, condition, base)
+    )
+    application = store.applicability(target.id, base)
+    assert isinstance(application, Blocked)
+    assert application.refuted == target.obligations
+    assert application.unresolved == ()
+    assert application.witnesses == (refutation.id,)
+    assert application.is_blocked()
+
+
+def test_a_blocked_judgment_keeps_its_unresolved_obligations(runtime):
+    store, checker = setup(runtime)
+    base = runtime.frame.id
+    x = variable(runtime)
+    first = equation(runtime, x, T.number(0))
+    second = equation(runtime, x, T.number(2))
+    _, target = commit_one(
+        store,
+        checker,
+        base,
+        equation(runtime, x, T.number(1)),
+        conditions=(first, second),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    commit_one(store, checker, base, negate(runtime, first, base))
+    application = store.applicability(target.id, base)
+    assert isinstance(application, Blocked)
+    assert application.refuted == (target.obligations[0],)
+    assert application.unresolved == (target.obligations[1],)
+
+
+def test_a_conditional_judgment_is_not_a_refutation(runtime):
+    store, checker = setup(runtime)
+    base = runtime.frame.id
+    x = variable(runtime)
+    condition = equation(runtime, x, T.number(0))
+    other = equation(runtime, x, T.number(2))
+    _, target = commit_one(
+        store,
+        checker,
+        base,
+        equation(runtime, x, T.number(1)),
+        conditions=(condition,),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    commit_one(
+        store,
+        checker,
+        base,
+        negate(runtime, condition, base),
+        conditions=(other,),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    assert store.applicability(target.id, base).is_conditional()
+
+
+def test_a_refutation_in_an_ancestor_blocks_a_descendant(runtime):
+    store, checker = setup(runtime)
+    base = runtime.frame.id
+    child = runtime.frames.create(base)
+    x = variable(runtime)
+    condition = equation(runtime, x, T.number(0), child.id)
+    _, target = commit_one(
+        store,
+        checker,
+        child.id,
+        equation(runtime, x, T.number(1), child.id),
+        conditions=(condition,),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    commit_one(store, checker, base, negate(runtime, condition, base))
+    application = store.applicability(target.id, child.id)
+    assert isinstance(application, Blocked)
+
+
+def test_a_refutation_in_a_sibling_is_not_visible(runtime):
+    store, checker = setup(runtime)
+    base = runtime.frame.id
+    left = runtime.frames.create(base)
+    right = runtime.frames.create(base)
+    x = variable(runtime)
+    condition = equation(runtime, x, T.number(0), left.id)
+    _, target = commit_one(
+        store,
+        checker,
+        left.id,
+        equation(runtime, x, T.number(1), left.id),
+        conditions=(condition,),
+        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+    )
+    commit_one(
+        store, checker, right.id, negate(runtime, condition, right.id)
+    )
+    assert store.applicability(target.id, left.id).is_conditional()

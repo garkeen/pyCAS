@@ -1,8 +1,8 @@
 """Commit: exact checker specifications, conditions and atomic publication."""
 
-from support import equation, variable
+from support import equation, head_app, runtime_proposition, variable
 
-from cas.foundation.ids import FrameId, JudgmentId
+from cas.foundation.ids import FrameId, JudgmentId, ObligationId
 from cas.kernel.commit import (
     CommitProposal,
     Committed,
@@ -13,15 +13,22 @@ from cas.kernel.commit import (
 )
 from cas.kernel.evidence import (
     CheckerRegistry,
+    CheckerSpec,
     InvalidEvidence,
     ObligationReport,
     Refuted,
     Unverified,
     Verified,
 )
-from cas.kernel.model import ObligationReason
+from cas.kernel.model import (
+    BasisKind,
+    BasisRef,
+    CertificateSchema,
+    ObligationReason,
+)
 from cas.kernel.store import KernelStore
 from cas.language.decisions import Reason
+from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
 
 
@@ -40,7 +47,15 @@ class StubChecker:
 
 def setup(runtime):
     checker = StubChecker()
-    store = KernelStore(runtime.frames, CheckerRegistry({checker.id: checker}))
+    registration = CheckerSpec(
+        checker,
+        CertificateSchema("test", "1"),
+        frozenset({"test.problem"}),
+        frozenset({"test.specification"}),
+    )
+    store = KernelStore(
+        runtime.frames, CheckerRegistry({checker.id: registration})
+    )
     return store, checker
 
 
@@ -53,6 +68,8 @@ def proposal(runtime, proposition, **overrides):
         frame=runtime.frame.id,
         conclusions=(proposition,),
         checker_id="test.checker",
+        problem_kind="test.problem",
+        specification_kind="test.specification",
         certificate="certificate",
     )
     values.update(overrides)
@@ -307,6 +324,161 @@ def test_discharging_the_condition_makes_the_judgment_applicable(runtime):
     ).is_applicable()
 
 
+def test_a_proof_and_discharge_are_published_atomically(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    condition = conclusion(runtime, 0)
+    checker.outcome = Verified(
+        (proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    target = commit(
+        store,
+        proposal(
+            runtime, proposition, policy=ConditionPolicy.ALLOW_CONDITIONAL
+        ),
+    )
+    assert isinstance(target, Committed)
+    obligation = target.obligations[0]
+
+    checker.outcome = Verified((condition,))
+    before = store.stats()
+    proof = commit(
+        store,
+        proposal(
+            runtime,
+            condition,
+            discharge_obligations=(obligation,),
+        ),
+    )
+    assert isinstance(proof, Committed)
+    assert proof.discharged == (obligation,)
+    assert store.is_discharged(obligation, runtime.frame.id)
+    assert store.applicability(
+        target.judgments[0], runtime.frame.id
+    ).is_applicable()
+    assert store.stats()["judgments"] == before["judgments"] + 1
+    assert store.stats()["discharges"] == before["discharges"] + 1
+
+
+def test_a_conditional_proof_is_not_published_with_a_discharge(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    condition = conclusion(runtime, 0)
+    checker.outcome = Verified(
+        (proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    target = commit(
+        store,
+        proposal(
+            runtime, proposition, policy=ConditionPolicy.ALLOW_CONDITIONAL
+        ),
+    )
+    assert isinstance(target, Committed)
+    obligation = target.obligations[0]
+
+    before = store.stats()
+    checker.outcome = Verified(
+        (condition,),
+        (ObligationReport(condition, ObligationReason.RULE_GUARD),),
+    )
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            condition,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+            discharge_obligations=(obligation,),
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert "open conditions" in result.detail
+    assert store.stats() == before
+
+
+def test_a_proof_cannot_use_an_open_obligation_as_support(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    condition = conclusion(runtime, 0)
+    checker.outcome = Verified(
+        (proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    target = commit(
+        store,
+        proposal(
+            runtime, proposition, policy=ConditionPolicy.ALLOW_CONDITIONAL
+        ),
+    )
+    assert isinstance(target, Committed)
+    obligation = target.obligations[0]
+
+    before = store.stats()
+    checker.outcome = Verified((condition,), used_premises=(0,))
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            condition,
+            premises=target.judgments,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+            discharge_obligations=(obligation,),
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert store.stats() == before
+
+
+def test_an_unknown_discharge_target_is_rejected_without_writing(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    checker.outcome = Verified((proposition,))
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            proposition,
+            discharge_obligations=(ObligationId(10_000),),
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert "obligation does not exist" in result.detail
+    assert_empty(store)
+
+
+def test_a_discharge_needs_a_matching_new_judgment(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    condition = conclusion(runtime, 0)
+    checker.outcome = Verified(
+        (proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    target = commit(
+        store,
+        proposal(
+            runtime, proposition, policy=ConditionPolicy.ALLOW_CONDITIONAL
+        ),
+    )
+    assert isinstance(target, Committed)
+    obligation = target.obligations[0]
+
+    before = store.stats()
+    checker.outcome = Verified((conclusion(runtime, 2),))
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            conclusion(runtime, 2),
+            discharge_obligations=(obligation,),
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert "no new judgment" in result.detail
+    assert store.stats() == before
+
+
 def test_inherited_conditions_are_carried_and_counted_by_the_policy(runtime):
     store, checker = setup(runtime)
     first_proposition = conclusion(runtime, 1)
@@ -461,3 +633,125 @@ def test_an_obligation_read_outside_the_submission_frame_is_rejected(runtime):
     assert isinstance(result, Rejected)
     assert "obligation was read outside" in result.detail
     assert_empty(store)
+
+
+def test_the_inference_records_the_trusted_basis(runtime):
+    checker = StubChecker()
+    basis = BasisRef(
+        "test-library",
+        BasisKind.STANDARD_LIBRARY,
+        "1",
+        "digest",
+        runtime.world.id,
+    )
+    store = KernelStore(
+        runtime.frames,
+        CheckerRegistry(
+            {
+                checker.id: CheckerSpec(
+                    checker,
+                    CertificateSchema("test", "1"),
+                    frozenset({"test.problem"}),
+                    frozenset({"test.specification"}),
+                    (basis,),
+                )
+            }
+        ),
+    )
+    proposition = conclusion(runtime)
+    checker.outcome = Verified((proposition,))
+    result = commit(store, proposal(runtime, proposition))
+    assert isinstance(result, Committed)
+    assert store.inference_of(result.judgments[0]).basis == (basis,)
+
+
+def test_a_checker_is_not_admitted_for_an_unknown_problem_kind(runtime):
+    store, checker = setup(runtime)
+    checker.outcome = Verified((conclusion(runtime),))
+    result = commit(
+        store, proposal(runtime, conclusion(runtime), problem_kind="other")
+    )
+    assert isinstance(result, Rejected)
+    assert "problem kind" in result.detail
+    assert_empty(store)
+
+
+def test_a_checker_is_not_admitted_for_an_unknown_specification_kind(runtime):
+    store, checker = setup(runtime)
+    checker.outcome = Verified((conclusion(runtime),))
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            conclusion(runtime),
+            specification_kind="other",
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert "specification kind" in result.detail
+    assert_empty(store)
+
+
+def test_a_refuted_condition_is_rejected_without_deferral(runtime):
+    store, checker = setup(runtime)
+    condition = conclusion(runtime, 0)
+    target = conclusion(runtime, 1)
+    not_condition = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.NOT,
+            condition.term,
+        ),
+    )
+    checker.outcome = Verified((not_condition,))
+    refutation = commit(store, proposal(runtime, not_condition))
+    assert isinstance(refutation, Committed)
+
+    checker.outcome = Verified(
+        (target,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    result = commit(
+        store,
+        proposal(
+            runtime,
+            target,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        ),
+    )
+    assert isinstance(result, Rejected)
+    assert result.refuted_conditions == (condition,)
+    assert result.refutation is None
+    assert store.stats()["judgments"] == 1
+
+
+def test_an_inconsistent_frame_rejects_publication(runtime):
+    store, checker = setup(runtime)
+    child = runtime.frames.create(runtime.frame.id)
+    false_proposition = runtime_proposition(runtime, T.FALSE, child.id)
+    checker.outcome = Verified((false_proposition,))
+    proof = commit(
+        store, proposal(runtime, false_proposition, frame=child.id)
+    )
+    assert isinstance(proof, Committed)
+    store.record_inconsistency(child.id, proof.judgments[0])
+
+    proposition = conclusion(runtime, 2)
+    checker.outcome = Verified((proposition,))
+    result = commit(
+        store, proposal(runtime, proposition, frame=child.id)
+    )
+    assert isinstance(result, Rejected)
+    assert "inconsistent" in result.detail
+
+    grandchild = runtime.frames.create(child.id)
+    inherited = runtime_proposition(
+        runtime, proposition.term, grandchild.id
+    )
+    result = commit(
+        store, proposal(runtime, inherited, frame=grandchild.id)
+    )
+    assert isinstance(result, Rejected)
+    assert "inconsistent" in result.detail
+    assert store.stats()["judgments"] == 1

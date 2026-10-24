@@ -3,12 +3,14 @@
 import pytest
 
 from cas.foundation.ids import SymbolId
+from cas.kernel.model import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode
 from cas.language.signatures import StructuralHead
 from cas.runtime.bootstrap import (
     Runtime,
     bootstrap,
+    bootstrap_elementary,
     bootstrap_parameterized,
     new_workspace,
 )
@@ -45,6 +47,35 @@ def test_bootstrap_wires_the_world_explicitly():
     assert runtime.request.parameter_mode is ParameterMode.SPECIFIED_VALUES
     assert runtime.request.interpretation is Interpretation.FORMAL
     assert runtime.request.role_of(runtime.variable) is Role.TARGET
+
+
+def test_the_polynomial_checker_is_admitted_with_explicit_metadata():
+    runtime = bootstrap()
+    spec = runtime.store.checkers.spec(runtime.checker.id)
+    assert spec is not None
+    assert spec.certificate_schema == CertificateSchema("derivative", "1")
+    assert spec.accepted_problem_kinds == frozenset({"differentiate"})
+    assert spec.accepted_specification_kinds == frozenset({"HasDerivative"})
+    assert spec.trusted_dependencies == ()
+    assert runtime.store.checkers.spec("kernel.contradiction") is not None
+
+
+def test_elementary_bootstrap_admits_the_declaration_basis():
+    runtime = bootstrap_elementary()
+    library = runtime.elementary
+    assert library is not None
+    basis = library.basis
+    assert basis is not None
+    assert basis.kind is BasisKind.DECLARATION_FILE
+    assert basis.name == "declarations.dsl"
+    assert len(basis.digest) == 64
+    assert basis.world == runtime.world.id
+
+    spec = runtime.store.checkers.spec(runtime.derivative.checker_id)
+    assert spec is not None
+    assert spec.trusted_dependencies == (basis,)
+    assert spec.accepted_problem_kinds == frozenset({"differentiate"})
+    assert spec.accepted_specification_kinds == frozenset({"HasDerivative"})
 
 
 def test_parameterized_bootstrap_separates_roles():
