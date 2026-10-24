@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from cas.foundation.ids import FrameId
-from cas.kernel.model import ObligationReason
+from cas.kernel.model import BasisRef, CertificateSchema, ObligationReason
 from cas.language.decisions import Reason
 from cas.language.propositions import Proposition
 from cas.syntax import term as T
@@ -98,27 +98,81 @@ class Checker(Protocol):
         """Re-verify the request and report exactly what was verified."""
 
 
+@dataclass(frozen=True, slots=True)
+class CheckerSpec:
+    """Everything the kernel admits about one checker.
+
+    The certificate schema, accepted kinds and trusted dependencies belong to
+    the registration, not to a proposal. A proposal names a checker and a kind;
+    it cannot supply its own trust metadata.
+    """
+
+    checker: Checker
+    certificate_schema: CertificateSchema
+    accepted_problem_kinds: frozenset[str]
+    accepted_specification_kinds: frozenset[str]
+    trusted_dependencies: tuple[BasisRef, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.checker.id:
+            raise ValueError("a checker specification needs a checker id")
+        if not self.checker.version:
+            raise ValueError(
+                f"checker {self.checker.id!r} has no version"
+            )
+        if (
+            not self.accepted_problem_kinds
+            or any(not kind for kind in self.accepted_problem_kinds)
+        ):
+            raise ValueError(
+                f"checker {self.checker.id!r} accepts no problem kind"
+            )
+        if (
+            not self.accepted_specification_kinds
+            or any(not kind for kind in self.accepted_specification_kinds)
+        ):
+            raise ValueError(
+                f"checker {self.checker.id!r} accepts no specification kind"
+            )
+        keys = [
+            (basis.name, basis.kind, basis.version, basis.digest, basis.world)
+            for basis in self.trusted_dependencies
+        ]
+        if len(set(keys)) != len(keys):
+            raise ValueError(
+                f"checker {self.checker.id!r} repeats a trusted dependency"
+            )
+
+
 class CheckerRegistry:
     """A frozen checker table built during assembly."""
 
-    __slots__ = ("_checkers",)
+    __slots__ = ("_specs",)
 
-    def __init__(self, checkers: Mapping[str, Checker]) -> None:
-        table = dict(checkers)
-        for key, checker in table.items():
-            if checker.id != key:
-                raise ValueError(
-                    f"checker registered as {key!r} reports id {checker.id!r}"
+    def __init__(self, specs: Mapping[str, CheckerSpec]) -> None:
+        table = dict(specs)
+        for key, spec in table.items():
+            if not isinstance(spec, CheckerSpec):
+                raise TypeError(
+                    "a checker registry holds CheckerSpec values, "
+                    f"got {type(spec).__name__}"
                 )
-            if not checker.version:
-                raise ValueError(f"checker {key!r} has no version")
-        self._checkers = MappingProxyType(table)
+            if spec.checker.id != key:
+                raise ValueError(
+                    f"checker registered as {key!r} reports id "
+                    f"{spec.checker.id!r}"
+                )
+        self._specs = MappingProxyType(table)
 
     def get(self, checker_id: str) -> Checker | None:
-        return self._checkers.get(checker_id)
+        spec = self._specs.get(checker_id)
+        return None if spec is None else spec.checker
+
+    def spec(self, checker_id: str) -> CheckerSpec | None:
+        return self._specs.get(checker_id)
 
     def __len__(self) -> int:
-        return len(self._checkers)
+        return len(self._specs)
 
 
 __all__ = [
@@ -126,6 +180,7 @@ __all__ = [
     "CheckRequest",
     "Checker",
     "CheckerRegistry",
+    "CheckerSpec",
     "InvalidEvidence",
     "ObligationReport",
     "Refuted",

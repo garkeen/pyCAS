@@ -14,6 +14,7 @@ symbol table.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -24,12 +25,15 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from cas.foundation.ids import SymbolId
+from cas.kernel.model import BasisRef
 from cas.language import sorts as S
 from cas.language.declarations import sort_from_name
 from cas.language.signatures import LanguageSignature, OperatorSignature, StructuralHead
 from cas.syntax import term as T
 
 DEFAULT_DECLARATIONS = Path(__file__).with_name("declarations.dsl")
+
+DOMAIN_ARGUMENT = "u"
 
 
 class LawOrigin(StrEnum):
@@ -147,6 +151,8 @@ class ElementarySource:
     constants: tuple[ConstantSource, ...]
     functions: tuple[FunctionSource, ...]
     laws: tuple[LawSource, ...]
+    name: str = "<memory>"
+    digest: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +194,7 @@ class ElementaryLibrary:
     functions: Mapping[str, FunctionSymbol]
     functions_by_id: Mapping[SymbolId, FunctionSymbol]
     operators: Mapping[SymbolId, OperatorSignature]
+    basis: BasisRef | None = None
 
     def is_constant(self, symbol_id: SymbolId) -> bool:
         return symbol_id in self.constants_by_id
@@ -729,6 +736,7 @@ def load_elementary(
     text: str,
     *,
     origin: LawOrigin = LawOrigin.USER_AXIOM,
+    source_name: str = "<memory>",
 ) -> ElementarySource:
     """Parse elementary declarations; nothing is registered."""
     constants: list[ConstantSource] = []
@@ -806,7 +814,11 @@ def load_elementary(
             number,
         )
     return ElementarySource(
-        tuple(constants), tuple(functions), tuple(laws)
+        tuple(constants),
+        tuple(functions),
+        tuple(laws),
+        source_name,
+        hashlib.sha256(text.encode("utf-8")).hexdigest(),
     )
 
 
@@ -816,8 +828,11 @@ def load_elementary_file(
     origin: LawOrigin = LawOrigin.USER_AXIOM,
 ) -> ElementarySource:
     """Read and parse an elementary declaration file."""
+    declarations = Path(path)
     return load_elementary(
-        Path(path).read_text(encoding="utf-8"), origin=origin
+        declarations.read_text(encoding="utf-8"),
+        origin=origin,
+        source_name=declarations.name,
     )
 
 
@@ -833,8 +848,18 @@ def build_elementary(
     source: ElementarySource,
     *,
     reserved: frozenset[str] = frozenset(),
+    basis: BasisRef | None = None,
 ) -> ElementaryLibrary:
     """Build stable ids, operator signatures and law data."""
+    if basis is not None:
+        if not source.digest:
+            raise ValueError(
+                "a declaration basis needs a source digest"
+            )
+        if basis.digest != source.digest:
+            raise ValueError(
+                "the basis digest does not match the declaration source"
+            )
     reserved_names = (
         frozenset(head.value for head in StructuralHead) | reserved
     )
@@ -879,7 +904,7 @@ def build_elementary(
         if function_declaration.domain is not None:
             _validate(
                 function_declaration.domain,
-                "u",
+                DOMAIN_ARGUMENT,
                 constants,
                 functions,
                 function_declaration.line,
@@ -973,6 +998,7 @@ def build_elementary(
             }
         ),
         MappingProxyType(operators),
+        basis,
     )
 
 
@@ -982,6 +1008,7 @@ __all__ = [
     "ConstantSource",
     "ConstantSymbol",
     "DEFAULT_DECLARATIONS",
+    "DOMAIN_ARGUMENT",
     "DerivativeLaw",
     "ElementaryDeclarationError",
     "ElementaryLibrary",

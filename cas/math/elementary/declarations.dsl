@@ -17,5 +17,5 @@ function log : Real -> Real on u > 0
 derivative sin(u) = cos(u)
 derivative cos(u) = -sin(u)
 derivative exp(u) = exp(u)
-derivative sqrt(u) = (1/2)*u^(-1/2) on u > 0
+derivative sqrt(u) = (1/2)*sqrt(u)^(-1) on u > 0
 derivative log(u) = u^(-1) on u > 0

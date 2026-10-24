@@ -1,11 +1,10 @@
 """Independent verification of a declared elementary derivative.
 
 This module is a second implementation of the same rule: it walks the source
-term itself and constructs the expected derivative from the declared laws. It
-does not import the candidate generator, so a defect in that search cannot
-certify itself. A structural mismatch with the claimed candidate is reported as
-"unverified", not refuted: structural difference alone does not decide
-mathematical inequality.
+term itself and constructs the expected derivative and region from the declared
+laws. It does not import the candidate generator, so a defect in that search
+cannot certify itself. A structural mismatch is reported as "unverified", not
+refuted: structural difference alone does not decide mathematical inequality.
 """
 
 from __future__ import annotations
@@ -17,11 +16,16 @@ from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.math.calculus.differentiation import terms as B
+from cas.math.elementary.conditions import (
+    application_condition,
+    application_defined,
+)
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     FunctionSymbol,
     LawOrigin,
 )
+from cas.semantics.conditions import and_all
 from cas.semantics.services import (
     DerivationOutcome,
     DerivationUnsupported,
@@ -32,7 +36,7 @@ from cas.syntax import term as T
 
 @dataclass(frozen=True, slots=True)
 class ElementaryVerifier:
-    """Expected derivative for one term in the elementary fragment."""
+    """Expected derivative and region for one elementary term."""
 
     library: ElementaryLibrary
     signature: LanguageSignature
@@ -95,30 +99,51 @@ class ElementaryVerifier:
 
     def _sum(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         values: list[T.Term] = []
+        conditions: list[T.Term | None] = []
+        defined: list[T.Term | None] = []
         for argument in arguments:
             expected = self._walk(argument)
             if not isinstance(expected, Derived):
                 return expected
             values.append(expected.term)
-        return Derived(B.plus(self.signature, *values))
+            conditions.append(expected.condition)
+            defined.append(expected.defined)
+        return self._result(
+            B.plus(self.signature, *values),
+            and_all(self.signature, *conditions),
+            and_all(self.signature, *defined),
+        )
 
     def _product(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         if not arguments:
             return DerivationUnsupported(
                 Reason.FRAGMENT, "an empty product has no derivative rule"
             )
-        values: list[T.Term] = []
-        for index in range(len(arguments)):
-            expected = self._walk(arguments[index])
+        outcomes: list[Derived] = []
+        for argument in arguments:
+            expected = self._walk(argument)
             if not isinstance(expected, Derived):
                 return expected
+            outcomes.append(expected)
+        values: list[T.Term] = []
+        for index, expected in enumerate(outcomes):
             replaced = (
                 arguments[:index]
                 + (expected.term,)
                 + arguments[index + 1 :]
             )
             values.append(B.times(self.signature, *replaced))
-        return Derived(B.plus(self.signature, *values))
+        return self._result(
+            B.plus(self.signature, *values),
+            and_all(
+                self.signature,
+                *(expected.condition for expected in outcomes),
+            ),
+            and_all(
+                self.signature,
+                *(expected.defined for expected in outcomes),
+            ),
+        )
 
     def _power(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         if len(arguments) != 2:
@@ -131,23 +156,22 @@ class ElementaryVerifier:
                 Reason.FRAGMENT,
                 "only nonnegative integer powers are differentiated",
             )
-        if exponent.value < 0:
-            return DerivationUnsupported(
-                Reason.FRAGMENT,
-                "only nonnegative integer powers are differentiated",
-            )
         inner = self._walk(base)
         if not isinstance(inner, Derived):
             return inner
         if exponent.value == 0:
-            return Derived(T.number(0))
-        return Derived(
+            return self._result(
+                T.number(0), inner.defined, inner.defined
+            )
+        return self._result(
             B.times(
                 self.signature,
                 T.number(exponent.value),
                 B.power(self.signature, base, exponent.value - 1),
                 inner.term,
-            )
+            ),
+            and_all(self.signature, inner.condition, inner.defined),
+            inner.defined,
         )
 
     def _chain(
@@ -177,29 +201,73 @@ class ElementaryVerifier:
                 f"the derivative law for {function.name} is a user axiom, "
                 "not an admitted basis",
             )
-        if law.condition is not None or function.domain is not None:
-            return DerivationUnsupported(
-                Reason.GUARDED,
-                f"the derivative law or domain for {function.name} is "
-                "conditional; its condition has not been discharged",
-            )
-        problem = self.library.body_partiality(law.body)
-        if problem is not None:
-            return DerivationUnsupported(
-                Reason.GUARDED,
-                f"the derivative law for {function.name} is not total: "
-                f"{problem}",
-            )
-        inner = self._walk(application.arguments[0])
+        if law.condition is None:
+            problem = self.library.body_partiality(law.body)
+            if problem is not None:
+                return DerivationUnsupported(
+                    Reason.GUARDED,
+                    f"the derivative law for {function.name} is not total: "
+                    f"{problem}",
+                )
+        argument = application.arguments[0]
+        inner = self._walk(argument)
         if not isinstance(inner, Derived):
             return inner
+        if inner.term == T.number(0):
+            defined = application_defined(
+                self.library,
+                function,
+                argument,
+                inner.defined,
+                self.signature,
+            )
+            return self._result(T.number(0), defined, defined)
         outer = self.library.instantiate(
-            law.body,
-            law.argument,
-            application.arguments[0],
+            law.body, law.argument, argument, self.signature
+        )
+        condition = application_condition(
+            self.library,
+            function,
+            argument,
+            inner.condition,
+            inner.defined,
             self.signature,
         )
-        return Derived(B.times(self.signature, outer, inner.term))
+        defined = application_defined(
+            self.library,
+            function,
+            argument,
+            inner.defined,
+            self.signature,
+        )
+        return self._result(
+            B.times(self.signature, outer, inner.term),
+            condition,
+            defined,
+        )
+
+    def _result(
+        self,
+        term: T.Term,
+        condition: T.Term | None,
+        defined: T.Term | None,
+    ) -> DerivationOutcome:
+        actual_condition = T.TRUE if condition is None else condition
+        actual_defined = T.TRUE if defined is None else defined
+        if actual_condition == T.FALSE:
+            return DerivationUnsupported(
+                Reason.GUARDED,
+                "the source has no differentiability region",
+            )
+        if actual_defined == T.FALSE:
+            return DerivationUnsupported(
+                Reason.GUARDED, "the source is not defined anywhere"
+            )
+        return Derived(
+            term,
+            None if actual_condition == T.TRUE else actual_condition,
+            None if actual_defined == T.TRUE else actual_defined,
+        )
 
 
 def verify_elementary_derivative(
@@ -209,7 +277,7 @@ def verify_elementary_derivative(
     variable: SymbolId,
     name_of: Callable[[SymbolId], str],
 ) -> DerivationOutcome:
-    """The expected derivative, or a precise refusal."""
+    """The expected derivative and region, or a precise refusal."""
     return ElementaryVerifier(
         library, signature, variable, name_of
     ).verify(source)

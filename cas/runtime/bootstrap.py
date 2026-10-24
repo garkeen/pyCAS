@@ -25,7 +25,11 @@ from cas.algebra.polynomial import (
 )
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId, WorldId
-from cas.kernel.evidence import Checker, CheckerRegistry
+from cas.kernel.applicability import ConditionChecker
+from cas.kernel.consistency import ContradictionChecker
+from cas.kernel.context_rules import HypothesisChecker
+from cas.kernel.evidence import Checker, CheckerRegistry, CheckerSpec
+from cas.kernel.model import BasisKind, BasisRef, CertificateSchema
 from cas.kernel.store import KernelStore
 from cas.language import sorts as S
 from cas.language.decisions import Reason
@@ -95,6 +99,7 @@ class PolynomialDerivativeService(Generic[E]):
     bridge: PolynomialBridge[E]
     differential: DifferentialStructure[Polynomial[E]]
     checker_id: str
+    specification_kind: str
 
     def candidate(self, term: T.Term) -> DerivationOutcome:
         value = self.bridge.to_value(term)
@@ -126,6 +131,7 @@ class ElementaryDerivativeService:
 
     differentiator: ElementaryDifferentiator
     checker_id: str
+    specification_kind: str
 
     def candidate(self, term: T.Term) -> DerivationOutcome:
         return self.differentiator.derive(term)
@@ -163,6 +169,32 @@ class Runtime(Generic[E]):
     derivative: DerivativeService
     specialization: SpecializationRuntime | None = None
     elementary: ElementaryLibrary | None = None
+
+
+def _core_specs(
+    frames: FrameStore, signature: LanguageSignature
+) -> dict[str, CheckerSpec]:
+    """The scope and condition rules every assembled runtime admits."""
+    return {
+        ConditionChecker.id: CheckerSpec(
+            ConditionChecker(signature),
+            CertificateSchema("condition", "1"),
+            frozenset({"discharge"}),
+            frozenset({"Condition"}),
+        ),
+        HypothesisChecker.id: CheckerSpec(
+            HypothesisChecker(frames),
+            CertificateSchema("hypothesis", "1"),
+            frozenset({"assume"}),
+            frozenset({"Hypothesis"}),
+        ),
+        ContradictionChecker.id: CheckerSpec(
+            ContradictionChecker(frames, signature),
+            CertificateSchema("contradiction", "1"),
+            frozenset({"consistency"}),
+            frozenset({"Contradiction"}),
+        ),
+    }
 
 
 def _world(
@@ -206,7 +238,16 @@ def bootstrap() -> Runtime[Fraction]:
     checker = DerivativeChecker(
         ring, signature, vocabulary, bridge.to_value
     )
-    store = KernelStore(frames, CheckerRegistry({checker.id: checker}))
+    specs = {
+        checker.id: CheckerSpec(
+            checker,
+            CertificateSchema("derivative", "1"),
+            frozenset({"differentiate"}),
+            frozenset({"HasDerivative"}),
+        ),
+        **_core_specs(frames, signature),
+    }
+    store = KernelStore(frames, CheckerRegistry(specs))
     request = AlgebraRequest(
         coefficient=coefficient,
         parameter_ring=None,
@@ -231,7 +272,7 @@ def bootstrap() -> Runtime[Fraction]:
         bridge,
         request,
         derivative=PolynomialDerivativeService(
-            bridge, differential, checker.id
+            bridge, differential, checker.id, "HasDerivative"
         ),
     )
 
@@ -344,10 +385,22 @@ def bootstrap_parameterized(
         base_bridge.to_value,
         identifier="calculus.derivative.specialized",
     )
-    store = KernelStore(
-        frames,
-        CheckerRegistry({checker.id: checker, base_checker.id: base_checker}),
-    )
+    specs = {
+        checker.id: CheckerSpec(
+            checker,
+            CertificateSchema("derivative", "1"),
+            frozenset({"differentiate"}),
+            frozenset({"HasDerivative"}),
+        ),
+        base_checker.id: CheckerSpec(
+            base_checker,
+            CertificateSchema("derivative", "1"),
+            frozenset({"specialize"}),
+            frozenset({"HasDerivative"}),
+        ),
+        **_core_specs(frames, signature),
+    }
+    store = KernelStore(frames, CheckerRegistry(specs))
     request = AlgebraRequest(
         coefficient=coefficient,
         parameter_ring=parameter_parent,
@@ -388,7 +441,7 @@ def bootstrap_parameterized(
         bridge,
         request,
         derivative=PolynomialDerivativeService(
-            bridge, differential, checker.id
+            bridge, differential, checker.id, "HasDerivative"
         ),
         specialization=specialization,
     )
@@ -402,6 +455,13 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     function and law comes from the declaration file admitted at assembly.
     """
     source = default_elementary_source()
+    basis = BasisRef(
+        source.name,
+        BasisKind.DECLARATION_FILE,
+        "1",
+        source.digest,
+        WorldId(0),
+    )
     table = SymbolTable()
     predicate = table.intern("HasDerivative")
     vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
@@ -409,6 +469,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         table.intern,
         source,
         reserved=frozenset({"x", "HasDerivative"}),
+        basis=basis,
     )
     signature = standard_language(
         table,
@@ -443,7 +504,17 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     checker = ElementaryDerivativeChecker(
         library, signature, vocabulary, variable, table.name_of
     )
-    store = KernelStore(frames, CheckerRegistry({checker.id: checker}))
+    specs = {
+        checker.id: CheckerSpec(
+            checker,
+            CertificateSchema("elementary_derivative", "1"),
+            frozenset({"differentiate"}),
+            frozenset({"HasDerivative"}),
+            (basis,),
+        ),
+        **_core_specs(frames, signature),
+    }
+    store = KernelStore(frames, CheckerRegistry(specs))
     differentiator = ElementaryDifferentiator(
         library, signature, variable, table.name_of
     )
@@ -471,7 +542,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         bridge,
         request,
         derivative=ElementaryDerivativeService(
-            differentiator, checker.id
+            differentiator, checker.id, "HasDerivative"
         ),
         elementary=library,
     )

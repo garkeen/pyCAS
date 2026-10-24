@@ -21,6 +21,7 @@ from cas.foundation.ids import (
     ObjectVersionId,
     RevisionId,
 )
+from cas.kernel.model import FrameConsistency, Unassessed
 from cas.language.problems import ProblemSpec
 from cas.language.propositions import Proposition
 from cas.semantics.specialization import GenericResult
@@ -31,6 +32,7 @@ class OperationStatus(StrEnum):
     """What happened to one proposed answer."""
 
     VERIFIED = "verified"
+    CONDITIONAL = "conditional"
     REFUTED = "refuted"
     UNSUPPORTED = "unsupported"
     INVALID = "invalid"
@@ -66,6 +68,7 @@ class VerificationLink:
     judgment: JudgmentId | None
     status: OperationStatus
     detail: str = ""
+    condition: Proposition | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +105,19 @@ class DerivativeResult:
     result: Expression | None
     detail: str = ""
     generic: GenericResult | None = None
+    condition: Proposition | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssumptionResult:
+    """The outcome of introducing one hypothesis in a child frame."""
+
+    status: OperationStatus
+    frame: FrameId
+    proposition: Proposition | None
+    judgment: JudgmentId | None
+    detail: str = ""
+    consistency: FrameConsistency = Unassessed()
 
 
 class SpecializationPath(StrEnum):
@@ -124,6 +140,7 @@ class SpecializationResult:
 
 
 __all__ = [
+    "AssumptionResult",
     "Candidate",
     "DerivativeResult",
     "Event",

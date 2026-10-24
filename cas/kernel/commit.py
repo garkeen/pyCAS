@@ -24,7 +24,13 @@ from cas.kernel.evidence import (
     Unverified,
     Verified,
 )
-from cas.kernel.model import InferenceRecord, Judgment, Obligation
+from cas.kernel.model import (
+    Discharge,
+    Inconsistent,
+    InferenceRecord,
+    Judgment,
+    Obligation,
+)
 from cas.kernel.store import KernelStore
 from cas.language.decisions import Reason
 from cas.language.propositions import Proposition
@@ -50,9 +56,12 @@ class CommitProposal:
     frame: FrameId
     conclusions: tuple[Proposition, ...]
     checker_id: str
+    problem_kind: str
+    specification_kind: str
     premises: tuple[JudgmentId, ...] = ()
     certificate: object = None
     policy: ConditionPolicy = ConditionPolicy.REQUIRE_PROVED
+    discharge_obligations: tuple[ObligationId, ...] = ()
 
 
 class CommitResult:
@@ -73,6 +82,7 @@ class Committed(CommitResult):
     inference: InferenceId
     judgments: tuple[JudgmentId, ...]
     obligations: tuple[ObligationId, ...] = ()
+    discharged: tuple[ObligationId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,10 +96,16 @@ class Deferred(CommitResult):
 
 @dataclass(frozen=True, slots=True)
 class Rejected(CommitResult):
-    """The submission is invalid or the specification was refuted."""
+    """The submission is invalid or the specification was refuted.
+
+    `refutation` is a refutation of a requested conclusion. `refuted_conditions`
+    are necessary conditions proved false; they invalidate this application but
+    do not refute the conclusion itself.
+    """
 
     detail: str
     refutation: Refuted | None = None
+    refuted_conditions: tuple[Proposition, ...] = ()
 
 
 def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
@@ -100,6 +116,11 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
         return Rejected(f"frame does not exist: {proposal.frame}")
     if not proposal.conclusions:
         return Rejected("a submission needs at least one conclusion")
+    consistency = store.consistency(frame.id)
+    if isinstance(consistency, Inconsistent):
+        return Rejected(
+            "the frame is inconsistent: " + consistency.detail
+        )
 
     for conclusion in proposal.conclusions:
         if not store.frames.is_visible(conclusion.meaning.frame, frame.id):
@@ -108,9 +129,23 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
         if escaped:
             return Rejected(f"a local symbol escapes the frame: {escaped!r}")
 
-    checker = store.checkers.get(proposal.checker_id)
-    if checker is None:
-        return Deferred(Reason.FRAGMENT, f"checker not registered: {proposal.checker_id}")
+    spec = store.checkers.spec(proposal.checker_id)
+    if spec is None:
+        return Deferred(
+            Reason.FRAGMENT,
+            f"checker not registered: {proposal.checker_id}",
+        )
+    if proposal.problem_kind not in spec.accepted_problem_kinds:
+        return Rejected(
+            f"checker {spec.checker.id} is not admitted for problem kind "
+            f"{proposal.problem_kind!r}"
+        )
+    if proposal.specification_kind not in spec.accepted_specification_kinds:
+        return Rejected(
+            f"checker {spec.checker.id} is not admitted for specification "
+            f"kind {proposal.specification_kind!r}"
+        )
+    checker = spec.checker
 
     premise_propositions: list[Proposition] = []
     premises_by_id: dict[JudgmentId, Judgment] = {}
@@ -189,6 +224,16 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
         for obligation in inherited_obligations
         if not store.is_discharged(obligation.id, frame.id)
     ] + [report.proposition for report in reported]
+    refuted_conditions = tuple(
+        proposition
+        for proposition in dict.fromkeys(pending)
+        if store.refutation_of(proposition, frame.id) is not None
+    )
+    if refuted_conditions:
+        return Rejected(
+            "a required condition is refuted",
+            refuted_conditions=refuted_conditions,
+        )
     if pending:
         if proposal.policy is ConditionPolicy.REQUIRE_PROVED:
             return Deferred(
@@ -237,13 +282,81 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
         tuple(judgment_ids),
         proposal.certificate,
         outcome.reads,
+        spec.trusted_dependencies,
     )
+
+    discharges: list[Discharge] = []
+    if proposal.discharge_obligations:
+        if len(set(proposal.discharge_obligations)) != len(
+            proposal.discharge_obligations
+        ):
+            return Rejected("a submission repeats a discharge target")
+        supports: set[JudgmentId] = set()
+        for premise_id in used_premises:
+            supports.add(premise_id)
+            supports.update(store.support(premise_id))
+        for obligation_id in proposal.discharge_obligations:
+            try:
+                target_obligation = store.get_obligation(obligation_id)
+            except KeyError:
+                return Rejected(
+                    f"obligation does not exist: {obligation_id}"
+                )
+            if not store.frames.is_visible(
+                target_obligation.frame, frame.id
+            ):
+                return Rejected(
+                    "the discharged obligation is outside the submission frame"
+                )
+            if not store.frames.is_visible(
+                target_obligation.proposition.meaning.frame, frame.id
+            ):
+                return Rejected(
+                    "the discharged obligation proposition is outside the "
+                    "submission frame"
+                )
+            proof = next(
+                (
+                    judgment
+                    for judgment in judgments
+                    if judgment.proposition == target_obligation.proposition
+                ),
+                None,
+            )
+            if proof is None:
+                return Rejected(
+                    "no new judgment proves the discharged obligation"
+                )
+            for open_obligation in proof.obligations:
+                if not store.is_discharged(open_obligation, frame.id):
+                    return Rejected(
+                        "the discharging proof still has open conditions"
+                    )
+            for support_id in supports:
+                support = store.get_judgment(support_id)
+                if obligation_id in support.obligations and not (
+                    store.is_discharged(obligation_id, frame.id)
+                ):
+                    return Rejected(
+                        "cyclic discharge: the proof support depends on "
+                        "the open obligation"
+                    )
+            discharges.append(
+                Discharge(obligation_id, proof.id, frame.id)
+            )
+
     store._publish(
         obligations=tuple(new_obligations),
         judgments=tuple(judgments),
         inferences=(inference,),
+        discharges=tuple(discharges),
     )
-    return Committed(inference_id, tuple(judgment_ids), carried)
+    return Committed(
+        inference_id,
+        tuple(judgment_ids),
+        carried,
+        tuple(discharge.obligation for discharge in discharges),
+    )
 
 
 __all__ = [

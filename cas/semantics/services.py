@@ -22,9 +22,16 @@ class DerivationOutcome:
 
 @dataclass(frozen=True, slots=True)
 class Derived(DerivationOutcome):
-    """A candidate for the requested derivative."""
+    """A candidate and the region on which its derivative relation is stated.
+
+    `condition` is None for the whole domain. `defined` is the region where the
+    source is defined; it lets a constant composition use definedness rather
+    than differentiability of an inner function.
+    """
 
     term: T.Term
+    condition: T.Term | None = None
+    defined: T.Term | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +55,10 @@ class DerivativeService(Protocol):
     @property
     def checker_id(self) -> str:
         """The registered checker that verifies this service's certificates."""
+
+    @property
+    def specification_kind(self) -> str:
+        """The admitted specification family this service proposes."""
 
     def candidate(self, term: T.Term) -> DerivationOutcome:
         """Produce a candidate, or refuse honestly."""

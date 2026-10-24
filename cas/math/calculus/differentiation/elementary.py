@@ -3,8 +3,9 @@
 The fragment contains exact literals, the target variable, declared elementary
 constants, declared unary functions, sums, products and nonnegative integer
 powers. A function's derivative law is used only when the library marks it as a
-trusted basis and it has no open condition. Anything else is refused instead of
-being differentiated by an implicit assumption.
+trusted basis. Conditional laws and function domains do not cause a blanket
+refusal: they contribute to an explicit region on which the derivative relation
+is stated. A source with an empty differentiability region is still refused.
 """
 
 from __future__ import annotations
@@ -16,11 +17,16 @@ from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.math.calculus.differentiation import terms as B
+from cas.math.elementary.conditions import (
+    application_condition,
+    application_defined,
+)
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     FunctionSymbol,
     LawOrigin,
 )
+from cas.semantics.conditions import and_all
 from cas.semantics.services import (
     DerivationOutcome,
     DerivationUnsupported,
@@ -92,30 +98,51 @@ class ElementaryDifferentiator:
 
     def _sum(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         derivatives: list[T.Term] = []
+        conditions: list[T.Term | None] = []
+        defined: list[T.Term | None] = []
         for argument in arguments:
             outcome = self._derive(argument)
             if not isinstance(outcome, Derived):
                 return outcome
             derivatives.append(outcome.term)
-        return Derived(B.plus(self.signature, *derivatives))
+            conditions.append(outcome.condition)
+            defined.append(outcome.defined)
+        return self._result(
+            B.plus(self.signature, *derivatives),
+            and_all(self.signature, *conditions),
+            and_all(self.signature, *defined),
+        )
 
     def _product(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         if not arguments:
             return DerivationUnsupported(
                 Reason.FRAGMENT, "an empty product has no derivative rule"
             )
-        terms: list[T.Term] = []
-        for position, argument in enumerate(arguments):
+        outcomes: list[Derived] = []
+        for argument in arguments:
             outcome = self._derive(argument)
             if not isinstance(outcome, Derived):
                 return outcome
+            outcomes.append(outcome)
+        terms: list[T.Term] = []
+        for position, outcome in enumerate(outcomes):
             factors = (
                 arguments[:position]
                 + (outcome.term,)
                 + arguments[position + 1 :]
             )
             terms.append(B.times(self.signature, *factors))
-        return Derived(B.plus(self.signature, *terms))
+        return self._result(
+            B.plus(self.signature, *terms),
+            and_all(
+                self.signature,
+                *(outcome.condition for outcome in outcomes),
+            ),
+            and_all(
+                self.signature,
+                *(outcome.defined for outcome in outcomes),
+            ),
+        )
 
     def _power(self, arguments: tuple[T.Term, ...]) -> DerivationOutcome:
         if len(arguments) != 2:
@@ -132,14 +159,20 @@ class ElementaryDifferentiator:
         if not isinstance(outcome, Derived):
             return outcome
         if exponent.value == 0:
-            return Derived(T.number(0))
-        return Derived(
+            return self._result(
+                T.number(0), outcome.defined, outcome.defined
+            )
+        return self._result(
             B.times(
                 self.signature,
                 T.number(exponent.value),
                 B.power(self.signature, base, exponent.value - 1),
                 outcome.term,
-            )
+            ),
+            and_all(
+                self.signature, outcome.condition, outcome.defined
+            ),
+            outcome.defined,
         )
 
     def _function(
@@ -169,28 +202,72 @@ class ElementaryDifferentiator:
                 f"the derivative law for {function.name} is a user axiom, "
                 "not an admitted basis",
             )
-        if law.condition is not None or function.domain is not None:
-            return DerivationUnsupported(
-                Reason.GUARDED,
-                f"the derivative law or domain for {function.name} is "
-                "conditional; its condition has not been discharged",
-            )
-        problem = self.library.body_partiality(law.body)
-        if problem is not None:
-            return DerivationUnsupported(
-                Reason.GUARDED,
-                f"the derivative law for {function.name} is not total: "
-                f"{problem}",
-            )
+        if law.condition is None:
+            problem = self.library.body_partiality(law.body)
+            if problem is not None:
+                return DerivationUnsupported(
+                    Reason.GUARDED,
+                    f"the derivative law for {function.name} is not total: "
+                    f"{problem}",
+                )
         argument = application.arguments[0]
-        outcome = self._derive(argument)
-        if not isinstance(outcome, Derived):
-            return outcome
+        inner = self._derive(argument)
+        if not isinstance(inner, Derived):
+            return inner
+        if inner.term == T.number(0):
+            defined = application_defined(
+                self.library,
+                function,
+                argument,
+                inner.defined,
+                self.signature,
+            )
+            return self._result(T.number(0), defined, defined)
         body = self.library.instantiate(
             law.body, law.argument, argument, self.signature
         )
+        condition = application_condition(
+            self.library,
+            function,
+            argument,
+            inner.condition,
+            inner.defined,
+            self.signature,
+        )
+        defined = application_defined(
+            self.library,
+            function,
+            argument,
+            inner.defined,
+            self.signature,
+        )
+        return self._result(
+            B.times(self.signature, body, inner.term),
+            condition,
+            defined,
+        )
+
+    def _result(
+        self,
+        term: T.Term,
+        condition: T.Term | None,
+        defined: T.Term | None,
+    ) -> DerivationOutcome:
+        actual_condition = T.TRUE if condition is None else condition
+        actual_defined = T.TRUE if defined is None else defined
+        if actual_condition == T.FALSE:
+            return DerivationUnsupported(
+                Reason.GUARDED,
+                "the source has no differentiability region",
+            )
+        if actual_defined == T.FALSE:
+            return DerivationUnsupported(
+                Reason.GUARDED, "the source is not defined anywhere"
+            )
         return Derived(
-            B.times(self.signature, body, outcome.term)
+            term,
+            None if actual_condition == T.TRUE else actual_condition,
+            None if actual_defined == T.TRUE else actual_defined,
         )
 
 

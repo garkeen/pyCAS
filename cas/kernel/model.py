@@ -18,8 +18,59 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cas.foundation.ids import FrameId, InferenceId, JudgmentId, ObligationId
+from cas.foundation.ids import (
+    FrameId,
+    InferenceId,
+    JudgmentId,
+    ObligationId,
+    WorldId,
+)
 from cas.language.propositions import Proposition
+
+
+class BasisKind(StrEnum):
+    """What kind of trusted dependency a basis reference names."""
+
+    STANDARD_LIBRARY = "standard_library"
+    DECLARATION_FILE = "declaration_file"
+
+
+@dataclass(frozen=True, slots=True)
+class BasisRef:
+    """An admitted trusted basis: kind, version, scope and content digest.
+
+    A basis reference is created at assembly time from data the runtime admits
+    explicitly. It is not a proof; it records which trusted dependency a checker
+    used, so an inference can be audited against the world it was made in.
+    """
+
+    name: str
+    kind: BasisKind
+    version: str
+    digest: str
+    world: WorldId
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("a basis reference needs a name")
+        if not self.version:
+            raise ValueError("a basis reference needs a version")
+        if not self.digest:
+            raise ValueError("a basis reference needs a content digest")
+
+
+@dataclass(frozen=True, slots=True)
+class CertificateSchema:
+    """The certificate format a checker is admitted to interpret."""
+
+    name: str
+    version: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("a certificate schema needs a name")
+        if not self.version:
+            raise ValueError("a certificate schema needs a version")
 
 
 class ObligationReason(StrEnum):
@@ -71,6 +122,7 @@ class InferenceRecord:
     conclusions: tuple[JudgmentId, ...]
     certificate: object
     reads: tuple[tuple[str, str], ...] = ()
+    basis: tuple[BasisRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +132,48 @@ class Discharge:
     obligation: ObligationId
     by_judgment: JudgmentId
     frame: FrameId
+
+
+class FrameConsistency:
+    """Closed result of assessing whether a frame's assumptions are consistent.
+
+    `Unassessed` is the default and does not mean consistent. A fragment claim
+    must name its fragment and carry evidence; an inconsistency must carry the
+    issued false judgment that closed the contradiction.
+    """
+
+    __slots__ = ()
+
+    def is_inconsistent(self) -> bool:
+        return isinstance(self, Inconsistent)
+
+
+@dataclass(frozen=True, slots=True)
+class Unassessed(FrameConsistency):
+    """No consistency evidence has been recorded."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConsistentForFragment(FrameConsistency):
+    """Consistency is claimed for a named fragment, with explicit evidence."""
+
+    fragment: str
+    evidence: tuple[JudgmentId, ...] = ()
+    basis: tuple[BasisRef, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.fragment:
+            raise ValueError("a fragment claim needs a fragment description")
+        if not self.evidence and not self.basis:
+            raise ValueError("a fragment claim needs evidence or a basis")
+
+
+@dataclass(frozen=True, slots=True)
+class Inconsistent(FrameConsistency):
+    """A closed proof of false was issued in the frame or an ancestor."""
+
+    witness: JudgmentId
+    detail: str = ""
 
 
 class Applicability:
@@ -92,6 +186,9 @@ class Applicability:
 
     def is_conditional(self) -> bool:
         return isinstance(self, Conditional)
+
+    def is_blocked(self) -> bool:
+        return isinstance(self, Blocked)
 
     def is_out_of_scope(self) -> bool:
         return isinstance(self, OutOfScope)
@@ -110,6 +207,23 @@ class Conditional(Applicability):
 
 
 @dataclass(frozen=True, slots=True)
+class Blocked(Applicability):
+    """A required obligation is refuted; the derivation cannot be applied.
+
+    `Blocked` says the current use of the judgment is unavailable, not that its
+    proposition is false.
+    """
+
+    refuted: tuple[ObligationId, ...]
+    unresolved: tuple[ObligationId, ...] = ()
+    witnesses: tuple[JudgmentId, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.refuted:
+            raise ValueError("a blocked judgment needs a refuted obligation")
+
+
+@dataclass(frozen=True, slots=True)
 class OutOfScope(Applicability):
     """The judgment's frame is not visible from the query frame."""
 
@@ -120,11 +234,19 @@ class OutOfScope(Applicability):
 __all__ = [
     "Applicability",
     "Applicable",
+    "BasisKind",
+    "BasisRef",
+    "Blocked",
+    "CertificateSchema",
     "Conditional",
+    "ConsistentForFragment",
     "Discharge",
+    "FrameConsistency",
+    "Inconsistent",
     "InferenceRecord",
     "Judgment",
     "Obligation",
     "ObligationReason",
     "OutOfScope",
+    "Unassessed",
 ]

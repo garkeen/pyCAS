@@ -38,7 +38,9 @@ from cas.kernel.commit import (
     Rejected,
     commit,
 )
-from cas.kernel.model import Applicability
+from cas.kernel.consistency import assess_consistency
+from cas.kernel.context_rules import HypothesisChecker
+from cas.kernel.model import Applicability, Inconsistent
 from cas.language import propositions as Pr
 from cas.language import sorts as S
 from cas.language.problems import (
@@ -49,6 +51,7 @@ from cas.language.problems import (
 from cas.math.calculus.differentiation.checker import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.semantics import elaborate
+from cas.semantics.frames import Hypothesis
 from cas.semantics.services import (
     DerivationInvalid,
     DerivationUnsupported,
@@ -68,6 +71,7 @@ from cas.semantics.specialization import (
 from cas.syntax import binding as B
 from cas.syntax import term as T
 from cas.workflow.records import (
+    AssumptionResult,
     Candidate,
     DerivativeResult,
     Event,
@@ -144,6 +148,98 @@ class Workspace:
         self._append_revision(f"intake {label or expression.id}", event)
         return expression
 
+    def assume(self, term: T.Term) -> AssumptionResult:
+        """Introduce one hypothesis in a child frame and issue `H |- H`."""
+        runtime = self._runtime
+        current = runtime.store.consistency(self.frame)
+        if current.is_inconsistent():
+            return AssumptionResult(
+                OperationStatus.INVALID,
+                self.frame,
+                None,
+                None,
+                "the current frame is inconsistent",
+                current,
+            )
+        issued = elaborate.proposition(
+            term,
+            runtime.frames,
+            self.frame,
+            runtime.signature,
+        )
+        if not isinstance(issued, Pr.Proposition):
+            return AssumptionResult(
+                OperationStatus.INVALID,
+                self.frame,
+                None,
+                None,
+                "the hypothesis is not a proposition",
+            )
+        if issued in runtime.frames.assumptions(self.frame):
+            return AssumptionResult(
+                OperationStatus.INVALID,
+                self.frame,
+                issued,
+                None,
+                "the proposition is already an assumption",
+            )
+        child = runtime.frames.create(
+            self.frame, hypotheses=(Hypothesis(issued),)
+        )
+        outcome = commit(
+            runtime.store,
+            CommitProposal(
+                child.id,
+                (issued,),
+                HypothesisChecker.id,
+                "assume",
+                "Hypothesis",
+                certificate=None,
+            ),
+        )
+        if not isinstance(outcome, Committed):
+            detail = (
+                outcome.detail
+                if isinstance(outcome, (Rejected, Deferred))
+                else "the hypothesis could not be issued"
+            )
+            status = (
+                OperationStatus.UNSUPPORTED
+                if isinstance(outcome, Deferred)
+                else OperationStatus.INVALID
+            )
+            return AssumptionResult(
+                status, self.frame, issued, None, detail
+            )
+        judgment = outcome.judgments[0]
+        consistency = assess_consistency(runtime.store, child.id)
+        inconsistent = consistency.is_inconsistent()
+        witness = (
+            (consistency.witness,)
+            if isinstance(consistency, Inconsistent)
+            else ()
+        )
+        event = self._record_event(
+            "Assume",
+            judgments=(judgment,) + witness,
+            note="inconsistent" if inconsistent else "",
+        )
+        self._append_revision(
+            f"assume {issued.term}", event, frame=child.id
+        )
+        return AssumptionResult(
+            OperationStatus.INVALID if inconsistent else OperationStatus.VERIFIED,
+            child.id,
+            issued,
+            judgment,
+            (
+                "the assumptions prove a contradiction"
+                if inconsistent
+                else ""
+            ),
+            consistency,
+        )
+
     def differentiate(
         self,
         source: Expression,
@@ -151,6 +247,15 @@ class Workspace:
     ) -> DerivativeResult:
         """Differentiate one expression and try to publish the specification."""
         runtime = self._runtime
+        consistency = runtime.store.consistency(self.frame)
+        if consistency.is_inconsistent():
+            return DerivativeResult(
+                OperationStatus.INVALID,
+                None,
+                None,
+                None,
+                "the current frame is inconsistent",
+            )
         if variable != runtime.variable:
             return DerivativeResult(
                 OperationStatus.UNSUPPORTED,
@@ -158,6 +263,14 @@ class Workspace:
                 None,
                 None,
                 "this runtime differentiates with respect to x only",
+            )
+        if not runtime.frames.is_visible(source.frame, self.frame):
+            return DerivativeResult(
+                OperationStatus.UNSUPPORTED,
+                None,
+                None,
+                None,
+                "the source is outside the current frame",
             )
         derivation = runtime.derivative.candidate(source.term)
         if isinstance(derivation, DerivationUnsupported):
@@ -181,11 +294,33 @@ class Workspace:
                 f"unknown derivation outcome: {type(derivation).__name__}"
             )
         candidate_term = derivation.term
+        condition_proposition: Pr.Proposition | None = None
+        if derivation.condition is not None:
+            issued_condition = elaborate.proposition(
+                derivation.condition,
+                runtime.frames,
+                self.frame,
+                runtime.signature,
+            )
+            if not isinstance(issued_condition, Pr.Proposition):
+                return DerivativeResult(
+                    OperationStatus.INVALID,
+                    None,
+                    None,
+                    None,
+                    "the differentiability region is not a proposition",
+                )
+            condition_proposition = issued_condition
+        region_term = (
+            T.TRUE
+            if condition_proposition is None
+            else condition_proposition.term
+        )
 
         variable_reference = T.symbol(variable, runtime.table.name_of(variable))
         specification_term = has_derivative(
             runtime.vocabulary,
-            T.TRUE,
+            region_term,
             source.term,
             variable_reference,
             candidate_term,
@@ -193,7 +328,7 @@ class Workspace:
         issued = elaborate.proposition(
             specification_term,
             runtime.frames,
-            source.frame,
+            self.frame,
             runtime.signature,
         )
         if not isinstance(issued, Pr.Proposition):
@@ -207,20 +342,24 @@ class Workspace:
 
         generic: GenericResult | None = None
         if runtime.request.parameters:
-            valid_on = elaborate.proposition(
-                T.TRUE,
-                runtime.frames,
-                source.frame,
-                runtime.signature,
-            )
-            if not isinstance(valid_on, Pr.Proposition):
-                return DerivativeResult(
-                    OperationStatus.INVALID,
-                    None,
-                    None,
-                    None,
-                    "the parameter validity region is not a proposition",
+            if condition_proposition is not None:
+                valid_on = condition_proposition
+            else:
+                issued_validity = elaborate.proposition(
+                    T.TRUE,
+                    runtime.frames,
+                    self.frame,
+                    runtime.signature,
                 )
+                if not isinstance(issued_validity, Pr.Proposition):
+                    return DerivativeResult(
+                        OperationStatus.INVALID,
+                        None,
+                        None,
+                        None,
+                        "the parameter validity region is not a proposition",
+                    )
+                valid_on = issued_validity
             generic = GenericResult.assemble(
                 result=candidate_term,
                 valid_on=valid_on,
@@ -236,30 +375,37 @@ class Workspace:
                 inputs=(source.term,),
                 target=variable,
                 target_sort=S.REAL,
-                region=None,
+                region=condition_proposition,
                 result_language=ResultLanguage.EXPRESSION,
                 parameter_mode=runtime.request.parameter_mode,
                 coverage=Coverage.ONE_VERIFIED,
             ),
             candidate_term,
-            source.frame,
+            self.frame,
         )
         self._candidates[candidate.id] = candidate
 
         outcome = commit(
             runtime.store,
             CommitProposal(
-                source.frame,
+                self.frame,
                 (issued,),
                 runtime.derivative.checker_id,
+                "differentiate",
+                runtime.derivative.specification_kind,
                 certificate=runtime.derivative.certificate(
-                    T.TRUE, source.term, variable, candidate_term
+                    region_term, source.term, variable, candidate_term
                 ),
             ),
         )
         judgment: JudgmentId | None = None
+        conditional = condition_proposition is not None
         if isinstance(outcome, Committed):
-            status = OperationStatus.VERIFIED
+            status = (
+                OperationStatus.CONDITIONAL
+                if conditional
+                else OperationStatus.VERIFIED
+            )
             judgment = outcome.judgments[0]
             detail = ""
         elif isinstance(outcome, Rejected):
@@ -276,7 +422,7 @@ class Workspace:
             raise RuntimeError(f"unknown commit result: {type(outcome).__name__}")
 
         result: Expression | None = None
-        if status is OperationStatus.VERIFIED:
+        if status in (OperationStatus.VERIFIED, OperationStatus.CONDITIONAL):
             result = self._record_expression(
                 candidate_term, f"d/dx {source.label or source.id}"
             )
@@ -284,8 +430,22 @@ class Workspace:
                 self._generic_results[source.version] = generic
         else:
             generic = None
+            condition_proposition = None
+        link_status = (
+            OperationStatus.VERIFIED
+            if status in (
+                OperationStatus.VERIFIED,
+                OperationStatus.CONDITIONAL,
+            )
+            else status
+        )
         link = VerificationLink(
-            candidate.id, issued, judgment, status, detail
+            candidate.id,
+            issued,
+            judgment,
+            link_status,
+            detail,
+            condition_proposition,
         )
         event = self._record_event(
             "Differentiate",
@@ -296,7 +456,13 @@ class Workspace:
         )
         self._append_revision(f"differentiate {source.id}", event, (link,))
         return DerivativeResult(
-            status, candidate, link, result, detail, generic
+            status,
+            candidate,
+            link,
+            result,
+            detail,
+            generic,
+            condition_proposition,
         )
 
     def generic_result(self, source: Expression) -> GenericResult | None:
@@ -317,6 +483,16 @@ class Workspace:
         specialized instance is verified independently before publication.
         """
         runtime = self._runtime
+        consistency = runtime.store.consistency(self.frame)
+        if consistency.is_inconsistent():
+            return SpecializationResult(
+                OperationStatus.INVALID,
+                None,
+                None,
+                None,
+                None,
+                "the current frame is inconsistent",
+            )
         view = runtime.specialization
         if view is None or not runtime.request.parameters:
             return SpecializationResult(
@@ -337,6 +513,15 @@ class Workspace:
                 None,
                 None,
                 "the source is not visible in the current revision",
+            )
+        if not runtime.frames.is_visible(source.frame, self.frame):
+            return SpecializationResult(
+                OperationStatus.UNSUPPORTED,
+                None,
+                None,
+                None,
+                None,
+                "the source is outside the current frame",
             )
         family = (
             generic
@@ -445,7 +630,7 @@ class Workspace:
         issued = elaborate.proposition(
             specification_term,
             runtime.frames,
-            source.frame,
+            self.frame,
             runtime.signature,
         )
         if not isinstance(issued, Pr.Proposition):
@@ -471,16 +656,18 @@ class Workspace:
                 coverage=Coverage.ONE_VERIFIED,
             ),
             candidate_term,
-            source.frame,
+            self.frame,
         )
         self._candidates[candidate.id] = candidate
 
         committed = commit(
             runtime.store,
             CommitProposal(
-                source.frame,
+                self.frame,
                 (issued,),
                 view.checker.id,
+                "specialize",
+                "HasDerivative",
                 certificate=DerivativeCertificate(
                     T.TRUE, specialized_source, runtime.variable, candidate_term
                 ),
@@ -580,11 +767,13 @@ class Workspace:
         label: str,
         event: Event,
         links: tuple[VerificationLink, ...] = (),
+        *,
+        frame: FrameId | None = None,
     ) -> Revision:
         current = self.revision
         revision = Revision(
             RevisionId(len(self._revisions)),
-            current.frame,
+            current.frame if frame is None else frame,
             tuple(dict.fromkeys(current.objects + event.objects)),
             current.links + links,
             current.events + (event.id,),

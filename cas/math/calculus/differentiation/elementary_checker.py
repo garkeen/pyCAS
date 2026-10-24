@@ -30,6 +30,7 @@ from cas.math.calculus.differentiation.specification import (
     parse_has_derivative,
 )
 from cas.math.elementary.declarations import ElementaryLibrary
+from cas.semantics.conditions import equivalent
 from cas.semantics.services import DerivationUnsupported, Derived
 from cas.syntax import term as T
 
@@ -82,19 +83,17 @@ class ElementaryDerivativeChecker:
                 return InvalidEvidence(
                     "an elementary derivative certificate is required"
                 )
+            if certificate.region != claim.region:
+                return InvalidEvidence(
+                    "the certificate does not match the specification"
+                )
             if (
-                certificate.region != claim.region
-                or certificate.source != claim.source
+                certificate.source != claim.source
                 or certificate.variable != claim.variable.symbol_id
                 or certificate.candidate != claim.candidate
             ):
                 return InvalidEvidence(
                     "the certificate does not match the specification"
-                )
-            if claim.region != T.TRUE:
-                return Unverified(
-                    Reason.GUARDED,
-                    "only the whole-domain region is verified",
                 )
             if claim.variable.symbol_id != self._variable:
                 return Unverified(
@@ -114,6 +113,17 @@ class ElementaryDerivativeChecker:
                 return Unverified(
                     Reason.FRAGMENT,
                     "the verifier could not produce a derivative",
+                )
+            expected_region = (
+                T.TRUE if expected.condition is None else expected.condition
+            )
+            if claim.region != expected_region and equivalent(
+                claim.region, expected_region, self._signature
+            ) is not True:
+                return Unverified(
+                    Reason.FRAGMENT,
+                    "the claimed region is not the verified "
+                    "differentiability region",
                 )
             if expected.term != claim.candidate:
                 return Unverified(

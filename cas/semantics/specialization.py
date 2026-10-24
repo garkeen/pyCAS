@@ -25,7 +25,8 @@ from typing import TypeAlias
 from cas.foundation.ids import SymbolId
 from cas.language.problems import ParameterMode
 from cas.language.propositions import Proposition
-from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.language.signatures import LanguageSignature
+from cas.semantics.conditions import condition_truth
 from cas.semantics.request import AlgebraRequest
 from cas.syntax import binding as B
 from cas.syntax import term as T
@@ -209,144 +210,9 @@ def _truth(
     mapping: Mapping[SymbolId, T.Term],
     signature: LanguageSignature,
 ) -> bool | None:
-    value = _evaluate(B.substitute_free(proposition.term, mapping), signature)
-    return value if isinstance(value, bool) else None
-
-
-def _evaluate(
-    term: T.Term,
-    signature: LanguageSignature,
-) -> Fraction | bool | None:
-    """Exact ground evaluation; None means the fragment cannot decide it."""
-    if isinstance(term, T.IntLit):
-        return Fraction(term.value)
-    if isinstance(term, T.RatLit):
-        return term.value
-    if isinstance(term, T.BoolLit):
-        return term.value
-    if not isinstance(term, T.Apply) or not isinstance(
-        term.operator, T.SymbolRef
-    ):
-        return None
-    head = signature.head_of(term.operator.symbol_id)
-    if head is None:
-        return None
-    if head in (StructuralHead.PLUS, StructuralHead.TIMES):
-        return _arithmetic(head, term.arguments, signature)
-    if head is StructuralHead.POWER:
-        return _power(term.arguments, signature)
-    if head in _COMPARISONS:
-        return _comparison(head, term.arguments, signature)
-    if head in (StructuralHead.AND, StructuralHead.OR):
-        return _junction(head, term.arguments, signature)
-    if head is StructuralHead.NOT:
-        value = _evaluate(term.arguments[0], signature)
-        return None if not isinstance(value, bool) else not value
-    if head is StructuralHead.IMPLIES:
-        left = _evaluate(term.arguments[0], signature)
-        right = _evaluate(term.arguments[1], signature)
-        return _implies(left, right)
-    return None
-
-
-_COMPARISONS = frozenset(
-    {
-        StructuralHead.EQ,
-        StructuralHead.NE,
-        StructuralHead.LT,
-        StructuralHead.LE,
-        StructuralHead.GT,
-        StructuralHead.GE,
-    }
-)
-
-
-def _arithmetic(
-    head: StructuralHead,
-    arguments: tuple[T.Term, ...],
-    signature: LanguageSignature,
-) -> Fraction | None:
-    values: list[Fraction] = []
-    for argument in arguments:
-        value = _evaluate(argument, signature)
-        if not isinstance(value, Fraction):
-            return None
-        values.append(value)
-    if not values:
-        return None
-    if head is StructuralHead.PLUS:
-        return sum(values, Fraction(0))
-    product = Fraction(1)
-    for value in values:
-        product *= value
-    return product
-
-
-def _power(
-    arguments: tuple[T.Term, ...],
-    signature: LanguageSignature,
-) -> Fraction | None:
-    if len(arguments) != 2:
-        return None
-    base = _evaluate(arguments[0], signature)
-    exponent = arguments[1]
-    if not isinstance(base, Fraction) or not isinstance(exponent, T.IntLit):
-        return None
-    if exponent.value < 0 and base == 0:
-        return None
-    return base**exponent.value
-
-
-def _comparison(
-    head: StructuralHead,
-    arguments: tuple[T.Term, ...],
-    signature: LanguageSignature,
-) -> bool | None:
-    if len(arguments) != 2:
-        return None
-    left = _evaluate(arguments[0], signature)
-    right = _evaluate(arguments[1], signature)
-    if not isinstance(left, Fraction) or not isinstance(right, Fraction):
-        return None
-    if head is StructuralHead.EQ:
-        return left == right
-    if head is StructuralHead.NE:
-        return left != right
-    if head is StructuralHead.LT:
-        return left < right
-    if head is StructuralHead.LE:
-        return left <= right
-    if head is StructuralHead.GT:
-        return left > right
-    return left >= right
-
-
-def _junction(
-    head: StructuralHead,
-    arguments: tuple[T.Term, ...],
-    signature: LanguageSignature,
-) -> bool | None:
-    unknown = False
-    for argument in arguments:
-        value = _evaluate(argument, signature)
-        if not isinstance(value, bool):
-            unknown = True
-            continue
-        if head is StructuralHead.AND and not value:
-            return False
-        if head is StructuralHead.OR and value:
-            return True
-    if unknown:
-        return None
-    return head is StructuralHead.AND
-
-
-def _implies(left: Fraction | bool | None, right: Fraction | bool | None) -> bool | None:
-    if left is False or right is True:
-        return True
-    if left is True and right is False:
-        return False
-    return None
+    return condition_truth(
+        B.substitute_free(proposition.term, mapping), signature
+    )
 
 
 __all__ = [

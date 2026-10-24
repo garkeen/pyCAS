@@ -25,14 +25,23 @@ from cas.kernel.evidence import CheckerRegistry
 from cas.kernel.model import (
     Applicability,
     Applicable,
+    BasisRef,
+    Blocked,
     Conditional,
+    ConsistentForFragment,
     Discharge,
+    FrameConsistency,
+    Inconsistent,
     InferenceRecord,
     Judgment,
     Obligation,
     OutOfScope,
+    Unassessed,
 )
+from cas.language.propositions import Proposition
+from cas.language.signatures import StructuralHead
 from cas.semantics.frames import FrameStore
+from cas.syntax import term as T
 
 
 class KernelError(Exception):
@@ -51,6 +60,7 @@ class KernelStore:
         "_judgments",
         "_inferences",
         "_discharges",
+        "_consistency",
         "_obligation_issuer",
         "_judgment_issuer",
         "_inference_issuer",
@@ -65,6 +75,7 @@ class KernelStore:
         self._judgments: dict[JudgmentId, Judgment] = {}
         self._inferences: dict[InferenceId, InferenceRecord] = {}
         self._discharges: dict[ObligationId, list[Discharge]] = {}
+        self._consistency: dict[FrameId, FrameConsistency] = {}
         self._obligation_issuer = IdIssuer()
         self._judgment_issuer = IdIssuer()
         self._inference_issuer = IdIssuer()
@@ -261,6 +272,14 @@ class KernelStore:
     def inference_of(self, judgment: JudgmentId) -> InferenceRecord:
         return self._inferences[self._judgments[judgment].inference]
 
+    def judgments_visible(self, frame: FrameId) -> tuple[Judgment, ...]:
+        """Every issued judgment whose frame is visible from `frame`."""
+        return tuple(
+            judgment
+            for judgment in self._judgments.values()
+            if self.frames.is_visible(judgment.frame, frame)
+        )
+
     def support(self, judgment: JudgmentId) -> frozenset[JudgmentId]:
         """Every premise reached transitively, excluding the judgment itself."""
         seen: set[JudgmentId] = set()
@@ -280,6 +299,50 @@ class KernelStore:
             for discharge in self._discharges.get(obligation, ())
         )
 
+    def _is_closed(self, judgment: Judgment, frame: FrameId) -> bool:
+        """Whether every obligation is discharged, without refutation checks.
+
+        Applicability needs a non-recursive closure test: refutation lookups
+        themselves ask which visible judgments are closed.
+        """
+        return all(
+            self.is_discharged(obligation, frame)
+            for obligation in judgment.obligations
+        )
+
+    def refutation_of(
+        self, proposition: Proposition, frame: FrameId
+    ) -> JudgmentId | None:
+        """A closed visible judgment that states the negation of `proposition`.
+
+        The comparison is structural because frames only extend along a chain:
+        every visible frame resolves the same stable symbol ids. A conditional
+        judgment is not a refutation; only a closed one is used.
+        """
+        if not self.frames.is_visible(proposition.meaning.frame, frame):
+            return None
+        not_symbol = self.frames.world.language.symbol_of(StructuralHead.NOT)
+        if not_symbol is None:
+            return None
+        head = T.symbol(not_symbol, StructuralHead.NOT.value)
+
+        def negates(outer: T.Term, inner: T.Term) -> bool:
+            return (
+                isinstance(outer, T.Apply)
+                and outer.operator == head
+                and len(outer.arguments) == 1
+                and outer.arguments[0] == inner
+            )
+
+        for judgment in self.judgments_visible(frame):
+            if not self._is_closed(judgment, frame):
+                continue
+            if negates(
+                judgment.proposition.term, proposition.term
+            ) or negates(proposition.term, judgment.proposition.term):
+                return judgment.id
+        return None
+
     def applicability(
         self, judgment: JudgmentId, frame: FrameId
     ) -> Applicability:
@@ -292,7 +355,103 @@ class KernelStore:
             for obligation in record.obligations
             if not self.is_discharged(obligation, frame)
         )
-        return Conditional(pending) if pending else Applicable()
+        if not pending:
+            return Applicable()
+        refuted: list[ObligationId] = []
+        unresolved: list[ObligationId] = []
+        witnesses: list[JudgmentId] = []
+        for obligation_id in pending:
+            obligation = self._obligations[obligation_id]
+            witness = self.refutation_of(obligation.proposition, frame)
+            if witness is None:
+                unresolved.append(obligation_id)
+            else:
+                refuted.append(obligation_id)
+                if witness not in witnesses:
+                    witnesses.append(witness)
+        if refuted:
+            return Blocked(tuple(refuted), tuple(unresolved), tuple(witnesses))
+        return Conditional(tuple(unresolved))
+
+    # --- frame consistency ---
+
+    def consistency(self, frame: FrameId) -> FrameConsistency:
+        """The recorded state, with inconsistency inherited from ancestors.
+
+        A fragment claim is not inherited: extending a frame can add a
+        hypothesis that invalidates it. Inconsistency is inherited because a
+        closed contradiction remains a contradiction in every descendant.
+        """
+        self._require_frame(frame)
+        for ancestor in self.frames.chain(frame):
+            state = self._consistency.get(ancestor.id)
+            if isinstance(state, Inconsistent):
+                return state
+        return self._consistency.get(frame, Unassessed())
+
+    def record_inconsistency(
+        self, frame: FrameId, witness: JudgmentId
+    ) -> Inconsistent:
+        """Record a closed false judgment as the contradiction witness."""
+        self._require_frame(frame)
+        try:
+            proof = self._judgments[witness]
+        except KeyError:
+            raise KernelError(f"judgment does not exist: {witness!r}") from None
+        if not self.frames.is_visible(proof.frame, frame):
+            raise KernelError("the contradiction proof is outside the frame")
+        if proof.proposition.term != T.FALSE:
+            raise KernelError("a contradiction proof must state false")
+        if not self._is_closed(proof, frame):
+            raise KernelError(
+                "the contradiction proof still has open conditions"
+            )
+        existing = self._consistency.get(frame)
+        if isinstance(existing, Inconsistent):
+            return existing
+        state = Inconsistent(witness, "the frame proves false")
+        self._consistency[frame] = state
+        return state
+
+    def record_consistent_for_fragment(
+        self,
+        frame: FrameId,
+        fragment: str,
+        *,
+        evidence: tuple[JudgmentId, ...] = (),
+        basis: tuple[BasisRef, ...] = (),
+    ) -> ConsistentForFragment:
+        """Record an explicit, evidence-bearing consistency claim.
+
+        The kernel checks that the evidence exists, is visible and is closed.
+        It does not turn the claim into a general consistency theorem.
+        """
+        self._require_frame(frame)
+        if isinstance(self.consistency(frame), Inconsistent):
+            raise KernelError(
+                "an inconsistent frame cannot be declared consistent"
+            )
+        for identifier in evidence:
+            try:
+                judgment = self._judgments[identifier]
+            except KeyError:
+                raise KernelError(
+                    f"judgment does not exist: {identifier!r}"
+                ) from None
+            if not self.frames.is_visible(judgment.frame, frame):
+                raise KernelError("consistency evidence is outside the frame")
+            if not self._is_closed(judgment, frame):
+                raise KernelError(
+                    "consistency evidence still has open conditions"
+                )
+        for reference in basis:
+            if reference.world != self.frames.world.id:
+                raise KernelError(
+                    "a basis reference belongs to another world"
+                )
+        state = ConsistentForFragment(fragment, evidence, basis)
+        self._consistency[frame] = state
+        return state
 
     # --- discharge (an explicit kernel operation) ---
 
