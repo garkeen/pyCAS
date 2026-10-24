@@ -3,6 +3,7 @@
 from cas.runtime.bootstrap import (
     Runtime,
     bootstrap,
+    bootstrap_elementary,
     bootstrap_parameterized,
     new_workspace,
 )
@@ -10,6 +11,7 @@ from cas.runtime.bootstrap import (
 __all__ = [
     "Runtime",
     "bootstrap",
+    "bootstrap_elementary",
     "bootstrap_parameterized",
     "new_workspace",
 ]

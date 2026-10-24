@@ -25,13 +25,29 @@ from cas.algebra.polynomial import (
 )
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId, WorldId
-from cas.kernel.evidence import CheckerRegistry
+from cas.kernel.evidence import Checker, CheckerRegistry
 from cas.kernel.store import KernelStore
 from cas.language import sorts as S
+from cas.language.decisions import Reason
 from cas.language.problems import ParameterMode
 from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.math.calculus.differentiation.checker import DerivativeChecker
+from cas.math.calculus.differentiation.checker import (
+    DerivativeCertificate,
+    DerivativeChecker,
+)
+from cas.math.calculus.differentiation.elementary import (
+    ElementaryDifferentiator,
+)
+from cas.math.calculus.differentiation.elementary_checker import (
+    ElementaryDerivativeCertificate,
+    ElementaryDerivativeChecker,
+)
 from cas.math.calculus.differentiation.specification import DerivativeVocabulary
+from cas.math.elementary.declarations import (
+    ElementaryLibrary,
+    build_elementary,
+    default_elementary_source,
+)
 from cas.semantics.bridge import (
     ParameterPolynomialBridge,
     PolynomialBridge,
@@ -40,6 +56,13 @@ from cas.semantics.bridge import (
 from cas.semantics.differential import DifferentialStructure, polynomial_structure
 from cas.semantics.frames import Declaration, Frame, FrameStore, World
 from cas.semantics.request import AlgebraRequest, Interpretation
+from cas.semantics.services import (
+    DerivationInvalid,
+    DerivationOutcome,
+    DerivationUnsupported,
+    DerivativeService,
+    Derived,
+)
 from cas.semantics.symbols import SymbolTable, standard_language
 from cas.syntax import term as T
 from cas.workflow.workspace import Workspace
@@ -65,6 +88,60 @@ class SpecializationRuntime:
     request: AlgebraRequest
 
 
+@dataclass(frozen=True, slots=True)
+class PolynomialDerivativeService(Generic[E]):
+    """Candidate generation through a polynomial bridge and derivation."""
+
+    bridge: PolynomialBridge[E]
+    differential: DifferentialStructure[Polynomial[E]]
+    checker_id: str
+
+    def candidate(self, term: T.Term) -> DerivationOutcome:
+        value = self.bridge.to_value(term)
+        if value is None:
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                "the source is outside the polynomial fragment",
+            )
+        rendered = self.bridge.to_term(self.differential.deriv(value))
+        if rendered is None:
+            return DerivationInvalid(
+                "the derivative cannot be rendered in this language"
+            )
+        return Derived(rendered)
+
+    def certificate(
+        self,
+        region: T.Term,
+        source: T.Term,
+        variable: SymbolId,
+        candidate: T.Term,
+    ) -> object:
+        return DerivativeCertificate(region, source, variable, candidate)
+
+
+@dataclass(frozen=True, slots=True)
+class ElementaryDerivativeService:
+    """Candidate generation through the declared elementary differentiator."""
+
+    differentiator: ElementaryDifferentiator
+    checker_id: str
+
+    def candidate(self, term: T.Term) -> DerivationOutcome:
+        return self.differentiator.derive(term)
+
+    def certificate(
+        self,
+        region: T.Term,
+        source: T.Term,
+        variable: SymbolId,
+        candidate: T.Term,
+    ) -> object:
+        return ElementaryDerivativeCertificate(
+            region, source, variable, candidate
+        )
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class Runtime(Generic[E]):
     """One assembled world, its algebra view, ledger and supported operation."""
@@ -79,11 +156,13 @@ class Runtime(Generic[E]):
     parent: Parent[Polynomial[E]]
     differential: DifferentialStructure[Polynomial[E]]
     vocabulary: DerivativeVocabulary
-    checker: DerivativeChecker[E]
+    checker: Checker
     store: KernelStore
     bridge: PolynomialBridge[E]
     request: AlgebraRequest
+    derivative: DerivativeService
     specialization: SpecializationRuntime | None = None
+    elementary: ElementaryLibrary | None = None
 
 
 def _world(
@@ -151,6 +230,9 @@ def bootstrap() -> Runtime[Fraction]:
         store,
         bridge,
         request,
+        derivative=PolynomialDerivativeService(
+            bridge, differential, checker.id
+        ),
     )
 
 
@@ -305,7 +387,93 @@ def bootstrap_parameterized(
         store,
         bridge,
         request,
+        derivative=PolynomialDerivativeService(
+            bridge, differential, checker.id
+        ),
         specialization=specialization,
+    )
+
+
+def bootstrap_elementary() -> Runtime[Fraction]:
+    """Assemble the declared elementary fragment with target `x` over Q.
+
+    The Q[x] fields are the algebra view of the polynomial subfragment. The
+    active candidate generator and checker are the elementary ones; every
+    function and law comes from the declaration file admitted at assembly.
+    """
+    source = default_elementary_source()
+    table = SymbolTable()
+    predicate = table.intern("HasDerivative")
+    vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
+    library = build_elementary(
+        table.intern,
+        source,
+        reserved=frozenset({"x", "HasDerivative"}),
+    )
+    signature = standard_language(
+        table,
+        operators={predicate: vocabulary.signature, **library.operators},
+    )
+    world = World(WorldId(0), signature)
+    frames = FrameStore(world)
+    variable = table.intern("x")
+    declarations = (Declaration(variable, "x", S.REAL),) + tuple(
+        Declaration(constant.symbol, constant.name, constant.sort)
+        for constant in library.constants.values()
+    )
+    frame = frames.create(frames.root.id, declarations=declarations)
+
+    rationals = RationalField()
+    registry = ParentRegistry()
+    coefficient = registry.intern(ParentSpec("Q"), rationals)
+    ring = UnivariatePolynomialRing(variable, rationals)
+    parent = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=coefficient.spec,
+            generators=(variable,),
+        ),
+        ring,
+    )
+    differential = polynomial_structure(parent, 0)
+    bridge = SimplePolynomialBridge(
+        ring, signature, table.name_of, T.number
+    )
+
+    checker = ElementaryDerivativeChecker(
+        library, signature, vocabulary, variable, table.name_of
+    )
+    store = KernelStore(frames, CheckerRegistry({checker.id: checker}))
+    differentiator = ElementaryDifferentiator(
+        library, signature, variable, table.name_of
+    )
+    request = AlgebraRequest(
+        coefficient=coefficient,
+        parameter_ring=None,
+        parameters=(),
+        target=variable,
+        parameter_mode=ParameterMode.SPECIFIED_VALUES,
+        interpretation=Interpretation.FORMAL,
+    )
+    return Runtime(
+        table,
+        signature,
+        world,
+        frames,
+        frame,
+        variable,
+        ring,
+        parent,
+        differential,
+        vocabulary,
+        checker,
+        store,
+        bridge,
+        request,
+        derivative=ElementaryDerivativeService(
+            differentiator, checker.id
+        ),
+        elementary=library,
     )
 
 
@@ -318,6 +486,7 @@ __all__ = [
     "Runtime",
     "SpecializationRuntime",
     "bootstrap",
+    "bootstrap_elementary",
     "bootstrap_parameterized",
     "new_workspace",
 ]

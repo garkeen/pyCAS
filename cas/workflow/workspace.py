@@ -49,6 +49,11 @@ from cas.language.problems import (
 from cas.math.calculus.differentiation.checker import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.semantics import elaborate
+from cas.semantics.services import (
+    DerivationInvalid,
+    DerivationUnsupported,
+    Derived,
+)
 from cas.semantics.specialization import (
     Applied,
     GenericResult,
@@ -154,26 +159,28 @@ class Workspace:
                 None,
                 "this runtime differentiates with respect to x only",
             )
-        source_polynomial = runtime.bridge.to_value(source.term)
-        if source_polynomial is None:
+        derivation = runtime.derivative.candidate(source.term)
+        if isinstance(derivation, DerivationUnsupported):
             return DerivativeResult(
                 OperationStatus.UNSUPPORTED,
                 None,
                 None,
                 None,
-                "the source is outside the polynomial fragment",
+                derivation.detail,
             )
-        candidate_term = runtime.bridge.to_term(
-            runtime.differential.deriv(source_polynomial)
-        )
-        if candidate_term is None:
+        if isinstance(derivation, DerivationInvalid):
             return DerivativeResult(
                 OperationStatus.INVALID,
                 None,
                 None,
                 None,
-                "the derivative cannot be rendered in this language",
+                derivation.detail,
             )
+        if not isinstance(derivation, Derived):
+            raise RuntimeError(
+                f"unknown derivation outcome: {type(derivation).__name__}"
+            )
+        candidate_term = derivation.term
 
         variable_reference = T.symbol(variable, runtime.table.name_of(variable))
         specification_term = has_derivative(
@@ -244,8 +251,8 @@ class Workspace:
             CommitProposal(
                 source.frame,
                 (issued,),
-                runtime.checker.id,
-                certificate=DerivativeCertificate(
+                runtime.derivative.checker_id,
+                certificate=runtime.derivative.certificate(
                     T.TRUE, source.term, variable, candidate_term
                 ),
             ),

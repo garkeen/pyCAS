@@ -2,6 +2,7 @@
 
 from cas.frontend.repl import run
 from cas.frontend.session import Session
+from cas.runtime import bootstrap_elementary
 
 
 def test_run_executes_and_stops_at_quit(runtime):
@@ -28,3 +29,18 @@ def test_honest_refusal_is_a_result_not_a_frontend_error(runtime):
     run(session, ["1/x", "diff"], output.append)
     assert output[1].startswith("unsupported:")
     assert not any(line.startswith("error:") for line in output)
+
+
+def test_the_repl_runs_the_elementary_runtime():
+    session = Session(bootstrap_elementary())
+    output: list[str] = []
+    run(
+        session,
+        ["sin(x)", "diff", "sqrt(x)", "diff"],
+        output.append,
+    )
+    assert output[0] == "@E0: sin(x)"
+    assert output[1] == "verified @E1: cos(x)"
+    assert output[2] == "@E2: sqrt(x)"
+    assert output[3].startswith("unsupported:")
+    assert "conditional" in output[3]

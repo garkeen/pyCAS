@@ -9,8 +9,9 @@
 
 v5 的新层（foundation / syntax / language / algebra / semantics / kernel / 求导 /
 workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码树已全部删除。
-全库 `mypy --strict cas`、`ruff`、`compileall` 与测试均转绿。当前唯一的数学能力是
-Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数学层将按 v5 架构重新落地。
+全库 `mypy --strict cas`、`ruff`、`compileall` 与测试均转绿。当前数学能力是 Q[x]、
+形式参数系数 Q[a…][x] 上的单变量多项式求导，以及由 data-only 声明装配的初等函数
+片段（无条件定律可用，条件定律诚实拒答）；其余数学层将按 v5 架构重新落地。
 
 ### 已完成
 
@@ -39,6 +40,7 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 | semantics | `request.py`：`AlgebraRequest` 固定系数 parent、参数环、参数、目标与参数模式；角色属于请求，不属于符号 |
 | semantics | `bridge.py`：项 ↔ 多项式元素；参数桥把参数映射到系数环生成元、目标映射到外层生成元 |
 | semantics | `specialization.py`：`GenericResult`（有效区域/异常集/正确性规格/覆盖声明）、精确点 `Specialization`、条件求值与特化结果 |
+| semantics | `services.py`：注入的 `DerivativeService` 协议与 `Derived / Unsupported / Invalid` 结果，工作流不知道候选来自哪个片段 |
 | semantics | `differential.py`：`DifferentialStructure` 把 parent 与选定导子显式配对 |
 | semantics | `elaborate.py`：先展开别名再定型/发行命题，存下的命题 alias-free |
 | kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；Checker 协议与四种 outcome |
@@ -47,12 +49,14 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 | math | `differentiation/specification.py`：`HasDerivative(region, f, x, g)` 词表与解析 |
 | math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative` |
 | math | `differentiation/checker.py`：证书逐项匹配；只有全域可证；片段外 Unverified；错误候选 Refuted 带见证 |
-| workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图；参数族记录与精确点特化 |
-| runtime | `bootstrap.py`：显式装配 Q[x]（无参数）、Q[a…][x]（形式参数作为系数）与 Q[x] 特化视图（独立 parent/导子/桥/checker）；`bootstrap_parameterized` 把参数角色固定为目标之外的系数生成元 |
+| math | `elementary/declarations.py` + `declarations.dsl`：data-only 常数/一元函数/定义域/导数定律、BASIS 与 USER_AXIOM 来源、精确有理 DSL 表达式 |
+| math | `differentiation/elementary.py` / `elementary_verify.py` / `elementary_checker.py`：符号候选生成、独立重建与 checker；条件定律/未声明依赖/负幂诚实拒答 |
+| workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图；参数族记录与精确点特化；求导候选经注入服务 |
+| runtime | `bootstrap.py`：显式装配 Q[x]、Q[a…][x]、Q[x] 特化视图与初等函数片段；`bootstrap_parameterized` 固定参数角色，`bootstrap_elementary` 从声明文件装配函数与定律 |
 | frontend | `parser.py`：文本 → Term，名称解析到稳定 SymbolId，结构 head 驱动，无化简、无数学语义 |
 | frontend | `pprint.py`：可读形式 + 全应用 source 形式；source 对可解析项逐项往返，binder/自由索引/非符号算子显式拒答 |
 | frontend | `session.py`：对象标签、焦点、intake/diff/specialize/show/list/undo/redo；只经 Workspace 与 kernel；旧 `cas/api.py` 已删除，Session 是唯一前端门面 |
-| frontend | `repl.py`：逐行 REPL，仅分派与打印；前端错误报告，诚实拒答仍是结果 |
+| frontend | `repl.py`：逐行 REPL，仅分派与打印；默认装配初等函数片段；前端错误报告，诚实拒答仍是结果 |
 
 ### 参数域与系数域
 
@@ -117,6 +121,35 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 - 尚未实现：注解驱动的参数 sort（当前参数 sort 来自声明）、量化/全称引入、binder 的
   前端语法与 source 形式、导数定律/定义域/别名等其余 DSL 声明。
 
+### 初等函数片段（首个切片）
+
+- `math/elementary/declarations.dsl` 是 data-only 的 v4 旧文件替换：声明常数、一元函数、
+  函数定义域与导数定律。示例：`sin`/`cos`/`exp` 为无条件定律，`sqrt`/`log` 的定律
+  和定义域带条件。DSL 有自己的精确表达式解析器，不依赖会话符号表。
+- `LawOrigin.BASIS` / `USER_AXIOM` 记录定律来源；装配器只把标准库文件作为 basis
+  准入，用户公理来源的定律保留但不会被自动使用。尚无完整的 `BasisRef` 版本/摘要记录。
+- `build_elementary` 把名称固定为稳定 `SymbolId`，生成 `OperatorSignature`，并拒绝
+  重名、保留名、未知名称/函数、错误 arity、非数值指数、重复定律与非法 law 参数。
+  无条件定律还必须满足：函数本身无定义域条件、定律无 guard、定律体只调用全定义函数
+  且不含负幂；否则在装配期拒绝。
+- `differentiation/elementary.py` 是候选生成器：字面量与常数导数为 0，目标为 1；
+  支持 Plus、Times、非负整数 Power 与声明函数的链式法则。负幂、未声明依赖、条件
+  定律/定义域、用户公理、无定律函数都返回带理由的拒答。
+- `elementary_verify.py` 是第二个独立的求导实现，`elementary_checker.py` 只调用它。
+  checker 校验证书与规格一致；结构不同的候选返回 `Unverified`，不伪装成 `Refuted`，
+  因为没有初等表达式相等判定。
+- `semantics/services.py` 引入注入的 `DerivativeService`；`Workspace.differentiate`
+  只依赖候选/证书服务，不再知道多项式桥。Q[x] 与参数化运行时使用多项式适配器，
+  初等运行时使用符号适配器。参数特化路径保持不变。
+- `bootstrap_elementary()` 从声明文件装配函数、常数、签名、frame、elementary checker
+  与 Q[x] 子片段的代数视图；默认 REPL 已切换到该运行时。
+- 测试覆盖：DSL 装载/装配/拒答、定义域与条件、basis 与用户公理、候选生成、
+  链式/乘积/幂规则、checker 的接受与拒绝、端到端会话、随机多项式与独立 checker 的
+  性质验收。
+- 尚未实现：条件定律与函数定义域的条件服务/义务清偿（`sqrt`/`log` 因此拒答）、
+  完整 `BasisRef`、别名/角色、非一元函数、负幂/分式与更多初等函数、初等表达式
+  相等判定。
+
 ### 第一条纵线：已贯通
 
 文本 → 解析为 Term → 求导 → `HasDerivative` 规格 → 独立验证 → kernel 发行 → 工作流记录 →
@@ -132,24 +165,25 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
 v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-新套件共 484 个用例：
+新套件共 545 个用例：
 
-- `tests/unit`（含参数化展开，440 个）：ids、term、binding、sorts、signatures、typing、
+- `tests/unit`（含参数化展开，491 个）：ids、term、binding、sorts、signatures、typing、
   propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
   symbols、frames、definitions、bridge、differential、elaborate、algebra request；
   evidence、store、commit；specification、verify、differentiation checker；
   bootstrap、workspace；parser、pprint、session、repl；参数桥与参数 checker；
-  binder 定型、声明 DSL、参数特化语义与特化 workflow。
-- `tests/integration`（19）：纵线端到端、前端纵线与参数化纵线。intake 不产生
+  binder 定型、声明 DSL、参数特化语义与特化 workflow；初等声明、符号求导与 checker。
+- `tests/integration`（27）：纵线端到端、前端纵线、参数化纵线与初等函数纵线。intake 不产生
   Judgment；一次发行一条判断；inference/certificate 与请求逐项一致；undo 不回滚
   账本；片段外零写入；二阶导是新判断；文本经 parser/session 走到同一
   `HasDerivative` 验证边界；参数化 Q[a][x] 的角色分离与验证；泛参数覆盖声明、
-  精确有理点特化与 Q[x] 独立复核。
-- `tests/property`（25，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
+  精确有理点特化与 Q[x] 独立复核；初等函数的链式法则、条件定律拒答与历史。
+- `tests/property`（27，固定种子）：结构相等/hash/全序、重建项折叠为一个字典槽位；
   绑定往返、shift 可逆、同时代换、Quote 惰性；
   Q/Z/K[x]/K(x) 的域与环定律、导子加性与 Leibniz；
   随机求导的独立验证、checker 接受正确候选并以见证否证扰动候选、workspace 随机求导；
-  随机参数化多项式的独立验证与 checker 接受/否证；特化与求导可交换。
+  随机参数化多项式的独立验证与 checker 接受/否证；特化与求导可交换；初等符号求导
+  在多项式子片段上与 Q[x] 求导一致，随机初等表达式通过独立 checker。
 
 前端行为另有明确覆盖：运算优先级/结合性、`1+1` 不化简、有理字面量折叠、名称稳定 id、
 链式比较与空输入等解析拒答（带列号）、可读打印、source 形式往返、标签唯一性、
@@ -176,7 +210,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
   `constraints`、`project` 等。
 
 这些实现全部依赖已删除的 v4 内核/语法 API，与 v5 不兼容。git 历史保留它们作为重新
-实现时的参考，当前树中不保留兼容层。`README.md` 与 CI 已同步为 v5 验收
+实现时的参考，当前树中不保留兼容层。`elementary/` 已按 v5 重新建立为 data-only
+声明与独立 checker，不是旧实现的迁移。`README.md` 与 CI 已同步为 v5 验收
 （`mypy --strict`、`ruff`、`compileall`、`pytest`）；旧的门禁式测试分类
 （`contract` / `regression` / `random` 标记与 `tests/random` 路径）一并移除。
 
@@ -205,15 +240,18 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 验收（本轮）
 
-- `python -m pytest -q`：484 passed。
-- `python -m mypy --strict cas`：52 source files，无问题（全库）。
+- `python -m pytest -q`：545 passed。
+- `python -m mypy --strict cas`：59 source files，无问题（全库）。
 - `python -m ruff check cas tests`：All checks passed。
 - `python -m compileall -q cas`：通过。
 
 ### 已知语义缺口
 
-- 声明 DSL 首个切片只覆盖 binder/operator 签名；导数定律、定义域/值域、别名/角色、
-  常数以及 `math/elementary` 的数学声明尚未建。
+- 初等函数片段只覆盖一元函数、非负整数幂与无条件且全定义的定律；条件定律与函数
+  定义域尚未接入条件服务/义务清偿，因此 `sqrt`/`log` 诚实拒答。还没有完整的
+  `BasisRef` 版本/摘要、别名/角色声明、初等表达式相等判定与更多函数。
+- 语言层声明 DSL 首个切片只覆盖 binder/operator 签名；导数定律、定义域/值域、
+  别名/角色与常数的 *语言级* 声明仍归各自的数学声明文件。
 - binder 类型规则首个切片已完成（声明参数 sort、函数值/值 binder、嵌套索引、注解外层
   定型）；尚未完成注解驱动的参数 sort、量化/全称引入、前端 binder 语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
@@ -223,19 +261,21 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 - 义务清偿目前是显式操作；自动解析/决策服务（inspect/resolve）尚未接入。
 - 否定导致的 Blocked 变体尚未接入（需要 refutation 记录）。
 - 条件被否证时的 Rejected 分支依赖未来的判定服务；当前只区分未决条件的三种策略。
-- 前端当前只覆盖纵线：无声明/定义命令、无隐式标量默认（未声明名字可以进入对象，但
-  求导会诚实拒答）、`@LABEL` 只作为命令目标，不能嵌入公式、只对 `x` 求导、无持久化；
-  `specialize` 只接受精确有理字面量。
+- 前端当前只覆盖纵线：无声明/定义命令、无隐式标量默认、`@LABEL` 只作为命令目标，
+  不能嵌入公式、只对 `x` 求导、无持久化；REPL 默认装配初等片段，参数化入口仍在
+  Python API；`specialize` 只接受精确有理字面量。
 
 ### 下一步
 
-1. 参数层继续：参数关系、参数分支，以及让新的局部化算法真正产生异常集；
-   每个新语义都配正例、拒答和性质测试。
-2. 语义层补齐：binder 表面语法与注解驱动 sort、量化/全称引入、K(x) 桥接、
-   义务自动清偿与否证；扩展声明 DSL 到导数定律、定义域与别名/角色。
-3. 新的数学层：按 v5 架构重新落地被删除的能力。先做 `elementary` 声明（函数/常数/
-   导数定律），再按目标顺序推进积分、方程、实代数与 CAD。
-4. 前端下一层：声明/定义命令、对象引用嵌入公式、参数化会话入口、source/serialization
-   形式、新的数学操作命令；每项都配「正例 + 诚实拒绝」行为测试。
-5. 测试随能力增长：每个新数学层同时补行为测试与种子固定的性质测试；不恢复按名字
+1. 条件与义务：接入条件判定/清偿服务，让带条件定律和函数定义域产生显式义务或
+   guarded 结果，而不是一律拒答；先服务 `sqrt`/`log` 的可微区域。
+2. 初等层扩展：更多函数、负幂/分式与初等表达式相等判定；为每个新规则补正例、
+   拒答与固定种子性质测试。
+3. 语义层补齐：binder 表面语法与注解驱动 sort、量化/全称引入、K(x) 桥接；
+   完整 `BasisRef` 与别名/角色。
+4. 新的数学层：按目标顺序推进积分、方程、实代数与 CAD；先建立在已声明的初等函数
+   与条件义务之上。
+5. 参数层继续：参数关系、参数分支，以及让局部化算法真正产生异常集；前端下一层：
+   声明/定义命令、对象引用嵌入公式、参数化会话入口与持久化。
+6. 测试随能力增长：每个新数学层同时补行为测试与种子固定的性质测试；不恢复按名字
    扫描的门禁。

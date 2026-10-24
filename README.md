@@ -19,12 +19,19 @@
      → kernel 原子发行 → 工作流记录 → 会话显示 / undo / redo
 ```
 
-当前可用的数学能力是 **Q 上的单变量多项式求导**，以及它的参数化版本
-**Q[a…][x]**：形式参数作为系数环的生成元，`x` 仍然是求导目标，两个角色由请求
-显式固定。参数族结果携带有效区域、异常集与覆盖声明；多项式求导不引入分母或分支，
-因此默认的 `AllParameterValues` 请求可以得到无条件覆盖。精确有理参数点可以特化，
-特化结果在 Q[x] 中由独立 checker 重新验证。片段外（例如 `1/a` 或非多项式输入）
-一律诚实拒答，不会伪造答案，也不会写入账本。
+当前可用的数学能力：
+
+- **Q 上的单变量多项式求导**；
+- 它的参数化版本 **Q[a…][x]**：形式参数作为系数环的生成元，`x` 仍然是求导目标，
+  两个角色由请求显式固定。参数族结果携带有效区域、异常集与覆盖声明；多项式求导
+  不引入分母或分支，因此默认的 `AllParameterValues` 请求可以得到无条件覆盖。精确
+  有理参数点可以特化，结果在 Q[x] 中由独立 checker 重新验证；
+- 由数据声明的**初等函数片段**：`sin`、`cos`、`exp` 及其导数定律来自
+  `cas/math/elementary/declarations.dsl`，支持和、积、非负整数幂与链式法则。
+  `sqrt`、`log` 的定律是带条件的，当前被诚实拒答，而不是当成全域可微。
+
+片段外（例如 `1/a`、`1/x`、条件定律或未声明符号）一律诚实拒答，不会伪造答案，
+也不会写入账本。
 
 v4 的 CAD、积分、方程求解、实根隔离、规则引擎等实现已删除；它们会在 v5 地基上
 重新落地，而不是以兼容层迁回。旧代码仍可从 git 历史中查阅。
@@ -35,19 +42,23 @@ v4 的 CAD、积分、方程求解、实根隔离、规则引擎等实现已删�
 
 ```console
 $ python repl.py
-pyCAS v5 — polynomial differentiation. Type help for commands.
+pyCAS v5 — polynomial and elementary differentiation. Type help for commands.
 cas> x^3 - 3*x
 @E0: x^3 - 3*x
 cas> diff
 verified @E1: -3 + 3*x^2
-cas> undo
-undo: @E0
-cas> list
-> @E0: x^3 - 3*x
-cas> 1/x
-@E2: x^-1
+cas> sin(x)
+@E2: sin(x)
 cas> diff
-unsupported: the source is outside the polynomial fragment
+verified @E3: cos(x)
+cas> sqrt(x)
+@E4: sqrt(x)
+cas> diff
+unsupported: the derivative law or domain for sqrt is conditional; its condition has not been discharged
+cas> 1/x
+@E5: x^-1
+cas> diff
+unsupported: only nonnegative integer powers are differentiated
 ```
 
 命令：
@@ -63,8 +74,8 @@ unsupported: the source is outside the polynomial fragment
 | `undo` / `redo` | 移动视图指针；账本不回滚 |
 | `help` / `quit` | 帮助 / 退出 |
 
-默认 REPL 装配的是 Q[x]。参数化运行时通过 `bootstrap_parameterized` 在 Python API
-中使用；REPL 的参数化入口尚未实现。
+默认 REPL 装配的是 `bootstrap_elementary()`（多项式是它的子片段）。参数化运行时通过
+`bootstrap_parameterized` 在 Python API 中使用；REPL 的参数化入口尚未实现。
 
 程序化使用：
 
@@ -112,6 +123,35 @@ session.execute("specialize @F a=3") # verified @E1: 6*x
 源与候选都经 Q[x] 的独立 checker 验证后才提交。非有理参数点、缺失参数或片段外
 输入一律诚实拒答。
 
+### 初等函数声明
+
+`cas/math/elementary/declarations.dsl` 是 data-only 的数学声明：
+
+```text
+constant pi : Real
+function sin : Real -> Real
+function sqrt : Real -> Real on u >= 0
+derivative sin(u) = cos(u)
+derivative sqrt(u) = (1/2)*u^(-1/2) on u > 0
+```
+
+装配器把文件作为受信任的 basis 读入；带条件或用户公理来源的定律只作为数据保留，
+不会自动用于求导。`bootstrap_elementary()` 是默认 REPL 运行时：
+
+```python
+from cas.frontend import Session
+from cas.runtime import bootstrap_elementary
+
+session = Session(bootstrap_elementary())
+assert session.execute("sin(x^2)") == "@E0: sin(x^2)"
+assert session.execute("diff") == "verified @E1: 2*cos(x^2)*x"
+```
+
+候选生成器与 checker 是两个独立实现：checker 不调用候选生成器，只按同一声明数据
+重建期望导数；结构不同但可能等价的候选返回 `unverified`，不会被伪装成否证。当前片段
+只支持一元函数、非负整数幂和声明为无条件且值域全定义的定律；`sqrt`/`log` 的条件
+（包括函数自身定义域）尚未接入条件服务，因此诚实拒答。
+
 语言层另有 data-only 声明 DSL（`operator` / `binder` 签名）与 binder 定型：
 `BindingSignature` 声明参数 sort 与结果，函数值 binder 定型为 `FunctionSort`，
 值 binder 要求 body 嵌入结果。前端 binder 输入语法尚未接入。
@@ -126,11 +166,11 @@ session.execute("specialize @F a=3") # verified @E1: 6*x
 | `cas/syntax/` | 不可变 Term、结构相等/hash/序、de Bruijn 绑定原语 |
 | `cas/language/` | Sort、结构签名、定型（含 binder）、Proposition、ProblemSpec、三值 Verdict、声明 DSL |
 | `cas/algebra/` | 结构协议、parent 描述、ℤ、ℚ、多项式环、有理函数域 |
-| `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、参数特化/覆盖、Term↔元素桥（含参数系数）、微分结构 |
+| `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、参数特化/覆盖、注入的求导服务、Term↔元素桥（含参数系数）、微分结构 |
 | `cas/kernel/` | Judgment/Obligation/InferenceRecord、checker 协议、原子账本、commit |
-| `cas/math/` | 数学规格与独立 checker（当前仅多项式求导） |
+| `cas/math/` | 数学声明与独立 checker：多项式求导、data-only 初等函数声明与符号求导 |
 | `cas/workflow/` | 表达式对象、候选、验证关联、事件与 revision |
-| `cas/runtime/` | 显式装配的 Runtime（Q[x]、参数化 Q[a…][x] 与特化 Q[x] 视图）与 workspace 入口 |
+| `cas/runtime/` | 显式装配的 Runtime（Q[x]、参数化 Q[a…][x]、Q[x] 特化视图与初等函数片段）与 workspace 入口 |
 | `cas/frontend/` | parser、printer、Session、REPL |
 
 依赖方向：`syntax → language → algebra → semantics → kernel → workflow → frontend`；

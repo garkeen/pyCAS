@@ -10,9 +10,12 @@ from collections.abc import Callable, Iterable
 
 from cas.frontend.errors import FrontendError
 from cas.frontend.session import Session
-from cas.runtime.bootstrap import bootstrap
+from cas.runtime.bootstrap import bootstrap_elementary
 
-_BANNER = "pyCAS v5 — polynomial differentiation. Type help for commands."
+_BANNER = (
+    "pyCAS v5 — polynomial and elementary differentiation. "
+    "Type help for commands."
+)
 
 
 def run(
@@ -34,7 +37,7 @@ def run(
 
 
 def main() -> None:
-    session = Session(bootstrap())
+    session = Session(bootstrap_elementary())
     print(_BANNER)
     while not session.closed:
         try:

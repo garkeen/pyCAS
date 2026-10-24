@@ -34,3 +34,6 @@ ignore = ["E501"]
 
 [tool.setuptools.packages.find]
 include = ["cas*"]
+
+[tool.setuptools.package-data]
+"cas.math.elementary" = ["*.dsl"]

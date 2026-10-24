@@ -92,10 +92,15 @@ class DeclarationSet:
 
 
 def _parse_sort(text: str, line: int) -> S.Sort:
-    sort = _SORTS.get(text)
+    sort = sort_from_name(text)
     if sort is None:
         raise DeclarationError(f"unknown sort {text!r}", line)
     return sort
+
+
+def sort_from_name(name: str) -> S.Sort | None:
+    """The declared sort called `name`, or None when the language has none."""
+    return _SORTS.get(name)
 
 
 def _parse_parameters(text: str, line: int) -> tuple[S.Sort, ...]:
@@ -201,4 +206,5 @@ __all__ = [
     "build_language",
     "load_declarations",
     "load_declarations_file",
+    "sort_from_name",
 ]
