@@ -39,9 +39,10 @@ class NoVersion(GoodChecker):
 def spec(checker, *, deps=()):
     return CheckerSpec(
         checker,
-        CertificateSchema("test", "1"),
+        CertificateSchema("test", "1", type(None)),
         frozenset({"test.problem"}),
         frozenset({"test.specification"}),
+        WorldId(0),
         deps,
     )
 
@@ -77,21 +78,23 @@ def test_a_checker_spec_needs_kinds_and_a_schema():
     with pytest.raises(ValueError):
         CheckerSpec(
             GoodChecker(),
-            CertificateSchema("test", "1"),
+            CertificateSchema("test", "1", type(None)),
             frozenset(),
             frozenset({"test.specification"}),
+            WorldId(0),
         )
     with pytest.raises(ValueError):
         CheckerSpec(
             GoodChecker(),
-            CertificateSchema("test", "1"),
+            CertificateSchema("test", "1", type(None)),
             frozenset({"test.problem"}),
             frozenset(),
+            WorldId(0),
         )
     with pytest.raises(ValueError):
-        CertificateSchema("", "1")
+        CertificateSchema("", "1", type(None))
     with pytest.raises(ValueError):
-        CertificateSchema("test", "")
+        CertificateSchema("test", "", type(None))
 
 
 def test_a_basis_reference_records_kind_version_scope_and_digest():
@@ -144,3 +147,16 @@ def test_a_check_request_is_a_value():
     request = CheckRequest(FrameId(0), (), (), "certificate")
     assert request.frame == FrameId(0)
     assert request.certificate == "certificate"
+
+
+def test_a_checker_cannot_trust_a_basis_from_another_world():
+    other = BasisRef(
+        "other", BasisKind.STANDARD_LIBRARY, "1", "digest", WorldId(1)
+    )
+    with pytest.raises(ValueError):
+        spec(GoodChecker(), deps=(other,))
+
+
+def test_a_certificate_schema_needs_a_certificate_type():
+    with pytest.raises(TypeError):
+        CertificateSchema("test", "1", "not a type")

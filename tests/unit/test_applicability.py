@@ -115,27 +115,31 @@ def setup(*, hypotheses=()):
             {
                 condition.id: CheckerSpec(
                     condition,
-                    CertificateSchema("condition", "1"),
+                    CertificateSchema("condition", "1", type(None)),
                     frozenset({"discharge"}),
                     frozenset({"Condition"}),
+                    frames.world.id,
                 ),
                 hypothesis.id: CheckerSpec(
                     hypothesis,
-                    CertificateSchema("hypothesis", "1"),
+                    CertificateSchema("hypothesis", "1", type(None)),
                     frozenset({"assume"}),
                     frozenset({"Hypothesis"}),
+                    frames.world.id,
                 ),
                 obligation.id: CheckerSpec(
                     obligation,
-                    CertificateSchema("test", "1"),
+                    CertificateSchema("test", "1", type(None)),
                     frozenset({"test.problem"}),
                     frozenset({"test.specification"}),
+                    frames.world.id,
                 ),
                 AnythingChecker.id: CheckerSpec(
                     AnythingChecker(),
-                    CertificateSchema("test", "1"),
+                    CertificateSchema("test", "1", type(None)),
                     frozenset({"test.problem"}),
                     frozenset({"test.specification"}),
+                    frames.world.id,
                 ),
             }
         ),

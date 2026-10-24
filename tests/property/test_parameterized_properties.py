@@ -7,7 +7,7 @@ from support import runtime_proposition, variable
 
 from cas.kernel.evidence import CheckRequest, Refuted, Verified
 from cas.language.problems import ParameterMode
-from cas.math.calculus.differentiation.checker import DerivativeCertificate
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.math.calculus.differentiation.verify import verify_derivative
 from cas.runtime import bootstrap_parameterized

@@ -155,7 +155,7 @@ def test_a_new_operation_after_undo_truncates_redo(runtime):
 def test_unknown_names_are_stored_but_refused_by_differentiation(runtime):
     session = new_session(runtime)
     session.execute("u")
-    assert session.execute("diff").startswith("unsupported:")
+    assert session.execute("diff").startswith("invalid:")
     assert runtime.store.stats()["judgments"] == 0
 
 

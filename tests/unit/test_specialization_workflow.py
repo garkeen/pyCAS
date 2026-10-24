@@ -14,7 +14,7 @@ from cas.semantics.specialization import (
 )
 from cas.syntax import binding as B
 from cas.syntax import term as T
-from cas.workflow.records import OperationStatus, SpecializationPath
+from cas.workflow.records import OperationStatus
 from cas.workflow.workspace import Workspace
 
 
@@ -48,7 +48,10 @@ def test_differentiation_records_the_parameter_family():
     assert generic.is_unconditional
     assert generic.excluded_cases == ()
     assert generic.result == differentiated.result.term
-    assert generic.correctness_specification == differentiated.verification.specification
+    assert (
+        generic.correctness_specification
+        == differentiated.verifications[0].specification
+    )
     assert runtime.store.stats()["judgments"] == 1
 
 
@@ -56,14 +59,14 @@ def test_a_point_reuses_the_generic_formula_and_is_reverified():
     runtime, workspace, a_id, _, source, _ = setup()
     outcome = workspace.specialize(source, {a_id: 3})
     assert outcome.status is OperationStatus.VERIFIED
-    assert outcome.path is SpecializationPath.GENERIC_FORMULA
+    assert outcome.trace == ("generic_formula",)
     assert outcome.detail == ""
     assert outcome.candidate is not None
-    assert outcome.verification is not None
+    assert outcome.verifications
     assert outcome.result is not None
-    assert outcome.verification.judgment is not None
+    assert outcome.verifications[0].judgment is not None
     assert workspace.applicability(
-        outcome.verification.judgment
+        outcome.verifications[0].judgment
     ).is_applicable()
     assert runtime.store.stats()["judgments"] == 2
 
@@ -77,7 +80,7 @@ def test_a_point_reuses_the_generic_formula_and_is_reverified():
     assert runtime.variable in B.free_symbols(candidate.term)
 
     claim = parse_has_derivative(
-        runtime.vocabulary, outcome.verification.specification.term
+        runtime.vocabulary, outcome.verifications[0].specification.term
     )
     assert claim is not None
     assert not B.free_symbols(claim.source) & set(runtime.request.parameters)
@@ -87,7 +90,9 @@ def test_a_point_reuses_the_generic_formula_and_is_reverified():
     assert runtime.variable in B.free_symbols(claim.source)
     assert runtime.variable in B.free_symbols(claim.candidate)
 
-    inference = runtime.store.inference_of(outcome.verification.judgment)
+    inference = runtime.store.inference_of(
+        outcome.verifications[0].judgment
+    )
     assert inference.checker_id == "calculus.derivative.specialized"
 
     specialized = runtime.specialization
@@ -101,8 +106,8 @@ def test_a_point_reuses_the_generic_formula_and_is_reverified():
     )
     assert [event.operation for event in workspace.events()] == [
         "Intake",
-        "Differentiate",
-        "Specialize",
+        "differentiate",
+        "specialize",
     ]
 
 
@@ -112,7 +117,7 @@ def test_zero_and_fractional_points_are_verified():
     assert zero.status is OperationStatus.VERIFIED
     assert zero.result is not None
     assert zero.result.term == T.number(0)
-    assert zero.path is SpecializationPath.GENERIC_FORMULA
+    assert zero.trace == ("generic_formula",)
 
     half = workspace.specialize(source, {a_id: Fraction(1, 2)})
     assert half.status is OperationStatus.VERIFIED
@@ -175,12 +180,12 @@ def test_a_point_outside_the_generic_validity_recomputes():
         result=differentiated.result.term,
         valid_on=equation(runtime, a, T.number(1)),
         excluded_cases=(),
-        correctness_specification=differentiated.verification.specification,
+        correctness_specification=differentiated.verifications[0].specification,
         parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
     )
     outside = workspace.specialize(source, {a_id: 2}, generic=family)
     assert outside.status is OperationStatus.VERIFIED
-    assert outside.path is SpecializationPath.RECOMPUTED
+    assert outside.trace == ("recomputed",)
     assert outside.result is not None
     assert outside.result.term == head_app(
         runtime.signature,
@@ -191,7 +196,7 @@ def test_a_point_outside_the_generic_validity_recomputes():
 
     inside = workspace.specialize(source, {a_id: 1}, generic=family)
     assert inside.status is OperationStatus.VERIFIED
-    assert inside.path is SpecializationPath.GENERIC_FORMULA
+    assert inside.trace == ("generic_formula",)
 
 
 def test_an_excluded_point_recomputes_instead_of_substituting():
@@ -202,22 +207,22 @@ def test_an_excluded_point_recomputes_instead_of_substituting():
         result=T.number(-999),
         valid_on=true,
         excluded_cases=(excluded,),
-        correctness_specification=differentiated.verification.specification,
+        correctness_specification=differentiated.verifications[0].specification,
         parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
     )
     assert family.coverage_claim is CoverageClaim.PARTIAL
 
     recomputed = workspace.specialize(source, {a_id: 0}, generic=family)
     assert recomputed.status is OperationStatus.VERIFIED
-    assert recomputed.path is SpecializationPath.RECOMPUTED
+    assert recomputed.trace == ("recomputed",)
     assert recomputed.result is not None
     assert recomputed.result.term == T.number(0)
 
     bad_substitution = workspace.specialize(source, {a_id: 2}, generic=family)
     assert bad_substitution.status is OperationStatus.REFUTED
     assert bad_substitution.result is None
-    assert bad_substitution.verification is not None
-    assert bad_substitution.verification.judgment is None
+    assert bad_substitution.verifications
+    assert bad_substitution.verifications[0].judgment is None
 
 
 def test_a_hidden_source_cannot_be_specialized():
@@ -225,7 +230,7 @@ def test_a_hidden_source_cannot_be_specialized():
     assert workspace.undo()
     assert workspace.undo()
     outcome = workspace.specialize(source, {a_id: 1})
-    assert outcome.status is OperationStatus.UNSUPPORTED
+    assert outcome.status is OperationStatus.INVALID
     assert "visible" in outcome.detail
 
 

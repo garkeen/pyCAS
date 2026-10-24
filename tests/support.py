@@ -9,10 +9,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from cas.foundation.ids import FrameId, SymbolId
+from cas.foundation.ids import FrameId, SymbolId, WorldId
+from cas.kernel.model import BasisKind, BasisRef
 from cas.language import propositions as Pr
 from cas.language import sorts as S
 from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.math.elementary.declarations import ElementarySource
 from cas.semantics.frames import FrameSorts, FrameStore
 from cas.syntax import term as T
 
@@ -79,6 +81,21 @@ def proposition_in(
     term: T.Term,
 ) -> Pr.Proposition:
     return require_proposition(check_in(frames, frame, signature, term))
+
+
+def elementary_basis(
+    source: ElementarySource,
+    world: WorldId = WorldId(0),
+) -> BasisRef:
+    """The admission record a basis-loaded elementary source must carry."""
+    assert source.digest, "a loaded source carries its content digest"
+    return BasisRef(
+        source.name,
+        BasisKind.DECLARATION_FILE,
+        "1",
+        source.digest,
+        world,
+    )
 
 
 def variable(runtime: Runtime) -> T.SymbolRef:

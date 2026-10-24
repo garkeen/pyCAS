@@ -74,9 +74,9 @@ def test_differentiation_produces_a_verified_candidate_and_result(runtime):
     assert result.status is OperationStatus.VERIFIED
     assert result.detail == ""
     assert result.candidate is not None
-    assert result.verification is not None
+    assert result.verifications
     assert result.result is not None
-    link = result.verification
+    link = result.verifications[0]
     assert link.status is OperationStatus.VERIFIED
     assert link.judgment is not None
     assert link.candidate == result.candidate.id
@@ -110,7 +110,7 @@ def test_differentiation_produces_a_verified_candidate_and_result(runtime):
     assert runtime.ring.equal(value, expected_derivative(runtime))
     assert [event.operation for event in workspace.events()] == [
         "Intake",
-        "Differentiate",
+        "differentiate",
     ]
     assert len(workspace.links()) == 1
 
@@ -121,7 +121,7 @@ def test_outside_the_fragment_the_workspace_refuses_without_writing(runtime):
     result = workspace.differentiate(source, runtime.variable)
     assert result.status is OperationStatus.UNSUPPORTED
     assert result.candidate is None
-    assert result.verification is None
+    assert not result.verifications
     assert result.result is None
     assert "polynomial fragment" in result.detail
     assert runtime.store.stats()["judgments"] == 0
@@ -146,7 +146,7 @@ def test_undo_and_redo_move_the_view_but_not_the_ledger(runtime):
     result = workspace.differentiate(source, runtime.variable)
     assert result.status is OperationStatus.VERIFIED
     assert len(workspace.expressions()) == 2
-    judgment = result.verification.judgment
+    judgment = result.verifications[0].judgment
 
     assert workspace.undo()
     assert workspace.expressions() == (source,)
@@ -187,7 +187,7 @@ def test_each_differentiation_gets_its_own_candidate_and_judgment(runtime):
     first = workspace.differentiate(source, runtime.variable)
     second = workspace.differentiate(source, runtime.variable)
     assert first.candidate.id != second.candidate.id
-    assert first.verification.judgment != second.verification.judgment
+    assert first.verifications[0].judgment != second.verifications[0].judgment
     assert runtime.store.stats()["judgments"] == 2
     assert len(workspace.links()) == 2
     assert len(workspace.expressions()) == 3

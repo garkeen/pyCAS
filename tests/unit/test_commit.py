@@ -49,9 +49,10 @@ def setup(runtime):
     checker = StubChecker()
     registration = CheckerSpec(
         checker,
-        CertificateSchema("test", "1"),
+        CertificateSchema("test", "1", str),
         frozenset({"test.problem"}),
         frozenset({"test.specification"}),
+        runtime.world.id,
     )
     store = KernelStore(
         runtime.frames, CheckerRegistry({checker.id: registration})
@@ -314,11 +315,16 @@ def test_discharging_the_condition_makes_the_judgment_applicable(runtime):
     )
     assert isinstance(committed, Committed)
     checker.outcome = Verified((condition,))
-    proof = commit(store, proposal(runtime, condition))
-    assert isinstance(proof, Committed)
-    store.discharge(
-        committed.obligations[0], proof.judgments[0], runtime.frame.id
+    proof = commit(
+        store,
+        proposal(
+            runtime,
+            condition,
+            discharge_obligations=committed.obligations,
+        ),
     )
+    assert isinstance(proof, Committed)
+    assert proof.discharged == committed.obligations
     assert store.applicability(
         committed.judgments[0], runtime.frame.id
     ).is_applicable()
@@ -650,9 +656,10 @@ def test_the_inference_records_the_trusted_basis(runtime):
             {
                 checker.id: CheckerSpec(
                     checker,
-                    CertificateSchema("test", "1"),
+                    CertificateSchema("test", "1", str),
                     frozenset({"test.problem"}),
                     frozenset({"test.specification"}),
+                    runtime.world.id,
                     (basis,),
                 )
             }
@@ -755,3 +762,83 @@ def test_an_inconsistent_frame_rejects_publication(runtime):
     assert isinstance(result, Rejected)
     assert "inconsistent" in result.detail
     assert store.stats()["judgments"] == 1
+
+
+def test_an_identical_condition_reuses_the_existing_obligation(runtime):
+    store, checker = setup(runtime)
+    condition = conclusion(runtime, 0)
+    first_proposition = conclusion(runtime, 1)
+    second_proposition = conclusion(runtime, 2)
+    checker.outcome = Verified(
+        (first_proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    first = commit(
+        store,
+        proposal(
+            runtime,
+            first_proposition,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        ),
+    )
+    assert isinstance(first, Committed)
+
+    checker.outcome = Verified(
+        (second_proposition,),
+        (ObligationReport(condition, ObligationReason.RULE_GUARD),),
+    )
+    second = commit(
+        store,
+        proposal(
+            runtime,
+            second_proposition,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        ),
+    )
+    assert isinstance(second, Committed)
+    assert second.obligations == first.obligations
+    assert store.stats()["obligations"] == 1
+
+    checker.outcome = Verified((condition,))
+    proof = commit(
+        store,
+        proposal(
+            runtime,
+            condition,
+            discharge_obligations=first.obligations,
+        ),
+    )
+    assert isinstance(proof, Committed)
+    assert store.applicability(
+        first.judgments[0], runtime.frame.id
+    ).is_applicable()
+    assert store.applicability(
+        second.judgments[0], runtime.frame.id
+    ).is_applicable()
+
+    third_proposition = conclusion(runtime, 3)
+    checker.outcome = Verified(
+        (third_proposition,),
+        (ObligationReport(condition, ObligationReason.DEFINEDNESS),),
+    )
+    third = commit(store, proposal(runtime, third_proposition))
+    assert isinstance(third, Committed)
+    assert third.obligations == first.obligations
+    assert store.stats()["obligations"] == 1
+    assert store.applicability(
+        third.judgments[0], runtime.frame.id
+    ).is_applicable()
+
+
+def test_a_certificate_must_match_the_declared_schema(runtime):
+    store, checker = setup(runtime)
+    proposition = conclusion(runtime)
+    checker.outcome = Verified((proposition,))
+    result = commit(
+        store,
+        proposal(runtime, proposition, certificate=object()),
+    )
+    assert isinstance(result, Rejected)
+    assert "declared schema" in result.detail
+    assert checker.requests == []
+    assert_empty(store)

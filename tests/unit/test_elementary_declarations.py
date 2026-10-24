@@ -3,7 +3,7 @@
 from fractions import Fraction
 
 import pytest
-from support import head_app
+from support import elementary_basis, head_app
 
 from cas.language import sorts as S
 from cas.language.signatures import StructuralHead
@@ -38,7 +38,10 @@ def setup(text=None):
     predicate = table.intern("HasDerivative")
     vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
     library = build_elementary(
-        table.intern, source, reserved=frozenset({"x", "HasDerivative"})
+        table.intern,
+        source,
+        reserved=frozenset({"x", "HasDerivative"}),
+        basis=elementary_basis(source),
     )
     signature = standard_language(
         table,
@@ -113,7 +116,10 @@ derivative F(u) = 1 on u > 0
     source = load_elementary(text, origin=LawOrigin.BASIS)
     table = SymbolTable()
     library = build_elementary(
-        table.intern, source, reserved=frozenset({"x", "HasDerivative"})
+        table.intern,
+        source,
+        reserved=frozenset({"x", "HasDerivative"}),
+        basis=elementary_basis(source),
     )
     assert library.admissible_law(library.functions["F"]) is None
 
@@ -171,8 +177,16 @@ def test_loader_errors_carry_a_line(text, line, fragment):
 def build(text, *, origin=LawOrigin.BASIS):
     source = load_elementary(text, origin=origin)
     table = SymbolTable()
+    basis = (
+        elementary_basis(source)
+        if any(law.origin is LawOrigin.BASIS for law in source.laws)
+        else None
+    )
     return table, build_elementary(
-        table.intern, source, reserved=frozenset({"x", "HasDerivative"})
+        table.intern,
+        source,
+        reserved=frozenset({"x", "HasDerivative"}),
+        basis=basis,
     )
 
 
@@ -362,3 +376,14 @@ def test_a_source_without_a_digest_cannot_become_a_basis():
     table = SymbolTable()
     with pytest.raises(ValueError):
         build_elementary(table.intern, source, basis=basis)
+
+
+def test_a_basis_law_cannot_be_built_without_an_admitted_basis():
+    source = load_elementary(
+        "function F : Real -> Real\n"
+        "derivative F(u) = 1\n",
+        origin=LawOrigin.BASIS,
+    )
+    table = SymbolTable()
+    with pytest.raises(ValueError, match="BasisRef"):
+        build_elementary(table.intern, source)

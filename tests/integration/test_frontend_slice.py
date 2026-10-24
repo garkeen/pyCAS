@@ -1,7 +1,7 @@
 """The frontend slice: text -> term -> candidate -> published judgment."""
 
 from cas.frontend.session import Session
-from cas.math.calculus.differentiation.checker import DerivativeCertificate
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.workflow.records import OperationStatus
 

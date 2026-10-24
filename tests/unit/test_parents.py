@@ -97,3 +97,39 @@ def test_capabilities_come_from_the_attached_structure():
     assert not polynomials.is_ordered
     assert not polynomials.has_derivation
     assert not polynomials.embeds_integers
+
+
+def test_membership_is_total_and_structure_specific():
+    from fractions import Fraction
+
+    q = ParentRegistry().intern(ParentSpec("Q"), RationalField())
+    assert q.contains(Fraction(1, 2))
+    assert not q.contains(1)
+    assert not q.contains("one")
+
+    z = ParentRegistry().intern(ParentSpec("Z"), IntegerRing())
+    assert z.contains(1)
+    assert not z.contains(True)
+    assert not z.contains(Fraction(1, 1))
+
+    first = UnivariatePolynomialRing(X, RationalField())
+    second = UnivariatePolynomialRing(Y, RationalField())
+    assert first.contains(first.zero())
+    assert not first.contains(second.zero())
+    assert not first.contains(Fraction(0))
+
+
+def test_algebra_values_require_the_owning_parent():
+    from fractions import Fraction
+
+    from cas.algebra.parents import AlgebraValue
+
+    q = ParentRegistry().intern(ParentSpec("Q"), RationalField())
+    value = q.value(Fraction(1, 2))
+    assert isinstance(value, AlgebraValue)
+    assert value.parent is q
+    assert value.representation == Fraction(1, 2)
+    with pytest.raises(ValueError):
+        q.value(1)
+    with pytest.raises(ValueError):
+        AlgebraValue(q, "not a rational")

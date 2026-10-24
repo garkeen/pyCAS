@@ -56,9 +56,9 @@ def test_operations_use_the_current_assumption_frame():
     assert differentiated.status is OperationStatus.VERIFIED
     assert differentiated.candidate is not None
     assert differentiated.candidate.frame == result.frame
-    assert differentiated.verification is not None
+    assert differentiated.verifications
     assert (
-        differentiated.verification.specification.meaning.frame
+        differentiated.verifications[0].specification.meaning.frame
         == result.frame
     )
     assert differentiated.result is not None

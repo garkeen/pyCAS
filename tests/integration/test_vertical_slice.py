@@ -7,7 +7,7 @@ checker -> kernel publication -> verification link -> undo/redo.
 from support import head_app, variable
 
 from cas.language.signatures import StructuralHead
-from cas.math.calculus.differentiation.checker import DerivativeCertificate
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.runtime.bootstrap import new_workspace
 from cas.semantics.bridge import to_polynomial
@@ -44,9 +44,9 @@ def test_the_slice_publishes_exactly_one_checked_judgment(runtime):
     result = workspace.differentiate(source, runtime.variable)
     assert result.status is OperationStatus.VERIFIED
     assert result.candidate is not None
-    assert result.verification is not None
+    assert result.verifications
     assert result.result is not None
-    link = result.verification
+    link = result.verifications[0]
     assert link.judgment is not None
 
     judgment = runtime.store.get_judgment(link.judgment)
@@ -90,7 +90,7 @@ def test_undo_hides_the_view_but_never_rolls_back_the_ledger(runtime):
     workspace = new_workspace(runtime)
     source = workspace.intake(source_term(runtime))
     result = workspace.differentiate(source, runtime.variable)
-    judgment = result.verification.judgment
+    judgment = result.verifications[0].judgment
     assert workspace.undo()
     assert workspace.expressions() == (source,)
     assert workspace.links() == ()
@@ -113,7 +113,7 @@ def test_outside_the_fragment_nothing_becomes_trusted(runtime):
     result = workspace.differentiate(source, runtime.variable)
     assert result.status is OperationStatus.UNSUPPORTED
     assert result.candidate is None
-    assert result.verification is None
+    assert not result.verifications
     assert result.result is None
     assert runtime.store.stats()["judgments"] == 0
     assert runtime.store.stats()["inferences"] == 0

@@ -217,7 +217,7 @@ def test_a_fragment_claim_needs_evidence_and_is_not_inherited():
     )
     with pytest.raises(ValueError):
         ConsistentForFragment("Q[x]", ())
-    state = runtime.store.record_consistent_for_fragment(
+    state = runtime.store.record_consistency_claim(
         runtime.frame.id, "Q[x] differentiation", basis=(basis,)
     )
     assert isinstance(state, ConsistentForFragment)
@@ -236,7 +236,7 @@ def test_a_fragment_claim_rejects_a_basis_from_another_world():
         WorldId(99),
     )
     with pytest.raises(KernelError):
-        runtime.store.record_consistent_for_fragment(
+        runtime.store.record_consistency_claim(
             runtime.frame.id, "Q[x] differentiation", basis=(basis,)
         )
 
@@ -247,7 +247,7 @@ def test_an_inconsistent_frame_cannot_be_declared_consistent():
     workspace.assume(gt_zero(runtime))
     workspace.assume(not_gt_zero(runtime))
     with pytest.raises(KernelError):
-        runtime.store.record_consistent_for_fragment(
+        runtime.store.record_consistency_claim(
             workspace.frame,
             "Q[x] differentiation",
             basis=(
@@ -267,9 +267,20 @@ def test_a_contradiction_witness_must_state_false():
     workspace = Workspace(runtime)
     source = workspace.intake(square(runtime), "source")
     result = workspace.differentiate(source, runtime.variable)
-    assert result.verification is not None
-    assert result.verification.judgment is not None
+    assert result.verifications
+    assert result.verifications[0].judgment is not None
     with pytest.raises(KernelError):
         runtime.store.record_inconsistency(
-            workspace.frame, result.verification.judgment
+            workspace.frame, result.verifications[0].judgment
         )
+
+
+def test_a_ground_false_assumption_is_a_contradiction():
+    runtime = bootstrap()
+    workspace = Workspace(runtime)
+    false_term = head_app(
+        runtime.signature, StructuralHead.NOT, T.TRUE
+    )
+    result = workspace.assume(false_term)
+    assert result.status is OperationStatus.INVALID
+    assert isinstance(result.consistency, Inconsistent)

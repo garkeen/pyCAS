@@ -246,3 +246,19 @@ def test_restricted_implication_and_equivalence():
     )
     assert implies(contradictory, gt, signature) is True
     assert equivalent(contradictory, T.FALSE, signature) is True
+
+
+def test_zero_to_the_zero_is_not_a_ground_value():
+    signature, _ = setup()
+    assert ground_value(
+        head_app(signature, StructuralHead.POWER, T.number(0), T.number(0)),
+        signature,
+    ) is None
+    assert ground_value(
+        head_app(signature, StructuralHead.POWER, T.number(0), T.number(-1)),
+        signature,
+    ) is None
+    assert ground_value(
+        head_app(signature, StructuralHead.POWER, T.number(2), T.number(0)),
+        signature,
+    ) == 1

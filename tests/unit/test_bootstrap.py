@@ -7,6 +7,9 @@ from cas.kernel.model import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode
 from cas.language.signatures import StructuralHead
+from cas.math.calculus.differentiation.certificate import (
+    DerivativeCertificate,
+)
 from cas.runtime.bootstrap import (
     Runtime,
     bootstrap,
@@ -53,7 +56,9 @@ def test_the_polynomial_checker_is_admitted_with_explicit_metadata():
     runtime = bootstrap()
     spec = runtime.store.checkers.spec(runtime.checker.id)
     assert spec is not None
-    assert spec.certificate_schema == CertificateSchema("derivative", "1")
+    assert spec.certificate_schema == CertificateSchema(
+        "derivative", "1", DerivativeCertificate
+    )
     assert spec.accepted_problem_kinds == frozenset({"differentiate"})
     assert spec.accepted_specification_kinds == frozenset({"HasDerivative"})
     assert spec.trusted_dependencies == ()

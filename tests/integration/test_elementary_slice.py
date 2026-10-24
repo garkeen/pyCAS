@@ -1,9 +1,7 @@
 """Elementary differentiation through the frontend, workflow and kernel."""
 
 from cas.frontend import Session
-from cas.math.calculus.differentiation.elementary_checker import (
-    ElementaryDerivativeCertificate,
-)
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.runtime import bootstrap_elementary
 from cas.workflow.records import OperationStatus
@@ -36,7 +34,7 @@ def test_declared_function_laws_are_used_and_independently_checked():
     inference = runtime.store.inference_of(link.judgment)
     assert inference.checker_id == "calculus.derivative.elementary"
     assert isinstance(
-        inference.certificate, ElementaryDerivativeCertificate
+        inference.certificate, DerivativeCertificate
     )
     assert runtime.elementary is not None
     assert inference.basis == (runtime.elementary.basis,)
@@ -101,11 +99,11 @@ def test_a_conditional_result_has_a_restricted_problem():
     session.execute("sqrt(x)")
     result = session.differentiate(session.object("E0"))
     assert result.status is OperationStatus.CONDITIONAL
-    assert result.condition is not None
-    assert result.verification is not None
-    assert result.verification.condition == result.condition
+    assert result.region is not None
+    assert result.verifications
+    assert result.verifications[0].condition == result.region
     assert result.candidate is not None
-    assert result.candidate.problem.region == result.condition
+    assert result.candidate.problem.region == result.region
     assert result.result is not None
     assert runtime.store.stats()["judgments"] == 1
 
@@ -132,8 +130,8 @@ def test_negative_powers_and_unknown_symbols_are_refused():
     assert session.execute("diff").startswith("unsupported:")
     session.execute("y")
     output = session.execute("diff")
-    assert output.startswith("unsupported:")
-    assert "dependency contract" in output
+    assert output.startswith("invalid:")
+    assert "undeclared" in output
     assert runtime.store.stats()["judgments"] == 0
 
 

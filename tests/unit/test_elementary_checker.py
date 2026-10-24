@@ -10,9 +10,7 @@ from cas.kernel.evidence import (
     Verified,
 )
 from cas.language.decisions import Reason
-from cas.math.calculus.differentiation.elementary_checker import (
-    ElementaryDerivativeCertificate,
-)
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.runtime import bootstrap_elementary
 from cas.syntax import term as T
@@ -41,7 +39,7 @@ def claim(runtime, source, candidate, region=None, variable_term=None):
 
 
 def certificate(runtime, source, candidate, region=None, variable_term=None):
-    return ElementaryDerivativeCertificate(
+    return DerivativeCertificate(
         T.TRUE if region is None else region,
         source,
         runtime.variable if variable_term is None else variable_term.symbol_id,

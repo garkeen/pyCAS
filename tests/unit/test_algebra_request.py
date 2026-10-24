@@ -3,7 +3,8 @@
 import pytest
 
 from cas.algebra.parents import ParentRegistry, ParentSpec
-from cas.algebra.polynomial import PolynomialRing
+from cas.algebra.polynomial import PolynomialRing, UnivariatePolynomialRing
+from cas.algebra.rational import RationalFunctionField
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId
 from cas.language.problems import ParameterMode
@@ -154,3 +155,42 @@ def test_a_simple_request_has_no_parameter_ring():
     )
     assert simple.role_of(X) is Role.TARGET
     assert simple.parameter_ring is None
+
+
+def test_a_non_polynomial_parameter_ring_with_generators_is_accepted():
+    registry = ParentRegistry()
+    rationals = RationalField()
+    coefficient = registry.intern(ParentSpec("Q"), rationals)
+    polynomials = UnivariatePolynomialRing(A, rationals)
+    parameter_ring = registry.intern(
+        ParentSpec(
+            "rational_function",
+            base=coefficient.spec,
+            generators=(A,),
+        ),
+        RationalFunctionField(polynomials),
+    )
+    algebra = AlgebraRequest(
+        coefficient,
+        parameter_ring,
+        (A,),
+        X,
+        ParameterMode.ALL_PARAMETER_VALUES,
+        Interpretation.PARAMETER_FAMILY,
+    )
+    assert algebra.parameter_ring is parameter_ring
+    assert algebra.role_of(A) is Role.PARAMETER
+
+
+def test_a_parameter_ring_without_generators_is_rejected():
+    registry = ParentRegistry()
+    coefficient = registry.intern(ParentSpec("Q"), RationalField())
+    with pytest.raises(ValueError):
+        AlgebraRequest(
+            coefficient,
+            coefficient,
+            (A,),
+            X,
+            ParameterMode.ALL_PARAMETER_VALUES,
+            Interpretation.PARAMETER_FAMILY,
+        )

@@ -8,6 +8,7 @@ from cas.kernel.commit import (
     CommitProposal,
     Committed,
     ConditionPolicy,
+    Rejected,
     commit,
 )
 from cas.kernel.evidence import (
@@ -20,11 +21,10 @@ from cas.kernel.model import (
     Blocked,
     CertificateSchema,
     Conditional,
-    Discharge,
     ObligationReason,
     OutOfScope,
 )
-from cas.kernel.store import KernelError, KernelStore
+from cas.kernel.store import KernelStore
 from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
 
@@ -53,9 +53,10 @@ def setup(runtime):
     checker = StubChecker()
     registration = CheckerSpec(
         checker,
-        CertificateSchema("test", "1"),
+        CertificateSchema("test", "1", type(None)),
         frozenset({"test.problem"}),
         frozenset({"test.specification"}),
+        runtime.world.id,
     )
     store = KernelStore(
         runtime.frames, CheckerRegistry({checker.id: registration})
@@ -73,6 +74,7 @@ def commit_one(
     conditions=(),
     policy=ConditionPolicy.REQUIRE_PROVED,
     used=(),
+    discharge=(),
 ):
     checker.conditions = tuple(conditions)
     checker.used_premises = tuple(used)
@@ -87,6 +89,7 @@ def commit_one(
             premises=tuple(premises),
             certificate=None,
             policy=policy,
+            discharge_obligations=tuple(discharge),
         ),
     )
     assert isinstance(result, Committed), result
@@ -185,9 +188,14 @@ def test_discharge_is_recorded_and_visible_to_descendants(runtime):
     child = runtime.frames.create(base)
     sibling = runtime.frames.create(base)
     grandchild = runtime.frames.create(child.id)
-    _, proof = commit_one(store, checker, base, condition)
-    discharge = store.discharge(obligation_id, proof.id, child.id)
-    assert discharge == Discharge(obligation_id, proof.id, child.id)
+    proof, _ = commit_one(
+        store,
+        checker,
+        child.id,
+        condition,
+        discharge=(obligation_id,),
+    )
+    assert proof.discharged == (obligation_id,)
     assert store.is_discharged(obligation_id, child.id)
     assert store.is_discharged(obligation_id, grandchild.id)
     assert not store.is_discharged(obligation_id, base)
@@ -211,11 +219,23 @@ def test_discharge_requires_the_exact_proposition(runtime):
         policy=ConditionPolicy.ALLOW_CONDITIONAL,
     )
     obligation_id = result.obligations[0]
-    _, unrelated = commit_one(
-        store, checker, base, equation(runtime, x, T.number(2))
+    checker.conditions = ()
+    checker.used_premises = ()
+    outcome = commit(
+        store,
+        CommitProposal(
+            base,
+            (equation(runtime, x, T.number(2)),),
+            checker.id,
+            "test.problem",
+            "test.specification",
+            certificate=None,
+            discharge_obligations=(obligation_id,),
+        ),
     )
-    with pytest.raises(KernelError):
-        store.discharge(obligation_id, unrelated.id, base)
+    assert isinstance(outcome, Rejected)
+    assert "no new judgment proves" in outcome.detail
+    assert not store.is_discharged(obligation_id, base)
 
 
 def test_discharge_requires_a_visible_proof(runtime):
@@ -233,14 +253,23 @@ def test_discharge_requires_a_visible_proof(runtime):
         policy=ConditionPolicy.ALLOW_CONDITIONAL,
     )
     obligation_id = result.obligations[0]
-    _, proof = commit_one(
+    checker.conditions = ()
+    checker.used_premises = ()
+    outcome = commit(
         store,
-        checker,
-        child.id,
-        equation(runtime, x, T.number(0), child.id),
+        CommitProposal(
+            base,
+            (equation(runtime, x, T.number(0), child.id),),
+            checker.id,
+            "test.problem",
+            "test.specification",
+            certificate=None,
+            discharge_obligations=(obligation_id,),
+        ),
     )
-    with pytest.raises(KernelError):
-        store.discharge(obligation_id, proof.id, base)
+    assert isinstance(outcome, Rejected)
+    assert "outside" in outcome.detail
+    assert not store.is_discharged(obligation_id, base)
 
 
 def test_discharge_refuses_a_conditional_proof(runtime):
@@ -258,17 +287,23 @@ def test_discharge_refuses_a_conditional_proof(runtime):
         policy=ConditionPolicy.ALLOW_CONDITIONAL,
     )
     obligation_id = first_result.obligations[0]
-    _, proof = commit_one(
+    checker.conditions = (other_condition,)
+    checker.used_premises = ()
+    outcome = commit(
         store,
-        checker,
-        base,
-        target_condition,
-        conditions=(other_condition,),
-        policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        CommitProposal(
+            base,
+            (target_condition,),
+            checker.id,
+            "test.problem",
+            "test.specification",
+            certificate=None,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+            discharge_obligations=(obligation_id,),
+        ),
     )
-    assert proof.obligations != ()
-    with pytest.raises(KernelError, match="open conditions"):
-        store.discharge(obligation_id, proof.id, base)
+    assert isinstance(outcome, Rejected)
+    assert "open conditions" in outcome.detail
     assert not store.is_discharged(obligation_id, base)
 
 
@@ -286,10 +321,30 @@ def test_discharge_is_not_recorded_twice(runtime):
         policy=ConditionPolicy.ALLOW_CONDITIONAL,
     )
     obligation_id = result.obligations[0]
-    _, proof = commit_one(store, checker, base, condition)
-    store.discharge(obligation_id, proof.id, base)
-    with pytest.raises(KernelError):
-        store.discharge(obligation_id, proof.id, base)
+    first, _ = commit_one(
+        store,
+        checker,
+        base,
+        condition,
+        discharge=(obligation_id,),
+    )
+    assert first.discharged == (obligation_id,)
+    checker.conditions = ()
+    checker.used_premises = ()
+    second = commit(
+        store,
+        CommitProposal(
+            base,
+            (condition,),
+            checker.id,
+            "test.problem",
+            "test.specification",
+            certificate=None,
+            discharge_obligations=(obligation_id,),
+        ),
+    )
+    assert isinstance(second, Rejected)
+    assert "already discharged" in second.detail
     assert store.stats()["discharges"] == 1
 
 

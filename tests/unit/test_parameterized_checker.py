@@ -5,7 +5,7 @@ from support import head_app, runtime_proposition, variable
 from cas.kernel.evidence import CheckRequest, Refuted, Unverified, Verified
 from cas.language.decisions import Reason
 from cas.language.signatures import StructuralHead
-from cas.math.calculus.differentiation.checker import DerivativeCertificate
+from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.runtime import bootstrap_parameterized
 from cas.syntax import term as T

@@ -2,7 +2,7 @@
 
 from fractions import Fraction
 
-from support import head_app
+from support import elementary_basis, head_app
 
 from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
@@ -34,7 +34,10 @@ def setup(text=None, origin=LawOrigin.BASIS):
     predicate = table.intern("HasDerivative")
     vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
     library = build_elementary(
-        table.intern, source, reserved=frozenset({"x", "HasDerivative"})
+        table.intern,
+        source,
+        reserved=frozenset({"x", "HasDerivative"}),
+        basis=elementary_basis(source),
     )
     signature = standard_language(
         table,
@@ -178,16 +181,21 @@ def test_conditional_laws_carry_a_restricted_region():
     assert logarithm.defined == interior
 
 
-def test_a_zero_power_uses_definedness_only():
+def test_a_zero_power_requires_a_defined_nonzero_base():
     table, _, signature, variable, deriver = setup()
     x = T.symbol(variable, "x")
-    powered = power(signature, call(table, signature, "sqrt", x), 0)
+    base = call(table, signature, "sqrt", x)
+    powered = power(signature, base, 0)
     outcome = deriver.derive(powered)
     assert isinstance(outcome, Derived)
     assert outcome.term == T.number(0)
-    assert outcome.condition == head_app(
-        signature, StructuralHead.GE, x, T.number(0)
+    expected = head_app(
+        signature,
+        StructuralHead.AND,
+        head_app(signature, StructuralHead.GE, x, T.number(0)),
+        head_app(signature, StructuralHead.NE, base, T.number(0)),
     )
+    assert outcome.condition == expected
     assert outcome.defined == outcome.condition
 
 
@@ -324,3 +332,35 @@ def test_the_same_symbol_is_not_a_target_by_accident():
     assert outcome.reason is Reason.FRAGMENT
     # pi remains a constant even when it is the only symbol in the term
     assert deriver.derive(pi).term == T.number(0)
+
+
+def test_a_constant_inner_function_keeps_its_differentiability_condition():
+    text = """
+function F : Real -> Real on u >= 0
+derivative F(u) = 0 on u > 0
+function H : Real -> Real
+derivative H(u) = 1
+"""
+    table, library, signature, variable, deriver = setup(text)
+    x = T.symbol(variable, "x")
+    source = call(table, signature, "H", call(table, signature, "F", x))
+    outcome = deriver.derive(source)
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(0)
+    assert outcome.condition == head_app(
+        signature, StructuralHead.GT, x, T.number(0)
+    )
+    assert outcome.defined == head_app(
+        signature, StructuralHead.GE, x, T.number(0)
+    )
+
+    from cas.math.calculus.differentiation.elementary_verify import (
+        verify_elementary_derivative,
+    )
+
+    expected = verify_elementary_derivative(
+        source, library, signature, variable, table.name_of
+    )
+    assert isinstance(expected, Derived)
+    assert expected.condition == outcome.condition
+    assert expected.defined == outcome.defined

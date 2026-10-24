@@ -16,8 +16,8 @@ def test_an_assumption_scopes_later_operations_and_history():
     assert session.execute("x^2") == "@E0: x^2"
     result = session.differentiate(session.object("E0"))
     assert result.status is OperationStatus.VERIFIED
-    assert result.verification is not None
-    assert result.verification.specification.meaning.frame == child
+    assert result.verifications
+    assert result.verifications[0].specification.meaning.frame == child
     assert result.candidate is not None
     assert result.candidate.frame == child
     assert runtime.store.stats()["judgments"] == 2

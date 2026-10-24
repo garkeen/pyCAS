@@ -179,3 +179,48 @@ def test_euclidean_capability_is_univariate_only():
 def test_elements_cannot_be_built_by_hand():
     with pytest.raises(ValueError):
         Polynomial(R, (), object())
+
+
+def test_the_declared_monomial_order_controls_storage_order():
+    from cas.algebra.polynomial import MonomialOrder
+
+    lex = PolynomialRing((X, Y), Q, MonomialOrder.LEX)
+    grlex = PolynomialRing((X, Y), Q, MonomialOrder.GRLEX)
+    x_cubed = lex.monomial((3, 0), Fraction(1))
+    y_fifth = lex.monomial((0, 5), Fraction(1))
+    lex_sum = lex.add(x_cubed, y_fifth)
+    assert [exponents for exponents, _ in lex_sum.terms] == [(0, 5), (3, 0)]
+
+    x_cubed_g = grlex.monomial((3, 0), Fraction(1))
+    y_fifth_g = grlex.monomial((0, 5), Fraction(1))
+    grlex_sum = grlex.add(x_cubed_g, y_fifth_g)
+    assert [exponents for exponents, _ in grlex_sum.terms] == [(3, 0), (0, 5)]
+
+    grevlex = PolynomialRing((X, Y, SymbolId(3)), Q, MonomialOrder.GREVLEX)
+    first = grevlex.monomial((1, 2, 0), Fraction(1))
+    second = grevlex.monomial((2, 1, 0), Fraction(1))
+    combined = grevlex.add(first, second)
+    assert [exponents for exponents, _ in combined.terms] == [
+        (1, 2, 0),
+        (2, 1, 0),
+    ]
+
+
+def test_parent_options_must_match_the_ring_representation():
+    from cas.algebra.parents import ParentRegistry, ParentSpec
+    from cas.algebra.polynomial import MonomialOrder
+
+    registry = ParentRegistry()
+    grlex = PolynomialRing((X, Y), Q, MonomialOrder.GRLEX)
+    spec = ParentSpec(
+        "polynomial",
+        generators=(X, Y),
+        options=(("monomial_order", "grlex"),),
+    )
+    parent = registry.intern(spec, grlex)
+    assert parent.ring is grlex
+
+    other = ParentRegistry()
+    lex = PolynomialRing((X, Y), Q, MonomialOrder.LEX)
+    with pytest.raises(ValueError, match="option"):
+        other.intern(spec, lex)
