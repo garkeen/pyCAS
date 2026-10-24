@@ -28,10 +28,11 @@
   有理参数点可以特化，结果在 Q[x] 中由独立 checker 重新验证；
 - 由数据声明的**初等函数片段**：`sin`、`cos`、`exp` 及其导数定律来自
   `cas/math/elementary/declarations.dsl`，支持和、积、非负整数幂与链式法则。
-  `sqrt`、`log` 的定律是带条件的，当前被诚实拒答，而不是当成全域可微。
+  `sqrt`、`log` 的条件定律与函数定义域会生成显式的可微区域；结果在
+  `HasDerivative(region, …)` 中发行，并显示为 `verified on …`，不会伪装成全域结论。
 
-片段外（例如 `1/a`、`1/x`、条件定律或未声明符号）一律诚实拒答，不会伪造答案，
-也不会写入账本。
+片段外（例如 `1/a`、`1/x`、未声明符号或区域为空的条件）一律诚实拒答，不会伪造
+答案，也不会写入账本。
 
 v4 的 CAD、积分、方程求解、实根隔离、规则引擎等实现已删除；它们会在 v5 地基上
 重新落地，而不是以兼容层迁回。旧代码仍可从 git 历史中查阅。
@@ -54,9 +55,9 @@ verified @E3: cos(x)
 cas> sqrt(x)
 @E4: sqrt(x)
 cas> diff
-unsupported: the derivative law or domain for sqrt is conditional; its condition has not been discharged
+verified on x > 0 @E5: 1/2*sqrt(x)^-1
 cas> 1/x
-@E5: x^-1
+@E6: x^-1
 cas> diff
 unsupported: only nonnegative integer powers are differentiated
 ```
@@ -67,6 +68,7 @@ unsupported: only nonnegative integer powers are differentiated
 |---|---|
 | `<expr>` | 存入一个表达式对象（不产生判断） |
 | `expr LABEL := <expr>` | 带标签存入 |
+| `assume FORMULA` | 在子 frame 中引入一条假设，并发行 `H ⊢ H` |
 | `diff [@LABEL]` | 对焦点或指定对象求导，候选须通过独立验证 |
 | `specialize [@LABEL] a=VALUE …` | 用精确有理值特化已验证的参数族，并在 Q[x] 中重新验证 |
 | `show [@LABEL]` | 显示对象 |
@@ -132,11 +134,11 @@ constant pi : Real
 function sin : Real -> Real
 function sqrt : Real -> Real on u >= 0
 derivative sin(u) = cos(u)
-derivative sqrt(u) = (1/2)*u^(-1/2) on u > 0
+derivative sqrt(u) = (1/2)*sqrt(u)^(-1) on u > 0
 ```
 
-装配器把文件作为受信任的 basis 读入；带条件或用户公理来源的定律只作为数据保留，
-不会自动用于求导。`bootstrap_elementary()` 是默认 REPL 运行时：
+装配器把文件作为受信任的 basis 读入；用户公理来源的定律不会自动用于求导。
+`bootstrap_elementary()` 是默认 REPL 运行时：
 
 ```python
 from cas.frontend import Session
@@ -148,15 +150,71 @@ assert session.execute("diff") == "verified @E1: 2*cos(x^2)*x"
 ```
 
 候选生成器与 checker 是两个独立实现：checker 不调用候选生成器，只按同一声明数据
-重建期望导数；结构不同但可能等价的候选返回 `unverified`，不会被伪装成否证。当前片段
-只支持一元函数、非负整数幂和声明为无条件且值域全定义的定律；`sqrt`/`log` 的条件
-（包括函数自身定义域）尚未接入条件服务，因此诚实拒答。
+重建期望导数与区域；结构不同但可能等价的候选或区域返回 `unverified`，不会被伪装成
+否证。条件计算区分**定义域**与**可微区域**：
+
+- `sqrt(0)` 的导数 0 在定义域 `x >= 0` 上已成立，因此是无条件结果；
+- `sqrt(x)` 的导数只在 `x > 0` 上成立，结果以 `HasDerivative(x > 0, …)` 发行；
+- `sqrt(-1)`、`log(0)` 的可微区域为空，诚实拒答；
+- 条件合取会做精确的真假折叠、线性边界规范化、矛盾检测与结构去重；未知条件保持
+  显式，不自动当成成立。
+
+工作流的 `OperationStatus.CONDITIONAL`、`DerivativeResult.condition` 与
+`VerificationLink.condition` 记录受限区域；kernel 的 judgment 本身是在该区域上
+无条件成立的规格，而不是把全域结论挂上一条说明。条件区域仍写进规格；kernel 的
+假设、条件检查与 `resolve_applicability`/原子 discharge 机制单独用于显式前提和
+将来会产生 obligation 的算法，不用于伪造全域导数结论。
+
+条件服务还提供受限的规范化与蕴含/等价判定：一原子线性比较会化成边界
+（`x >= 0 and x > 0` 化为 `x > 0`），矛盾边界化为 `false`，重叠边界取最强；
+checker 接受结构不同但被证明等价的区域。未知原子、跨原子关系与非线性关系不做
+猜测，保持未决。当前限制：初等片段仍只支持一元函数与非负整数幂；条件服务只支持
+线性单原子比较、受限的命题连接词与保守的 Or/Not 处理；没有一般的一阶判定或
+kernel 义务自动清偿。
 
 语言层另有 data-only 声明 DSL（`operator` / `binder` 签名）与 binder 定型：
 `BindingSignature` 声明参数 sort 与结果，函数值 binder 定型为 `FunctionSort`，
 值 binder 要求 body 嵌入结果。前端 binder 输入语法尚未接入。
 
----
+### 假设、条件与适用性
+
+`assume FORMULA` 在当前 frame 下解析并发行命题，然后创建一个包含该假设的子 frame，
+并用 core hypothesis checker 发行 `H ⊢ H`。之后的对象与判断使用当前 revision 的
+frame；`undo`/`redo` 会连同 frame 一起移动，账本不回滚。
+
+```python
+session.execute("assume x > 0")
+session.execute("sin(x)")
+session.execute("diff")
+```
+
+kernel 还提供 `ConditionChecker`（`logic.condition`）与
+`resolve_applicability`：前者用受限蕴含服务从前提判断证明条件，并只报告实际使用的
+前提；后者尝试为未决 obligation 生成证明，并在**同一个 commit 批次**中发行证明
+Judgment 与 discharge（循环与前提闭合检查在发布前完成）。证明失败、前提不足或
+超过预算时保持 `Conditional`，不会返回虚假的 `Applicable`。
+
+### 一致性、信任与失效
+
+frame 一致性是显式状态，而不是“没发现矛盾就等于一致”：
+
+- `Unassessed` 是默认状态；`ConsistentForFragment` 必须给出片段说明以及证据判断
+  或 `BasisRef`；`Inconsistent` 必须引用一条已发行的闭合 `false` 判断。
+- 核心矛盾规则只在 frame 链上可见的假设出现 `H` 与 `not H`（或直接假设 `false`）
+  时发行 `false`。祖先假设按 §6.3 的弱化进入后代；兄弟 frame 之间不互相可见。
+- 在已判定不一致的 frame（或其后代）中，`commit` 拒绝发行，`assume`、`diff`、
+  `specialize` 都会停止并报告。撤销/重做只移动 revision，矛盾证明仍留在账本中。
+
+checker 注册现在是 `CheckerSpec`，显式绑定证书 schema、接受的 problem /
+specification 种类、验证函数与可信依赖。可信依赖用 `BasisRef` 记录种类、版本、
+世界作用域和内容摘要；每次 `InferenceRecord` 记录该次推理实际使用的 basis。
+初等声明文件在装配期以 `declarations.dsl` 的 SHA-256 摘要登记为
+`DECLARATION_FILE` basis。结构性的证书校验仍由 checker 的 `InvalidEvidence`
+负责；证书大小/深度预算尚未接入本文档所称的 schema 门限。
+
+适用性增加 `Blocked`：当某个未决义务的否定已由可见闭合判断证明时，该判断不能
+应用，但这**不**表示结论为假。`commit` 对已否定条件返回 `Rejected`，并区分
+`refuted_conditions`（应用所需条件被否定）与 `refutation`（结论本身被否定）。
 
 ## 目录
 
@@ -166,10 +224,10 @@ assert session.execute("diff") == "verified @E1: 2*cos(x^2)*x"
 | `cas/syntax/` | 不可变 Term、结构相等/hash/序、de Bruijn 绑定原语 |
 | `cas/language/` | Sort、结构签名、定型（含 binder）、Proposition、ProblemSpec、三值 Verdict、声明 DSL |
 | `cas/algebra/` | 结构协议、parent 描述、ℤ、ℚ、多项式环、有理函数域 |
-| `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、参数特化/覆盖、注入的求导服务、Term↔元素桥（含参数系数）、微分结构 |
-| `cas/kernel/` | Judgment/Obligation/InferenceRecord、checker 协议、原子账本、commit |
+| `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、参数特化/覆盖、条件求值、注入的求导服务、Term↔元素桥（含参数系数）、微分结构 |
+| `cas/kernel/` | Judgment/Obligation/InferenceRecord、BasisRef/CheckerSpec、假设与矛盾规则、条件 checker、一致性状态、原子账本、commit、Blocked/适用性解析 |
 | `cas/math/` | 数学声明与独立 checker：多项式求导、data-only 初等函数声明与符号求导 |
-| `cas/workflow/` | 表达式对象、候选、验证关联、事件与 revision |
+| `cas/workflow/` | 表达式对象、候选、验证关联、事件、revision、frame 作用域假设 |
 | `cas/runtime/` | 显式装配的 Runtime（Q[x]、参数化 Q[a…][x]、Q[x] 特化视图与初等函数片段）与 workspace 入口 |
 | `cas/frontend/` | parser、printer、Session、REPL |
 
