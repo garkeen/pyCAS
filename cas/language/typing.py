@@ -31,6 +31,9 @@ class SortEnvironment(Protocol):
     def sort_of(self, symbol_id: SymbolId) -> S.Sort | None:
         """Return the declared sort, or None when the symbol is not declared."""
 
+    def bound_sort(self, index: int) -> S.Sort | None:
+        """Return the sort of a bound variable, or None outside a binder."""
+
 
 class Typing:
     __slots__ = ()
@@ -95,20 +98,81 @@ def infer(
     if isinstance(term, T.Quote):
         return Typed(S.SYNTAX)
     if isinstance(term, T.BoundVar):
-        return IllTyped("a bound variable has no sort outside its binder")
+        sort = environment.bound_sort(term.index)
+        if sort is None:
+            return IllTyped("a bound variable has no sort inside this scope")
+        return Typed(sort)
     if isinstance(term, T.SymbolRef):
         sort = environment.sort_of(term.symbol_id)
         if sort is None:
             return NeedsDeclaration(term.symbol_id)
         return Typed(sort)
     if isinstance(term, T.Binder):
-        return Unsupported(
-            "binder variables receive their sorts from elaboration, "
-            "not from syntax inference"
-        )
+        return _infer_binder(term, signature, environment)
     if isinstance(term, T.Apply):
         return _apply(term, signature, environment)
     return IllTyped(f"unknown term variant: {type(term).__name__}")
+
+
+class _BoundEnvironment:
+    """A sort environment extended by the variables of enclosing binders."""
+
+    __slots__ = ("_outer", "_sorts")
+
+    def __init__(
+        self,
+        outer: SortEnvironment,
+        sorts: tuple[S.Sort, ...],
+    ) -> None:
+        self._outer = outer
+        self._sorts = sorts
+
+    def sort_of(self, symbol_id: SymbolId) -> S.Sort | None:
+        return self._outer.sort_of(symbol_id)
+
+    def bound_sort(self, index: int) -> S.Sort | None:
+        if index < len(self._sorts):
+            return self._sorts[index]
+        return self._outer.bound_sort(index - len(self._sorts))
+
+
+def _infer_binder(
+    term: T.Binder,
+    signature: LanguageSignature,
+    environment: SortEnvironment,
+) -> Typing:
+    scheme = signature.binder_of(term.signature)
+    if scheme is None:
+        return Unsupported(f"binder {term.signature!r} is not declared")
+    if scheme.arity != term.arity:
+        return IllTyped(
+            f"binder {term.signature!r} introduces {scheme.arity} variables, "
+            f"got {term.arity}"
+        )
+    if len(scheme.parameter_sorts) != scheme.arity:
+        return Unsupported(
+            f"binder {term.signature!r} has no declared parameter sorts"
+        )
+    for annotation in term.annotations:
+        result = infer(annotation, signature, environment)
+        if not isinstance(result, Typed):
+            return result
+    body = infer(
+        term.body,
+        signature,
+        _BoundEnvironment(environment, scheme.parameter_sorts),
+    )
+    if not isinstance(body, Typed):
+        return body
+    if scheme.result is None:
+        return Typed(
+            S.FunctionSort(scheme.parameter_sorts, body.sort)
+        )
+    if not body.sort.embeds_into(scheme.result):
+        return IllTyped(
+            f"the body sort {body.sort!r} does not embed into {scheme.result!r}"
+        )
+    return Typed(scheme.result)
 
 
 def _apply(

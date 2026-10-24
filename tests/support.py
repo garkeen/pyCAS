@@ -33,6 +33,10 @@ class MapEnvironment:
     def sort_of(self, symbol_id: SymbolId) -> S.Sort | None:
         return self._sorts.get(symbol_id)
 
+    def bound_sort(self, index: int) -> S.Sort | None:
+        del index
+        return None
+
 
 def structural(signature: LanguageSignature, head: StructuralHead) -> T.SymbolRef:
     """The term-level symbol this world uses for a structural head."""

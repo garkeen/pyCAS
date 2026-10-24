@@ -281,6 +281,10 @@ class FrameSorts:
     def sort_of(self, symbol_id: SymbolId) -> S.Sort | None:
         return self._frames.sort_of(self._frame, symbol_id)
 
+    def bound_sort(self, index: int) -> S.Sort | None:
+        del index
+        return None
+
 
 __all__ = [
     "Declaration",

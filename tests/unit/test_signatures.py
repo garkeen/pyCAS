@@ -62,6 +62,16 @@ def test_binding_signature_validates_its_shape():
         BindingSignature("Integral", 0)
 
 
+def test_binding_signature_can_declare_parameter_sorts_and_result():
+    function_binder = BindingSignature("Lambda", 1, (S.REAL,))
+    assert function_binder.parameter_sorts == (S.REAL,)
+    assert function_binder.result is None
+    value_binder = BindingSignature("Integral", 1, (S.REAL,), S.REAL)
+    assert value_binder.result is S.REAL
+    with pytest.raises(ValueError):
+        BindingSignature("Pair", 2, (S.REAL,))
+
+
 def test_binders_are_looked_up_by_name():
     built = LanguageSignature.build(
         {}, binders={"Integral": BindingSignature("Integral", 1)}

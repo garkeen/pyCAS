@@ -22,8 +22,9 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 | syntax | `term.py`：不可变项模型（字面量/符号引用/绑定变量/应用/binder/Quote），结构相等、hash、序，无介入、无 AC 排序、无化简 |
 | syntax | `binding.py`：`shift` / `instantiate` / `abstract` / `substitute_free` / `free_symbols` / `well_scoped`，捕获规避，Quote 完全惰性 |
 | language | `sorts.py`：Sort 封闭层次、数值嵌入塔、`join`、`is_ordered`（sort ≠ 表示） |
-| language | `signatures.py`：结构 head 封闭集合、Arity、BindingSignature、按 SymbolId 绑定的 LanguageSignature |
-| language | `typing.py`：`Typed / NeedsDeclaration / Unsupported / IllTyped` |
+| language | `signatures.py`：结构 head 封闭集合、Arity、BindingSignature（参数 sort 与结果）、按 SymbolId 绑定的 LanguageSignature |
+| language | `typing.py`：`Typed / NeedsDeclaration / Unsupported / IllTyped`；binder 局部索引环境与函数值/值 binder 定型 |
+| language | `declarations.py`：data-only 声明 DSL（binder/operator 签名）、文本/文件加载、带行号的拒答、`build_language` 装配 |
 | language | `propositions.py`：`Proposition` 只能经 `check` 发行，必须良作用域、命题 sort，并携带 `MeaningKey` |
 | language | `problems.py`：ProblemSpec 固定操作、输入、目标、区域、结果语言、参数模式、覆盖要求 |
 | language | `decisions.py`：三值 Verdict；No 必带见证；Unknown 必带四类理由；不可转 bool |
@@ -71,6 +72,23 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
   参数分支；当前只承诺形式参数作为多项式系数的泛参数结果，不声称对所有参数值
   成立。
 
+### 绑定与声明 DSL（首个切片）
+
+- `BindingSignature` 现在可以声明每个被绑定变量的 sort 与结果：`result=None` 表示函数值
+  binder，定型为 `FunctionSort(parameter_sorts, body_sort)`；具体结果表示值 binder，
+  要求 body sort 嵌入结果。
+- 定型器新增局部绑定环境：`BoundVar` 经 `SortEnvironment.bound_sort` 取得 sort；嵌套
+  binder 会按内层 arity 平移外层索引；注解在**外层**环境定型；缺失声明、arity 不匹配、
+  越界索引、未声明参数 sort、body sort 不嵌入都分别诚实返回。
+- `declarations.py` 提供 data-only DSL：
+  `operator Sin (Real) -> Real`、`binder Lambda (Real) -> function`、
+  `binder Integral (Real, Rational) -> Real`。支持注释、空行、文件加载、行号错误、
+  重名与结构 head 名拒绝；`build_language` 把声明装成 `LanguageSignature`。
+- 测试覆盖 lambda/Pair/Integral binder、嵌套索引、注解外层语义、FrameSorts 集成，
+  以及 DSL 的装载、建语言、声明算子定型、错误行号与拒答。
+- 尚未实现：注解驱动的参数 sort（当前参数 sort 来自声明）、量化/全称引入、binder 的
+  前端语法与 source 形式、导数定律/定义域/别名等其余 DSL 声明。
+
 ### 第一条纵线：已贯通
 
 文本 → 解析为 Term → 求导 → `HasDerivative` 规格 → 独立验证 → kernel 发行 → 工作流记录 →
@@ -86,13 +104,14 @@ Q[x] 与形式参数系数 Q[a…][x] 上的单变量多项式求导，其余数
 CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
 v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-新套件共 425 个用例：
+新套件共 454 个用例：
 
-- `tests/unit`（含参数化展开，388 个）：ids、term、binding、sorts、signatures、typing、
+- `tests/unit`（含参数化展开，417 个）：ids、term、binding、sorts、signatures、typing、
   propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
   symbols、frames、definitions、bridge、differential、elaborate、algebra request；
   evidence、store、commit；specification、verify、differentiation checker；
-  bootstrap、workspace；parser、pprint、session、repl；参数桥与参数 checker。
+  bootstrap、workspace；parser、pprint、session、repl；参数桥与参数 checker；
+  binder 定型与声明 DSL。
 - `tests/integration`（13）：纵线端到端、前端纵线与参数化纵线。intake 不产生
   Judgment；一次发行一条判断；inference/certificate 与请求逐项一致；undo 不回滚
   账本；片段外零写入；二阶导是新判断；文本经 parser/session 走到同一
@@ -157,16 +176,17 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 验收（本轮）
 
-- `python -m pytest -q`：425 passed。
-- `python -m mypy --strict cas`：50 source files，无问题（全库）。
+- `python -m pytest -q`：454 passed。
+- `python -m mypy --strict cas`：51 source files，无问题（全库）。
 - `python -m ruff check cas tests`：All checks passed。
 - `python -m compileall -q cas`：通过。
 
 ### 已知语义缺口
 
-- 声明 DSL（函数签名、导数定律、常数）尚未建；等 `math/elementary` 落地时再加。
-- binder 的类型规则未建，`infer` 对 `Binder` 诚实返回 Unsupported；前端也还没有 binder
-  的输入语法与 source 形式。
+- 声明 DSL 首个切片只覆盖 binder/operator 签名；导数定律、定义域/值域、别名/角色、
+  常数以及 `math/elementary` 的数学声明尚未建。
+- binder 类型规则首个切片已完成（声明参数 sort、函数值/值 binder、嵌套索引、注解外层
+  定型）；尚未完成注解驱动的参数 sort、量化/全称引入、前端 binder 语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
 - 参数层只完成首个切片：形式参数作为系数生成元与 `GenericParameters` 记录；特化、
   局部化/异常集、`AllParameterValues`、参数关系与参数分支尚未实现。
@@ -180,7 +200,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 1. 参数层继续：参数特化、局部化/异常集、`AllParameterValues` 覆盖与参数关系；
    每个新语义都配正例、拒答和性质测试。
-2. 语义层补齐：binder 类型规则与表面语法、声明 DSL、K(x) 桥接、义务自动清偿与否证。
+2. 语义层补齐：binder 表面语法与注解驱动 sort、量化/全称引入、K(x) 桥接、
+   义务自动清偿与否证；扩展声明 DSL 到导数定律、定义域与别名/角色。
 3. 新的数学层：按 v5 架构重新落地被删除的能力。先做 `elementary` 声明（函数/常数/
    导数定律），再按目标顺序推进积分、方程、实代数与 CAD。
 4. 前端下一层：声明/定义命令、对象引用嵌入公式、参数化会话入口、source/serialization

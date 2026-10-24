@@ -80,20 +80,29 @@ class OperatorSignature:
 
 @dataclass(frozen=True, slots=True)
 class BindingSignature:
-    """A binding form: how many variables it introduces.
+    """A binding form: how many variables it introduces and their sorts.
 
-    The sorts of those variables are established by elaboration from the
-    annotation syntax, not by this record.
+    `result=None` marks a function-valued binder (a lambda): typing yields a
+    `FunctionSort` from the parameter sorts to the body sort. A concrete
+    `result` marks a value binder (for example an integral), and the body sort
+    must embed into it. The parameter sorts are declared data; the first slice
+    does not yet derive them from annotation syntax.
     """
 
     name: str
     arity: int
+    parameter_sorts: tuple[S.Sort, ...] = ()
+    result: S.Sort | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("a binding signature needs a name")
         if self.arity < 1:
             raise ValueError("a binding signature must introduce a variable")
+        if self.parameter_sorts and len(self.parameter_sorts) != self.arity:
+            raise ValueError(
+                "a binding signature needs one parameter sort per variable"
+            )
 
 
 DEFAULT_ARITIES: Mapping[StructuralHead, Arity] = MappingProxyType(

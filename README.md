@@ -96,6 +96,10 @@ assert session.execute("diff @F") == "verified @E0: 2*a*x"
 同一个符号可以在另一个请求里成为目标。当前只承诺形式参数的泛参数结果
 （`GenericParameters`），参数特化与异常集尚未实现。
 
+语言层另有 data-only 声明 DSL（`operator` / `binder` 签名）与 binder 定型：
+`BindingSignature` 声明参数 sort 与结果，函数值 binder 定型为 `FunctionSort`，
+值 binder 要求 body 嵌入结果。前端 binder 输入语法尚未接入。
+
 ---
 
 ## 目录
@@ -104,7 +108,7 @@ assert session.execute("diff @F") == "verified @E0: 2*a*x"
 |---|---|
 | `cas/foundation/` | 互不混用的身份类型与 issuer |
 | `cas/syntax/` | 不可变 Term、结构相等/hash/序、de Bruijn 绑定原语 |
-| `cas/language/` | Sort、结构签名、定型、Proposition、ProblemSpec、三值 Verdict |
+| `cas/language/` | Sort、结构签名、定型（含 binder）、Proposition、ProblemSpec、三值 Verdict、声明 DSL |
 | `cas/algebra/` | 结构协议、parent 描述、ℤ、ℚ、多项式环、有理函数域 |
 | `cas/semantics/` | World/Frame、符号表、定义展开、AlgebraRequest 角色、Term↔元素桥（含参数系数）、微分结构 |
 | `cas/kernel/` | Judgment/Obligation/InferenceRecord、checker 协议、原子账本、commit |
