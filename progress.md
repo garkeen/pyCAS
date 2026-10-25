@@ -27,12 +27,12 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 | language | `sorts.py`：Sort 封闭层次、数值嵌入塔、`join`、`is_ordered`（sort ≠ 表示） |
 | language | `signatures.py`：结构 head 封闭集合、Arity、BindingSignature（参数 sort 与结果）、按 SymbolId 绑定的 LanguageSignature |
 | language | `typing.py`：`Typed / NeedsDeclaration / Unsupported / IllTyped`；binder 局部索引环境与函数值/值 binder 定型 |
-| language | `declarations.py`：data-only 声明 DSL（binder/operator 签名）、文本/文件加载、带行号的拒答、`build_language` 装配 |
+| language | `declarations.py`：唯一的 data-only 声明 DSL（常数/operator/函数/binder/导数定律与声明表达式）、文本/文件加载、带行号的拒答、`build_language` 装配 |
 | language | `propositions.py`：`Proposition` 只能经 `check` 发行，必须良作用域、命题 sort，并携带 `MeaningKey` |
 | language | `problems.py`：ProblemSpec 固定操作、输入、目标、区域、结果语言、参数模式、覆盖要求 |
-| language | `decisions.py`：三值 Verdict；No 必带见证；Unknown 必带四类理由；不可转 bool |
+| language | `decisions.py`：四类未决理由的封闭词表（FRAGMENT / GUARDED / UNDECIDABLE / BUDGET），供 checker outcome 与候选拒答消费 |
 | algebra | `protocols.py`：Ring / Field / Euclidean / Ordered / IntegerEmbedding / RationalEmbedding / Derivation 分离，无默认零导子 |
-| algebra | `parents.py`：ParentSpec 结构身份 + ParentRegistry（同描述一个 id，不同结构拒绝） |
+| algebra | `parents.py`：ParentSpec 结构身份 + ParentRegistry（kind、base 有无、生成元与表示选项必须和结构一致；同描述一个 id，不同结构拒绝） |
 | algebra | `rationals.py` / `integers.py`：Q 为有序域；Z 为欧几里得整环，gcd 非负归一 |
 | algebra | `polynomial.py`：K[x₁…xₙ]，元素私有封印、跨环拒绝、系数环判等权威、形式偏导；一元域上才有 divmod/gcd |
 | algebra | `rational.py`：K(x) 既约分式域，分母非零且首一，分子分母互素；形式导数与求逆 |
@@ -46,20 +46,21 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 | semantics | `conditions.py`：精确 ground 求值、三值逻辑、`and_all` 的线性边界规范化/矛盾检测/结构去重，以及受限 `implies`/`equivalent`；参数特化与初等条件共用 |
 | semantics | `differential.py`：`DifferentialStructure` 把 parent 与选定导子显式配对 |
 | semantics | `elaborate.py`：先展开别名再定型/发行命题，存下的命题 alias-free |
-| kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；`BasisRef` / `CertificateSchema` / `CheckerSpec`；frame 一致性状态；Checker 协议与四种 outcome |
-| kernel | `store.py`：唯一原子写入 `_publish`（只由 commit 调用）；support 传递闭包；适用性查询；按结构否定查找否证；一致性查询与记录 |
+| kernel | `model.py` / `evidence.py`：Judgment / Obligation / InferenceRecord / Discharge / Applicability；`CheckerSpec`；frame 一致性状态；Checker 协议与四种 outcome |
+| kernel | `trust.py`：`BasisRef` / `BasisKind` / `CertificateSchema`；schema 记录证书类型与节点数/深度预算，`commit` 在 checker 前检查 |
+| kernel | `store.py`：唯一原子写入 `_publish`（只由 commit 调用）；support 传递闭包；适用性查询；按结构否定查找否证；一致性查询 |
 | kernel | `commit.py`：实际验证规格必须等于请求；checker 准入的 problem/specification 种类；basis 写入推理记录；继承义务 + 新义务受同一 ConditionPolicy；已否定条件拒绝；证明与 discharge 同一批原子发行；已清偿义务不重复放电 |
 | operations | `protocols.py` / `registry.py`：开放 `OperationSpec`、`OperationRequest`、`MathematicalProposal`、`CheckerBinding` 与冻结注册表；workflow 只通过注册表应用操作 |
 | operations | 现有操作：`differentiation/operation.py`、`specialization_operation.py`；数学服务移到 `differentiation/services.py`，runtime 只装配 |
 | kernel | `context_rules.py`：`HypothesisChecker` 只把 frame 中可见的精确假设命题验证为 `H ⊢ H` |
 | kernel | `consistency.py`：核心矛盾规则（可见假设的 `H` 与 `not H`，或假设 `false`）与 `assess_consistency`；没有矛盾只保持 `Unassessed` |
-| kernel | `applicability.py`：`ConditionChecker` 从前提判断证明条件并只上报实际使用的前提；`resolve_applicability` 在同一 commit 批次中发行证明与 discharge，未决保持 `Conditional`，被否定返回 `Blocked` |
+| kernel | `condition_checker.py` / `applicability.py`：checker 与 resolver 分家；`ConditionChecker` 从前提判断证明条件并只上报实际使用的前提，检查所有命题在请求 frame 可读；`resolve_applicability` 在同一 commit 批次中发行证明与 discharge，未决保持 `Conditional`，被否定返回 `Blocked` |
 | math | `differentiation/specification.py`：`HasDerivative(region, f, x, g)` 词表与解析 |
 | math | `differentiation/verify.py`：系数级独立验证，不调用环的 `derivative` |
 | math | `differentiation/checker.py`：证书逐项匹配；只有全域可证；片段外 Unverified；错误候选 Refuted 带见证 |
-| math | `differentiation/elementary_checker.py`：校验区域与候选；接受结构相同或被证明等价的区域，否则 Unverified（不伪造否证） |
+| math | `differentiation/elementary_checker.py`：要求 `Derivation` 规则实例树，逐节点重建并比对；接受结构相同或被证明等价的区域，否则 Unverified（不伪造否证） |
 | math | `elementary/declarations.py` + `declarations.dsl`：data-only 常数/一元函数/定义域/导数定律、BASIS 与 USER_AXIOM 来源、精确有理 DSL 表达式；源文件名称与 SHA-256 摘要参与 `BasisRef` 装配 |
-| math | `differentiation/elementary.py` / `elementary_verify.py`：符号候选生成与独立重建；同时计算可微区域与定义域，空区域、未声明依赖、负幂诚实拒答 |
+| math | `differentiation/elementary.py` / `derivation.py`：候选搜索 + 唯一的局部规则实例实现；同时计算可微区域与定义域，空区域、未声明依赖、负幂诚实拒答 |
 | workflow | `records.py` / `workspace.py`：表达式对象、候选、验证关联、事件、revision；intake 不发行判断；undo/redo 只移视图；参数族记录与精确点特化；求导候选经注入服务；条件结果记录受限区域；假设创建子 frame，操作使用当前 revision frame |
 | runtime | `bootstrap.py`：显式装配 Q[x]、Q[a…][x]、Q[x] 特化视图与初等函数片段；`bootstrap_parameterized` 固定参数角色，`bootstrap_elementary` 从声明文件装配函数与定律 |
 | frontend | `parser.py`：文本 → Term，名称解析到稳定 SymbolId，结构 head 驱动，无化简、无数学语义 |
@@ -145,13 +146,15 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
   条件规范化与受限蕴含/等价判定：一原子线性比较化成边界，重叠边界取最强，矛盾
   边界化为 `false`，冗余不等号被删除；未知原子、多原子与非线性关系保持未决。
   参数特化与初等条件共用该模块，原先的私有求值器已删除。
-- `differentiation/elementary.py` 与 `elementary_verify.py` 在求导的同时计算
+- `differentiation/elementary.py` 与 `derivation.py` 在求导的同时计算
   `condition`（可微区域）与 `defined`（定义域）：函数定义域和定律条件都实例化到实际
-  参数；内层导数为 0 时只用定义域（因此 `sqrt(0)` 的导数 0 是无条件的）；指数 0
-  也只要求底数有定义（`sqrt(x)^0` 的区域是 `x >= 0`）。区域为空时拒答。
-- `elementary_checker.py` 不再要求全域：它独立重建期望区域，并接受结构相同或
-  `equivalent` 证明等价的区域；区域更弱/不同或候选不同都返回 `Unverified`，
-  不伪装成 `Refuted`。`sqrt(x)` 的 `x >= 0 and x > 0` 现在规范化为 `x > 0`。
+  参数；内层导数为 0 时保留其条件（因此内层不可微的点不会被误当成可微；
+  `sqrt(0)` 的导数 0 仍是无条件结果）；指数 0
+  要求底数有定义且非零（`x^0` 的区域是 `x != 0`，`0^0` 未定义）。区域为空时拒答。
+- `elementary_checker.py` 不再要求全域：它逐节点重建 `Derivation` 规则实例，
+  并接受结构相同或 `equivalent` 证明等价的区域；区域更弱/不同或候选不同都返回
+  `Unverified`，不伪装成 `Refuted`。`sqrt(x)` 的 `x >= 0 and x > 0` 现在规范化为
+  `x > 0`。
 - 工作流新增 `OperationStatus.CONDITIONAL`、`OperationResult.region` 与
   `VerificationLink.condition`；候选 `ProblemSpec.region` 记录受限区域。会话显示
   `verified on <region> @LABEL: …`。kernel judgment 本身是在该区域上无条件成立的
@@ -200,10 +203,10 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 
 ### 一致性与信任元数据（基础）
 
-- `kernel/model.py` 新增信任记录：`BasisRef`（名称、种类、版本、世界作用域、
-  内容摘要）、`CertificateSchema` 与 frame 一致性封闭变体
-  （`Unassessed` / `ConsistentForFragment(fragment, evidence, basis)` /
-  `Inconsistent(witness, detail)`）。
+- `kernel/trust.py` 集中信任记录：`BasisRef`（名称、种类、版本、世界作用域、
+  内容摘要）与 `CertificateSchema`（证书类型、节点数/深度预算）。frame 一致性
+  只有 `Unassessed` 与 `Inconsistent(witness, detail)`；片段级一致性需要可验证的
+  checker，当前不提供记录入口，避免把任意判断当成一致性证明。
 - `kernel/evidence.py` 的注册项改为 `CheckerSpec`：绑定 checker、证书 schema、
   accepted problem kinds、accepted specification kinds 与 trusted dependencies。
   `CheckerRegistry` 只接受 spec，并校验 key/id 一致、种类非空、依赖不重复。
@@ -215,7 +218,7 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 - `kernel/consistency.py` 提供核心矛盾规则：只证明 `false`，依据是 frame 链上
   可见假设中的 `H` 与 `not H`，或直接假设 `false`。`assess_consistency` 尝试
   发行 `false` 并记录 `Inconsistent`；找不到矛盾、checker 缺失或结果未决都保持
-  原状态。祖先的不一致会被后代继承；`ConsistentForFragment` 不会被后代自动继承。
+  原状态。祖先的不一致会被后代继承。
 - `KernelStore` 拒绝为不一致 frame（含后代）发行任何判断；`Workspace.assume`
   在提交假设后自动评估，并在矛盾时返回 `INVALID`、记录矛盾判断到事件中；
   `diff`/`specialize` 在不一致 frame 中停止且不写账本。撤销回到一致 frame 后
@@ -228,9 +231,10 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
   basis；`CheckerSpec` 未准入种类拒绝；矛盾规则的互补/无关/false 假设；workflow
   的矛盾假设、继承、停止、撤销恢复与会话输出；`Blocked` 的单/多义务、条件否证
   不算否证、祖先可见与兄弟不可见；`resolve_applicability` 不为被否定义务写 discharge。
-- 尚未实现：证书 schema 的大小/深度预算（类型匹配已由 `commit` 执行，结构细节
-  仍由 checker 的 `InvalidEvidence` 负责）；`AxiomRef` / `LocalReceipt` 的完整
-  分类；一般一阶一致性判定与等价变形后的否证。
+- 证书 schema 现在同时执行类型匹配与节点数/深度预算；预算在 checker 运行前拒绝
+  超限或不可测量的证书，结构细节仍由 checker 的 `InvalidEvidence` 负责。
+- 尚未实现：`AxiomRef` / `LocalReceipt` 的完整分类；一般一阶一致性判定、片段级
+  一致性 checker 与等价变形后的否证。
 
 ### 操作协议、依赖倒置与域边界（本轮）
 
@@ -243,35 +247,102 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 - workflow 新增通用 `Workspace.apply(operation_id, inputs, ...)` 与
   `OperationResult`；求导/特化只是薄适配器。workflow 现在不再导入具体 math。
 - 导数证书统一为 `differentiation/certificate.py` 的 `DerivativeCertificate`；
-  多项式与初等 checker 共用证书 schema，但保留各自独立的验证过程。
+  初等证书额外携带 `Derivation` 规则实例树。候选器搜索并生成树，checker 用
+  `derivation.py` 的唯一局部规则逐节点重建比对；删除 `elementary_verify.py`
+  的第二套递归搜索。多项式 checker 仍有独立的系数级验证。
 - 删除 `KernelStore.discharge` 第二条写路径；证明与 discharge 只能通过同一个
   `commit` 批次发行，已清偿义务重复放电会被拒绝。
 - 初等定义域/定律条件组合模块改名为 `math/elementary/law_conditions.py`，与
   `semantics/conditions.py` 的条件判定职责分开。
 - `Ring` 增加总成员检查；ℚ/ℤ/K[x]/K(x) 实现 `contains`；新增
   `AlgebraValue(parent, representation)` 与 `Parent.value`，求导服务在边界使用它。
-- `CertificateSchema` 记录实际证书类型并在 `commit` 中强制匹配；`CheckerSpec`
-  校验 trusted dependency 的 world 与当前 world 一致。
+- 信任记录移到 `kernel/trust.py`；`CertificateSchema` 记录实际证书类型与节点数/
+  深度预算，`commit` 在 checker 前强制类型与预算；`CheckerSpec` 校验 trusted
+  dependency 的 world 与当前 world 一致。
 - 义务按 `(frame, proposition)` 复用：相同条件不再重复创建 obligation，已清偿的
   条件可被后续判断直接复用。
 - `0^0` 不再由 Python 决定：ground 求值返回未决，零次幂的导数条件要求底数非零。
 - 矛盾规则用 ground 真值识别 `not true` 等闭合假假设，而不仅是结构 `false`。
 - 参数环改用 `GeneratorRing` 能力检查，不再只对 `PolynomialRing` 特判；单项式序
-  成为 `PolynomialRing` 的显式参数，`ParentSpec.options` 与 ring 表示不一致时拒绝。
-- `AGENTS.md` 增加“第零条：代码质量红线”，并强化自动化代理的操作底线。
-- 新增操作协议/通用 workflow、成员检查与 `AlgebraValue`、证书 schema/world、
-  义务复用、零次幂和单调序测试；P0 零内层条件与 BASIS 准入回归测试保留。
+  成为 `PolynomialRing` 的显式参数，`ParentSpec.options` 必须完整声明 ring 的
+  表示选项，缺项、多项或值不符都拒绝。
+- `AGENTS.md` 重写为一份去重的红线清单；自动化代理的操作底线并入“改动流程”。
+- 声明 DSL 统一：`language/declarations.py` 现在解析常数/operator/函数/binder/
+  导数定律与声明表达式；`math/elementary/declarations.py` 只负责准入与建库，
+  删除第二套 tokenizer/parser/AST。
+- 三个 bootstrap 共用 `_start`、`_world`、`_derivative_spec`、`_q_coefficient`、
+  `_q_polynomial` 装配助手；elementary 也从共享声明集构建。
+- `FrameStore.readable` / `agree_in` 把跨 frame 弱化规则变成显式前置条件；
+  `refutation_of`、矛盾规则与条件 checker 在比较裸 Term 前消费该规则。
+- `_normalize_not` 只对全定义表达式把 `not` 推入比较；含未声明函数的比较保持未决。
+- `terms.times` 不再静默丢弃零系数旁的符号因子；乘积法则跳过零导数和项时，
+  其定义性仍由结果条件携带。
+- `ProblemSpec` 的 target/parameter_mode 现在由操作持有的 `AlgebraRequest` 派生，
+  不再由操作独立选择；边界写入 `problems.py` 与 `request.py` 的模块契约。
+- `ALL_VALUES` 覆盖检查收敛到 `semantics/specialization.py` 的唯一校验函数；
+  数据记录没有证明器，因此只接受规范 `true` 区域，保守但明确。
+- `ConditionChecker` 与 `resolve_applicability` 分家；`Math` 只依赖
+  `kernel/trust.py` 与 checker 接口，不再从 `kernel/model.py` 取信任记录。
+- 新增规则实例证书、证书预算、跨 frame 可读性、零因子、Not 偏函数、完整
+  `ParentSpec` 选项与 `ProblemSpec`/`AlgebraRequest` 边界测试；P0 零内层条件与
+  BASIS 准入回归测试保留。
+- 复审又发现并修掉：`terms.power` 曾把 `x^0` 折叠为 1（现在保留显式零次幂，
+  一阶幂规则直接返回内层导数）；`_is_total` 曾把零次幂当作全定义（现在只承认
+  正整数幂）；`ProblemSpec.coverage` 原先无人消费（`MathematicalProposal` 现在
+  声明 `answer_coverage`，workflow 在 commit 前要求它与请求一致，并拒绝尚未实现
+  的集合覆盖）；未实现的 `externalizable` 与非 `EXPRESSION` 结果语言现在被
+  workflow 明确拒答，而不是静默忽略。
+- 跨 frame 复审又收紧：`SymbolId` 在整个 FrameStore 内唯一，兄弟 frame 不能
+  重复引入同一符号；不存在的 frame 不再让可见性查询抛异常；hypothesis 的项
+  若引用无关 frame 的局部符号会在构造期拒绝。
+- 操作/问题协议补上不变量：`ProblemSpec` 的字段种类、`OperationRequest` 的输入
+  与参数种类、`CommitProposal` 的 policy/种类、`CheckRequest`/checker outcome
+  的载荷、可信记录的 kind 与 types 都在构造边界检查；workflow 还要求固定问题
+  的 inputs/target 与请求一致，并拒绝当前 frame 不可读的 region。
+- 删除无生产消费者的 `ElementaryLibrary.admissible_law`、
+  `DerivativeLaw.is_unconditional` 与 `RationalInput`；多项式环构造期检查系数
+  结构与单项式序类型。条件定律体调用的声明函数定义域现在并入结果区域；
+  体内部的非零要求仍作为受信 basis 的承诺写入 `law_conditions.py` 文档。
+- 重复实现收口：两个 polynomial bridge 共用同一项转换器；求导/特化共用问题
+  构造与 `HasDerivative` 发行；两个 checker 共用证书匹配；三处结构 head 构造
+  统一为 `LanguageSignature.head_term`；比较 head 集合、解析/打印拼写与精确
+  幂/精确有理映射各只有一份；区间矛盾判定不再在 `_interval_terms` 重抄。
+- 上一轮复审遗留的未接线/构造绕过项已收口：
+  - 删除没有 `decide` 消费者的 `Verdict`/`Yes`/`No`/`Unknown`；四类未决理由仍是
+    checker outcome 的共享词表，`decide` 建立时再引入三值结果。
+  - `build_language` 接入 `bootstrap_elementary` 的真实装配；常数是带 sort 的名字，
+    不再伪装成零元 operator；`ElementaryLibrary.operators` 这一派生字段删除。
+  - `DeclarationSet` 在构造期执行完整准入规则，loader 不再复制同一套语义校验；
+    `ElementaryLibrary` 在构造期校验名称/id 映射、basis 类型与 BASIS 定律前提，
+    直接构造不能再绕过 builder。
+  - `ParentRegistry` 要求结构声明自己的 kind、是否需要 base、生成元与表示选项，
+    并逐一核对；`ParentSpec` 明确只描述已准入片段，relations/结构证明/根嵌入尚不可
+    表达，也没有结构能冒充它们。
+  - `AlgebraRequest` 不再只比较 `ParentSpec.base`，而是要求参数环暴露的实际系数
+    结构对象就是请求的系数 parent。
+  - 删除无消费者的 `ProblemSpec.target_sort`（此前还错误地存了源表达式的 sort）与
+    `Interpretation.FUNCTION`。
+  - 比较拼写表移到 `language/signatures.py`，删除 `frontend/surface.py`；
+    `standard_language` 委托给 `build_language`；声明表达式的节点判定与
+    `DeclarationSet` 校验各只有一份。
+  - 本轮概念 owner 收口：结构否定统一到 `language/propositions.negates`；
+    `LawExpr` 遍历统一到 `language/declarations.law_children`；`IntegerRing` 与
+    一元多项式环复用 `Euclidean.gcd`；`KernelStore` 的 pending obligation 查询
+    只有一份；`AGENTS.md` 增加概念 owner 纪律。
+- 仍属显式能力边界而非当前纵线缺陷：`Reason.UNDECIDABLE`/`BUDGET` 尚无片段产生者；
+  `ObligationReason` 的细分原因等到有 checker 报告义务时再消费；`IntegerRing`、
+  `RationalFunctionField` 与 `rational_structure` 目前是低层代数 API，尚未接入运行时
+  的数学片段；`ParentSpec` 的 relations/结构证明/根嵌入要等商结构与代数扩张落地。
 
 仍待完成（按依赖顺序）：
 
-1. 统一 language 与 elementary 两套声明 DSL；删除 elementary 自造 parser。
-2. 因子化三个 bootstrap；明确 `ProblemSpec` 与 `AlgebraRequest` 的职责边界。
-3. `Definedness`/`Region` 证书、`EqualOn`/`SamePartialFunction`、结果/解集表示。
-4. kernel 多推理批次/`LocalReceipt`/`AxiomRef`、分支合并支持；证书大小/深度预算。
-5. Artifact/ObjectVersion、Task/Candidate 状态、完整 Event、Revision DAG、
+1. `Definedness`/`Region` 证书、`EqualOn`/`SamePartialFunction`、结果/解集表示，
+   以及请求 `Coverage` 与答案 `CoverageClaim` 在集合结果上的映射。
+2. kernel 多推理批次/`LocalReceipt`/`AxiomRef`、分支合并支持。
+3. Artifact/ObjectVersion、Task/Candidate 状态、完整 Event、Revision DAG、
    分支合并与覆盖派生。
-6. 手动代换/改写/方程变换/出现位置/声明定义入口与前端显示。
-7. 自动算法最后接入。
+4. 手动代换/改写/方程变换/出现位置/声明定义入口与前端显示。
+5. 自动算法最后接入。
 
 ### 第一条纵线：已贯通
 
@@ -288,9 +359,9 @@ workflow / runtime / frontend）已完整，具备正式验收；v4 遗留代码
 CAD、积分、求解、REPL 等尚未在 v5 重建；保留测试名而没有可测对象没有意义。新套件以
 v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
-新套件共 632 个用例：
+新套件共 672 个用例：
 
-- `tests/unit`（含参数化展开，573 个）：ids、term、binding、sorts、signatures、typing、
+- `tests/unit`（含参数化展开，613 个）：ids、term、binding、sorts、signatures、typing、
   propositions、decisions、problems；rationals、integers、parents、polynomial、rational；
   symbols、frames、definitions、bridge、differential、elaborate、algebra request；
   evidence、store、commit；specification、verify、differentiation checker；
@@ -299,7 +370,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
   符号求导与 checker；hypothesis checker、条件检查、used_premises 最小化、
   适用性解析与 frame 作用域假设；`CheckerSpec`/`BasisRef`、矛盾规则、一致性状态
   的继承与撤销恢复、`Blocked` 适用性与否定义务；开放操作协议、通用
-  `Workspace.apply`、成员检查与 `AlgebraValue`、统一导数证书和单批 discharge。
+  `Workspace.apply`、成员检查与 `AlgebraValue`、统一导数证书、规则实例树与
+  证书预算、跨 frame 可读性、单批 discharge。
 - `tests/integration`（31）：纵线端到端、前端纵线、参数化纵线与初等函数纵线。intake 不产生
   Judgment；一次发行一条判断；inference/certificate 与请求逐项一致；undo 不回滚
   账本；片段外零写入；二阶导是新判断；文本经 parser/session 走到同一
@@ -369,8 +441,8 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 ### 验收（本轮）
 
-- `python -m pytest -q`：632 passed（unit 573 / integration 31 / property 28）。
-- `python -m mypy --strict cas`：72 source files，无问题（全库）。
+- `python -m pytest -q`：672 passed（unit 613 / integration 31 / property 28）。
+- `python -m mypy --strict cas`：76 source files，无问题（全库）。
 - `python -m ruff check cas tests`：All checks passed。
 - `python -m compileall -q cas`：通过。
 
@@ -381,13 +453,16 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
   frame 一致性状态、核心矛盾规则与 `Blocked` 分支已建立；矛盾规则现在也识别
   ground 闭合假假设，但一般一阶一致性与等价变形后的否证仍未建。
 - 信任元数据：`CheckerSpec`（证书 schema、accepted kinds、trusted
-  dependencies）与 `BasisRef` 版本/摘要已接入；证书类型与 basis world 由 kernel
-  检查。证书大小/深度预算与更细的结构校验仍由 checker 的 `InvalidEvidence`
-  承担，`AxiomRef` / `LocalReceipt` 的完整分类仍未建。
+  dependencies）与 `BasisRef` 版本/摘要已接入；证书类型、节点数/深度预算与 basis
+  world 由 kernel 检查。更细的结构校验仍由 checker 的 `InvalidEvidence` 承担，
+  `AxiomRef` / `LocalReceipt` 的完整分类仍未建。
 - 初等层仍只覆盖一元函数、非负整数幂；负幂/分式、更多函数、初等表达式相等判定、
-  完整 `BasisRef`、别名/角色尚未实现。
-- 语言层声明 DSL 首个切片只覆盖 binder/operator 签名；导数定律、定义域/值域、
-  别名/角色与常数的 *语言级* 声明仍归各自的数学声明文件。
+  完整 `BasisRef`、别名/角色尚未实现。条件定律体调用的函数定义域现在会并入
+  结果区域；体内部的非零要求（如负幂）仍属于受信 basis 的承诺。
+- 问题/覆盖层：workflow 当前只接受 `ONE_VERIFIED` + `EXPRESSION` 结果；集合结果、
+  `SOUND_SET`/`COMPLETE_SET` 与 externalizable premises 都明确拒答，尚未实现。
+- 声明 DSL 已统一：常数/函数/定律与 binder/operator 使用同一个 loader；数学层只
+  做准入与建库。别名/角色声明仍未接入。
 - binder 类型规则首个切片已完成（声明参数 sort、函数值/值 binder、嵌套索引、注解外层
   定型）；尚未完成注解驱动的参数 sort、量化/全称引入、前端 binder 语法与 source 形式。
 - 桥接只覆盖多项式；K(x) 的 Term 双向桥接未建。
@@ -404,18 +479,16 @@ v5 对象重写数学性质，不通过兼容层迁就旧语义。
 
 按依赖顺序继续，不扩张计算功能：
 
-1. 统一声明 DSL：扩展 `language/declarations.py` 支持常数/函数/定律，删除
-   elementary 自造 parser；因子化 bootstrap；明确 `ProblemSpec` 与
-   `AlgebraRequest` 的职责边界。
-2. 域层：单项式序数据化、参数环通用化、转换/同态、`AlgebraValue` 的完整使用、
-   `Definedness`/`Region` 证书、`EqualOn`/`SamePartialFunction`、结果/解集表示。
-3. 条件逻辑：多原子线性不等式组与更完整的 Or/Not；`refutation_of` 扩展到
+1. 域层：转换/同态、`AlgebraValue` 的完整使用、`Definedness`/`Region` 证书、
+   `EqualOn`/`SamePartialFunction`、结果/解集表示，以及请求 `Coverage` 与答案
+   `CoverageClaim` 在集合结果上的映射。
+2. 条件逻辑：多原子线性不等式组与更完整的 Or/Not；`refutation_of` 扩展到
    被证明等价的否定形式；未知关系仍返回 Unknown。
-4. 信任收口：证书 schema 结构校验与预算、语义义务去重、world 校验、
-   `AxiomRef`/`LocalReceipt`、多推理批次与分支合并支持。
-5. workflow：Artifact/ObjectVersion、Task/Candidate 状态、完整 Event、
+3. 信任收口：`AxiomRef`/`LocalReceipt`、片段级一致性 checker、多推理批次与
+   分支合并支持。
+4. workflow：Artifact/ObjectVersion、Task/Candidate 状态、完整 Event、
    Revision DAG/分支合并、覆盖派生；之后才是手动代换/改写/方程变换/出现位置
    与前端显示。
-6. 计算层最后接入：初等函数扩展、参数关系/分支、积分、方程、实代数与 CAD；
+5. 计算层最后接入：初等函数扩展、参数关系/分支、积分、方程、实代数与 CAD；
    每个新数学层同时补行为测试与种子固定的性质测试。
-7. 不恢复按名字扫描的门禁；结构不变量继续由构造方式保证。
+6. 不恢复按名字扫描的门禁；结构不变量继续由构造方式保证。
