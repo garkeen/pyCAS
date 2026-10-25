@@ -6,7 +6,13 @@ from support import elementary_basis, head_app
 
 from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
+from cas.language.declarations import (
+    DeclarationOrigin,
+    build_language,
+    load_declarations,
+)
 from cas.language.signatures import StructuralHead
+from cas.math.calculus.differentiation import terms as B
 from cas.math.calculus.differentiation.elementary import (
     ElementaryDifferentiator,
 )
@@ -14,21 +20,19 @@ from cas.math.calculus.differentiation.specification import (
     DerivativeVocabulary,
 )
 from cas.math.elementary.declarations import (
-    LawOrigin,
     build_elementary,
-    default_elementary_source,
-    load_elementary,
+    default_elementary_declarations,
 )
 from cas.semantics.services import DerivationUnsupported, Derived
-from cas.semantics.symbols import SymbolTable, standard_language
+from cas.semantics.symbols import SymbolTable
 from cas.syntax import term as T
 
 
-def setup(text=None, origin=LawOrigin.BASIS):
+def setup(text=None, origin=DeclarationOrigin.BASIS):
     source = (
-        default_elementary_source()
+        default_elementary_declarations()
         if text is None
-        else load_elementary(text, origin=origin)
+        else load_declarations(text, origin=origin)
     )
     table = SymbolTable()
     predicate = table.intern("HasDerivative")
@@ -39,9 +43,8 @@ def setup(text=None, origin=LawOrigin.BASIS):
         reserved=frozenset({"x", "HasDerivative"}),
         basis=elementary_basis(source),
     )
-    signature = standard_language(
-        table,
-        operators={predicate: vocabulary.signature, **library.operators},
+    signature = build_language(
+        table.intern, source, {predicate: vocabulary.signature}
     )
     variable = table.intern("x")
     return (
@@ -53,6 +56,39 @@ def setup(text=None, origin=LawOrigin.BASIS):
             library, signature, variable, table.name_of
         ),
     )
+
+
+def test_a_literal_zero_does_not_drop_symbolic_factors():
+    _, _, signature, variable, _ = setup()
+    x = T.symbol(variable, "x")
+    product = B.times(signature, T.number(0), x)
+    assert product != T.number(0)
+    assert isinstance(product, T.Apply)
+    assert product.arguments[0] == T.number(0)
+    assert B.times(signature, T.number(0)) == T.number(0)
+
+
+def test_the_power_helper_does_not_fold_a_zero_exponent():
+    _, _, signature, variable, _ = setup()
+    x = T.symbol(variable, "x")
+    term = B.power(signature, x, 0)
+    assert isinstance(term, T.Apply)
+    assert (
+        signature.head_of(term.operator.symbol_id)
+        is StructuralHead.POWER
+    )
+    assert B.power(signature, x, 1) == x
+
+
+def test_the_first_power_does_not_introduce_a_zero_power():
+    table, _, signature, variable, deriver = setup()
+    x = T.symbol(variable, "x")
+    source = head_app(
+        signature, StructuralHead.POWER, x, T.number(1)
+    )
+    outcome = deriver.derive(source)
+    assert isinstance(outcome, Derived)
+    assert outcome.term == T.number(1)
 
 
 def call(table, signature, name, *arguments):
@@ -292,7 +328,7 @@ function F : Real -> Real
 derivative F(u) = 1
 """
     table, _, signature, variable, deriver = setup(
-        text, origin=LawOrigin.USER_AXIOM
+        text, origin=DeclarationOrigin.USER_AXIOM
     )
     x = T.symbol(variable, "x")
     outcome = deriver.derive(call(table, signature, "F", x))
@@ -334,6 +370,22 @@ def test_the_same_symbol_is_not_a_target_by_accident():
     assert deriver.derive(pi).term == T.number(0)
 
 
+def test_a_conditional_law_body_domain_strengthens_the_region():
+    text = """
+function G : Real -> Real on u >= 1
+function F : Real -> Real
+derivative F(u) = G(u) on u > 0
+"""
+    table, _, signature, variable, deriver = setup(text)
+    x = T.symbol(variable, "x")
+    outcome = deriver.derive(call(table, signature, "F", x))
+    assert isinstance(outcome, Derived)
+    assert outcome.term == call(table, signature, "G", x)
+    expected = head_app(signature, StructuralHead.GE, x, T.number(1))
+    assert outcome.condition == expected
+    assert outcome.defined == expected
+
+
 def test_a_constant_inner_function_keeps_its_differentiability_condition():
     text = """
 function F : Real -> Real on u >= 0
@@ -354,13 +406,16 @@ derivative H(u) = 1
         signature, StructuralHead.GE, x, T.number(0)
     )
 
-    from cas.math.calculus.differentiation.elementary_verify import (
-        verify_elementary_derivative,
+    from cas.math.calculus.differentiation.certificate import Derivation
+    from cas.math.calculus.differentiation.derivation import (
+        RuleContext,
+        verify_derivation,
     )
 
-    expected = verify_elementary_derivative(
-        source, library, signature, variable, table.name_of
+    assert isinstance(outcome.evidence, Derivation)
+    assert (
+        verify_derivation(
+            outcome.evidence, RuleContext(library, signature, variable)
+        )
+        is None
     )
-    assert isinstance(expected, Derived)
-    assert expected.condition == outcome.condition
-    assert expected.defined == outcome.defined

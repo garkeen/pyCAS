@@ -7,7 +7,10 @@ from support import head_app, runtime_proposition, variable
 
 from cas.kernel.evidence import CheckRequest, Verified
 from cas.language.signatures import StructuralHead
-from cas.math.calculus.differentiation.certificate import DerivativeCertificate
+from cas.math.calculus.differentiation.certificate import (
+    Derivation,
+    DerivativeCertificate,
+)
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.runtime import bootstrap_elementary
 from cas.semantics.services import Derived
@@ -106,11 +109,13 @@ def test_random_declared_expressions_reach_the_independent_checker():
                 outcome.term,
             ),
         )
+        assert isinstance(outcome.evidence, Derivation)
         certificate = DerivativeCertificate(
             T.TRUE if outcome.condition is None else outcome.condition,
             source,
             runtime.variable,
             outcome.term,
+            outcome.evidence,
         )
         checked = runtime.checker.check(
             CheckRequest(runtime.frame.id, (proposition,), (), certificate)
@@ -152,8 +157,9 @@ def test_random_conditional_expressions_keep_their_region():
                 outcome.term,
             ),
         )
+        assert isinstance(outcome.evidence, Derivation)
         certificate = DerivativeCertificate(
-            region, source, runtime.variable, outcome.term
+            region, source, runtime.variable, outcome.term, outcome.evidence
         )
         checked = runtime.checker.check(
             CheckRequest(runtime.frame.id, (proposition,), (), certificate)

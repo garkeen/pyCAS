@@ -14,6 +14,7 @@ from cas.algebra.polynomial import Polynomial
 from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.math.calculus.differentiation.certificate import (
+    Derivation,
     DerivativeCertificate,
 )
 from cas.math.calculus.differentiation.elementary import (
@@ -63,9 +64,11 @@ class PolynomialDerivativeService(Generic[E]):
         region: T.Term,
         source: T.Term,
         variable: SymbolId,
-        candidate: T.Term,
+        derivation: Derived,
     ) -> object:
-        return DerivativeCertificate(region, source, variable, candidate)
+        return DerivativeCertificate(
+            region, source, variable, derivation.term
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,9 +87,16 @@ class ElementaryDerivativeService:
         region: T.Term,
         source: T.Term,
         variable: SymbolId,
-        candidate: T.Term,
+        derivation: Derived,
     ) -> object:
-        return DerivativeCertificate(region, source, variable, candidate)
+        evidence = derivation.evidence
+        if not isinstance(evidence, Derivation):
+            raise TypeError(
+                "the elementary candidate has no rule-instance derivation"
+            )
+        return DerivativeCertificate(
+            region, source, variable, derivation.term, evidence
+        )
 
 
 __all__ = [

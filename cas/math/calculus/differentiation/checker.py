@@ -30,6 +30,7 @@ from cas.math.calculus.differentiation.certificate import (
 )
 from cas.math.calculus.differentiation.specification import (
     DerivativeVocabulary,
+    certificate_matches_claim,
     parse_has_derivative,
 )
 from cas.math.calculus.differentiation.verify import verify_derivative
@@ -79,12 +80,12 @@ class DerivativeChecker(Generic[E]):
             certificate = request.certificate
             if not isinstance(certificate, DerivativeCertificate):
                 return InvalidEvidence("a derivative certificate is required")
-            if (
-                certificate.region != claim.region
-                or certificate.source != claim.source
-                or certificate.variable != claim.variable.symbol_id
-                or certificate.candidate != claim.candidate
-            ):
+            if certificate.derivation is not None:
+                return InvalidEvidence(
+                    "the polynomial checker does not interpret a "
+                    "rule-instance derivation"
+                )
+            if not certificate_matches_claim(certificate, claim):
                 return InvalidEvidence(
                     "the certificate does not match the specification"
                 )

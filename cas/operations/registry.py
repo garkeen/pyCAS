@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 
-from cas.operations.protocols import OperationSpec
+from cas.operations.protocols import CheckerBinding, OperationSpec
 
 
 class OperationError(ValueError):
@@ -31,6 +31,13 @@ class OperationRegistry:
                 raise OperationError(
                     f"operation {key!r} names no checker binding"
                 )
+            if any(
+                not isinstance(binding, CheckerBinding)
+                for binding in operation.checker_bindings
+            ):
+                raise OperationError(
+                    f"operation {key!r} has a malformed checker binding"
+                )
             kinds = [
                 binding.specification_kind
                 for binding in operation.checker_bindings
@@ -46,6 +53,9 @@ class OperationRegistry:
 
     def __len__(self) -> int:
         return len(self._operations)
+
+    def __iter__(self) -> Iterator[OperationSpec]:
+        return iter(self._operations.values())
 
 
 __all__ = ["OperationError", "OperationRegistry"]

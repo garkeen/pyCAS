@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from cas.foundation.ids import SymbolId
 from cas.language import sorts as S
 from cas.language.signatures import OperatorSignature
+from cas.math.calculus.differentiation.certificate import (
+    DerivativeCertificate,
+)
 from cas.syntax import term as T
 
 
@@ -59,6 +62,19 @@ def has_derivative(
     )
 
 
+def certificate_matches_claim(
+    certificate: DerivativeCertificate,
+    claim: DerivativeClaim,
+) -> bool:
+    """Whether a certificate names exactly the claimed derivative instance."""
+    return (
+        certificate.region == claim.region
+        and certificate.source == claim.source
+        and certificate.variable == claim.variable.symbol_id
+        and certificate.candidate == claim.candidate
+    )
+
+
 def parse_has_derivative(
     vocabulary: DerivativeVocabulary,
     term: T.Term,
@@ -81,6 +97,7 @@ def parse_has_derivative(
 __all__ = [
     "DerivativeClaim",
     "DerivativeVocabulary",
+    "certificate_matches_claim",
     "has_derivative",
     "parse_has_derivative",
 ]

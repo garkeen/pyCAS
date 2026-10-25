@@ -1,38 +1,43 @@
 """Elementary declarations: data, domains, laws and their admission."""
 
+from dataclasses import replace
 from fractions import Fraction
+from types import MappingProxyType
 
 import pytest
 from support import elementary_basis, head_app
 
 from cas.language import sorts as S
-from cas.language.signatures import StructuralHead
-from cas.math.calculus.differentiation.specification import DerivativeVocabulary
-from cas.math.elementary.declarations import (
-    ElementaryDeclarationError,
-    ElementarySource,
-    FunctionSource,
-    LawOrigin,
-    LawSource,
+from cas.language.declarations import (
+    DeclarationError,
+    DeclarationOrigin,
+    DeclarationSet,
+    FunctionDeclaration,
+    LawDeclaration,
     Name,
     Num,
     Power,
     Product,
-    build_elementary,
-    default_elementary_source,
-    load_elementary,
-    load_elementary_file,
+    build_language,
+    load_declarations,
+    load_declarations_file,
     numeric_value,
 )
-from cas.semantics.symbols import SymbolTable, standard_language
+from cas.language.signatures import StructuralHead
+from cas.math.calculus.differentiation.specification import DerivativeVocabulary
+from cas.math.elementary.declarations import (
+    build_elementary,
+    default_elementary_declarations,
+)
+from cas.semantics.symbols import SymbolTable
 from cas.syntax import term as T
 
 
 def setup(text=None):
     source = (
-        default_elementary_source()
+        default_elementary_declarations()
         if text is None
-        else load_elementary(text, origin=LawOrigin.BASIS)
+        else load_declarations(text, origin=DeclarationOrigin.BASIS)
     )
     table = SymbolTable()
     predicate = table.intern("HasDerivative")
@@ -43,15 +48,14 @@ def setup(text=None):
         reserved=frozenset({"x", "HasDerivative"}),
         basis=elementary_basis(source),
     )
-    signature = standard_language(
-        table,
-        operators={predicate: vocabulary.signature, **library.operators},
+    signature = build_language(
+        table.intern, source, {predicate: vocabulary.signature}
     )
     return table, library, signature
 
 
 def test_the_default_library_is_a_trusted_basis():
-    source = default_elementary_source()
+    source = default_elementary_declarations()
     assert [constant.name for constant in source.constants] == ["pi", "e"]
     assert [function.name for function in source.functions] == [
         "sin",
@@ -60,7 +64,7 @@ def test_the_default_library_is_a_trusted_basis():
         "sqrt",
         "log",
     ]
-    assert all(law.origin is LawOrigin.BASIS for law in source.laws)
+    assert all(law.origin is DeclarationOrigin.BASIS for law in source.laws)
     laws = {law.function: law for law in source.laws}
     assert laws["sin"].condition is None
     assert laws["cos"].condition is None
@@ -70,7 +74,7 @@ def test_the_default_library_is_a_trusted_basis():
 
 
 def test_function_domains_are_kept_as_conditions():
-    source = default_elementary_source()
+    source = default_elementary_declarations()
     functions = {function.name: function for function in source.functions}
     assert functions["sin"].domain is None
     assert functions["sqrt"].domain is not None
@@ -90,30 +94,36 @@ def test_the_builder_keys_names_by_stable_ids():
     assert library.function_for(sin.symbol) is sin
     assert signature.operator_of(sin.symbol) is not None
     assert signature.head_of(sin.symbol) is None
-    assert sin.law is not None and sin.law.is_unconditional
-    assert library.admissible_law(sin) is sin.law
+    assert sin.law is not None and sin.law.condition is None
 
 
-def test_conditional_and_user_axiom_laws_are_not_admissible():
+def test_a_directly_constructed_library_is_validated_and_copied():
+    _, library, _ = setup()
+    with pytest.raises(ValueError, match="id map"):
+        replace(library, constants_by_id={})
+    with pytest.raises(ValueError, match="id map"):
+        replace(library, functions_by_id={})
+
+    copied = replace(library, functions=dict(library.functions))
+    assert isinstance(copied.functions, MappingProxyType)
+
+
+def test_conditional_and_user_axiom_laws_keep_their_origin():
     text = """
 function F : Real -> Real
 derivative F(u) = 1 on u > 0
 """
-    source = load_elementary(text, origin=LawOrigin.USER_AXIOM)
+    source = load_declarations(text, origin=DeclarationOrigin.USER_AXIOM)
     table = SymbolTable()
     library = build_elementary(
         table.intern, source, reserved=frozenset({"x", "HasDerivative"})
     )
     function = library.functions["F"]
     assert function.law is not None
-    assert function.law.origin is LawOrigin.USER_AXIOM
-    assert library.admissible_law(function) is None
+    assert function.law.origin is DeclarationOrigin.USER_AXIOM
+    assert function.law.condition is not None
 
-    text = """
-function F : Real -> Real
-derivative F(u) = 1 on u > 0
-"""
-    source = load_elementary(text, origin=LawOrigin.BASIS)
+    source = load_declarations(text, origin=DeclarationOrigin.BASIS)
     table = SymbolTable()
     library = build_elementary(
         table.intern,
@@ -121,7 +131,10 @@ derivative F(u) = 1 on u > 0
         reserved=frozenset({"x", "HasDerivative"}),
         basis=elementary_basis(source),
     )
-    assert library.admissible_law(library.functions["F"]) is None
+    law = library.functions["F"].law
+    assert law is not None
+    assert law.origin is DeclarationOrigin.BASIS
+    assert law.condition is not None
 
 
 def test_declarations_can_be_loaded_from_a_file(tmp_path):
@@ -132,14 +145,14 @@ def test_declarations_can_be_loaded_from_a_file(tmp_path):
         "derivative F(u) = u\n",
         encoding="utf-8",
     )
-    source = load_elementary_file(path, origin=LawOrigin.BASIS)
+    source = load_declarations_file(path, origin=DeclarationOrigin.BASIS)
     assert [constant.name for constant in source.constants] == ["q"]
     assert [function.name for function in source.functions] == ["F"]
     assert [law.function for law in source.laws] == ["F"]
 
 
 def test_an_empty_file_is_an_empty_source():
-    source = load_elementary("# nothing\n\n")
+    source = load_declarations("# nothing\n\n")
     assert source.constants == ()
     assert source.functions == ()
     assert source.laws == ()
@@ -168,18 +181,18 @@ def test_an_empty_file_is_an_empty_source():
     ],
 )
 def test_loader_errors_carry_a_line(text, line, fragment):
-    with pytest.raises(ElementaryDeclarationError) as caught:
-        load_elementary(text)
+    with pytest.raises(DeclarationError) as caught:
+        load_declarations(text)
     assert caught.value.line == line
     assert fragment in str(caught.value)
 
 
-def build(text, *, origin=LawOrigin.BASIS):
-    source = load_elementary(text, origin=origin)
+def build(text, *, origin=DeclarationOrigin.BASIS):
+    source = load_declarations(text, origin=origin)
     table = SymbolTable()
     basis = (
         elementary_basis(source)
-        if any(law.origin is LawOrigin.BASIS for law in source.laws)
+        if any(law.origin is DeclarationOrigin.BASIS for law in source.laws)
         else None
     )
     return table, build_elementary(
@@ -254,7 +267,7 @@ def build(text, *, origin=LawOrigin.BASIS):
     ],
 )
 def test_build_errors_are_explicit(text, fragment):
-    with pytest.raises(ElementaryDeclarationError) as caught:
+    with pytest.raises(DeclarationError) as caught:
         build(text)
     assert fragment in str(caught.value)
 
@@ -269,21 +282,21 @@ def test_a_reserved_name_is_refused():
 
 
 def test_a_binary_function_cannot_have_a_unary_law():
-    source = ElementarySource(
+    source = DeclarationSet(
         constants=(),
         functions=(
-            FunctionSource(
+            FunctionDeclaration(
                 "F", (S.REAL, S.REAL), S.REAL, None, 1
             ),
         ),
         laws=(
-            LawSource(
-                "F", "u", Name("u"), None, LawOrigin.BASIS, 2
+            LawDeclaration(
+                "F", "u", Name("u"), None, DeclarationOrigin.BASIS, 2
             ),
         ),
     )
     table = SymbolTable()
-    with pytest.raises(ElementaryDeclarationError) as caught:
+    with pytest.raises(DeclarationError) as caught:
         build_elementary(table.intern, source)
     assert "unary" in str(caught.value)
 
@@ -316,7 +329,7 @@ def test_instantiation_builds_terms_and_conditions():
 
 
 def test_numeric_value_is_exact():
-    body = load_elementary(
+    body = load_declarations(
         "function F : Real -> Real\n"
         "derivative F(u) = u"
     ).laws[0].body
@@ -335,11 +348,11 @@ def test_numeric_value_is_exact():
 
 def test_a_basis_reference_must_match_the_loaded_source():
     from cas.foundation.ids import WorldId
-    from cas.kernel.model import BasisKind, BasisRef
+    from cas.kernel.trust import BasisKind, BasisRef
 
     text = "function F : Real -> Real\nderivative F(u) = 1\n"
-    source = load_elementary(
-        text, origin=LawOrigin.BASIS, source_name="test.dsl"
+    source = load_declarations(
+        text, origin=DeclarationOrigin.BASIS, source_name="test.dsl"
     )
     assert source.name == "test.dsl"
     assert len(source.digest) == 64
@@ -367,9 +380,9 @@ def test_a_basis_reference_must_match_the_loaded_source():
 
 def test_a_source_without_a_digest_cannot_become_a_basis():
     from cas.foundation.ids import WorldId
-    from cas.kernel.model import BasisKind, BasisRef
+    from cas.kernel.trust import BasisKind, BasisRef
 
-    source = ElementarySource((), (), ())
+    source = DeclarationSet((), (), ())
     basis = BasisRef(
         "test.dsl", BasisKind.DECLARATION_FILE, "1", "digest", WorldId(0)
     )
@@ -379,10 +392,10 @@ def test_a_source_without_a_digest_cannot_become_a_basis():
 
 
 def test_a_basis_law_cannot_be_built_without_an_admitted_basis():
-    source = load_elementary(
+    source = load_declarations(
         "function F : Real -> Real\n"
         "derivative F(u) = 1\n",
-        origin=LawOrigin.BASIS,
+        origin=DeclarationOrigin.BASIS,
     )
     table = SymbolTable()
     with pytest.raises(ValueError, match="BasisRef"):

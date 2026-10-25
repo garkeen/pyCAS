@@ -12,21 +12,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from cas.foundation.ids import SymbolId
-from cas.language import propositions as Pr
-from cas.language import typing as Ty
 from cas.language.decisions import Reason
-from cas.language.problems import (
-    Coverage,
-    ProblemSpec,
-    ResultLanguage,
-)
+from cas.language.problems import ProblemSpec
 from cas.language.signatures import LanguageSignature
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
 )
+from cas.math.calculus.differentiation.problem import (
+    derivative_specification,
+    expression_problem,
+)
 from cas.math.calculus.differentiation.specification import (
     DerivativeVocabulary,
-    has_derivative,
 )
 from cas.math.calculus.differentiation.view import SpecializationView
 from cas.operations.protocols import (
@@ -34,17 +31,13 @@ from cas.operations.protocols import (
     GenericResultInput,
     MathematicalProposal,
     OperationRequest,
-    ProblemBuilt,
-    ProblemInvalid,
     ProblemOutcome,
-    ProblemUnsupported,
     ProposalInvalid,
     ProposalOutcome,
     ProposalUnsupported,
     Proposed,
     ValueMappingInput,
 )
-from cas.semantics import elaborate
 from cas.semantics.frames import FrameStore
 from cas.semantics.request import AlgebraRequest
 from cas.semantics.specialization import (
@@ -66,7 +59,6 @@ class SpecializationOperation:
     signature: LanguageSignature
     frames: FrameStore
     vocabulary: DerivativeVocabulary
-    variable: SymbolId
     name_of: Callable[[SymbolId], str]
     view: SpecializationView
     parameter_request: AlgebraRequest
@@ -76,7 +68,17 @@ class SpecializationOperation:
     specification_kind: str = "HasDerivative"
     checker_bindings: tuple[CheckerBinding, ...] = ()
 
+    @property
+    def variable(self) -> SymbolId:
+        """The target role fixed by the specialized view."""
+        return self.view.request.target
+
     def __post_init__(self) -> None:
+        if self.view.request.target != self.parameter_request.target:
+            raise ValueError(
+                "the specialization view and the family request "
+                "disagree about the target"
+            )
         object.__setattr__(
             self,
             "checker_bindings",
@@ -90,40 +92,13 @@ class SpecializationOperation:
         )
 
     def build_problem(self, request: OperationRequest) -> ProblemOutcome:
-        if len(request.inputs) != 1:
-            return ProblemInvalid("specialisation takes one input")
-        if request.target is None:
-            return ProblemInvalid("specialisation needs a target variable")
-        if request.target != self.variable:
-            return ProblemUnsupported(
-                Reason.FRAGMENT,
-                "this runtime specialises with respect to x only",
-            )
-        source = request.inputs[0]
-        typing = elaborate.typing(
-            source, self.frames, request.frame, self.signature
-        )
-        if isinstance(typing, Ty.NeedsDeclaration):
-            return ProblemInvalid(
-                "the source contains an undeclared symbol"
-            )
-        if isinstance(typing, Ty.Unsupported):
-            return ProblemInvalid(typing.detail)
-        if isinstance(typing, Ty.IllTyped):
-            return ProblemInvalid(typing.detail)
-        if not isinstance(typing, Ty.Typed):
-            return ProblemInvalid("the source cannot be typed")
-        return ProblemBuilt(
-            ProblemSpec(
-                operation=self.problem_kind,
-                inputs=(source,),
-                target=self.variable,
-                target_sort=typing.sort,
-                region=request.region,
-                result_language=ResultLanguage.EXPRESSION,
-                parameter_mode=self.view.request.parameter_mode,
-                coverage=Coverage.ONE_VERIFIED,
-            )
+        return expression_problem(
+            request,
+            operation=self.problem_kind,
+            variable=self.variable,
+            frames=self.frames,
+            signature=self.signature,
+            parameter_mode=self.view.request.parameter_mode,
         )
 
     def propose(
@@ -193,21 +168,18 @@ class SpecializationOperation:
                 "the specialized derivative cannot be rendered"
             )
 
-        variable = T.symbol(self.variable, self.name_of(self.variable))
-        specification_term = has_derivative(
+        issued = derivative_specification(
             self.vocabulary,
             T.TRUE,
             specialized_source,
-            variable,
+            self.variable,
             candidate_term,
+            frames=self.frames,
+            frame=request.frame,
+            signature=self.signature,
+            name_of=self.name_of,
         )
-        issued = elaborate.proposition(
-            specification_term,
-            self.frames,
-            request.frame,
-            self.signature,
-        )
-        if not isinstance(issued, Pr.Proposition):
+        if issued is None:
             return ProposalInvalid(
                 "the specialized specification is not a proposition"
             )

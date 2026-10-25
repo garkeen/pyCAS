@@ -146,6 +146,7 @@ class Session:
     # --- commands ---
 
     def execute(self, line: str) -> str:
+        """Dispatch user commands; mathematical dispatch stays in the registry."""
         text = line.strip()
         if not text:
             return ""

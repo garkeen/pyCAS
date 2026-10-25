@@ -15,31 +15,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from fractions import Fraction
-from types import MappingProxyType
 from typing import Protocol, TypeAlias
 
 from cas.foundation.ids import FrameId, SymbolId
 from cas.language.decisions import Reason
-from cas.language.problems import ProblemSpec
+from cas.language.problems import Coverage, ProblemSpec
 from cas.language.propositions import Proposition
-from cas.semantics.specialization import CoverageClaim, GenericResult
+from cas.semantics.specialization import (
+    CoverageClaim,
+    GenericResult,
+    exact_values,
+    validate_coverage_claim,
+)
 from cas.syntax import term as T
 
 # --- operation inputs ---
-
-
-@dataclass(frozen=True, slots=True)
-class RationalInput:
-    """One exact rational parameter."""
-
-    value: Fraction
-
-    def __post_init__(self) -> None:
-        if isinstance(self.value, bool) or not isinstance(
-            self.value, (int, Fraction)
-        ):
-            raise TypeError("a rational input needs an exact rational value")
-        object.__setattr__(self, "value", Fraction(self.value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,14 +39,7 @@ class ValueMappingInput:
     values: Mapping[SymbolId, Fraction]
 
     def __post_init__(self) -> None:
-        normalized: dict[SymbolId, Fraction] = {}
-        for symbol, value in self.values.items():
-            if isinstance(value, bool) or not isinstance(
-                value, (int, Fraction)
-            ):
-                raise TypeError("a mapping input needs exact rational values")
-            normalized[SymbolId(symbol)] = Fraction(value)
-        object.__setattr__(self, "values", MappingProxyType(normalized))
+        object.__setattr__(self, "values", exact_values(self.values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +49,7 @@ class GenericResultInput:
     result: GenericResult
 
 
-OperationInput: TypeAlias = RationalInput | ValueMappingInput | GenericResultInput
+OperationInput: TypeAlias = ValueMappingInput | GenericResultInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +70,17 @@ class OperationRequest:
     def __post_init__(self) -> None:
         if not self.inputs:
             raise ValueError("an operation request needs at least one input")
+        if any(not isinstance(item, T.Term) for item in self.inputs):
+            raise TypeError("operation inputs must be terms")
+        if self.region is not None and not isinstance(
+            self.region, Proposition
+        ):
+            raise TypeError("an operation region must be a proposition")
+        for _, value in self.parameters:
+            if not isinstance(
+                value, (ValueMappingInput, GenericResultInput)
+            ):
+                raise TypeError("unknown operation input kind")
         names = [name for name, _ in self.parameters]
         if any(not name for name in names):
             raise ValueError("an operation parameter needs a name")
@@ -133,8 +127,9 @@ class MathematicalProposal:
 
     The proposal is not a judgment. It names the exact specifications it asks
     to verify, the certificate bytes its checker interprets, and the region on
-    which the result is stated. Coverage data is present only when the operation
-    claims a parameter-family answer.
+    which the result is stated. `coverage`/`valid_on` describe the parameter
+    family; `answer_coverage` describes the answer-set completeness the proposal
+    claims, and must meet the fixed problem's requested coverage.
     """
 
     result: T.Term
@@ -146,8 +141,11 @@ class MathematicalProposal:
     valid_on: Proposition | None = None
     excluded_cases: tuple[Proposition, ...] = ()
     trace: tuple[str, ...] = ()
+    answer_coverage: Coverage = Coverage.ONE_VERIFIED
 
     def __post_init__(self) -> None:
+        if not isinstance(self.result, T.Term):
+            raise TypeError("a proposal result must be a term")
         if not self.specifications:
             raise ValueError("a proposal needs at least one specification")
         if not self.specification_kind:
@@ -156,22 +154,23 @@ class MathematicalProposal:
             not isinstance(item, Proposition) for item in self.specifications
         ):
             raise TypeError("proposal specifications are propositions")
-        if self.coverage is not None and self.valid_on is None:
-            raise ValueError(
-                "a coverage claim needs the region on which it is claimed"
+        if self.result_region is not None and not isinstance(
+            self.result_region, Proposition
+        ):
+            raise TypeError("a result region must be a proposition")
+        if self.valid_on is not None and not isinstance(
+            self.valid_on, Proposition
+        ):
+            raise TypeError("a validity region must be a proposition")
+        excluded = tuple(self.excluded_cases)
+        if any(not isinstance(item, Proposition) for item in excluded):
+            raise TypeError("excluded cases must be propositions")
+        validate_coverage_claim(self.coverage, self.valid_on, excluded)
+        if not isinstance(self.answer_coverage, Coverage):
+            raise TypeError(
+                "answer_coverage must be a requested-coverage value"
             )
-        if self.coverage is CoverageClaim.ALL_VALUES:
-            if self.excluded_cases or self.valid_on is None:
-                raise ValueError(
-                    "an all-values claim needs unconditional validity"
-                )
-            if self.valid_on.term != T.TRUE:
-                raise ValueError(
-                    "an all-values claim needs a true validity region"
-                )
-        object.__setattr__(
-            self, "excluded_cases", tuple(self.excluded_cases)
-        )
+        object.__setattr__(self, "excluded_cases", excluded)
         object.__setattr__(self, "trace", tuple(self.trace))
 
 
@@ -253,6 +252,5 @@ __all__ = [
     "ProposalOutcome",
     "ProposalUnsupported",
     "Proposed",
-    "RationalInput",
     "ValueMappingInput",
 ]

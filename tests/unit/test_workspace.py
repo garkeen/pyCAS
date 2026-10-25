@@ -4,7 +4,6 @@ from fractions import Fraction
 
 from support import head_app, variable
 
-from cas.language import sorts as S
 from cas.language.signatures import StructuralHead
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.runtime.bootstrap import new_workspace
@@ -88,7 +87,6 @@ def test_differentiation_produces_a_verified_candidate_and_result(runtime):
     assert candidate.problem.operation == "differentiate"
     assert candidate.problem.inputs == (source.term,)
     assert candidate.problem.target == runtime.variable
-    assert candidate.problem.target_sort is S.REAL
     assert candidate.problem.coverage.value == "one_verified"
     assert candidate.problem.result_language.value == "expression"
     assert candidate.frame == runtime.frame.id
@@ -135,9 +133,19 @@ def test_another_variable_is_refused_without_writing(runtime):
     y = runtime.table.intern("y")
     result = workspace.differentiate(source, y)
     assert result.status is OperationStatus.UNSUPPORTED
-    assert "x only" in result.detail
+    assert "target variable" in result.detail
     assert result.candidate is None
     assert runtime.store.stats()["judgments"] == 0
+
+
+def test_revision_ids_are_not_reused_after_undo(runtime):
+    workspace = new_workspace(runtime)
+    workspace.intake(variable(runtime))
+    deleted = workspace.revision.id
+    assert workspace.undo()
+    workspace.intake(variable(runtime))
+    assert workspace.revision.id != deleted
+    assert int(workspace.revision.id) > int(deleted)
 
 
 def test_undo_and_redo_move_the_view_but_not_the_ledger(runtime):

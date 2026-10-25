@@ -13,27 +13,20 @@ from dataclasses import dataclass
 
 from cas.foundation.ids import SymbolId
 from cas.language import propositions as Pr
-from cas.language import typing as Ty
-from cas.language.decisions import Reason
-from cas.language.problems import (
-    Coverage,
-    ParameterMode,
-    ProblemSpec,
-    ResultLanguage,
-)
+from cas.language.problems import ParameterMode, ProblemSpec
 from cas.language.signatures import LanguageSignature
+from cas.math.calculus.differentiation.problem import (
+    derivative_specification,
+    expression_problem,
+)
 from cas.math.calculus.differentiation.specification import (
     DerivativeVocabulary,
-    has_derivative,
 )
 from cas.operations.protocols import (
     CheckerBinding,
     MathematicalProposal,
     OperationRequest,
-    ProblemBuilt,
-    ProblemInvalid,
     ProblemOutcome,
-    ProblemUnsupported,
     ProposalInvalid,
     ProposalOutcome,
     ProposalUnsupported,
@@ -41,6 +34,7 @@ from cas.operations.protocols import (
 )
 from cas.semantics import elaborate
 from cas.semantics.frames import FrameStore
+from cas.semantics.request import AlgebraRequest
 from cas.semantics.services import (
     DerivationInvalid,
     DerivationUnsupported,
@@ -58,15 +52,24 @@ class DifferentiationOperation:
     signature: LanguageSignature
     frames: FrameStore
     vocabulary: DerivativeVocabulary
-    variable: SymbolId
+    algebra: AlgebraRequest
     name_of: Callable[[SymbolId], str]
     service: DerivativeService
-    parameter_mode: ParameterMode
     id: str = "differentiate"
     version: str = "1"
     problem_kind: str = "differentiate"
     specification_kind: str = "HasDerivative"
     checker_bindings: tuple[CheckerBinding, ...] = ()
+
+    @property
+    def variable(self) -> SymbolId:
+        """The target role fixed by the algebra request."""
+        return self.algebra.target
+
+    @property
+    def parameter_mode(self) -> ParameterMode:
+        """The parameter promise fixed by the algebra request."""
+        return self.algebra.parameter_mode
 
     def __post_init__(self) -> None:
         if self.service.specification_kind != self.specification_kind:
@@ -86,40 +89,13 @@ class DifferentiationOperation:
         )
 
     def build_problem(self, request: OperationRequest) -> ProblemOutcome:
-        if len(request.inputs) != 1:
-            return ProblemInvalid("differentiation takes one input")
-        if request.target is None:
-            return ProblemInvalid("differentiation needs a target variable")
-        if request.target != self.variable:
-            return ProblemUnsupported(
-                Reason.FRAGMENT,
-                "this runtime differentiates with respect to x only",
-            )
-        source = request.inputs[0]
-        typing = elaborate.typing(
-            source, self.frames, request.frame, self.signature
-        )
-        if isinstance(typing, Ty.NeedsDeclaration):
-            return ProblemInvalid(
-                "the source contains an undeclared symbol"
-            )
-        if isinstance(typing, Ty.Unsupported):
-            return ProblemInvalid(typing.detail)
-        if isinstance(typing, Ty.IllTyped):
-            return ProblemInvalid(typing.detail)
-        if not isinstance(typing, Ty.Typed):
-            return ProblemInvalid("the source cannot be typed")
-        return ProblemBuilt(
-            ProblemSpec(
-                operation=self.problem_kind,
-                inputs=(source,),
-                target=self.variable,
-                target_sort=typing.sort,
-                region=request.region,
-                result_language=ResultLanguage.EXPRESSION,
-                parameter_mode=self.parameter_mode,
-                coverage=Coverage.ONE_VERIFIED,
-            )
+        return expression_problem(
+            request,
+            operation=self.problem_kind,
+            variable=self.variable,
+            frames=self.frames,
+            signature=self.signature,
+            parameter_mode=self.parameter_mode,
         )
 
     def propose(
@@ -141,34 +117,31 @@ class DifferentiationOperation:
 
         condition: Pr.Proposition | None = None
         if derivation.condition is not None:
-            issued = elaborate.proposition(
+            region_outcome = elaborate.proposition(
                 derivation.condition,
                 self.frames,
                 request.frame,
                 self.signature,
             )
-            if not isinstance(issued, Pr.Proposition):
+            if not isinstance(region_outcome, Pr.Proposition):
                 return ProposalInvalid(
                     "the differentiability region is not a proposition"
                 )
-            condition = issued
+            condition = region_outcome
         region = T.TRUE if condition is None else condition.term
 
-        variable = T.symbol(self.variable, self.name_of(self.variable))
-        specification_term = has_derivative(
+        issued = derivative_specification(
             self.vocabulary,
             region,
             source,
-            variable,
+            self.variable,
             derivation.term,
+            frames=self.frames,
+            frame=request.frame,
+            signature=self.signature,
+            name_of=self.name_of,
         )
-        issued = elaborate.proposition(
-            specification_term,
-            self.frames,
-            request.frame,
-            self.signature,
-        )
-        if not isinstance(issued, Pr.Proposition):
+        if issued is None:
             return ProposalInvalid(
                 "the derivative specification is not a proposition"
             )
@@ -201,7 +174,7 @@ class DifferentiationOperation:
                     region,
                     source,
                     self.variable,
-                    derivation.term,
+                    derivation,
                 ),
                 result_region=condition,
                 coverage=coverage,

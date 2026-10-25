@@ -23,13 +23,6 @@ def numeric(term: T.Term) -> Fraction | None:
     return None
 
 
-def _head(signature: LanguageSignature, head: StructuralHead) -> T.SymbolRef:
-    symbol_id = signature.symbol_of(head)
-    if symbol_id is None:
-        raise ValueError(f"the language has no symbol for {head.value}")
-    return T.symbol(symbol_id, head.value)
-
-
 def plus(
     signature: LanguageSignature,
     *terms: T.Term,
@@ -63,14 +56,18 @@ def plus(
         return T.number(0)
     if len(parts) == 1:
         return parts[0]
-    return T.app(_head(signature, StructuralHead.PLUS), *parts)
+    return T.app(signature.head_term(StructuralHead.PLUS), *parts)
 
 
 def times(
     signature: LanguageSignature,
     *factors: T.Term,
 ) -> T.Term:
-    """A product with exact literal folding and zero/one removal."""
+    """A product with exact literal folding and one removal.
+
+    A zero coefficient keeps the symbolic factors in the term, because dropping
+    them would also drop their definedness.
+    """
     flattened: list[T.Term] = []
     for factor in factors:
         if (
@@ -92,9 +89,17 @@ def times(
         else:
             coefficient *= value
     if coefficient == 0:
-        # Callers must carry the definedness of the removed factors in the
-        # result condition; the derivative paths do so explicitly.
-        return T.number(0)
+        # Zero times a partial expression is zero only where that expression
+        # is defined. Keep the factors instead of silently dropping their
+        # definedness; callers that may omit them must carry that condition
+        # explicitly.
+        if not symbolic:
+            return T.number(0)
+        return T.app(
+            signature.head_term(StructuralHead.TIMES),
+            T.number(0),
+            *symbolic,
+        )
     parts: list[T.Term] = []
     if coefficient != 1:
         parts.append(T.number(coefficient))
@@ -103,13 +108,13 @@ def times(
         return T.number(1)
     if len(parts) == 1:
         return parts[0]
-    return T.app(_head(signature, StructuralHead.TIMES), *parts)
+    return T.app(signature.head_term(StructuralHead.TIMES), *parts)
 
 
 def ne_zero(signature: LanguageSignature, term: T.Term) -> T.Term:
     """`term != 0`, used where a zero base is not in the defined fragment."""
     return T.app(
-        _head(signature, StructuralHead.NE), term, T.number(0)
+        signature.head_term(StructuralHead.NE), term, T.number(0)
     )
 
 
@@ -118,14 +123,16 @@ def power(
     base: T.Term,
     exponent: int,
 ) -> T.Term:
+    """A nonnegative power; exponent zero stays explicit.
+
+    `base^0` is not folded to 1 because the fragment treats `0^0` as undefined.
+    """
     if exponent < 0:
         raise ValueError("a symbolic power needs a nonnegative exponent")
-    if exponent == 0:
-        return T.number(1)
     if exponent == 1:
         return base
     return T.app(
-        _head(signature, StructuralHead.POWER), base, T.number(exponent)
+        signature.head_term(StructuralHead.POWER), base, T.number(exponent)
     )
 
 

@@ -17,19 +17,14 @@ from fractions import Fraction
 
 from cas.foundation.ids import SymbolId
 from cas.frontend.errors import ParseError
-from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.language.signatures import (
+    COMPARISON_BY_TEXT,
+    LanguageSignature,
+    StructuralHead,
+)
 from cas.semantics.symbols import SymbolTable
 from cas.syntax import term as T
 
-_COMPARISONS: dict[str, StructuralHead] = {
-    "==": StructuralHead.EQ,
-    "=": StructuralHead.EQ,
-    "!=": StructuralHead.NE,
-    "<": StructuralHead.LT,
-    "<=": StructuralHead.LE,
-    ">": StructuralHead.GT,
-    ">=": StructuralHead.GE,
-}
 _RESERVED = frozenset({"and", "or", "not"})
 _TWO_CHARACTER = frozenset({"==", "!=", "<=", ">=", "=>", "->"})
 _ONE_CHARACTER = frozenset("+-*/^(),=<>")
@@ -181,12 +176,12 @@ class _Parser:
 
     def _comparison(self) -> T.Term:
         left = self._sum()
-        head = _COMPARISONS.get(self._peek().value)
+        head = COMPARISON_BY_TEXT.get(self._peek().value)
         if head is None:
             return left
         self._advance()
         right = self._sum()
-        if self._peek().value in _COMPARISONS:
+        if self._peek().value in COMPARISON_BY_TEXT:
             raise ParseError(
                 "a chained comparison is not one formula; combine them with and",
                 self._peek().position,

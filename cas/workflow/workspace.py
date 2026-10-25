@@ -6,7 +6,10 @@ proposal, commits the proposal through the declared checker binding, and records
 the resulting expression, verification links, event and revision.
 
 Differentiation and specialisation are registered operations, not branches in
-this module. Adding another operation does not change this file.
+this module. Adding another operation does not change this file. The
+`differentiate` and `specialize` methods below are client conveniences over
+`apply`: they assemble a request and contain no mathematical rule. They are not
+a dispatch table and do not need to grow when an operation is registered.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from cas.kernel.consistency import assess_consistency
 from cas.kernel.context_rules import HypothesisChecker
 from cas.kernel.model import Applicability, Inconsistent
 from cas.language import propositions as Pr
+from cas.language.problems import Coverage, ResultLanguage
 from cas.operations.protocols import (
     GenericResultInput,
     OperationInput,
@@ -82,9 +86,10 @@ class Workspace:
         self._generic_results: dict[ObjectVersionId, GenericResult] = {}
         self._candidates: dict[CandidateId, Candidate] = {}
         self._events: dict[EventId, Event] = {}
+        self._revision_ids = IdIssuer()
         self._revisions: list[Revision] = [
             Revision(
-                RevisionId(0),
+                RevisionId(self._revision_ids.issue()),
                 runtime.frame.id,
                 (),
                 (),
@@ -270,6 +275,29 @@ class Workspace:
                 OperationStatus.UNSUPPORTED,
                 f"operation not registered: {operation_id}",
             )
+        if region is not None and not runtime.frames.readable(
+            region, self.frame
+        ):
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the requested region is outside the current frame",
+            )
+        for _, value in parameters:
+            if not isinstance(value, GenericResultInput):
+                continue
+            family = value.result
+            for proposition in (
+                family.valid_on,
+                family.correctness_specification,
+                *family.excluded_cases,
+            ):
+                if not runtime.frames.readable(proposition, self.frame):
+                    return self._failure(
+                        operation_id,
+                        OperationStatus.INVALID,
+                        "a generic result is outside the current frame",
+                    )
         request = OperationRequest(
             self.frame,
             tuple(expression.term for expression in inputs),
@@ -295,6 +323,30 @@ class Workspace:
                 "an operation returned an unknown problem outcome"
             )
         problem = problem_outcome.problem
+        if problem.inputs != request.inputs:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the problem does not describe the requested inputs",
+            )
+        if request.target is not None and problem.target != request.target:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the problem does not describe the requested target",
+            )
+        if problem.allows_unresolved():
+            return self._failure(
+                operation_id,
+                OperationStatus.UNSUPPORTED,
+                "externalizable premises are not implemented",
+            )
+        if problem.result_language is not ResultLanguage.EXPRESSION:
+            return self._failure(
+                operation_id,
+                OperationStatus.UNSUPPORTED,
+                "only expression results are implemented",
+            )
 
         proposal_outcome = operation.propose(request, problem)
         if isinstance(proposal_outcome, ProposalUnsupported):
@@ -314,6 +366,31 @@ class Workspace:
                 "an operation returned an unknown proposal outcome"
             )
         proposal = proposal_outcome.proposal
+        if proposal.answer_coverage is not problem.coverage:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the proposal does not meet the requested coverage",
+            )
+        if problem.coverage is not Coverage.ONE_VERIFIED:
+            return self._failure(
+                operation_id,
+                OperationStatus.UNSUPPORTED,
+                "only one-verified coverage is implemented",
+            )
+        for region in (
+            proposal.result_region,
+            proposal.valid_on,
+            *proposal.excluded_cases,
+        ):
+            if region is not None and not runtime.frames.readable(
+                region, self.frame
+            ):
+                return self._failure(
+                    operation_id,
+                    OperationStatus.INVALID,
+                    "the proposal states a region outside the current frame",
+                )
         binding = next(
             (
                 item
@@ -327,6 +404,12 @@ class Workspace:
                 operation_id,
                 OperationStatus.INVALID,
                 "the operation has no checker for the proposed specification",
+            )
+        if problem.operation != binding.problem_kind:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                "the problem kind does not match the checker binding",
             )
 
         candidate_problem = (
@@ -442,7 +525,7 @@ class Workspace:
         source: Expression,
         variable: SymbolId,
     ) -> OperationResult:
-        """Convenience entry for the registered differentiation operation."""
+        """Client helper: assemble and apply one derivative request."""
         return self.apply("differentiate", (source,), target=variable)
 
     def generic_result(self, source: Expression) -> GenericResult | None:
@@ -456,7 +539,11 @@ class Workspace:
         *,
         generic: GenericResult | None = None,
     ) -> OperationResult:
-        """Convenience entry for the registered specialisation operation."""
+        """Client helper: resolve a verified family and apply specialised values.
+
+        This method only assembles the operation's declared parameters; the
+        semantics of specialisation live in the registered operation.
+        """
         if not self._runtime.request.parameters:
             return self._failure(
                 "specialize",
@@ -565,7 +652,7 @@ class Workspace:
     ) -> Revision:
         current = self.revision
         revision = Revision(
-            RevisionId(len(self._revisions)),
+            RevisionId(self._revision_ids.issue()),
             current.frame if frame is None else frame,
             tuple(dict.fromkeys(current.objects + event.objects)),
             current.links + links,

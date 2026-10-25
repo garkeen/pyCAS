@@ -1,5 +1,7 @@
 """Independent checker for the declared elementary fragment."""
 
+from dataclasses import replace
+
 from support import runtime_proposition, variable
 
 from cas.frontend import parse
@@ -11,8 +13,12 @@ from cas.kernel.evidence import (
 )
 from cas.language.decisions import Reason
 from cas.math.calculus.differentiation.certificate import DerivativeCertificate
+from cas.math.calculus.differentiation.elementary import (
+    ElementaryDifferentiator,
+)
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.runtime import bootstrap_elementary
+from cas.semantics.services import Derived
 from cas.syntax import term as T
 
 
@@ -39,11 +45,20 @@ def claim(runtime, source, candidate, region=None, variable_term=None):
 
 
 def certificate(runtime, source, candidate, region=None, variable_term=None):
+    differentiator = ElementaryDifferentiator(
+        runtime.elementary,
+        runtime.signature,
+        runtime.variable,
+        runtime.table.name_of,
+    )
+    derived = differentiator.derive(source)
+    assert isinstance(derived, Derived)
     return DerivativeCertificate(
         T.TRUE if region is None else region,
         source,
         runtime.variable if variable_term is None else variable_term.symbol_id,
         candidate,
+        derived.evidence,
     )
 
 
@@ -77,7 +92,7 @@ def test_a_different_candidate_is_unverified_not_refuted():
     )
     assert isinstance(outcome, Unverified)
     assert outcome.reason is Reason.FRAGMENT
-    assert "verified derivative" in outcome.detail
+    assert "derivation" in outcome.detail
 
 
 def test_a_differently_shaped_equivalent_candidate_is_not_refuted():
@@ -174,6 +189,25 @@ def test_conditional_claims_are_verified_on_their_region():
         certificate(runtime, source, T.number(0), region=region),
     )
     assert isinstance(wrong_candidate, Unverified)
+
+
+def test_a_tampered_child_rule_instance_is_unverified():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    cert = certificate(runtime, source, candidate)
+    assert cert.derivation is not None
+    child = cert.derivation.children[0]
+    tampered = replace(
+        cert.derivation, children=(replace(child, result=T.number(2)),)
+    )
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        replace(cert, derivation=tampered),
+    )
+    assert isinstance(outcome, Unverified)
+    assert "inconsistent" in outcome.detail
 
 
 def test_a_weaker_region_is_unverified():

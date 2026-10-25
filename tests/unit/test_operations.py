@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 import pytest
 from support import head_app, runtime_proposition, variable
 
-from cas.language import sorts as S
+from cas.foundation.ids import SymbolId
 from cas.language.decisions import Reason
 from cas.language.problems import (
     Coverage,
@@ -13,6 +13,7 @@ from cas.language.problems import (
     ProblemSpec,
     ResultLanguage,
 )
+from cas.language.propositions import Proposition
 from cas.language.signatures import StructuralHead
 from cas.operations.protocols import (
     CheckerBinding,
@@ -21,7 +22,7 @@ from cas.operations.protocols import (
     ProblemBuilt,
     ProposalUnsupported,
     Proposed,
-    RationalInput,
+    ValueMappingInput,
 )
 from cas.operations.registry import OperationError, OperationRegistry
 from cas.runtime import bootstrap
@@ -37,6 +38,13 @@ class HypothesisOperation:
     """A non-derivative operation used to prove the workflow is generic."""
 
     frames: FrameStore
+    coverage: Coverage = Coverage.ONE_VERIFIED
+    proposal_coverage: Coverage = Coverage.ONE_VERIFIED
+    result_language: ResultLanguage = ResultLanguage.EXPRESSION
+    externalizable: tuple[Proposition, ...] = ()
+    wrong_inputs: bool = False
+    wrong_target: bool = False
+    wrong_problem_kind: bool = False
     id: str = "test.hypothesis"
     version: str = "1"
     problem_kind: str = "assume"
@@ -59,14 +67,26 @@ class HypothesisOperation:
     def build_problem(self, request: OperationRequest):
         return ProblemBuilt(
             ProblemSpec(
-                operation="hypothesis",
-                inputs=request.inputs,
-                target=request.target,
-                target_sort=S.REAL,
+                operation=(
+                    "wrong"
+                    if self.wrong_problem_kind
+                    else "assume"
+                ),
+                inputs=(
+                    (T.number(0),)
+                    if self.wrong_inputs
+                    else request.inputs
+                ),
+                target=(
+                    SymbolId(10_000)
+                    if self.wrong_target
+                    else request.target
+                ),
                 region=request.region,
-                result_language=ResultLanguage.EXPRESSION,
+                result_language=self.result_language,
                 parameter_mode=ParameterMode.SPECIFIED_VALUES,
-                coverage=Coverage.ONE_VERIFIED,
+                coverage=self.coverage,
+                externalizable=self.externalizable,
             )
         )
 
@@ -84,6 +104,7 @@ class HypothesisOperation:
                 (proposition,),
                 self.specification_kind,
                 certificate=None,
+                answer_coverage=self.proposal_coverage,
             )
         )
 
@@ -121,6 +142,222 @@ def test_the_workflow_applies_a_registered_non_derivative_operation():
     assert result.result is not None
 
 
+def test_a_problem_is_derived_from_the_operation_algebra_view():
+    runtime = bootstrap()
+    operation = runtime.operations.get("differentiate")
+    assert operation is not None
+    outcome = operation.build_problem(
+        OperationRequest(
+            runtime.frame.id,
+            (variable(runtime),),
+            runtime.request.target,
+        )
+    )
+    assert isinstance(outcome, ProblemBuilt)
+    assert outcome.problem.target == runtime.request.target
+    assert (
+        outcome.problem.parameter_mode
+        is runtime.request.parameter_mode
+    )
+
+
+def test_a_proposal_must_meet_the_requested_coverage():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames, coverage=Coverage.COMPLETE_SET
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    workspace.assume(
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        )
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "coverage" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_a_matching_set_coverage_is_refused_until_sets_exist():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames,
+        coverage=Coverage.COMPLETE_SET,
+        proposal_coverage=Coverage.COMPLETE_SET,
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    workspace.assume(
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        )
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.UNSUPPORTED
+    assert "one-verified" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_externalizable_premises_are_refused_honestly():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames,
+        externalizable=(runtime_proposition(runtime, T.TRUE),),
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.UNSUPPORTED
+    assert "externalizable" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_non_expression_result_languages_are_refused_honestly():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames, result_language=ResultLanguage.SET
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.UNSUPPORTED
+    assert "expression" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_a_problem_must_describe_the_requested_inputs():
+    runtime = bootstrap()
+    operation = HypothesisOperation(runtime.frames, wrong_inputs=True)
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    workspace.assume(
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        )
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "inputs" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_a_problem_kind_must_match_the_checker_binding():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames, wrong_problem_kind=True
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    workspace.assume(
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        )
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "problem kind" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_a_problem_must_describe_the_requested_target():
+    runtime = bootstrap()
+    operation = HypothesisOperation(runtime.frames, wrong_target=True)
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry({operation.id: operation}),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    workspace.assume(
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        )
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id, (source,), target=runtime.variable
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "target" in result.detail
+    assert runtime.store.stats() == before
+
+
+def test_an_invisible_request_region_is_refused():
+    runtime = bootstrap()
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    sibling = runtime.frames.create(runtime.frame.id)
+    foreign = runtime_proposition(runtime, T.TRUE, sibling.id)
+    before = runtime.store.stats()
+    result = workspace.apply(
+        "differentiate",
+        (source,),
+        target=runtime.variable,
+        region=foreign,
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "region" in result.detail
+    assert runtime.store.stats() == before
+
+
 def test_an_unknown_operation_is_refused_without_writing():
     runtime = bootstrap()
     workspace = Workspace(runtime)
@@ -153,18 +390,41 @@ def test_the_registry_refuses_inconsistent_registrations():
     with pytest.raises(OperationError):
         OperationRegistry({"test.hypothesis": Unbound()})
 
+    @dataclass(frozen=True, slots=True)
+    class BadBinding:
+        id: str = "test.hypothesis"
+        version: str = "1"
+        checker_bindings: tuple[object, ...] = ("not a binding",)
+
+        def build_problem(self, request):
+            raise AssertionError("unreachable")
+
+        def propose(self, request, problem):
+            raise AssertionError("unreachable")
+
+    with pytest.raises(OperationError):
+        OperationRegistry({"test.hypothesis": BadBinding()})
+
 
 def test_an_operation_request_needs_inputs_and_unique_parameters():
     runtime = bootstrap()
     with pytest.raises(ValueError):
         OperationRequest(runtime.frame.id, ())
+    with pytest.raises(TypeError):
+        OperationRequest(runtime.frame.id, (1,))
+    with pytest.raises(TypeError):
+        OperationRequest(
+            runtime.frame.id,
+            (T.number(1),),
+            parameters=(("a", "not-an-input"),),
+        )
     with pytest.raises(ValueError):
         OperationRequest(
             runtime.frame.id,
             (T.number(1),),
             parameters=(
-                ("a", RationalInput(1)),
-                ("a", RationalInput(2)),
+                ("a", ValueMappingInput({})),
+                ("a", ValueMappingInput({})),
             ),
         )
 
@@ -175,6 +435,42 @@ def test_a_proposal_requires_specifications_and_coherent_coverage():
     false = runtime_proposition(runtime, T.FALSE)
     with pytest.raises(ValueError):
         MathematicalProposal(T.number(1), (), "HasDerivative", None)
+    with pytest.raises(TypeError):
+        MathematicalProposal("1", (true,), "HasDerivative", None)
+    with pytest.raises(ValueError):
+        MathematicalProposal(
+            T.number(1),
+            (true,),
+            "HasDerivative",
+            None,
+            valid_on=true,
+        )
+    with pytest.raises(TypeError):
+        MathematicalProposal(
+            T.number(1),
+            (true,),
+            "HasDerivative",
+            None,
+            result_region=T.TRUE,
+        )
+    with pytest.raises(TypeError):
+        MathematicalProposal(
+            T.number(1),
+            (true,),
+            "HasDerivative",
+            None,
+            coverage="all_values",
+        )
+    with pytest.raises(TypeError):
+        MathematicalProposal(
+            T.number(1),
+            (true,),
+            "HasDerivative",
+            None,
+            coverage=CoverageClaim.ALL_VALUES,
+            valid_on=true,
+            excluded_cases=(T.TRUE,),
+        )
     with pytest.raises(ValueError):
         MathematicalProposal(
             T.number(1),

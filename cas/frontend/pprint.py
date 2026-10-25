@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.language.signatures import (
+    COMPARISON_TEXT,
+    LanguageSignature,
+    StructuralHead,
+)
 from cas.syntax import term as T
 
 _IMPLIES = 1
@@ -27,15 +31,6 @@ _PLUS = 6
 _TIMES = 7
 _POWER = 9
 _ATOM = 10
-
-_COMPARISON_TEXT = {
-    StructuralHead.EQ: "==",
-    StructuralHead.NE: "!=",
-    StructuralHead.LT: "<",
-    StructuralHead.LE: "<=",
-    StructuralHead.GT: ">",
-    StructuralHead.GE: ">=",
-}
 
 _Rendered = tuple[str, int]
 
@@ -105,7 +100,7 @@ class _Printer:
             return self._times(term)
         if head is StructuralHead.POWER:
             return self._power(term)
-        if head in _COMPARISON_TEXT:
+        if head in COMPARISON_TEXT:
             return self._comparison(head, term)
         if head is StructuralHead.AND:
             return self._junction(term, " and ", _AND)
@@ -208,7 +203,7 @@ class _Printer:
         right_text, right_precedence = self.term(term.arguments[1])
         left = _wrap(left_text, left_precedence, _COMPARISON + 1)
         right = _wrap(right_text, right_precedence, _COMPARISON + 1)
-        return f"{left} {_COMPARISON_TEXT[head]} {right}", _COMPARISON
+        return f"{left} {COMPARISON_TEXT[head]} {right}", _COMPARISON
 
     def _junction(
         self, term: T.Apply, separator: str, precedence: int

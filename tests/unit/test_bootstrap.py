@@ -1,15 +1,19 @@
 """Runtime assembly: everything is explicit and nothing leaks between worlds."""
 
+from dataclasses import dataclass, replace
+
 import pytest
 
 from cas.foundation.ids import SymbolId
-from cas.kernel.model import BasisKind, CertificateSchema
+from cas.kernel.trust import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode
 from cas.language.signatures import StructuralHead
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
 )
+from cas.operations.protocols import CheckerBinding
+from cas.operations.registry import OperationRegistry
 from cas.runtime.bootstrap import (
     Runtime,
     bootstrap,
@@ -159,6 +163,42 @@ def test_parameterized_bootstrap_validates_names():
         bootstrap_parameterized(("Plus",))
     with pytest.raises(ValueError):
         bootstrap_parameterized(("HasDerivative",))
+
+
+@dataclass(frozen=True, slots=True)
+class BoundOperation:
+    checker_id: str
+    id: str = "test.bound"
+    version: str = "1"
+    checker_bindings: tuple[CheckerBinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "checker_bindings",
+            (
+                CheckerBinding(
+                    "HasDerivative", "differentiate", self.checker_id
+                ),
+            ),
+        )
+
+
+def test_runtime_rejects_unregistered_or_incompatible_bindings():
+    runtime = bootstrap()
+    missing = BoundOperation("missing.checker")
+    with pytest.raises(ValueError, match="unregistered"):
+        replace(
+            runtime,
+            operations=OperationRegistry({missing.id: missing}),
+        )
+
+    incompatible = BoundOperation("kernel.hypothesis")
+    with pytest.raises(ValueError, match="does not accept"):
+        replace(
+            runtime,
+            operations=OperationRegistry({incompatible.id: incompatible}),
+        )
 
 
 def test_separate_assemblies_share_no_state():

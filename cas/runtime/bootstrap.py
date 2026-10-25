@@ -19,19 +19,21 @@ from typing import Any, Generic, TypeVar
 
 from cas.algebra.parents import Parent, ParentRegistry, ParentSpec
 from cas.algebra.polynomial import (
+    MonomialOrder,
     Polynomial,
     PolynomialRing,
     UnivariatePolynomialRing,
 )
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId, WorldId
-from cas.kernel.applicability import ConditionChecker
+from cas.kernel.condition_checker import ConditionChecker
 from cas.kernel.consistency import ContradictionChecker
 from cas.kernel.context_rules import HypothesisChecker
 from cas.kernel.evidence import Checker, CheckerRegistry, CheckerSpec
-from cas.kernel.model import BasisKind, BasisRef, CertificateSchema
 from cas.kernel.store import KernelStore
+from cas.kernel.trust import BasisKind, BasisRef, CertificateSchema
 from cas.language import sorts as S
+from cas.language.declarations import DeclarationSet, build_language
 from cas.language.problems import ParameterMode
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.math.calculus.differentiation.certificate import (
@@ -59,7 +61,7 @@ from cas.math.calculus.differentiation.view import SpecializationView
 from cas.math.elementary.declarations import (
     ElementaryLibrary,
     build_elementary,
-    default_elementary_source,
+    default_elementary_declarations,
 )
 from cas.operations.registry import OperationRegistry
 from cas.semantics.bridge import (
@@ -81,6 +83,34 @@ E = TypeVar("E")
 @dataclass(frozen=True, slots=True, eq=False)
 class Runtime(Generic[E]):
     """One assembled world, its algebra view, ledger and supported operation."""
+
+    def __post_init__(self) -> None:
+        for operation in self.operations:
+            for binding in operation.checker_bindings:
+                spec = self.store.checkers.spec(binding.checker_id)
+                if spec is None:
+                    raise ValueError(
+                        f"operation {operation.id!r} names an unregistered "
+                        f"checker {binding.checker_id!r}"
+                    )
+                if spec.world != self.frames.world.id:
+                    raise ValueError(
+                        f"operation {operation.id!r} binds a checker from "
+                        "another world"
+                    )
+                if binding.problem_kind not in spec.accepted_problem_kinds:
+                    raise ValueError(
+                        f"operation {operation.id!r} binds a checker that "
+                        "does not accept its problem kind"
+                    )
+                if (
+                    binding.specification_kind
+                    not in spec.accepted_specification_kinds
+                ):
+                    raise ValueError(
+                        f"operation {operation.id!r} binds a checker that "
+                        "does not accept its specification kind"
+                    )
 
     table: SymbolTable
     signature: LanguageSignature
@@ -108,7 +138,7 @@ def _core_specs(
     """The scope and condition rules every assembled runtime admits."""
     return {
         ConditionChecker.id: CheckerSpec(
-            ConditionChecker(signature),
+            ConditionChecker(frames, signature),
             CertificateSchema("condition", "1", type(None)),
             frozenset({"discharge"}),
             frozenset({"Condition"}),
@@ -131,41 +161,101 @@ def _core_specs(
     }
 
 
-def _world(
-    table: SymbolTable, predicate: SymbolId
-) -> tuple[DerivativeVocabulary, LanguageSignature, World]:
+def _start(
+    *,
+    table: SymbolTable | None = None,
+    declarations: DeclarationSet | None = None,
+) -> tuple[SymbolTable, DerivativeVocabulary, LanguageSignature, FrameStore]:
+    """The common world and frame store every assembled runtime starts with.
+
+    With declarations, the language is assembled by the declaration DSL; without
+    them it contains only the structural heads and the derivative predicate.
+    """
+    actual = SymbolTable() if table is None else table
+    predicate = actual.intern("HasDerivative")
     vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
-    signature = standard_language(
-        table, operators={predicate: vocabulary.signature}
+    extras = {predicate: vocabulary.signature}
+    signature = (
+        standard_language(actual, operators=extras)
+        if declarations is None
+        else build_language(actual.intern, declarations, extras)
     )
     world = World(WorldId(0), signature)
-    return vocabulary, signature, world
+    return actual, vocabulary, signature, FrameStore(world)
+
+
+def _derivative_spec(
+    checker: Checker,
+    world: WorldId,
+    *,
+    problem_kind: str = "differentiate",
+    dependencies: tuple[BasisRef, ...] = (),
+) -> CheckerSpec:
+    """The one trust registration shared by derivative checkers."""
+    return CheckerSpec(
+        checker,
+        CertificateSchema("derivative", "1", DerivativeCertificate),
+        frozenset({problem_kind}),
+        frozenset({"HasDerivative"}),
+        world,
+        dependencies,
+    )
+
+
+def _q_coefficient(
+    registry: ParentRegistry,
+) -> tuple[RationalField, Parent[Fraction]]:
+    rationals = RationalField()
+    coefficient = registry.intern(ParentSpec("Q"), rationals)
+    return rationals, coefficient
+
+
+def _polynomial_spec(
+    base: ParentSpec | None,
+    generators: tuple[SymbolId, ...],
+    order: MonomialOrder = MonomialOrder.LEX,
+) -> ParentSpec:
+    """A polynomial description that states every representation choice."""
+    return ParentSpec(
+        "polynomial",
+        base=base,
+        generators=generators,
+        options=(("monomial_order", order.value),),
+    )
+
+
+def _q_polynomial(
+    registry: ParentRegistry,
+    variable: SymbolId,
+) -> tuple[
+    RationalField,
+    Parent[Fraction],
+    UnivariatePolynomialRing[Fraction],
+    Parent[Polynomial[Fraction]],
+    DifferentialStructure[Polynomial[Fraction]],
+]:
+    rationals, coefficient = _q_coefficient(registry)
+    ring = UnivariatePolynomialRing(variable, rationals)
+    parent = registry.intern(
+        _polynomial_spec(coefficient.spec, (variable,)),
+        ring,
+    )
+    differential = polynomial_structure(parent, 0)
+    return rationals, coefficient, ring, parent, differential
 
 
 def bootstrap() -> Runtime[Fraction]:
     """Assemble Q[x] with target `x` and no formal parameters."""
-    table = SymbolTable()
-    predicate = table.intern("HasDerivative")
-    vocabulary, signature, world = _world(table, predicate)
-    frames = FrameStore(world)
+    table, vocabulary, signature, frames = _start()
     variable = table.intern("x")
     frame = frames.create(
         frames.root.id,
         declarations=(Declaration(variable, "x", S.REAL),),
     )
-    rationals = RationalField()
     registry = ParentRegistry()
-    coefficient = registry.intern(ParentSpec("Q"), rationals)
-    ring = UnivariatePolynomialRing(variable, rationals)
-    parent = registry.intern(
-        ParentSpec(
-            "polynomial",
-            base=coefficient.spec,
-            generators=(variable,),
-        ),
-        ring,
+    _, coefficient, ring, parent, differential = _q_polynomial(
+        registry, variable
     )
-    differential = polynomial_structure(parent, 0)
     bridge = SimplePolynomialBridge(
         ring, signature, table.name_of, T.number
     )
@@ -173,13 +263,7 @@ def bootstrap() -> Runtime[Fraction]:
         ring, signature, vocabulary, bridge.to_value
     )
     specs = {
-        checker.id: CheckerSpec(
-            checker,
-            CertificateSchema("derivative", "1", DerivativeCertificate),
-            frozenset({"differentiate"}),
-            frozenset({"HasDerivative"}),
-            world.id,
-        ),
+        checker.id: _derivative_spec(checker, frames.world.id),
         **_core_specs(frames, signature),
     }
     store = KernelStore(frames, CheckerRegistry(specs))
@@ -198,10 +282,9 @@ def bootstrap() -> Runtime[Fraction]:
         signature,
         frames,
         vocabulary,
-        variable,
+        request,
         table.name_of,
         service,
-        request.parameter_mode,
     )
     operations = OperationRegistry(
         {differentiation.id: differentiation}
@@ -209,7 +292,7 @@ def bootstrap() -> Runtime[Fraction]:
     return Runtime(
         table,
         signature,
-        world,
+        frames.world,
         frames,
         frame,
         variable,
@@ -261,10 +344,7 @@ def bootstrap_parameterized(
     for name in parameters:
         if name in reserved:
             raise ValueError(f"parameter name is reserved: {name}")
-    table = SymbolTable()
-    predicate = table.intern("HasDerivative")
-    vocabulary, signature, world = _world(table, predicate)
-    frames = FrameStore(world)
+    table, vocabulary, signature, frames = _start()
     variable = table.intern("x")
     parameter_ids = tuple(table.intern(name) for name in parameters)
     declarations = (Declaration(variable, "x", S.REAL),) + tuple(
@@ -273,25 +353,16 @@ def bootstrap_parameterized(
     )
     frame = frames.create(frames.root.id, declarations=declarations)
 
-    rationals = RationalField()
     registry = ParentRegistry()
-    coefficient = registry.intern(ParentSpec("Q"), rationals)
+    rationals, coefficient = _q_coefficient(registry)
     parameter_ring = PolynomialRing(parameter_ids, rationals)
     parameter_parent = registry.intern(
-        ParentSpec(
-            "polynomial",
-            base=coefficient.spec,
-            generators=parameter_ids,
-        ),
+        _polynomial_spec(coefficient.spec, parameter_ids),
         parameter_ring,
     )
     target_ring = PolynomialRing((variable,), parameter_ring)
     target_parent = registry.intern(
-        ParentSpec(
-            "polynomial",
-            base=parameter_parent.spec,
-            generators=(variable,),
-        ),
+        _polynomial_spec(parameter_parent.spec, (variable,)),
         target_ring,
     )
     differential = polynomial_structure(target_parent, 0)
@@ -316,11 +387,7 @@ def bootstrap_parameterized(
 
     base_ring = UnivariatePolynomialRing(variable, rationals)
     base_parent = registry.intern(
-        ParentSpec(
-            "polynomial",
-            base=coefficient.spec,
-            generators=(variable,),
-        ),
+        _polynomial_spec(coefficient.spec, (variable,)),
         base_ring,
     )
     base_differential = polynomial_structure(base_parent, 0)
@@ -335,19 +402,9 @@ def bootstrap_parameterized(
         identifier="calculus.derivative.specialized",
     )
     specs = {
-        checker.id: CheckerSpec(
-            checker,
-            CertificateSchema("derivative", "1", DerivativeCertificate),
-            frozenset({"differentiate"}),
-            frozenset({"HasDerivative"}),
-            world.id,
-        ),
-        base_checker.id: CheckerSpec(
-            base_checker,
-            CertificateSchema("derivative", "1", DerivativeCertificate),
-            frozenset({"specialize"}),
-            frozenset({"HasDerivative"}),
-            world.id,
+        checker.id: _derivative_spec(checker, frames.world.id),
+        base_checker.id: _derivative_spec(
+            base_checker, frames.world.id, problem_kind="specialize"
         ),
         **_core_specs(frames, signature),
     }
@@ -383,16 +440,14 @@ def bootstrap_parameterized(
         signature,
         frames,
         vocabulary,
-        variable,
+        request,
         table.name_of,
         service,
-        request.parameter_mode,
     )
     specialization_operation = SpecializationOperation(
         signature,
         frames,
         vocabulary,
-        variable,
         table.name_of,
         specialization_view,
         request,
@@ -406,7 +461,7 @@ def bootstrap_parameterized(
     return Runtime(
         table,
         signature,
-        world,
+        frames.world,
         frames,
         frame,
         variable,
@@ -431,7 +486,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     active candidate generator and checker are the elementary ones; every
     function and law comes from the declaration file admitted at assembly.
     """
-    source = default_elementary_source()
+    source = default_elementary_declarations()
     basis = BasisRef(
         source.name,
         BasisKind.DECLARATION_FILE,
@@ -440,20 +495,15 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         WorldId(0),
     )
     table = SymbolTable()
-    predicate = table.intern("HasDerivative")
-    vocabulary = DerivativeVocabulary(predicate, "HasDerivative")
+    table, vocabulary, signature, frames = _start(
+        table=table, declarations=source
+    )
     library = build_elementary(
         table.intern,
         source,
         reserved=frozenset({"x", "HasDerivative"}),
         basis=basis,
     )
-    signature = standard_language(
-        table,
-        operators={predicate: vocabulary.signature, **library.operators},
-    )
-    world = World(WorldId(0), signature)
-    frames = FrameStore(world)
     variable = table.intern("x")
     declarations = (Declaration(variable, "x", S.REAL),) + tuple(
         Declaration(constant.symbol, constant.name, constant.sort)
@@ -461,34 +511,20 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     )
     frame = frames.create(frames.root.id, declarations=declarations)
 
-    rationals = RationalField()
     registry = ParentRegistry()
-    coefficient = registry.intern(ParentSpec("Q"), rationals)
-    ring = UnivariatePolynomialRing(variable, rationals)
-    parent = registry.intern(
-        ParentSpec(
-            "polynomial",
-            base=coefficient.spec,
-            generators=(variable,),
-        ),
-        ring,
+    _, coefficient, ring, parent, differential = _q_polynomial(
+        registry, variable
     )
-    differential = polynomial_structure(parent, 0)
     bridge = SimplePolynomialBridge(
         ring, signature, table.name_of, T.number
     )
 
     checker = ElementaryDerivativeChecker(
-        library, signature, vocabulary, variable, table.name_of
+        library, signature, vocabulary, variable
     )
     specs = {
-        checker.id: CheckerSpec(
-            checker,
-            CertificateSchema("derivative", "1", DerivativeCertificate),
-            frozenset({"differentiate"}),
-            frozenset({"HasDerivative"}),
-            world.id,
-            (basis,),
+        checker.id: _derivative_spec(
+            checker, frames.world.id, dependencies=(basis,)
         ),
         **_core_specs(frames, signature),
     }
@@ -511,10 +547,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         signature,
         frames,
         vocabulary,
-        variable,
+        request,
         table.name_of,
         service,
-        request.parameter_mode,
     )
     operations = OperationRegistry(
         {differentiation.id: differentiation}
@@ -522,7 +557,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     return Runtime(
         table,
         signature,
-        world,
+        frames.world,
         frames,
         frame,
         variable,
