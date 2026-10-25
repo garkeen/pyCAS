@@ -3,7 +3,11 @@
 import pytest
 
 from cas.algebra.parents import ParentRegistry, ParentSpec
-from cas.algebra.polynomial import PolynomialRing, UnivariatePolynomialRing
+from cas.algebra.polynomial import (
+    MonomialOrder,
+    PolynomialRing,
+    UnivariatePolynomialRing,
+)
 from cas.algebra.rational import RationalFunctionField
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId
@@ -23,6 +27,7 @@ def family():
             "polynomial",
             base=coefficient.spec,
             generators=(A, B),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
         ),
         parameter_ring,
     )
@@ -43,6 +48,37 @@ def request(**overrides):
     return AlgebraRequest(**values)
 
 
+def test_an_algebra_request_validates_its_field_kinds():
+    coefficient, _, _ = family()
+    with pytest.raises(TypeError):
+        AlgebraRequest(
+            object(),  # type: ignore[arg-type]
+            None,
+            (),
+            X,
+            ParameterMode.SPECIFIED_VALUES,
+            Interpretation.FORMAL,
+        )
+    with pytest.raises(TypeError):
+        AlgebraRequest(
+            coefficient,
+            None,
+            (),
+            X,
+            "specified_values",  # type: ignore[arg-type]
+            Interpretation.FORMAL,
+        )
+    with pytest.raises(TypeError):
+        AlgebraRequest(
+            coefficient,
+            None,
+            (),
+            X,
+            ParameterMode.SPECIFIED_VALUES,
+            "formal",  # type: ignore[arg-type]
+        )
+
+
 def test_roles_are_local_to_the_request():
     algebra = request()
     assert algebra.role_of(X) is Role.TARGET
@@ -57,7 +93,12 @@ def test_the_same_symbol_can_have_another_role_in_another_request():
     coefficient = registry.intern(ParentSpec("Q"), rationals)
     first_ring = PolynomialRing((A, B), rationals)
     first_parent = registry.intern(
-        ParentSpec("polynomial", base=coefficient.spec, generators=(A, B)),
+        ParentSpec(
+            "polynomial",
+            base=coefficient.spec,
+            generators=(A, B),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
         first_ring,
     )
     first = AlgebraRequest(
@@ -70,7 +111,12 @@ def test_the_same_symbol_can_have_another_role_in_another_request():
     )
     swapped_ring = PolynomialRing((X, B), rationals)
     swapped_parent = registry.intern(
-        ParentSpec("polynomial", base=coefficient.spec, generators=(X, B)),
+        ParentSpec(
+            "polynomial",
+            base=coefficient.spec,
+            generators=(X, B),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
         swapped_ring,
     )
     second = AlgebraRequest(
@@ -116,7 +162,12 @@ def test_the_parameter_ring_must_extend_the_coefficient_parent():
     coefficient = registry.intern(ParentSpec("Q"), rationals)
     parameter_ring = PolynomialRing((A, B), rationals)
     unrelated = registry.intern(
-        ParentSpec("polynomial", base=ParentSpec("Z"), generators=(A, B)),
+        ParentSpec(
+            "polynomial",
+            base=ParentSpec("Z"),
+            generators=(A, B),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
         parameter_ring,
     )
     with pytest.raises(ValueError):
@@ -124,6 +175,30 @@ def test_the_parameter_ring_must_extend_the_coefficient_parent():
             coefficient,
             unrelated,
             (A, B),
+            X,
+            ParameterMode.GENERIC_PARAMETERS,
+            Interpretation.PARAMETER_FAMILY,
+        )
+
+
+def test_the_parameter_ring_must_use_the_same_coefficient_structure():
+    registry = ParentRegistry()
+    coefficient = registry.intern(ParentSpec("Q"), RationalField())
+    parameter_ring = PolynomialRing((A,), RationalField())
+    parameters = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=ParentSpec("Q"),
+            generators=(A,),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
+        parameter_ring,
+    )
+    with pytest.raises(ValueError, match="coefficient"):
+        AlgebraRequest(
+            coefficient,
+            parameters,
+            (A,),
             X,
             ParameterMode.GENERIC_PARAMETERS,
             Interpretation.PARAMETER_FAMILY,

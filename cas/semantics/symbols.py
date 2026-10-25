@@ -10,11 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from cas.foundation.ids import IdIssuer, SymbolId
-from cas.language.signatures import (
-    LanguageSignature,
-    OperatorSignature,
-    StructuralHead,
-)
+from cas.language.declarations import DeclarationSet, build_language
+from cas.language.signatures import LanguageSignature, OperatorSignature
 
 
 class SymbolTable:
@@ -58,10 +55,7 @@ def standard_language(
     operators: Mapping[SymbolId, OperatorSignature] | None = None,
 ) -> LanguageSignature:
     """Build the language signature, interning every structural head."""
-    return LanguageSignature.build(
-        {table.intern(head.value): head for head in StructuralHead},
-        operators=operators,
-    )
+    return build_language(table.intern, DeclarationSet(), operators)
 
 
 __all__ = ["SymbolTable", "standard_language"]

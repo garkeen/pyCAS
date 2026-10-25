@@ -22,6 +22,13 @@ R = PolynomialRing((X, Y), Q)
 UX = UnivariatePolynomialRing(X, Q)
 
 
+def test_a_ring_needs_a_ring_of_coefficients_and_a_monomial_order():
+    with pytest.raises(TypeError):
+        PolynomialRing((X,), object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        PolynomialRing((X,), Q, "lex")  # type: ignore[arg-type]
+
+
 def test_constructors_produce_canonical_storage():
     assert R.zero().terms == ()
     assert R.zero().is_zero()
@@ -159,6 +166,12 @@ def test_univariate_division():
         UX.divmod(dividend, UX.zero())
 
 
+def test_gcd_rejects_elements_of_another_ring():
+    other = UnivariatePolynomialRing(Y, Q)
+    with pytest.raises(ValueError):
+        UX.gcd(UX.zero(), other.zero())
+
+
 def test_univariate_gcd_is_monic():
     x = UX.generator(0)
     x_minus_one = UX.sub(x, UX.one())
@@ -214,6 +227,7 @@ def test_parent_options_must_match_the_ring_representation():
     grlex = PolynomialRing((X, Y), Q, MonomialOrder.GRLEX)
     spec = ParentSpec(
         "polynomial",
+        base=ParentSpec("Q"),
         generators=(X, Y),
         options=(("monomial_order", "grlex"),),
     )

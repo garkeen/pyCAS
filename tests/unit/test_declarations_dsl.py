@@ -6,12 +6,23 @@ from support import MapEnvironment, head_app
 from cas.language import sorts as S
 from cas.language import typing as Ty
 from cas.language.declarations import (
+    Compare,
+    ConstantDeclaration,
     DeclarationError,
+    DeclarationOrigin,
+    DeclarationSet,
+    FunctionDeclaration,
+    Junction,
+    LawDeclaration,
+    Name,
+    Num,
+    Power,
     build_language,
+    law_children,
     load_declarations,
     load_declarations_file,
 )
-from cas.language.signatures import StructuralHead
+from cas.language.signatures import OperatorSignature, StructuralHead
 from cas.semantics.symbols import SymbolTable
 from cas.syntax import term as T
 
@@ -117,10 +128,78 @@ def test_declared_binders_type_through_the_signature():
     assert Ty.infer(integral_body, signature, environment) == Ty.Typed(S.REAL)
 
 
+def test_a_multi_argument_function_cannot_have_a_domain():
+    with pytest.raises(DeclarationError) as caught:
+        load_declarations("function F : Real, Real -> Real on u >= 0")
+    assert "unary" in str(caught.value)
+
+
 def test_an_empty_file_is_an_empty_declaration_set():
     declarations = load_declarations("# nothing\n\n")
     assert declarations.operators == ()
     assert declarations.binders == ()
+
+
+def test_a_directly_constructed_declaration_set_is_validated():
+    with pytest.raises(DeclarationError, match="duplicate"):
+        DeclarationSet(
+            constants=(ConstantDeclaration("a", S.REAL, 1),),
+            functions=(
+                FunctionDeclaration("a", (S.REAL,), S.REAL, None, 2),
+            ),
+        )
+    with pytest.raises(DeclarationError, match="unknown function"):
+        DeclarationSet(
+            laws=(
+                LawDeclaration(
+                    "F", "u", Name("u"), None, DeclarationOrigin.BASIS, 1
+                ),
+            )
+        )
+
+
+def test_law_children_is_the_single_traversal_owner():
+    u = Name("u")
+    assert law_children(u) == ()
+    assert law_children(Power(u, Num(2))) == (u, Num(2))
+    assert law_children(Compare(">=", u, Num(0))) == (u, Num(0))
+
+
+def test_constants_are_names_not_zero_arity_operators():
+    declarations = load_declarations("constant q : Real")
+    table = SymbolTable()
+    signature = build_language(table.intern, declarations)
+    assert signature.operator_of(table.intern("q")) is None
+
+
+def test_the_builder_refuses_an_operator_that_reuses_a_constant_symbol():
+    declarations = load_declarations("constant q : Real")
+    table = SymbolTable()
+    with pytest.raises(ValueError, match="constant"):
+        build_language(
+            table.intern,
+            declarations,
+            {table.intern("q"): OperatorSignature((), S.PROPOSITION)},
+        )
+
+
+def test_a_directly_constructed_law_body_must_use_a_known_connective():
+    with pytest.raises(DeclarationError, match="logical connective"):
+        DeclarationSet(
+            functions=(
+                FunctionDeclaration("F", (S.REAL,), S.REAL, None, 1),
+            ),
+            laws=(
+                LawDeclaration(
+                    "F",
+                    "u",
+                    Junction("xor", (Name("u"),)),
+                    None,
+                    DeclarationOrigin.BASIS,
+                    2,
+                ),
+            ),
+        )
 
 
 def test_declarations_can_be_loaded_from_a_file(tmp_path):

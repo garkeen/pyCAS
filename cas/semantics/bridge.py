@@ -94,62 +94,27 @@ class ParameterPolynomialBridge(Generic[E]):
         }
         parameters = dict(self.parameters)
 
-        def convert(current: T.Term) -> Polynomial[Polynomial[E]] | None:
-            if isinstance(current, T.IntLit):
+        def resolve(symbol_id: SymbolId) -> Polynomial[Polynomial[E]] | None:
+            index = target_indices.get(symbol_id)
+            if index is not None:
+                return target.generator(index)
+            parameter = parameters.get(symbol_id)
+            if parameter is not None:
                 return target.constant(
-                    self.embed_rational(Fraction(current.value))
-                )
-            if isinstance(current, T.RatLit):
-                return target.constant(self.embed_rational(current.value))
-            if isinstance(current, T.SymbolRef):
-                index = target_indices.get(current.symbol_id)
-                if index is not None:
-                    return target.generator(index)
-                parameter = parameters.get(current.symbol_id)
-                if parameter is not None:
-                    return target.constant(
-                        coefficient_ring.generator(parameter)
-                    )
-                return None
-            if not isinstance(current, T.Apply) or not isinstance(
-                current.operator, T.SymbolRef
-            ):
-                return None
-            head = self.signature.head_of(current.operator.symbol_id)
-            if head is StructuralHead.PLUS:
-                total = target.zero()
-                for argument in current.arguments:
-                    converted = convert(argument)
-                    if converted is None:
-                        return None
-                    total = target.add(total, converted)
-                return total
-            if head is StructuralHead.TIMES:
-                product = target.one()
-                for argument in current.arguments:
-                    converted = convert(argument)
-                    if converted is None:
-                        return None
-                    product = target.mul(product, converted)
-                return product
-            if head is StructuralHead.POWER:
-                if len(current.arguments) != 2:
-                    return None
-                base_term, exponent_term = current.arguments
-                if (
-                    not isinstance(exponent_term, T.IntLit)
-                    or exponent_term.value < 0
-                ):
-                    return None
-                base = convert(base_term)
-                return (
-                    None
-                    if base is None
-                    else target.pow(base, exponent_term.value)
+                    coefficient_ring.generator(parameter)
                 )
             return None
 
-        return convert(term)
+        def embed(value: Fraction) -> Polynomial[Polynomial[E]] | None:
+            return target.constant(self.embed_rational(value))
+
+        return _convert_polynomial(
+            target,
+            term,
+            self.signature,
+            resolve,
+            embed,
+        )
 
     def to_term(self, value: Polynomial[Polynomial[E]]) -> T.Term | None:
         def render_coefficient(coefficient: Polynomial[E]) -> T.Term:
@@ -186,22 +151,41 @@ def to_polynomial(
         symbol_id: index for index, symbol_id in enumerate(ring.generators)
     }
 
+    def resolve(symbol_id: SymbolId) -> Polynomial[E] | None:
+        index = indices.get(symbol_id)
+        return None if index is None else ring.generator(index)
+
+    def embed(value: Fraction) -> Polynomial[E] | None:
+        if value.denominator == 1:
+            return ring.constant(
+                coefficients.mul_int(coefficients.one(), value.numerator)
+            )
+        if not isinstance(coefficients, RationalEmbedding):
+            return None
+        embedding = cast(RationalEmbedding[E], coefficients)
+        return ring.constant(
+            embedding.of_rational(value.numerator, value.denominator)
+        )
+
+    return _convert_polynomial(ring, term, signature, resolve, embed)
+
+
+def _convert_polynomial(
+    ring: PolynomialRing[E],
+    term: T.Term,
+    signature: LanguageSignature,
+    resolve: Callable[[SymbolId], Polynomial[E] | None],
+    embed: Callable[[Fraction], Polynomial[E] | None],
+) -> Polynomial[E] | None:
+    """The shared structural conversion used by both bridges."""
+
     def convert(current: T.Term) -> Polynomial[E] | None:
         if isinstance(current, T.IntLit):
-            return ring.constant(
-                coefficients.mul_int(coefficients.one(), current.value)
-            )
+            return embed(Fraction(current.value))
         if isinstance(current, T.RatLit):
-            if not isinstance(coefficients, RationalEmbedding):
-                return None
-            embedding = cast(RationalEmbedding[E], coefficients)
-            value = current.value
-            return ring.constant(
-                embedding.of_rational(value.numerator, value.denominator)
-            )
+            return embed(current.value)
         if isinstance(current, T.SymbolRef):
-            index = indices.get(current.symbol_id)
-            return None if index is None else ring.generator(index)
+            return resolve(current.symbol_id)
         if not isinstance(current, T.Apply) or not isinstance(
             current.operator, T.SymbolRef
         ):

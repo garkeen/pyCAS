@@ -63,6 +63,22 @@ class RationalFunctionField(Field[RationalFunction[E]], Generic[E]):
     def generators(self) -> tuple[SymbolId, ...]:
         return self._polynomials.generators
 
+    @property
+    def coefficients(self) -> Field[E]:
+        return self._polynomials.coefficients
+
+    @property
+    def parent_kind(self) -> str:
+        return "rational_function"
+
+    @property
+    def parent_requires_base(self) -> bool:
+        return True
+
+    @property
+    def parent_options(self) -> tuple[tuple[str, str], ...]:
+        return ()
+
     def contains(self, value: object) -> bool:
         return isinstance(value, RationalFunction) and value.owner is self
 

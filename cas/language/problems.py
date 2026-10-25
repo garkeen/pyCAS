@@ -7,6 +7,11 @@ demanded of an answer. Budget and execution attempts are not part of it.
 Operation-specific parameters (for example an integration method or an
 elimination order) belong to the operation's own spec record; they are added
 with that operation rather than guessed here.
+
+An `AlgebraRequest` owns the algebra view: coefficient and parameter parents,
+symbol roles and interpretation. The `target` and `parameter_mode` fields here
+mirror that view; an operation derives them from its fixed request and never
+chooses them independently.
 """
 
 from __future__ import annotations
@@ -15,7 +20,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from cas.foundation.ids import SymbolId
-from cas.language import sorts as S
 from cas.language.propositions import Proposition
 from cas.syntax import term as T
 
@@ -56,7 +60,6 @@ class ProblemSpec:
     operation: str
     inputs: tuple[T.Term, ...]
     target: SymbolId | None
-    target_sort: S.Sort
     region: Proposition | None
     result_language: ResultLanguage
     parameter_mode: ParameterMode
@@ -68,6 +71,23 @@ class ProblemSpec:
             raise ValueError("a problem needs an operation identifier")
         if not self.inputs:
             raise ValueError("a problem needs at least one input")
+        if any(not isinstance(item, T.Term) for item in self.inputs):
+            raise TypeError("problem inputs must be terms")
+        if self.region is not None and not isinstance(
+            self.region, Proposition
+        ):
+            raise TypeError("a problem region must be a proposition")
+        if not isinstance(self.result_language, ResultLanguage):
+            raise TypeError("a problem needs a result language")
+        if not isinstance(self.parameter_mode, ParameterMode):
+            raise TypeError("a problem needs a parameter mode")
+        if not isinstance(self.coverage, Coverage):
+            raise TypeError("a problem needs a coverage requirement")
+        if any(
+            not isinstance(item, Proposition)
+            for item in self.externalizable
+        ):
+            raise TypeError("externalizable premises must be propositions")
         if self.externalizable and self.coverage is Coverage.COMPLETE_SET:
             raise ValueError(
                 "a complete-set request cannot externalize premises: "

@@ -46,6 +46,8 @@ class Declaration:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("a declaration needs a display name")
+        if not isinstance(self.sort, S.Sort):
+            raise TypeError("a declaration needs a sort")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,8 @@ class Definition:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("a definition needs a display name")
+        if not isinstance(self.body, T.Term):
+            raise TypeError("a definition body must be a term")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +70,10 @@ class Hypothesis:
     """A proposition assumed in a frame."""
 
     proposition: Proposition
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.proposition, Proposition):
+            raise TypeError("a hypothesis must be a proposition")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -148,8 +156,16 @@ class FrameStore:
         return tuple(reversed(out))
 
     def is_visible(self, ancestor: FrameId, descendant: FrameId) -> bool:
-        """Whether `ancestor` is on the chain of `descendant` (inclusive)."""
-        return any(current.id == ancestor for current in self.chain(descendant))
+        """Whether `ancestor` is on the chain of `descendant` (inclusive).
+
+        A frame that was never created is not visible; callers can use this as
+        a guard before comparing propositions that carry a meaning key.
+        """
+        try:
+            chain = self.chain(descendant)
+        except KeyError:
+            return False
+        return any(current.id == ancestor for current in chain)
 
     def sort_of(self, frame: FrameId, symbol_id: SymbolId) -> S.Sort | None:
         """The declared sort of a symbol, innermost declaration first.
@@ -180,6 +196,29 @@ class FrameStore:
             for hypothesis in current.hypotheses
         )
 
+    def readable(self, proposition: Proposition, frame: FrameId) -> bool:
+        """Whether `proposition` keeps its meaning when read in `frame`."""
+        return (
+            proposition.meaning.world == self._world.id
+            and self.is_visible(proposition.meaning.frame, frame)
+            and not self.escapes(frame, proposition.term)
+        )
+
+    def agree_in(
+        self,
+        frame: FrameId,
+        left: Proposition,
+        right: Proposition,
+    ) -> bool:
+        """Whether two propositions may be compared in `frame`.
+
+        Symbols keep stable identities and a frame only extends its parent
+        chain, so a proposition read in an ancestor keeps its meaning in a
+        descendant. This method makes that weakening rule an explicit
+        precondition; propositions from unrelated frames or worlds never agree.
+        """
+        return self.readable(left, frame) and self.readable(right, frame)
+
     def escapes(self, frame: FrameId, term: T.Term) -> tuple[SymbolId, ...]:
         """Local symbols of unrelated frames that appear free in `term`."""
         free = B.free_symbols(term)
@@ -189,7 +228,10 @@ class FrameStore:
         escaped = []
         for symbol_id in free:
             owners = self._introducers.get(symbol_id)
-            if owners and not (owners & chain):
+            # Every introducer must be on the query chain. Sharing an id with
+            # a sibling frame makes the free occurrence ambiguous, so a merely
+            # intersecting owner set is not enough.
+            if owners and not owners <= chain:
                 escaped.append(symbol_id)
         return tuple(sorted(escaped))
 
@@ -222,6 +264,11 @@ class FrameStore:
             if not self.is_visible(hypothesis.proposition.meaning.frame, parent):
                 raise ValueError(
                     "a hypothesis must be meaningful in the parent frame"
+                )
+            if self.escapes(parent, hypothesis.proposition.term):
+                raise ValueError(
+                    "a hypothesis references a local symbol of an "
+                    "unrelated frame"
                 )
         self._reject_alias_cycles(parent, definitions)
 
@@ -260,13 +307,21 @@ class FrameStore:
     ) -> None:
         if symbol_id in introduced:
             raise ValueError(f"symbol introduced twice in one frame: {name}")
+        language = self._world.language
+        if language.head_of(symbol_id) is not None:
+            raise ValueError(
+                f"a structural head cannot be declared as a symbol: {name}"
+            )
+        if language.operator_of(symbol_id) is not None:
+            raise ValueError(
+                f"a language operator cannot be redeclared: {name}"
+            )
         introduced.add(symbol_id)
-        if parent is None:
-            return
-        if self.sort_of(parent, symbol_id) is not None:
-            raise ValueError(f"symbol already declared along the chain: {name}")
-        if self.lookup_definition(parent, symbol_id) is not None:
-            raise ValueError(f"symbol already defined along the chain: {name}")
+        owners = self._introducers.get(symbol_id)
+        if owners:
+            raise ValueError(
+                f"symbol {name!r} is already introduced in another frame"
+            )
 
 
 class FrameSorts:

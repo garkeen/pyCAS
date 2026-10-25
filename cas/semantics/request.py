@@ -5,6 +5,9 @@ may be a parameter in one request and the target in another; no request mutates 
 global role registry. The coefficient structure and the parameter ring are
 separate parents, so polynomial coefficients are not confused with the target
 generators.
+
+The request is the algebra view, not the problem statement. An operation fixes
+one request at assembly and derives its `ProblemSpec` roles from it.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from enum import StrEnum
 from typing import Any
 
 from cas.algebra.parents import Parent
-from cas.algebra.protocols import GeneratorRing
+from cas.algebra.protocols import CoefficientRing, GeneratorRing
 from cas.foundation.ids import SymbolId
 from cas.language.problems import ParameterMode
 
@@ -25,7 +28,6 @@ class Interpretation(StrEnum):
     FORMAL = "formal"
     PARAMETER_FAMILY = "parameter_family"
     EMBEDDED = "embedded"
-    FUNCTION = "function"
 
 
 class Role(StrEnum):
@@ -52,6 +54,18 @@ class AlgebraRequest:
     interpretation: Interpretation
 
     def __post_init__(self) -> None:
+        if not isinstance(self.coefficient, Parent):
+            raise TypeError("an algebra request needs a coefficient parent")
+        if self.parameter_ring is not None and not isinstance(
+            self.parameter_ring, Parent
+        ):
+            raise TypeError("an algebra request needs a parent parameter ring")
+        if not isinstance(self.parameter_mode, ParameterMode):
+            raise TypeError("an algebra request needs a parameter mode")
+        if not isinstance(self.interpretation, Interpretation):
+            raise TypeError("an algebra request needs an interpretation")
+        if not isinstance(self.parameters, tuple):
+            raise TypeError("algebra parameters must be a tuple")
         if self.target in self.parameters:
             raise ValueError("a symbol cannot be both the target and a parameter")
         if len(set(self.parameters)) != len(self.parameters):
@@ -70,6 +84,15 @@ class AlgebraRequest:
                 raise ValueError(
                     "the parameter ring generators must be the declared "
                     "parameters"
+                )
+            if not isinstance(ring, CoefficientRing):
+                raise ValueError(
+                    "the parameter ring must expose its coefficient structure"
+                )
+            if ring.coefficients is not self.coefficient.ring:
+                raise ValueError(
+                    "the parameter ring must be built over the coefficient "
+                    "parent"
                 )
             if self.parameter_ring.spec.base != self.coefficient.spec:
                 raise ValueError(

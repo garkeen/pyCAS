@@ -2,7 +2,8 @@
 
 import pytest
 
-from cas.language.signatures import StructuralHead
+from cas.language import sorts as S
+from cas.language.signatures import OperatorSignature, StructuralHead
 from cas.semantics.symbols import SymbolTable, standard_language
 
 
@@ -49,6 +50,7 @@ def test_standard_language_interns_every_structural_head():
 def test_standard_language_accepts_declared_operators():
     table = SymbolTable()
     predicate = table.intern("HasDerivative")
-    signature = standard_language(table, operators={predicate: None})
-    assert signature.operator_of(predicate) is None
+    declared = OperatorSignature((), S.PROPOSITION)
+    signature = standard_language(table, operators={predicate: declared})
+    assert signature.operator_of(predicate) == declared
     assert len(table) == len(StructuralHead) + 1

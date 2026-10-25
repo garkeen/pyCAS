@@ -81,6 +81,10 @@ class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
             raise ValueError("a polynomial ring needs at least one generator")
         if len(set(generators)) != len(generators):
             raise ValueError("polynomial generators must be distinct")
+        if not isinstance(coefficients, Ring):
+            raise TypeError("polynomial coefficients must form a ring")
+        if not isinstance(order, MonomialOrder):
+            raise TypeError("a polynomial ring needs a monomial order")
         self._generators = tuple(generators)
         self._coefficients = coefficients
         self._order = order
@@ -96,6 +100,14 @@ class PolynomialRing(Ring[Polynomial[E]], Generic[E]):
     @property
     def monomial_order(self) -> MonomialOrder:
         return self._order
+
+    @property
+    def parent_kind(self) -> str:
+        return "polynomial"
+
+    @property
+    def parent_requires_base(self) -> bool:
+        return True
 
     @property
     def parent_options(self) -> tuple[tuple[str, str], ...]:
@@ -304,10 +316,9 @@ class UnivariatePolynomialRing(PolynomialRing[E], Euclidean[Polynomial[E]]):
 
     def gcd(self, left: Polynomial[E], right: Polynomial[E]) -> Polynomial[E]:
         """Greatest common divisor, normalised to a monic polynomial."""
-        current, following = left, right
-        while not following.is_zero():
-            _, remainder = self.divmod(current, following)
-            current, following = following, remainder
+        self._own(left)
+        self._own(right)
+        current = super().gcd(left, right)
         if current.is_zero():
             return self.zero()
         leading = self.coefficient(current, (self.degree(current, 0),))

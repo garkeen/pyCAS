@@ -17,6 +17,7 @@ from typing import Mapping
 
 from cas.foundation.ids import SymbolId
 from cas.language import sorts as S
+from cas.syntax import term as T
 
 
 class StructuralHead(StrEnum):
@@ -38,6 +39,50 @@ class StructuralHead(StrEnum):
     GUARDED = "Guarded"
     PIECEWISE = "Piecewise"
     QUOTE = "Quote"
+
+
+COMPARISON_HEADS = frozenset(
+    {
+        StructuralHead.EQ,
+        StructuralHead.NE,
+        StructuralHead.LT,
+        StructuralHead.LE,
+        StructuralHead.GT,
+        StructuralHead.GE,
+    }
+)
+
+ORDER_COMPARISON_HEADS = frozenset(
+    {
+        StructuralHead.LT,
+        StructuralHead.LE,
+        StructuralHead.GT,
+        StructuralHead.GE,
+    }
+)
+
+COMPARISON_BY_TEXT: Mapping[str, StructuralHead] = MappingProxyType(
+    {
+        "==": StructuralHead.EQ,
+        "=": StructuralHead.EQ,
+        "!=": StructuralHead.NE,
+        "<": StructuralHead.LT,
+        "<=": StructuralHead.LE,
+        ">": StructuralHead.GT,
+        ">=": StructuralHead.GE,
+    }
+)
+
+COMPARISON_TEXT: Mapping[StructuralHead, str] = MappingProxyType(
+    {
+        StructuralHead.EQ: "==",
+        StructuralHead.NE: "!=",
+        StructuralHead.LT: "<",
+        StructuralHead.LE: "<=",
+        StructuralHead.GT: ">",
+        StructuralHead.GE: ">=",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +209,15 @@ class LanguageSignature:
                 return symbol_id
         return None
 
+    def head_term(self, head: StructuralHead) -> T.SymbolRef:
+        """The operator term for a structural head, or an error if absent."""
+        symbol_id = self.symbol_of(head)
+        if symbol_id is None:
+            raise ValueError(
+                f"the language has no symbol for {head.value}"
+            )
+        return T.symbol(symbol_id, head.value)
+
     def arity_of(self, head: StructuralHead) -> Arity:
         return self.arities[head]
 
@@ -178,8 +232,12 @@ class LanguageSignature:
 __all__ = [
     "Arity",
     "BindingSignature",
+    "COMPARISON_BY_TEXT",
+    "COMPARISON_HEADS",
+    "COMPARISON_TEXT",
     "DEFAULT_ARITIES",
     "LanguageSignature",
+    "ORDER_COMPARISON_HEADS",
     "OperatorSignature",
     "StructuralHead",
 ]

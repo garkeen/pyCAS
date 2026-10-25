@@ -15,6 +15,14 @@ def eq_one(runtime) -> T.Apply:
     return head_app(runtime.signature, StructuralHead.EQ, x, T.number(1))
 
 
+def test_negates_recognizes_the_language_not_head(runtime):
+    x = T.symbol(runtime.variable, "x")
+    not_x = head_app(runtime.signature, StructuralHead.NOT, x)
+    assert Pr.negates(not_x, x, runtime.signature)
+    assert not Pr.negates(x, not_x, runtime.signature)
+    assert not Pr.negates(not_x, T.number(1), runtime.signature)
+
+
 def test_check_issues_a_proposition_bound_to_the_frame(runtime):
     term = eq_one(runtime)
     proposition = require_proposition(

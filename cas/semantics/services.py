@@ -26,12 +26,14 @@ class Derived(DerivationOutcome):
 
     `condition` is None for the whole domain. `defined` is the region where the
     source is defined; it lets a constant composition use definedness rather
-    than differentiability of an inner function.
+    than differentiability of an inner function. `evidence` is opaque
+    derivation data for the registered checker; semantics never interprets it.
     """
 
     term: T.Term
     condition: T.Term | None = None
     defined: T.Term | None = None
+    evidence: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +70,7 @@ class DerivativeService(Protocol):
         region: T.Term,
         source: T.Term,
         variable: SymbolId,
-        candidate: T.Term,
+        derivation: Derived,
     ) -> object:
         """Build the certificate the registered checker expects."""
 

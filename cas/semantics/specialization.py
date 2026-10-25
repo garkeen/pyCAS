@@ -41,6 +41,45 @@ class CoverageClaim(StrEnum):
     ALL_VALUES = "all_values"
 
 
+def is_unconditional(
+    valid_on: Proposition,
+    excluded_cases: tuple[Proposition, ...],
+) -> bool:
+    """Whether the answer is stated without any validity restriction.
+
+    A data record has no prover, so only the canonical `true` region is
+    accepted. A logically equivalent but structurally different region is
+    conservatively not promoted to an all-values claim.
+    """
+    return valid_on.term == T.TRUE and not excluded_cases
+
+
+def validate_coverage_claim(
+    coverage: CoverageClaim | None,
+    valid_on: Proposition | None,
+    excluded_cases: tuple[Proposition, ...],
+) -> None:
+    """The single admission rule for coverage data."""
+    if coverage is not None and not isinstance(coverage, CoverageClaim):
+        raise TypeError("coverage must be a CoverageClaim")
+    if coverage is None:
+        if valid_on is not None or excluded_cases:
+            raise ValueError(
+                "validity data requires a coverage claim"
+            )
+        return
+    if valid_on is None:
+        raise ValueError(
+            "a coverage claim needs the region on which it is claimed"
+        )
+    if coverage is CoverageClaim.ALL_VALUES and not is_unconditional(
+        valid_on, excluded_cases
+    ):
+        raise ValueError(
+            "an all-values claim needs unconditional validity"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class GenericResult:
     """One parameter-family answer with its validity and coverage data."""
@@ -52,6 +91,8 @@ class GenericResult:
     coverage_claim: CoverageClaim
 
     def __post_init__(self) -> None:
+        if not isinstance(self.result, T.Term):
+            raise TypeError("a generic result must be a term")
         object.__setattr__(self, "excluded_cases", tuple(self.excluded_cases))
         for condition in (
             self.valid_on,
@@ -60,15 +101,13 @@ class GenericResult:
         ):
             if not isinstance(condition, Proposition):
                 raise TypeError("a generic result carries propositions")
-        if self.coverage_claim is CoverageClaim.ALL_VALUES:
-            if self.excluded_cases or self.valid_on.term != T.TRUE:
-                raise ValueError(
-                    "an all-values claim needs unconditional validity"
-                )
+        validate_coverage_claim(
+            self.coverage_claim, self.valid_on, self.excluded_cases
+        )
 
     @property
     def is_unconditional(self) -> bool:
-        return self.valid_on.term == T.TRUE and not self.excluded_cases
+        return is_unconditional(self.valid_on, self.excluded_cases)
 
     @classmethod
     def assemble(
@@ -96,14 +135,25 @@ def coverage_claim(
     excluded_cases: tuple[Proposition, ...],
 ) -> CoverageClaim:
     """The strongest claim justified by the request mode and validity data."""
-    unconditional = valid_on.term == T.TRUE and not excluded_cases
     if parameter_mode is ParameterMode.SPECIFIED_VALUES:
         return CoverageClaim.SPECIFIED
     if parameter_mode is ParameterMode.GENERIC_PARAMETERS:
         return CoverageClaim.GENERIC
-    if unconditional:
+    if is_unconditional(valid_on, excluded_cases):
         return CoverageClaim.ALL_VALUES
     return CoverageClaim.PARTIAL
+
+
+def exact_values(
+    values: Mapping[SymbolId, Fraction],
+) -> Mapping[SymbolId, Fraction]:
+    """Normalize an exact rational assignment, rejecting non-rational values."""
+    normalized: dict[SymbolId, Fraction] = {}
+    for symbol_id, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, Fraction)):
+            raise TypeError("an exact rational value is required")
+        normalized[SymbolId(symbol_id)] = Fraction(value)
+    return MappingProxyType(normalized)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,14 +163,10 @@ class Specialization:
     values: Mapping[SymbolId, Fraction]
 
     def __post_init__(self) -> None:
-        normalized: dict[SymbolId, Fraction] = {}
-        for symbol_id, value in self.values.items():
-            if isinstance(value, bool) or not isinstance(value, (int, Fraction)):
-                raise TypeError("a parameter value must be an exact rational")
-            normalized[SymbolId(symbol_id)] = Fraction(value)
+        normalized = exact_values(self.values)
         if not normalized:
             raise ValueError("a specialization needs at least one value")
-        object.__setattr__(self, "values", MappingProxyType(normalized))
+        object.__setattr__(self, "values", normalized)
 
 
 class SpecializationOutcome:
@@ -233,5 +279,8 @@ __all__ = [
     "SpecializationOutcome",
     "SpecializationOutcomeType",
     "coverage_claim",
+    "exact_values",
+    "is_unconditional",
     "specialize",
+    "validate_coverage_claim",
 ]

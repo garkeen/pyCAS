@@ -21,7 +21,13 @@ from typing import Protocol
 
 from cas.foundation.ids import SymbolId
 from cas.language import sorts as S
-from cas.language.signatures import LanguageSignature, OperatorSignature, StructuralHead
+from cas.language.signatures import (
+    COMPARISON_HEADS,
+    ORDER_COMPARISON_HEADS,
+    LanguageSignature,
+    OperatorSignature,
+    StructuralHead,
+)
 from cas.syntax import term as T
 
 
@@ -60,27 +66,6 @@ class Unsupported(Typing):
 @dataclass(frozen=True, slots=True)
 class IllTyped(Typing):
     detail: str
-
-
-_COMPARISONS = frozenset(
-    {
-        StructuralHead.EQ,
-        StructuralHead.NE,
-        StructuralHead.LT,
-        StructuralHead.LE,
-        StructuralHead.GT,
-        StructuralHead.GE,
-    }
-)
-
-_ORDERS = frozenset(
-    {
-        StructuralHead.LT,
-        StructuralHead.LE,
-        StructuralHead.GT,
-        StructuralHead.GE,
-    }
-)
 
 
 def infer(
@@ -262,11 +247,11 @@ def _apply_declared(
 def _apply_sorted(head: StructuralHead, sorts: list[S.Sort]) -> Typing:
     if head in (StructuralHead.PLUS, StructuralHead.TIMES):
         return _common_scalar(head, sorts)
-    if head in _COMPARISONS:
+    if head in COMPARISON_HEADS:
         common = S.join(sorts[0], sorts[1])
         if common is None:
             return IllTyped("comparison operands have no common sort")
-        if head in _ORDERS and not S.is_ordered(common):
+        if head in ORDER_COMPARISON_HEADS and not S.is_ordered(common):
             return IllTyped("an order comparison needs an ordered sort")
         return Typed(S.PROPOSITION)
     if head in (StructuralHead.AND, StructuralHead.OR):

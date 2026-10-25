@@ -12,19 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from fractions import Fraction
 
-from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.syntax import term as T
-
-_COMPARISONS = frozenset(
-    {
-        StructuralHead.EQ,
-        StructuralHead.NE,
-        StructuralHead.LT,
-        StructuralHead.LE,
-        StructuralHead.GT,
-        StructuralHead.GE,
-    }
+from cas.language.numbers import exact_power
+from cas.language.signatures import (
+    COMPARISON_HEADS,
+    LanguageSignature,
+    StructuralHead,
 )
+from cas.syntax import term as T
 
 _DUAL = {
     StructuralHead.EQ: StructuralHead.NE,
@@ -67,7 +61,7 @@ def ground_value(
         return _arithmetic(head, term.arguments, signature)
     if head is StructuralHead.POWER:
         return _power(term.arguments, signature)
-    if head in _COMPARISONS:
+    if head in COMPARISON_HEADS:
         return _comparison(head, term.arguments, signature)
     if head in (StructuralHead.AND, StructuralHead.OR):
         return _junction(head, term.arguments, signature)
@@ -157,7 +151,7 @@ def and_all(
         return T.TRUE
     if len(kept) == 1:
         return kept[0]
-    return T.app(_head(signature, StructuralHead.AND), *kept)
+    return T.app(signature.head_term(StructuralHead.AND), *kept)
 
 
 def implies(
@@ -199,7 +193,7 @@ def _normalize_comparison(
     ):
         return None
     head = signature.head_of(term.operator.symbol_id)
-    if head not in _COMPARISONS or len(term.arguments) != 2:
+    if head not in COMPARISON_HEADS or len(term.arguments) != 2:
         return None
     left, right = term.arguments
     left_form = _linear(left, signature)
@@ -291,6 +285,39 @@ def _multiply_linear(
     )
 
 
+def _is_total(
+    term: T.Term,
+    signature: LanguageSignature,
+) -> bool:
+    """Whether negation commutes with comparisons over this term.
+
+    A comparison is only a proposition where both sides are defined. Pushing
+    `not` into `a < b` yields `a >= b`, which is false rather than unknown when
+    a side is undefined, so the rewrite is admitted only for total expressions.
+    Unknown operators and declared functions are conservatively partial.
+    """
+    if isinstance(term, (T.IntLit, T.RatLit, T.SymbolRef)):
+        return True
+    if not isinstance(term, T.Apply) or not isinstance(
+        term.operator, T.SymbolRef
+    ):
+        return False
+    head = signature.head_of(term.operator.symbol_id)
+    if head in (StructuralHead.PLUS, StructuralHead.TIMES):
+        return all(
+            _is_total(argument, signature)
+            for argument in term.arguments
+        )
+    if head is StructuralHead.POWER and len(term.arguments) == 2:
+        exponent = term.arguments[1]
+        return (
+            isinstance(exponent, T.IntLit)
+            and exponent.value >= 1
+            and _is_total(term.arguments[0], signature)
+        )
+    return False
+
+
 def _normalize_not(
     term: T.Term,
     signature: LanguageSignature,
@@ -308,14 +335,17 @@ def _normalize_not(
             operand.operator, T.SymbolRef
         ):
             inner = signature.head_of(operand.operator.symbol_id)
-            if inner in _COMPARISONS:
+            if inner in COMPARISON_HEADS and all(
+                _is_total(argument, signature)
+                for argument in operand.arguments
+            ):
                 return T.app(
-                    _head(signature, _DUAL[inner]),
+                    signature.head_term(_DUAL[inner]),
                     *operand.arguments,
                 )
             if inner is StructuralHead.NOT and len(operand.arguments) == 1:
                 return operand.arguments[0]
-        return T.app(_head(signature, StructuralHead.NOT), operand)
+        return T.app(signature.head_term(StructuralHead.NOT), operand)
     if head in (StructuralHead.AND, StructuralHead.OR):
         arguments = tuple(
             _normalize_not(argument, signature)
@@ -325,7 +355,7 @@ def _normalize_not(
             new is old for new, old in zip(arguments, term.arguments)
         ):
             return term
-        return T.app(_head(signature, head), *arguments)
+        return T.app(signature.head_term(head), *arguments)
     return term
 
 
@@ -413,38 +443,15 @@ def _interval_terms(
         return None
     equality = interval.equality
     if equality is not None:
-        lower_problem = interval.lower is not None and (
-            interval.lower[0] > equality
-            or (
-                interval.lower[0] == equality
-                and interval.lower[1]
-            )
-        )
-        upper_problem = interval.upper is not None and (
-            interval.upper[0] < equality
-            or (
-                interval.upper[0] == equality
-                and interval.upper[1]
-            )
-        )
-        if lower_problem or upper_problem or equality in interval.disequalities:
-            return None
         return [_comparison_term(atom, StructuralHead.EQ, equality, signature)]
 
     lower = interval.lower
     upper = interval.upper
-    if lower is not None and upper is not None:
-        if lower[0] > upper[0]:
-            return None
-        if lower[0] == upper[0] and (lower[1] or upper[1]):
-            return None
     terms: list[T.Term] = []
     if (
         lower is not None
         and upper is not None
         and lower[0] == upper[0]
-        and not lower[1]
-        and not upper[1]
     ):
         terms.append(
             _comparison_term(atom, StructuralHead.EQ, lower[0], signature)
@@ -505,7 +512,7 @@ def _comparison_term(
     signature: LanguageSignature,
 ) -> T.Term:
     return T.app(
-        _head(signature, relation), atom, T.number(bound)
+        signature.head_term(relation), atom, T.number(bound)
     )
 
 
@@ -708,13 +715,6 @@ def _is_head(
     )
 
 
-def _head(signature: LanguageSignature, head: StructuralHead) -> T.SymbolRef:
-    symbol_id = signature.symbol_of(head)
-    if symbol_id is None:
-        raise ValueError(f"the language has no symbol for {head.value}")
-    return T.symbol(symbol_id, head.value)
-
-
 def _arithmetic(
     head: StructuralHead,
     arguments: tuple[T.Term, ...],
@@ -746,9 +746,7 @@ def _power(
     exponent = arguments[1]
     if not isinstance(base, Fraction) or not isinstance(exponent, T.IntLit):
         return None
-    if base == 0 and exponent.value <= 0:
-        return None
-    return base**exponent.value
+    return exact_power(base, exponent.value)
 
 
 def _comparison(

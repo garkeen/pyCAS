@@ -170,10 +170,29 @@ class GeneratorRing(Protocol):
 
 @runtime_checkable
 class DescribedRing(Protocol):
-    """A structure that exposes its representation options for identity checks."""
+    """A structure that describes its parent kind and representation choices.
+
+    The registry consumes all three properties: a description may not claim a
+    different kind, omit a base the structure requires, or invent one it does
+    not have.
+    """
+
+    @property
+    def parent_kind(self) -> str: ...
+
+    @property
+    def parent_requires_base(self) -> bool: ...
 
     @property
     def parent_options(self) -> tuple[tuple[str, str], ...]: ...
+
+
+@runtime_checkable
+class CoefficientRing(Protocol):
+    """A structure that exposes the base structure its coefficients live in."""
+
+    @property
+    def coefficients(self) -> object: ...
 
 
 class Derivation(ABC, Generic[E]):
@@ -185,6 +204,7 @@ class Derivation(ABC, Generic[E]):
 
 
 __all__ = [
+    "CoefficientRing",
     "Derivation",
     "DescribedRing",
     "Euclidean",

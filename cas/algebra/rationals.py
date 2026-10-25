@@ -41,6 +41,18 @@ class RationalField(
     def mul(self, left: Fraction, right: Fraction) -> Fraction:
         return left * right
 
+    @property
+    def parent_kind(self) -> str:
+        return "Q"
+
+    @property
+    def parent_requires_base(self) -> bool:
+        return False
+
+    @property
+    def parent_options(self) -> tuple[tuple[str, str], ...]:
+        return ()
+
     def contains(self, value: object) -> bool:
         return isinstance(value, Fraction)
 

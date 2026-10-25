@@ -56,16 +56,77 @@ def test_the_same_description_cannot_be_registered_with_another_structure():
         registry.intern(ParentSpec("Q"), RationalField())
 
 
+def test_a_description_must_state_every_representation_option():
+    registry = ParentRegistry()
+    with pytest.raises(ValueError, match="omits representation options"):
+        registry.intern(
+            ParentSpec(
+                "polynomial",
+                base=ParentSpec("Q"),
+                generators=(X,),
+            ),
+            UnivariatePolynomialRing(X, RationalField()),
+        )
+    with pytest.raises(ValueError, match="unknown representation options"):
+        registry.intern(
+            ParentSpec(
+                "polynomial",
+                base=ParentSpec("Q"),
+                generators=(X,),
+                options=(
+                    ("monomial_order", "lex"),
+                    ("dense", "yes"),
+                ),
+            ),
+            UnivariatePolynomialRing(X, RationalField()),
+        )
+
+
+def test_kind_base_and_generators_must_match_the_structure():
+    registry = ParentRegistry()
+    with pytest.raises(ValueError, match="kind"):
+        registry.intern(ParentSpec("Z"), RationalField())
+    with pytest.raises(ValueError, match="base"):
+        registry.intern(
+            ParentSpec(
+                "polynomial",
+                generators=(X,),
+                options=(("monomial_order", "lex"),),
+            ),
+            UnivariatePolynomialRing(X, RationalField()),
+        )
+    with pytest.raises(ValueError, match="generators"):
+        registry.intern(
+            ParentSpec(
+                "polynomial",
+                base=ParentSpec("Q"),
+                generators=(Y,),
+                options=(("monomial_order", "lex"),),
+            ),
+            UnivariatePolynomialRing(X, RationalField()),
+        )
+
+
 def test_different_descriptions_get_different_ids():
     registry = ParentRegistry()
     first = registry.intern(ParentSpec("Q"), RationalField())
     second = registry.intern(ParentSpec("Z"), IntegerRing())
     third = registry.intern(
-        ParentSpec("polynomial", generators=(X,)),
+        ParentSpec(
+            "polynomial",
+            base=ParentSpec("Q"),
+            generators=(X,),
+            options=(("monomial_order", "lex"),),
+        ),
         UnivariatePolynomialRing(X, RationalField()),
     )
     fourth = registry.intern(
-        ParentSpec("polynomial", generators=(Y,)),
+        ParentSpec(
+            "polynomial",
+            base=ParentSpec("Q"),
+            generators=(Y,),
+            options=(("monomial_order", "lex"),),
+        ),
         UnivariatePolynomialRing(Y, RationalField()),
     )
     assert len({first.id, second.id, third.id, fourth.id}) == 4
@@ -89,7 +150,12 @@ def test_capabilities_come_from_the_attached_structure():
     assert z.embeds_integers
 
     polynomials = registry.intern(
-        ParentSpec("polynomial", base=ParentSpec("Q"), generators=(X,)),
+        ParentSpec(
+            "polynomial",
+            base=ParentSpec("Q"),
+            generators=(X,),
+            options=(("monomial_order", "lex"),),
+        ),
         UnivariatePolynomialRing(X, RationalField()),
     )
     assert not polynomials.is_field

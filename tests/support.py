@@ -10,11 +10,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from cas.foundation.ids import FrameId, SymbolId, WorldId
-from cas.kernel.model import BasisKind, BasisRef
+from cas.kernel.trust import BasisKind, BasisRef
 from cas.language import propositions as Pr
 from cas.language import sorts as S
+from cas.language.declarations import DeclarationSet
 from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.math.elementary.declarations import ElementarySource
 from cas.semantics.frames import FrameSorts, FrameStore
 from cas.syntax import term as T
 
@@ -84,7 +84,7 @@ def proposition_in(
 
 
 def elementary_basis(
-    source: ElementarySource,
+    source: DeclarationSet,
     world: WorldId = WorldId(0),
 ) -> BasisRef:
     """The admission record a basis-loaded elementary source must carry."""

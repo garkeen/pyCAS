@@ -19,7 +19,7 @@ from typing import TypeAlias
 from cas.foundation.ids import FrameId, WorldId
 from cas.language import sorts as S
 from cas.language import typing as Ty
-from cas.language.signatures import LanguageSignature
+from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.syntax import binding as B
 from cas.syntax import term as T
 
@@ -87,10 +87,29 @@ def check(
     return typing
 
 
+def negates(
+    outer: T.Term,
+    inner: T.Term,
+    signature: LanguageSignature,
+) -> bool:
+    """Whether `outer` is exactly `not inner` in this language."""
+    not_symbol = signature.symbol_of(StructuralHead.NOT)
+    if not_symbol is None:
+        return False
+    head = T.symbol(not_symbol, StructuralHead.NOT.value)
+    return (
+        isinstance(outer, T.Apply)
+        and outer.operator == head
+        and len(outer.arguments) == 1
+        and outer.arguments[0] == inner
+    )
+
+
 __all__ = [
     "IllScoped",
     "MeaningKey",
     "Proposition",
     "PropositionOutcome",
     "check",
+    "negates",
 ]

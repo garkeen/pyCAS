@@ -19,6 +19,7 @@ from cas.algebra.protocols import (
     DescribedRing,
     Euclidean,
     Field,
+    GeneratorRing,
     IntegerEmbedding,
     Ordered,
     Ring,
@@ -30,11 +31,15 @@ E = TypeVar("E")
 
 @dataclass(frozen=True, slots=True)
 class ParentSpec:
-    """A complete description of a structure.
+    """A complete description of the admitted structure fragment.
 
     `options` records representation choices as `(name, value)` pairs. The
     constructor normalises them into name order, so two equal descriptions are
     always structurally equal regardless of how the caller built the pairs.
+
+    Quotient relations, required structure proofs and algebraic root embeddings
+    are not represented yet: no structure in this tree can be built with them,
+    so a description cannot claim them.
     """
 
     kind: str
@@ -43,11 +48,30 @@ class ParentSpec:
     options: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.kind:
+        if not isinstance(self.kind, str) or not self.kind:
             raise ValueError("a parent description needs a kind")
-        canonical = tuple(sorted(self.options))
-        names = [name for name, _ in canonical]
-        if len(set(names)) != len(names):
+        if self.base is not None and not isinstance(self.base, ParentSpec):
+            raise TypeError("a parent description base must be a ParentSpec")
+        generators = tuple(self.generators)
+        if any(
+            not isinstance(generator, int) or isinstance(generator, bool)
+            for generator in generators
+        ):
+            raise TypeError("parent generators must be SymbolIds")
+        if generators != self.generators:
+            object.__setattr__(self, "generators", generators)
+        options: list[tuple[str, str]] = []
+        for option in self.options:
+            if not isinstance(option, tuple) or len(option) != 2:
+                raise TypeError(
+                    "a parent option must be a (name, value) pair"
+                )
+            name, value = option
+            if not isinstance(name, str) or not isinstance(value, str):
+                raise TypeError("a parent option name and value must be strings")
+            options.append((name, value))
+        canonical = tuple(sorted(options))
+        if len({name for name, _ in canonical}) != len(canonical):
             raise ValueError("parent option names must be unique")
         if canonical != self.options:
             object.__setattr__(self, "options", canonical)
@@ -132,13 +156,50 @@ class ParentRegistry:
                     f"parent {spec.kind!r} was registered with a different structure"
                 )
             return cast(Parent[E], known)
-        if isinstance(ring, DescribedRing):
-            actual = dict(ring.parent_options)
-            for name, value in spec.options:
-                if actual.get(name) != value:
-                    raise ValueError(
-                        f"parent option {name!r} does not match the structure"
-                    )
+        if not isinstance(ring, DescribedRing):
+            raise ValueError(
+                "a parent structure must describe its kind and representation"
+            )
+        if spec.kind != ring.parent_kind:
+            raise ValueError(
+                f"parent kind {spec.kind!r} does not match the structure "
+                f"kind {ring.parent_kind!r}"
+            )
+        if (spec.base is not None) is not ring.parent_requires_base:
+            raise ValueError(
+                "the parent description disagrees with the structure about "
+                "whether it has a base"
+            )
+        if isinstance(ring, GeneratorRing):
+            if spec.generators != tuple(ring.generators):
+                raise ValueError(
+                    "the parent description's generators do not match the "
+                    "structure"
+                )
+        elif spec.generators:
+            raise ValueError(
+                "a structure without declared generators cannot describe "
+                "generators"
+            )
+        described = dict(ring.parent_options)
+        declared = dict(spec.options)
+        missing = sorted(set(described) - set(declared))
+        if missing:
+            raise ValueError(
+                "the parent description omits representation options: "
+                + ", ".join(missing)
+            )
+        unknown = sorted(set(declared) - set(described))
+        if unknown:
+            raise ValueError(
+                "the parent description declares unknown representation "
+                "options: " + ", ".join(unknown)
+            )
+        for name, value in described.items():
+            if declared[name] != value:
+                raise ValueError(
+                    f"parent option {name!r} does not match the structure"
+                )
         identifier = ParentId(self._issuer.issue())
         created = Parent(identifier, spec, ring)
         self._ids[spec] = identifier

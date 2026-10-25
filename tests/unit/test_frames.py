@@ -49,10 +49,34 @@ def test_visibility_is_ancestor_only():
     assert not frames.is_visible(sibling.id, child.id)
 
 
+def test_readability_and_agreement_are_explicit_across_frames():
+    _, signature, frames, base, x = setup()
+    child = frames.create(base.id)
+    sibling = frames.create(base.id)
+    term = head_app(
+        signature, StructuralHead.GT, T.symbol(x, "x"), T.number(0)
+    )
+    in_base = proposition_in(frames, base.id, signature, term)
+    in_child = proposition_in(frames, child.id, signature, term)
+    in_sibling = proposition_in(frames, sibling.id, signature, term)
+    assert frames.readable(in_base, child.id)
+    assert frames.readable(in_child, child.id)
+    assert not frames.readable(in_sibling, child.id)
+    assert frames.agree_in(child.id, in_base, in_child)
+    assert not frames.agree_in(child.id, in_base, in_sibling)
+
+
 def test_a_missing_parent_is_refused():
     _, _, frames, _, _ = setup()
     with pytest.raises(KeyError):
         frames.create(FrameId(10_000))
+
+
+def test_a_missing_frame_is_never_visible():
+    _, _, frames, base, _ = setup()
+    missing = FrameId(10_000)
+    assert not frames.is_visible(base.id, missing)
+    assert not frames.is_visible(missing, base.id)
 
 
 def test_declared_sorts_are_found_along_the_chain():
@@ -73,6 +97,16 @@ def test_shadowing_requires_a_fresh_id():
     assert frames.sort_of(child.id, x) is S.REAL
 
 
+def test_a_structural_head_cannot_be_declared_as_a_symbol():
+    _, signature, frames, base, _ = setup()
+    plus = signature.symbol_of(StructuralHead.PLUS)
+    assert plus is not None
+    with pytest.raises(ValueError):
+        frames.create(
+            base.id, declarations=(Declaration(plus, "Plus", S.REAL),)
+        )
+
+
 def test_a_symbol_cannot_be_introduced_twice():
     _, _, frames, base, x = setup()
     with pytest.raises(ValueError):
@@ -90,6 +124,12 @@ def test_a_symbol_cannot_be_introduced_twice():
 def test_declarations_and_definitions_need_display_names():
     with pytest.raises(ValueError):
         Declaration(SymbolId(1), "", S.REAL)
+    with pytest.raises(TypeError):
+        Declaration(SymbolId(1), "x", "real")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Definition(SymbolId(1), "x", "term")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Hypothesis("proposition")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         Definition(SymbolId(1), "", T.number(1))
 
@@ -208,6 +248,18 @@ def test_the_root_cannot_carry_a_hypothesis():
         frames.create(None, hypotheses=(Hypothesis(proposition),))
 
 
+def test_a_symbol_cannot_be_declared_in_two_sibling_frames():
+    table, _, frames, base, _ = setup()
+    y = table.intern("y")
+    frames.create(
+        base.id, declarations=(Declaration(y, "y", S.REAL),)
+    )
+    with pytest.raises(ValueError):
+        frames.create(
+            base.id, declarations=(Declaration(y, "y", S.REAL),)
+        )
+
+
 def test_a_hypothesis_must_be_meaningful_in_the_parent():
     table, signature, frames, base, x = setup()
     sibling = frames.create(base.id)
@@ -216,6 +268,28 @@ def test_a_hypothesis_must_be_meaningful_in_the_parent():
         sibling.id,
         signature,
         head_app(signature, StructuralHead.EQ, T.symbol(x, "x"), T.number(1)),
+    )
+    with pytest.raises(ValueError):
+        frames.create(base.id, hypotheses=(Hypothesis(foreign),))
+
+
+def test_a_hypothesis_cannot_reference_a_sibling_symbol():
+    table, signature, frames, base, x = setup()
+    y = table.intern("y")
+    frames.create(
+        base.id, declarations=(Declaration(y, "y", S.REAL),)
+    )
+    source = proposition_in(
+        frames,
+        base.id,
+        signature,
+        head_app(signature, StructuralHead.GT, T.symbol(x, "x"), T.number(0)),
+    )
+    foreign = dataclasses.replace(
+        source,
+        term=head_app(
+            signature, StructuralHead.GT, T.symbol(y, "y"), T.number(0)
+        ),
     )
     with pytest.raises(ValueError):
         frames.create(base.id, hypotheses=(Hypothesis(foreign),))

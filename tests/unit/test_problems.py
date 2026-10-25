@@ -5,7 +5,6 @@ import dataclasses
 import pytest
 from support import head_app, proposition_in
 
-from cas.language import sorts as S
 from cas.language.problems import (
     Coverage,
     ParameterMode,
@@ -21,7 +20,6 @@ def specification(**overrides) -> ProblemSpec:
         operation="differentiate",
         inputs=(T.number(1),),
         target=None,
-        target_sort=S.REAL,
         region=None,
         result_language=ResultLanguage.EXPRESSION,
         parameter_mode=ParameterMode.SPECIFIED_VALUES,
@@ -44,6 +42,17 @@ def test_a_problem_needs_an_operation_and_an_input():
         specification(operation="")
     with pytest.raises(ValueError):
         specification(inputs=())
+
+
+def test_a_problem_validates_field_kinds():
+    with pytest.raises(TypeError):
+        specification(inputs=(1,))
+    with pytest.raises(TypeError):
+        specification(coverage="one_verified")
+    with pytest.raises(TypeError):
+        specification(result_language="expression")
+    with pytest.raises(TypeError):
+        specification(externalizable=(T.number(1),))
 
 
 def test_a_complete_set_request_cannot_externalize_premises(runtime):

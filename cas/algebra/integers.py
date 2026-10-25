@@ -37,6 +37,18 @@ class IntegerRing(
     def mul(self, left: int, right: int) -> int:
         return left * right
 
+    @property
+    def parent_kind(self) -> str:
+        return "Z"
+
+    @property
+    def parent_requires_base(self) -> bool:
+        return False
+
+    @property
+    def parent_options(self) -> tuple[tuple[str, str], ...]:
+        return ()
+
     def contains(self, value: object) -> bool:
         return isinstance(value, int) and not isinstance(value, bool)
 
@@ -50,10 +62,7 @@ class IntegerRing(
 
     def gcd(self, left: int, right: int) -> int:
         """Greatest common divisor, normalised to a nonnegative value."""
-        first, second = abs(left), abs(right)
-        while second:
-            first, second = second, first % second
-        return first
+        return abs(super().gcd(left, right))
 
     def sign(self, value: int) -> int:
         return (value > 0) - (value < 0)

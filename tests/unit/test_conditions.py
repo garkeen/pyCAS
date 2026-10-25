@@ -248,6 +248,31 @@ def test_restricted_implication_and_equivalence():
     assert equivalent(contradictory, T.FALSE, signature) is True
 
 
+def test_not_is_not_pushed_through_a_partial_comparison():
+    signature, x = setup()
+    partial = T.app(T.symbol(SymbolId(10_000), "f"), x)
+    less = comparison(signature, StructuralHead.LT, partial, T.number(0))
+    greater_equal = comparison(
+        signature, StructuralHead.GE, partial, T.number(0)
+    )
+    negated = head_app(signature, StructuralHead.NOT, less)
+    assert equivalent(negated, greater_equal, signature) is not True
+    assert implies(negated, greater_equal, signature) is None
+
+
+def test_not_is_not_pushed_through_a_zero_power_comparison():
+    signature, x = setup()
+    zero_power = head_app(
+        signature, StructuralHead.POWER, x, T.number(0)
+    )
+    less = comparison(signature, StructuralHead.LT, zero_power, T.number(0))
+    greater_equal = comparison(
+        signature, StructuralHead.GE, zero_power, T.number(0)
+    )
+    negated = head_app(signature, StructuralHead.NOT, less)
+    assert equivalent(negated, greater_equal, signature) is not True
+
+
 def test_zero_to_the_zero_is_not_a_ground_value():
     signature, _ = setup()
     assert ground_value(
