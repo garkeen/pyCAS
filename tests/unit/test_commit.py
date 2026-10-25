@@ -1,8 +1,9 @@
 """Commit: exact checker specifications, conditions and atomic publication."""
 
+import pytest
 from support import equation, head_app, runtime_proposition, variable
 
-from cas.foundation.ids import FrameId, JudgmentId, ObligationId
+from cas.foundation.ids import FrameId, JudgmentId, ObligationId, WorldId
 from cas.kernel.commit import (
     CommitProposal,
     Committed,
@@ -20,13 +21,9 @@ from cas.kernel.evidence import (
     Unverified,
     Verified,
 )
-from cas.kernel.model import (
-    BasisKind,
-    BasisRef,
-    CertificateSchema,
-    ObligationReason,
-)
+from cas.kernel.model import ObligationReason
 from cas.kernel.store import KernelStore
+from cas.kernel.trust import BasisKind, BasisRef, CertificateSchema
 from cas.language.decisions import Reason
 from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
@@ -104,6 +101,67 @@ def test_a_verified_submission_is_published_once(runtime):
     assert request.frame == runtime.frame.id
     assert request.conclusions == (proposition,)
     assert request.certificate == "certificate"
+
+
+def test_an_oversized_certificate_is_rejected_before_the_checker(runtime):
+    checker = StubChecker()
+    registration = CheckerSpec(
+        checker,
+        CertificateSchema("test", "1", tuple, max_nodes=3),
+        frozenset({"test.problem"}),
+        frozenset({"test.specification"}),
+        runtime.world.id,
+    )
+    store = KernelStore(
+        runtime.frames, CheckerRegistry({checker.id: registration})
+    )
+    proposition = conclusion(runtime)
+    checker.outcome = Verified((proposition,))
+    result = commit(
+        store,
+        proposal(runtime, proposition, certificate=(1, 2, 3, 4)),
+    )
+    assert isinstance(result, Rejected)
+    assert "budget" in result.detail
+    assert checker.requests == []
+    assert_empty(store)
+
+
+def test_a_checker_from_another_world_is_rejected(runtime):
+    checker = StubChecker()
+    registration = CheckerSpec(
+        checker,
+        CertificateSchema("test", "1", str),
+        frozenset({"test.problem"}),
+        frozenset({"test.specification"}),
+        WorldId(runtime.world.id + 1),
+    )
+    store = KernelStore(
+        runtime.frames, CheckerRegistry({checker.id: registration})
+    )
+    proposition = conclusion(runtime)
+    checker.outcome = Verified((proposition,))
+    result = commit(store, proposal(runtime, proposition))
+    assert isinstance(result, Rejected)
+    assert "world" in result.detail
+    assert_empty(store)
+
+
+def test_a_commit_policy_must_be_a_condition_policy(runtime):
+    with pytest.raises(TypeError):
+        proposal(
+            runtime,
+            conclusion(runtime),
+            policy="allow_conditional",
+        )
+    with pytest.raises(TypeError):
+        proposal(
+            runtime,
+            conclusion(runtime),
+            conclusions=(T.number(1),),
+        )
+    with pytest.raises(ValueError):
+        proposal(runtime, conclusion(runtime), checker_id="")
 
 
 def test_a_checker_must_have_verified_exactly_the_request(runtime):
@@ -762,6 +820,49 @@ def test_an_inconsistent_frame_rejects_publication(runtime):
     assert isinstance(result, Rejected)
     assert "inconsistent" in result.detail
     assert store.stats()["judgments"] == 1
+
+
+def test_an_ancestor_condition_is_reused_in_a_child_frame(runtime):
+    store, checker = setup(runtime)
+    parent_condition = conclusion(runtime, 0)
+    first_proposition = conclusion(runtime, 1)
+    checker.outcome = Verified(
+        (first_proposition,),
+        (ObligationReport(parent_condition, ObligationReason.DEFINEDNESS),),
+    )
+    first = commit(
+        store,
+        proposal(
+            runtime,
+            first_proposition,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        ),
+    )
+    assert isinstance(first, Committed)
+
+    child = runtime.frames.create(runtime.frame.id)
+    child_condition = equation(
+        runtime, variable(runtime), T.number(0), child.id
+    )
+    second_proposition = equation(
+        runtime, variable(runtime), T.number(2), child.id
+    )
+    checker.outcome = Verified(
+        (second_proposition,),
+        (ObligationReport(child_condition, ObligationReason.RULE_GUARD),),
+    )
+    second = commit(
+        store,
+        proposal(
+            runtime,
+            second_proposition,
+            frame=child.id,
+            policy=ConditionPolicy.ALLOW_CONDITIONAL,
+        ),
+    )
+    assert isinstance(second, Committed)
+    assert second.obligations == first.obligations
+    assert store.stats()["obligations"] == 1
 
 
 def test_an_identical_condition_reuses_the_existing_obligation(runtime):

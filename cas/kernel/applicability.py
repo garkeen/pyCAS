@@ -1,87 +1,19 @@
-"""Condition checking and applicability resolution.
+"""Applicability resolution: try to discharge a judgment's open obligations.
 
-`ConditionChecker` proves a condition from supplied premise judgments using the
-restricted condition implication service. It reports only premises that are
-actually needed, so the kernel does not inherit support that the proof did not
-use.
-
-`resolve_applicability` is the resolver side of §14.6: it inspects a judgment's
-open obligations, tries to prove each one from visible unconditional judgments,
-commits the proof, and records a discharge. It never turns an undecided
-condition into `Applicable`; unresolved conditions remain `Conditional`.
+`resolve_applicability` is the resolver side of §14.6. It inspects a judgment's
+open obligations, offers visible unconditional judgments to the registered
+condition checker, commits the proof, and records a discharge. It never turns
+an undecided condition into `Applicable`; unresolved conditions remain
+`Conditional`. The checker itself lives in `condition_checker.py`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from cas.foundation.ids import FrameId, JudgmentId
 from cas.kernel.commit import CommitProposal, Committed, commit
-from cas.kernel.evidence import (
-    CheckOutcome,
-    CheckRequest,
-    Unverified,
-    Verified,
-)
+from cas.kernel.condition_checker import ConditionChecker
 from cas.kernel.model import Applicability, Conditional, OutOfScope
 from cas.kernel.store import KernelStore
-from cas.language.decisions import Reason
-from cas.language.propositions import Proposition
-from cas.language.signatures import LanguageSignature
-from cas.semantics.conditions import and_all, implies
-
-
-class ConditionChecker:
-    """Prove a condition from premise judgments by restricted implication."""
-
-    id = "logic.condition"
-    version = "1"
-
-    def __init__(self, signature: LanguageSignature) -> None:
-        self._signature = signature
-
-    def check(self, request: CheckRequest) -> CheckOutcome:
-        used: set[int] = set()
-        for conclusion in request.conclusions:
-            indices = self._needed(request.premises, conclusion)
-            if indices is None:
-                return Unverified(
-                    Reason.GUARDED,
-                    "the condition is not entailed by the supplied premises",
-                )
-            used.update(indices)
-        return Verified(
-            tuple(request.conclusions),
-            used_premises=tuple(sorted(used)),
-        )
-
-    def _needed(
-        self,
-        premises: tuple[Proposition, ...],
-        conclusion: Proposition,
-    ) -> list[int] | None:
-        if not self._entails(premises, range(len(premises)), conclusion):
-            return None
-        kept = list(range(len(premises)))
-        for index in list(kept):
-            trial = [position for position in kept if position != index]
-            if self._entails(premises, trial, conclusion):
-                kept = trial
-        return kept
-
-    def _entails(
-        self,
-        premises: tuple[Proposition, ...],
-        indices: Iterable[int],
-        conclusion: Proposition,
-    ) -> bool:
-        assumption = and_all(
-            self._signature,
-            *(premises[index].term for index in indices),
-        )
-        return implies(
-            assumption, conclusion.term, self._signature
-        ) is True
 
 
 def resolve_applicability(
@@ -150,4 +82,4 @@ def _candidates(
     return tuple(out)
 
 
-__all__ = ["ConditionChecker", "resolve_applicability"]
+__all__ = ["resolve_applicability"]

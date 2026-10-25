@@ -3,8 +3,9 @@
 from support import head_app, proposition_in
 
 from cas.foundation.ids import WorldId
-from cas.kernel.applicability import ConditionChecker, resolve_applicability
+from cas.kernel.applicability import resolve_applicability
 from cas.kernel.commit import CommitProposal, Committed, ConditionPolicy, commit
+from cas.kernel.condition_checker import ConditionChecker
 from cas.kernel.context_rules import HypothesisChecker
 from cas.kernel.evidence import (
     CheckerRegistry,
@@ -17,12 +18,12 @@ from cas.kernel.evidence import (
 from cas.kernel.model import (
     Applicable,
     Blocked,
-    CertificateSchema,
     Conditional,
     ObligationReason,
     OutOfScope,
 )
 from cas.kernel.store import KernelStore
+from cas.kernel.trust import CertificateSchema
 from cas.language import sorts as S
 from cas.language.signatures import StructuralHead
 from cas.semantics.frames import Declaration, FrameStore, Hypothesis, World
@@ -94,7 +95,7 @@ def setup(*, hypotheses=()):
         signature,
         head_app(signature, StructuralHead.GT, x_term, T.number(1)),
     )
-    condition = ConditionChecker(signature)
+    condition = ConditionChecker(frames, signature)
     hypothesis = HypothesisChecker(frames)
     obligation = ObligationChecker(
         proposition_in(
@@ -202,7 +203,7 @@ def test_the_condition_checker_reports_the_premises_it_needs():
         signature,
         head_app(signature, StructuralHead.GT, x_term, T.number(1)),
     )
-    outcome = ConditionChecker(signature).check(
+    outcome = ConditionChecker(frames, signature).check(
         CheckRequest(child.id, (weaker,), (stronger,), None)
     )
     assert isinstance(outcome, Verified)
@@ -214,7 +215,7 @@ def test_the_condition_checker_reports_the_premises_it_needs():
         signature,
         head_app(signature, StructuralHead.GE, x_term, T.number(0)),
     )
-    outcome = ConditionChecker(signature).check(
+    outcome = ConditionChecker(frames, signature).check(
         CheckRequest(child.id, (weaker,), (not_enough,), None)
     )
     assert isinstance(outcome, Unverified)

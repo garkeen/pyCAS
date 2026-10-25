@@ -71,6 +71,12 @@ def test_the_same_text_in_a_different_meaning_is_not_the_hypothesis():
 
 
 def test_every_conclusion_must_be_an_assumption():
-    frames, _, _, proposition, child = setup()
-    outcome = check(frames, child, (proposition, T.TRUE))
+    frames, signature, x_term, proposition, child = setup()
+    other = proposition_in(
+        frames,
+        child.id,
+        signature,
+        head_app(signature, StructuralHead.GT, x_term, T.number(1)),
+    )
+    outcome = check(frames, child, (proposition, other))
     assert isinstance(outcome, Unverified)

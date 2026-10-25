@@ -3,16 +3,9 @@
 import pytest
 from support import head_app, proposition_in, variable
 
-from cas.foundation.ids import WorldId
 from cas.kernel.consistency import ContradictionChecker, assess_consistency
 from cas.kernel.evidence import CheckRequest, Unverified, Verified
-from cas.kernel.model import (
-    BasisKind,
-    BasisRef,
-    ConsistentForFragment,
-    Inconsistent,
-    Unassessed,
-)
+from cas.kernel.model import Inconsistent, Unassessed
 from cas.kernel.store import KernelError
 from cas.language.signatures import StructuralHead
 from cas.runtime import bootstrap
@@ -204,62 +197,6 @@ def test_a_false_assumption_marks_the_frame_inconsistent():
     result = workspace.assume(T.FALSE)
     assert result.status is OperationStatus.INVALID
     assert isinstance(result.consistency, Inconsistent)
-
-
-def test_a_fragment_claim_needs_evidence_and_is_not_inherited():
-    runtime = bootstrap()
-    basis = BasisRef(
-        "test-library",
-        BasisKind.STANDARD_LIBRARY,
-        "1",
-        "digest",
-        WorldId(0),
-    )
-    with pytest.raises(ValueError):
-        ConsistentForFragment("Q[x]", ())
-    state = runtime.store.record_consistency_claim(
-        runtime.frame.id, "Q[x] differentiation", basis=(basis,)
-    )
-    assert isinstance(state, ConsistentForFragment)
-    assert runtime.store.consistency(runtime.frame.id) == state
-    child = runtime.frames.create(runtime.frame.id)
-    assert isinstance(runtime.store.consistency(child.id), Unassessed)
-
-
-def test_a_fragment_claim_rejects_a_basis_from_another_world():
-    runtime = bootstrap()
-    basis = BasisRef(
-        "test-library",
-        BasisKind.STANDARD_LIBRARY,
-        "1",
-        "digest",
-        WorldId(99),
-    )
-    with pytest.raises(KernelError):
-        runtime.store.record_consistency_claim(
-            runtime.frame.id, "Q[x] differentiation", basis=(basis,)
-        )
-
-
-def test_an_inconsistent_frame_cannot_be_declared_consistent():
-    runtime = bootstrap()
-    workspace = Workspace(runtime)
-    workspace.assume(gt_zero(runtime))
-    workspace.assume(not_gt_zero(runtime))
-    with pytest.raises(KernelError):
-        runtime.store.record_consistency_claim(
-            workspace.frame,
-            "Q[x] differentiation",
-            basis=(
-                BasisRef(
-                    "test-library",
-                    BasisKind.STANDARD_LIBRARY,
-                    "1",
-                    "digest",
-                    WorldId(0),
-                ),
-            ),
-        )
 
 
 def test_a_contradiction_witness_must_state_false():

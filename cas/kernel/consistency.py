@@ -53,39 +53,31 @@ class ContradictionChecker:
                 Reason.FRAGMENT,
                 "the contradiction rule proves false only",
             )
-        terms = [
-            proposition.term
-            for proposition in self._frames.assumptions(request.frame)
-        ]
+        propositions = self._frames.assumptions(request.frame)
         if any(
-            condition_truth(term, self._signature) is False
-            for term in terms
+            condition_truth(proposition.term, self._signature) is False
+            for proposition in propositions
         ):
             return Verified(tuple(request.conclusions))
-        not_symbol = self._signature.symbol_of(StructuralHead.NOT)
-        if not_symbol is None:
+        if self._signature.symbol_of(StructuralHead.NOT) is None:
             return Unverified(
                 Reason.FRAGMENT,
                 "the language has no negation symbol",
             )
-        head = T.symbol(not_symbol, StructuralHead.NOT.value)
-        for left in terms:
-            for right in terms:
-                if _negates(head, left, right) or _negates(head, right, left):
+        for left in propositions:
+            for right in propositions:
+                if not self._frames.agree_in(request.frame, left, right):
+                    continue
+                if Pr.negates(
+                    left.term, right.term, self._signature
+                ) or Pr.negates(
+                    right.term, left.term, self._signature
+                ):
                     return Verified(tuple(request.conclusions))
         return Unverified(
             Reason.GUARDED,
             "the visible assumptions are not a complementary pair",
         )
-
-
-def _negates(head: T.SymbolRef, outer: T.Term, inner: T.Term) -> bool:
-    return (
-        isinstance(outer, T.Apply)
-        and outer.operator == head
-        and len(outer.arguments) == 1
-        and outer.arguments[0] == inner
-    )
 
 
 def assess_consistency(

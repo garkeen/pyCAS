@@ -15,7 +15,8 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from cas.foundation.ids import FrameId, WorldId
-from cas.kernel.model import BasisRef, CertificateSchema, ObligationReason
+from cas.kernel.model import ObligationReason
+from cas.kernel.trust import BasisRef, CertificateSchema
 from cas.language.decisions import Reason
 from cas.language.propositions import Proposition
 from cas.syntax import term as T
@@ -30,6 +31,11 @@ class CheckRequest:
     premises: tuple[Proposition, ...]
     certificate: object
 
+    def __post_init__(self) -> None:
+        for proposition in self.premises + self.conclusions:
+            if not isinstance(proposition, Proposition):
+                raise TypeError("a check request carries propositions")
+
 
 @dataclass(frozen=True, slots=True)
 class ObligationReport:
@@ -37,6 +43,12 @@ class ObligationReport:
 
     proposition: Proposition
     reason: ObligationReason
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.proposition, Proposition):
+            raise TypeError("an obligation report carries a proposition")
+        if not isinstance(self.reason, ObligationReason):
+            raise TypeError("an obligation report needs a reason")
 
 
 class CheckOutcome:
@@ -57,6 +69,20 @@ class Verified(CheckOutcome):
     reads: tuple[tuple[str, str], ...] = ()
     used_premises: tuple[int, ...] = ()
 
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, Proposition) for item in self.checked):
+            raise TypeError("a verified outcome carries propositions")
+        if any(
+            not isinstance(item, ObligationReport)
+            for item in self.obligations
+        ):
+            raise TypeError("a verified outcome carries obligation reports")
+        if any(
+            not isinstance(index, int) or isinstance(index, bool)
+            for index in self.used_premises
+        ):
+            raise TypeError("used premise indices must be integers")
+
 
 @dataclass(frozen=True, slots=True)
 class Refuted(CheckOutcome):
@@ -67,8 +93,12 @@ class Refuted(CheckOutcome):
     detail: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.proposition, Proposition):
+            raise TypeError("a refutation carries a proposition")
         if not self.witnesses:
             raise ValueError("a refutation needs at least one witness")
+        if any(not isinstance(item, T.Term) for item in self.witnesses):
+            raise TypeError("refutation witnesses must be terms")
         if not self.detail:
             raise ValueError("a refutation needs an explanation")
 
@@ -79,6 +109,10 @@ class Unverified(CheckOutcome):
 
     reason: Reason
     detail: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, Reason):
+            raise TypeError("an unverified outcome needs a Reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,19 +155,31 @@ class CheckerSpec:
             raise ValueError(
                 f"checker {self.checker.id!r} has no version"
             )
-        if (
-            not self.accepted_problem_kinds
-            or any(not kind for kind in self.accepted_problem_kinds)
+        for label, kinds in (
+            ("problem", self.accepted_problem_kinds),
+            ("specification", self.accepted_specification_kinds),
         ):
-            raise ValueError(
-                f"checker {self.checker.id!r} accepts no problem kind"
+            if not isinstance(kinds, frozenset) or any(
+                not isinstance(kind, str) or not kind for kind in kinds
+            ):
+                raise TypeError(
+                    f"checker {self.checker.id!r} needs string {label} kinds"
+                )
+            if not kinds:
+                raise ValueError(
+                    f"checker {self.checker.id!r} accepts no {label} kind"
+                )
+        if not isinstance(self.trusted_dependencies, tuple):
+            raise TypeError(
+                f"checker {self.checker.id!r} trusted dependencies "
+                "must be a tuple"
             )
-        if (
-            not self.accepted_specification_kinds
-            or any(not kind for kind in self.accepted_specification_kinds)
+        if any(
+            not isinstance(basis, BasisRef)
+            for basis in self.trusted_dependencies
         ):
-            raise ValueError(
-                f"checker {self.checker.id!r} accepts no specification kind"
+            raise TypeError(
+                f"checker {self.checker.id!r} has a non-basis dependency"
             )
         keys = [
             (basis.name, basis.kind, basis.version, basis.digest, basis.world)

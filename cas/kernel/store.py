@@ -1,12 +1,14 @@
 """The trusted ledger.
 
-All writes go through `publish`, which validates the whole batch before touching
-a dictionary. There are no reverse indexes to repair and no half-inserted state:
-a batch either passes validation and is inserted, or nothing is inserted.
+Judgment/obligation/inference/discharge writes go through `_publish`, which
+validates the whole batch before touching a dictionary. There are no reverse
+indexes to repair and no half-inserted state: a batch either passes validation
+and is inserted, or nothing is inserted. Consistency state is the one separate
+trusted record; it is written only after checking a closed `false` judgment.
 
 This is atomicity for one synchronous writer, which is the current model. A
 concurrent or persisted ledger needs a real transaction, and the interface is
-shaped so that `publish` is the only place to implement it.
+shaped so that `_publish` is the only place to implement it.
 """
 
 from __future__ import annotations
@@ -25,10 +27,8 @@ from cas.kernel.evidence import CheckerRegistry
 from cas.kernel.model import (
     Applicability,
     Applicable,
-    BasisRef,
     Blocked,
     Conditional,
-    ConsistentForFragment,
     Discharge,
     FrameConsistency,
     Inconsistent,
@@ -38,8 +38,7 @@ from cas.kernel.model import (
     OutOfScope,
     Unassessed,
 )
-from cas.language.propositions import Proposition
-from cas.language.signatures import StructuralHead
+from cas.language.propositions import Proposition, negates
 from cas.semantics.frames import FrameStore
 from cas.syntax import term as T
 
@@ -103,8 +102,8 @@ class KernelStore:
     ) -> None:
         """Insert one validated batch, or nothing.
 
-        This is the only insertion point; it is called by `commit` and
-        `discharge`, never by a frontend. Duplicate ids and dangling references
+        This is the only insertion point; it is called by `commit`, never by a
+        frontend. Duplicate ids and dangling references
         are refused before any insertion, and every stored proposition must be
         readable in the frame that stores it. After validation, insertion cannot
         fail.
@@ -311,17 +310,21 @@ class KernelStore:
     def find_obligation(
         self, proposition: Proposition, frame: FrameId
     ) -> ObligationId | None:
-        """An existing obligation with the same proposition in `frame`.
+        """An existing obligation that states the same formula in `frame`.
 
-        Propositions carry their meaning environment, so exact equality is the
-        semantic identity key for the current immutable-frame model.
+        A proposition issued in an ancestor keeps its meaning in a descendant
+        (the explicit weakening rule in `FrameStore.agree_in`), so an ancestor
+        obligation can be reused. A sibling or descendant obligation is not
+        visible and is never reused.
         """
         for obligation in self._obligations.values():
-            if (
-                obligation.frame == frame
-                and obligation.proposition == proposition
+            if not self.frames.agree_in(
+                frame, obligation.proposition, proposition
             ):
-                return obligation.id
+                continue
+            if obligation.proposition.term != proposition.term:
+                continue
+            return obligation.id
         return None
 
     def is_discharged(self, obligation: ObligationId, frame: FrameId) -> bool:
@@ -331,47 +334,48 @@ class KernelStore:
             for discharge in self._discharges.get(obligation, ())
         )
 
+    def _pending_obligations(
+        self, judgment: Judgment, frame: FrameId
+    ) -> tuple[ObligationId, ...]:
+        return tuple(
+            obligation
+            for obligation in judgment.obligations
+            if not self.is_discharged(obligation, frame)
+        )
+
     def _is_closed(self, judgment: Judgment, frame: FrameId) -> bool:
         """Whether every obligation is discharged, without refutation checks.
 
         Applicability needs a non-recursive closure test: refutation lookups
         themselves ask which visible judgments are closed.
         """
-        return all(
-            self.is_discharged(obligation, frame)
-            for obligation in judgment.obligations
-        )
+        return not self._pending_obligations(judgment, frame)
 
     def refutation_of(
         self, proposition: Proposition, frame: FrameId
     ) -> JudgmentId | None:
         """A closed visible judgment that states the negation of `proposition`.
 
-        The comparison is structural because frames only extend along a chain:
-        every visible frame resolves the same stable symbol ids. A conditional
-        judgment is not a refutation; only a closed one is used.
+        Terms are compared only after `FrameStore.agree_in` has established the
+        explicit weakening rule: both propositions are readable in `frame` and
+        belong to the same world. A conditional judgment is not a refutation;
+        only a closed one is used.
         """
-        if not self.frames.is_visible(proposition.meaning.frame, frame):
+        if not self.frames.readable(proposition, frame):
             return None
-        not_symbol = self.frames.world.language.symbol_of(StructuralHead.NOT)
-        if not_symbol is None:
-            return None
-        head = T.symbol(not_symbol, StructuralHead.NOT.value)
-
-        def negates(outer: T.Term, inner: T.Term) -> bool:
-            return (
-                isinstance(outer, T.Apply)
-                and outer.operator == head
-                and len(outer.arguments) == 1
-                and outer.arguments[0] == inner
-            )
-
+        signature = self.frames.world.language
         for judgment in self.judgments_visible(frame):
             if not self._is_closed(judgment, frame):
                 continue
+            if not self.frames.agree_in(
+                frame, judgment.proposition, proposition
+            ):
+                continue
             if negates(
-                judgment.proposition.term, proposition.term
-            ) or negates(proposition.term, judgment.proposition.term):
+                judgment.proposition.term, proposition.term, signature
+            ) or negates(
+                proposition.term, judgment.proposition.term, signature
+            ):
                 return judgment.id
         return None
 
@@ -382,11 +386,7 @@ class KernelStore:
         record = self._judgments[judgment]
         if not self.frames.is_visible(record.frame, frame):
             return OutOfScope(record.frame, frame)
-        pending = tuple(
-            obligation
-            for obligation in record.obligations
-            if not self.is_discharged(obligation, frame)
-        )
+        pending = self._pending_obligations(record, frame)
         if not pending:
             return Applicable()
         refuted: list[ObligationId] = []
@@ -442,46 +442,6 @@ class KernelStore:
         if isinstance(existing, Inconsistent):
             return existing
         state = Inconsistent(witness, "the frame proves false")
-        self._consistency[frame] = state
-        return state
-
-    def record_consistency_claim(
-        self,
-        frame: FrameId,
-        fragment: str,
-        *,
-        evidence: tuple[JudgmentId, ...] = (),
-        basis: tuple[BasisRef, ...] = (),
-    ) -> ConsistentForFragment:
-        """Record an explicit, evidence-bearing consistency claim.
-
-        The kernel checks that the evidence exists, is visible and is closed.
-        It does not turn the claim into a general consistency theorem.
-        """
-        self._require_frame(frame)
-        if isinstance(self.consistency(frame), Inconsistent):
-            raise KernelError(
-                "an inconsistent frame cannot be declared consistent"
-            )
-        for identifier in evidence:
-            try:
-                judgment = self._judgments[identifier]
-            except KeyError:
-                raise KernelError(
-                    f"judgment does not exist: {identifier!r}"
-                ) from None
-            if not self.frames.is_visible(judgment.frame, frame):
-                raise KernelError("consistency evidence is outside the frame")
-            if not self._is_closed(judgment, frame):
-                raise KernelError(
-                    "consistency evidence still has open conditions"
-                )
-        for reference in basis:
-            if reference.world != self.frames.world.id:
-                raise KernelError(
-                    "a basis reference belongs to another world"
-                )
-        state = ConsistentForFragment(fragment, evidence, basis)
         self._consistency[frame] = state
         return state
 

@@ -14,12 +14,8 @@ from cas.kernel.evidence import (
     Unverified,
     Verified,
 )
-from cas.kernel.model import (
-    BasisKind,
-    BasisRef,
-    CertificateSchema,
-    ObligationReason,
-)
+from cas.kernel.model import ObligationReason
+from cas.kernel.trust import BasisKind, BasisRef, CertificateSchema
 from cas.language.decisions import Reason
 from cas.syntax import term as T
 
@@ -51,6 +47,62 @@ def basis(name="library"):
     return BasisRef(
         name, BasisKind.STANDARD_LIBRARY, "1", "digest", WorldId(0)
     )
+
+
+def test_a_certificate_schema_enforces_a_structural_budget():
+    schema = CertificateSchema(
+        "test", "1", tuple, max_nodes=4, max_depth=3
+    )
+    assert schema.within_budget((1, 2))
+    assert not schema.within_budget((1, 2, 3, 4, 5))
+    deep = ((((1,),),),)
+    assert schema.accepts(deep)
+    assert not schema.within_budget(deep)
+
+
+def test_a_certificate_budget_refuses_unmeasurable_or_cyclic_values():
+    schema = CertificateSchema("test", "1", object)
+    assert not schema.within_budget(object())
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+    assert schema.accepts(cyclic)
+    assert not schema.within_budget(cyclic)
+
+
+def test_trust_records_validate_their_kinds():
+    with pytest.raises(TypeError):
+        BasisRef(
+            "library",
+            "standard_library",
+            "1",
+            "digest",
+            WorldId(0),
+        )
+    with pytest.raises(TypeError):
+        CheckerSpec(
+            GoodChecker(),
+            CertificateSchema("test", "1", type(None)),
+            ["test.problem"],
+            frozenset({"test.specification"}),
+            WorldId(0),
+        )
+
+
+def test_check_outcomes_validate_their_payloads():
+    with pytest.raises(TypeError):
+        Verified((T.TRUE,))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Refuted(T.TRUE, (T.number(1),), "not a proposition")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Unverified("fragment")  # type: ignore[arg-type]
+
+
+def test_check_requests_and_obligation_reports_validate_their_data():
+    assert CheckRequest(FrameId(0), (), (), None).conclusions == ()
+    with pytest.raises(TypeError):
+        CheckRequest(FrameId(0), (T.TRUE,), (), None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        ObligationReport(T.TRUE, ObligationReason.DEFINEDNESS)  # type: ignore[arg-type]
 
 
 def test_the_registry_returns_registered_checkers():

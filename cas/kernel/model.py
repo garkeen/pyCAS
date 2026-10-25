@@ -23,60 +23,9 @@ from cas.foundation.ids import (
     InferenceId,
     JudgmentId,
     ObligationId,
-    WorldId,
 )
+from cas.kernel.trust import BasisRef
 from cas.language.propositions import Proposition
-
-
-class BasisKind(StrEnum):
-    """What kind of trusted dependency a basis reference names."""
-
-    STANDARD_LIBRARY = "standard_library"
-    DECLARATION_FILE = "declaration_file"
-
-
-@dataclass(frozen=True, slots=True)
-class BasisRef:
-    """An admitted trusted basis: kind, version, scope and content digest.
-
-    A basis reference is created at assembly time from data the runtime admits
-    explicitly. It is not a proof; it records which trusted dependency a checker
-    used, so an inference can be audited against the world it was made in.
-    """
-
-    name: str
-    kind: BasisKind
-    version: str
-    digest: str
-    world: WorldId
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("a basis reference needs a name")
-        if not self.version:
-            raise ValueError("a basis reference needs a version")
-        if not self.digest:
-            raise ValueError("a basis reference needs a content digest")
-
-
-@dataclass(frozen=True, slots=True)
-class CertificateSchema:
-    """The certificate format a checker is admitted to interpret."""
-
-    name: str
-    version: str
-    certificate_type: type
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("a certificate schema needs a name")
-        if not self.version:
-            raise ValueError("a certificate schema needs a version")
-        if not isinstance(self.certificate_type, type):
-            raise TypeError("a certificate schema needs a certificate type")
-
-    def accepts(self, certificate: object) -> bool:
-        return isinstance(certificate, self.certificate_type)
 
 
 class ObligationReason(StrEnum):
@@ -143,9 +92,10 @@ class Discharge:
 class FrameConsistency:
     """Closed result of assessing whether a frame's assumptions are consistent.
 
-    `Unassessed` is the default and does not mean consistent. A fragment claim
-    must name its fragment and carry evidence; an inconsistency must carry the
-    issued false judgment that closed the contradiction.
+    `Unassessed` is the default and does not mean consistent. An inconsistency
+    must carry the issued false judgment that closed the contradiction. A
+    fragment-consistency claim is deliberately absent until a checker can verify
+    it; recording arbitrary judgments as evidence would not be a proof.
     """
 
     __slots__ = ()
@@ -156,22 +106,7 @@ class FrameConsistency:
 
 @dataclass(frozen=True, slots=True)
 class Unassessed(FrameConsistency):
-    """No consistency evidence has been recorded."""
-
-
-@dataclass(frozen=True, slots=True)
-class ConsistentForFragment(FrameConsistency):
-    """Consistency is claimed for a named fragment, with explicit evidence."""
-
-    fragment: str
-    evidence: tuple[JudgmentId, ...] = ()
-    basis: tuple[BasisRef, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.fragment:
-            raise ValueError("a fragment claim needs a fragment description")
-        if not self.evidence and not self.basis:
-            raise ValueError("a fragment claim needs evidence or a basis")
+    """No consistency proof has been issued."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,12 +175,8 @@ class OutOfScope(Applicability):
 __all__ = [
     "Applicability",
     "Applicable",
-    "BasisKind",
-    "BasisRef",
     "Blocked",
-    "CertificateSchema",
     "Conditional",
-    "ConsistentForFragment",
     "Discharge",
     "FrameConsistency",
     "Inconsistent",

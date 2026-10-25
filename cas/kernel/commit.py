@@ -63,18 +63,25 @@ class CommitProposal:
     policy: ConditionPolicy = ConditionPolicy.REQUIRE_PROVED
     discharge_obligations: tuple[ObligationId, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.policy, ConditionPolicy):
+            raise TypeError("a commit policy must be a ConditionPolicy")
+        for label, value in (
+            ("checker", self.checker_id),
+            ("problem kind", self.problem_kind),
+            ("specification kind", self.specification_kind),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"a commit needs a {label}")
+        if any(
+            not isinstance(item, Proposition)
+            for item in self.conclusions
+        ):
+            raise TypeError("commit conclusions must be propositions")
+
 
 class CommitResult:
     __slots__ = ()
-
-    def is_committed(self) -> bool:
-        return isinstance(self, Committed)
-
-    def is_deferred(self) -> bool:
-        return isinstance(self, Deferred)
-
-    def is_rejected(self) -> bool:
-        return isinstance(self, Rejected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,9 +152,17 @@ def commit(store: KernelStore, proposal: CommitProposal) -> CommitResult:
             f"checker {spec.checker.id} is not admitted for specification "
             f"kind {proposal.specification_kind!r}"
         )
+    if spec.world != frame.world:
+        return Rejected(
+            f"checker {spec.checker.id} is registered for another world"
+        )
     if not spec.certificate_schema.accepts(proposal.certificate):
         return Rejected(
             "invalid evidence: certificate does not match the declared schema"
+        )
+    if not spec.certificate_schema.within_budget(proposal.certificate):
+        return Rejected(
+            "invalid evidence: certificate exceeds the schema budget"
         )
     checker = spec.checker
 

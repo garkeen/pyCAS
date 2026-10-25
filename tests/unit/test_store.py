@@ -19,12 +19,12 @@ from cas.kernel.evidence import (
 )
 from cas.kernel.model import (
     Blocked,
-    CertificateSchema,
     Conditional,
     ObligationReason,
     OutOfScope,
 )
 from cas.kernel.store import KernelStore
+from cas.kernel.trust import CertificateSchema
 from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
 
