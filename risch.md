@@ -6,7 +6,9 @@
 
 本文件**不含计划、阶段划分、优先级与顺序裁定**——那些属于 `AGENTS.md` 的节奏纪律与 `progress.md` 的进度职责，不在此处。文件内容只有三样：界分、工具清单、可核对的参考源码路径。
 
-使用时遵守 `reference.md` 的既有纪律：**抄语义不抄代码**；本系统裁定（`cas_v4_arch.md` + `AGENTS.md`）高于参考实现行为。三个参考库自身的缺口如实记录在 §16，不得当作「已实现」引用。
+使用时遵守 `reference.md` 的纪律：**抄语义不抄代码**；本系统裁定（`cas_v5_arch.md` + `AGENTS.md`）高于参考实现行为。
+
+2026-10-28：保留本报告完整工具清单及历史取证，不将任何一项因暂未实现而从最终目标删除。本文的旧 pyCAS 落地路径/状态不是当前 v5 状态，参考能力的“未定位/不存在”等判断也需逐项复核，不能由体量或关键词搜索推出。完整能力依赖、代数函数扩展与施工波次统一见架构 §30；下表并非所有 Risch 子片段的共同串行前置。
 
 ---
 
@@ -67,7 +69,7 @@
 | 素性判定 | 概率 / 确定性素性测试 | FriCAS `algebra/intfact.spad`、`algebra/numtheor.spad`；Maxima `numth.lisp`、`ifactor.lisp` |
 | 素数枚举 | 前若干素数、下一 / 上一素数 | FriCAS `algebra/intfact.spad`；Maxima `ifactor.lisp` |
 | 整数分解 | 分解为素数幂次 | FriCAS `algebra/intfact.spad`；Maxima `ifactor.lisp` |
-| 代数数判别式 | 数域判别式（积分基的输入） | sympy `polys/numberfields/modules.py`、`polys/numberfields/basis.py`；FriCAS `algebra/intclos.spad`（NumberFieldIntegralBasis）；Maxima `cpoly.lisp` |
+| 代数数判别式 | 数域判别式（整基的输入） | sympy `polys/numberfields/modules.py`、`polys/numberfields/basis.py`；FriCAS `algebra/intclos.spad`（NumberFieldIntegralBasis）；Maxima `cpoly.lisp` |
 
 ## §5 代数扩张
 
@@ -75,8 +77,8 @@
 |---|---|---|
 | 代数数域 | 由最小多项式建立域，元素与坐标双向转换 | sympy `polys/numberfields/minpoly.py`、`polys/domains/algebraicfield.py`；FriCAS `algebra/algext.spad`、`algebra/algcat.spad`；Maxima `algfac.lisp`、`nalgfa.lisp`、`rat3a.lisp` |
 | 代数数域上的因式分解 | 系数取在代数数域上的因式分解 | sympy `polys/factortools.py`；FriCAS `algebra/algfact.spad`、`algebra/ratfact.spad`、`algebra/fdalg.spad` |
-| 积分基 | 数域与一元函数域的整环基、局部基 | sympy `polys/numberfields/modules.py`、`polys/numberfields/subfield.py`；FriCAS `algebra/intclos.spad`（NumberFieldIntegralBasis / FunctionFieldIntegralBasis / WildFunctionFieldIntegralBasis）；Maxima `cpoly.lisp` |
-| 积分基支撑工具 | 模 Hermite 行归约、无分数三角逆、理想化子与理想化子矩阵、矩阵最大公因子 | sympy `polys/matrices/normalforms.py`、`polys/matrices/lll.py`；FriCAS `algebra/divisor.spad`、`algebra/intclos.spad`（TriangularMatrixOperations / IntegralBasisTools） |
+| 整基 | 数域与一元函数域的整环基、局部基 | sympy `polys/numberfields/modules.py`、`polys/numberfields/subfield.py`；FriCAS `algebra/intclos.spad`（NumberFieldIntegralBasis / FunctionFieldIntegralBasis / WildFunctionFieldIntegralBasis）；Maxima `cpoly.lisp` |
+| 整基支撑工具 | 模 Hermite 行归约、无分数三角逆、理想化子与理想化子矩阵、矩阵最大公因子 | sympy `polys/matrices/normalforms.py`、`polys/matrices/lll.py`；FriCAS `algebra/divisor.spad`、`algebra/intclos.spad`（TriangularMatrixOperations / IntegralBasisTools） |
 | 亏格 0 有理化换元 | 三类亏格 0 曲线的有理化代换（`y²=二次`、`y²=有理`、关于主变量一次） | FriCAS `algebra/intaf.spad`（GenusZeroIntegration）。**sympy 无对应实现** |
 | 代数函数域算术 | 曲线上的点、加乘、约化、极点判定 | sympy `polys/fields.py`；FriCAS `algebra/curve.spad`（AlgebraicFunctionField / RadicalFunctionField / ChangeOfVariable） |
 | 代数核规范化 | 嵌套根归一为「单根 + 首一最小多项式」标准形 | sympy `polys/polytools.py`、`simplify/simplify.py`；FriCAS `algebra/manip.spad`（AlgebraicManipulations）；Maxima `sqrtdenest.lisp`、`rpart.lisp` |
@@ -198,9 +200,9 @@
 | **sympy** | 1.14.0，`D:\Python\Python312\Lib\site-packages\sympy` | Python；Risch 三件套 `integrals/risch.py`（67,352 B）、`integrals/rde.py`（27,393 B）、`integrals/prde.py`（52,073 B），合计 146,818 B |
 | **FriCAS** | `D:\code\python\CAS\fricas`，核心在 `src\algebra`（356 个 `.spad`） | Spad；Risch 家族 16 个文件 438,594 B、50 个包：`intef/intaux/integrat/defintef/defintrf/intrf/intden/intaf/intalg/intpar/rdeefx/intclos/intfact/intlocp/intpm/intspec.spad` |
 | **Maxima** | `D:\code\python\CAS\maxima`，核心在 `src` | Common Lisp；`risch.lisp`（49,194 B）、`defint.lisp`（140,251 B）、`factor.lisp`、`spgcd.lisp`、`ezgcd.lisp`、`cpoly.lisp`、`algfac.lisp`、`nalgfa.lisp`、`ifactor.lisp`、`numth.lisp`、`nummod.lisp`、`series.lisp`、`tlimit.lisp`、`limit.lisp`、`exintegral.lisp`、`hypergeometric.lisp`、`sinint.lisp`、`trmode.lisp`、`trigo.lisp`、`halfangle.lisp`、`polyrz.lisp`、`rpart.lisp`、`intpol.lisp`、`irinte.lisp` |
-| **REDUCE** | `D:\code\python\CAS\reduce-algebra`，包在 `packages/` | Common Lisp（REDUCE / PSL）；**不是 Risch 算法权威**，只在两处有参考价值：结果表示 `packages/camal/camal.rlg`（37,835 B，CAMAL 闭式数学语言）、行为语料 `packages/algint/algint.rlg`（84,224 B）+ `packages/int/int.rlg`（80,077 B）。另有 `packages/invbase`（不变量基）、`packages/atensor`（微分形式）与目标 1 相关 |
+| **REDUCE** | `D:\code\python\CAS\reduce-algebra`，包在 `packages/` | 既有 `.red` 算法源码，也有 `.rlg` 行为语料；`algint/algint.red` 及相关模块需按算法取证。原记录的 CAMAL 结果表示、algint/int 行为日志、invbase/atensor 参考入口保留，但不再据日志内容断言整个系统只有这些参考价值 |
 
-**体量对照（说明覆盖范围的差异）**：sympy 的 Risch 三件套覆盖 FriCAS 家族中的**超越部分**（对应对数塔、指数塔、留数、微分方程、参数化）；FriCAS 家族多出的约 106 KB 几乎全是**代数部分**（`intaf.spad` 38,464 B + `intalg.spad` 31,937 B + `intclos.spad` 35,836 B），sympy 无对应实现。
+**体量记录不构成覆盖证明。** 上述字节数是历史快照，只能帮助定位文件，不能据此计算哪个实现覆盖了另一个的多少数学能力。超越/代数分支必须按实际入口、输入前提、归约算法与失败情形取证，特别检查结构定理、常数域和 RDE/PRDE 的缺口。
 
 ---
 
@@ -232,16 +234,16 @@
 | 参数化代数积分：若干情形未实现 | `algebra/intpar.spad`（3 处 `unimplemented`） |
 | Expression 上的因式分解未实现 | `algebra/intpar.spad`（`factorPolynomial unimplemented`） |
 | LambertW 的扩展积分是 FIXME | `algebra/intef.spad` |
-| 全库无超越指数积分层 | 大小写不敏感检索 `hyperexp` 于 `src/algebra` 与 `src/interp` 零命中 |
-| 全库无超几何积分层 | `hypergeometricF` 仅为函数对象，非积分算法 |
+| 超越指数积分的完整覆盖需核对 | `hyperexp` 关键词零命中不构成能力不存在的证据；应核对 exponential/RDE 等实际算法路径 |
+| 超几何积分的完整覆盖需核对 | 某函数对象不是积分算法，不足以断言全库没有对应能力 |
 
 ### REDUCE
 
 | 缺口 | 位置 |
 |---|---|
-| **`algint` 与 `int` 不是积分算法，是测试集** | 两个文件头均为「THE REDUCE INTEGRATION TEST PACKAGE」，内容是 Gradshteyn–Ryzhik 风格的初等积分行为语料；Reduce 的 Liouville 级积分在其核内，不在这两个包里。**不得把它们当作 Risch 实现引用** |
-| Liouville 级积分在核内，源码不在 `packages/` | 查语义应转向 `src/`（REDUCE / PSL 核），而非 `packages/algint`、`packages/int` |
-| 无超越指数、无超几何积分层 | 与 FriCAS 同；`packages/specfn` 只提供特殊函数表 |
+| 旧取证曾把测试日志外推为整个目录没有算法 | 此判断撤回：`packages/algint/algint.red` 是代数积分包入口，`abasic.red` 等包含算法；`.rlg` 的测试文件头不能证明目录只含测试 |
+| 积分算法的精确分布与覆盖需继续核对 | 从 `.red` 入口及实际调用链取证，不能以“都在 src 核内”排除 packages |
+| 超越指数/超几何积分的整体覆盖 | 本报告不足以证明不存在；保留为待核对能力，不作为缩减 pyCAS 目标的依据 |
 
 ### 共同空白
 

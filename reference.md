@@ -2,7 +2,9 @@
 
 本项目（pyCAS/）的算法与架构参考源码位于**同级目录** `D:\code\python\CAS\`：`maxima/`、`fricas/`、`expreduce/`、`mathics-core/`、`yacas/`、`reduce-algebra/`、`SAINT/` 均与 `pyCAS/` 平级。**主要权威参考：Maxima 与 FriCAS**。查算法语义、判定流程、边界行为时，先读这两个；其余五个为次要参照。
 
-裁定优先级：**本系统裁定（`cas_v4_arch.md` + `AGENTS.md`）高于参考实现行为**。参考实现里与本系统裁定冲突的做法（如 L0 隐式折叠、数值采样判等），一律以本系统裁定为准。
+裁定优先级：**本系统裁定（`cas_v5_arch.md` + `AGENTS.md`）高于参考实现行为**。参考实现里与本系统裁定冲突的做法（如 L0 隐式折叠、数值采样判等），一律以本系统裁定为准。
+
+2026-10-28 说明：以下原始参考路径与消化记录完整保留，其中“落地位置”“已消费”等属于早期实现快照，不表示当前 v5 状态；现状只看 progress。参考能力判断必须由实际源码及算法前提支持，不能用文件大小、关键词零命中或只读测试日志代替。完整目标/依赖见架构 §30，取证结论不用于缩减目标。
 
 ## 主要参考
 
@@ -44,9 +46,9 @@ FriCAS 的**域参数化体系**（Category → Domain → Package）是本系�
 
 ## 使用纪律
 
-1. **抄语义不抄代码**：参考实现在 Lisp/Spad 上，本系统是 Python + 驻留项层。对照它们的判定顺序和分支条件，不搬数据结构。
-2. **先本系统裁定后参考**：`cas_v4_arch.md` 与 `AGENTS.md` 的裁定优先；参考实现只是语义证据来源。
-3. **边界行为取证**：遇到「这个积分该不该出条件解」类问题时，去参考实现里找同名输入的实际行为作为证据。
+1. **抄语义不抄代码**：对照判定顺序、结构能力和分支条件，不照搬历史数据结构；本系统的项身份按完整结构而非驻留地址。
+2. **先本系统裁定后参考**：`cas_v5_arch.md` 与 `AGENTS.md` 的裁定优先；参考实现只是算法与行为证据来源。
+3. **边界行为取证**：遇到「这个积分该不该出条件解」类问题时，检查实际算法、前提和相应行为；一次参考输出不能独立证明一般数学结论。
 
 ## 已消化经验（按主题，持续积累）
 
@@ -65,5 +67,13 @@ FriCAS 的**域参数化体系**（Category → Domain → Package）是本系�
 - **expreduce/** — Common Lisp 规则重写 CAS，规则组织方式可参照
 - **mathics-core/** — Mathematica 语法的 Python 实现，语法兼容层参照
 - **yacas/** — C++ 轻量 CAS，工程结构参照
-- **reduce-algebra/** — REDUCE（Common Lisp）。**目标 3（CAD）的语义权威**：`packages/redlog/ofsf/ofsfcad.red`（CAD 主循环）、`ofsfqe.red`（量词消去）、`ofsfdpep.red`（区间隔离与符号判定）、`ofsfexfr.red`（代数扩张）、`ofsfgs.red` + `ofsftfc.red`（符号不变性），作者 Dolzmann / Seidl / Sturm / Kosta。另有 `packages/cgb/`（Comprehensive Gröbner Bases，参数化 GB）、`packages/f5/`、`packages/roots/`（Kameny 根求解）、`packages/wu/`（Wu 特征集法）、`packages/odesolve/zimmer.rlg`（Zimmermann / Rosenlicht 法 ODE）、`packages/crack/`（积分因子与精确方程）、`packages/sum/` + `zeilberg`（Zeilberger 创造性望远镜）、`packages/regressions/`（259 个真实缺陷的回归钉子）。注意：`packages/algint/` 与 `packages/int/` 是**积分测试集**而非积分算法，Liouville 级积分在 `src/` 核内。
+- **reduce-algebra/** — REDUCE（Common Lisp）。**目标 3（CAD）的语义权威**：`packages/redlog/ofsf/ofsfcad.red`（CAD 主循环）、`ofsfqe.red`（量词消去）、`ofsfdpep.red`（区间隔离与符号判定）、`ofsfexfr.red`（代数扩张）、`ofsfgs.red` + `ofsftfc.red`（符号不变性），作者 Dolzmann / Seidl / Sturm / Kosta。另有 `packages/cgb/`（Comprehensive Gröbner Bases，参数化 GB）、`packages/f5/`、`packages/roots/`（Kameny 根求解）、`packages/wu/`（Wu 特征集法）、`packages/odesolve/zimmer.rlg`（Zimmermann / Rosenlicht 法 ODE）、`packages/crack/`（积分因子与精确方程）、`packages/sum/` + `zeilberg`（Zeilberger 创造性望远镜）、`packages/regressions/`（259 个真实缺陷的回归钉子）。注意：目录中的 `.rlg` 是测试日志，不代表该目录只有测试。本地 `packages/algint/algint.red:1` 是代数积分包入口，`abasic.red:1` 是基础算法模块；此前“algint/int 整个目录只是测试集”的断言错误，不能据此排除其算法参考价值。
 - **SAINT/** — Macsyma 前身，历史价值
+
+## 2026-10-28 数学边界与源码核对
+
+- FriCAS 本地 `src/algebra/intalg.spad:134–147` 定义 AlgebraicIntegrate；163–168 行有明确未完成分支；178–181 行依赖除子、有限阶点和代数 Hermite，224–237 行实际消费整基。它并非没有代数分支，也不能因有入口就声称完整；这些依赖已进入架构的代数函数积分路线。
+- `src/algebra/intef.spad` 的 primitive/exponential 积分调用是后续取证入口，不由 hyperexp 关键词是否出现推断整个库能力。
+- Richardson 的函数恒等不可判定结果须保留具体表达式语言，不能直接外推为所有闭合超越常数判零不可判定。[原论文入口](https://www.jstor.org/stable/2271358)；[Constant Problem](https://mathworld.wolfram.com/ConstantProblem.html)。
+- 实指数域的 Schanuel 条件结果不等于无条件可判定：[Wilkie 说明](https://link.springer.com/chapter/10.1007/978-94-015-8923-9_11)；[2026 年相关预印本引言](https://arxiv.org/html/2603.08365v1)仍说明开放性。
+- 上述取证只支持准确的能力/理论边界，不作为删除代数积分、参数分类或完整交互目标的理由。

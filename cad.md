@@ -6,7 +6,9 @@
 
 主要取证对象是 **REDUCE / REDLOG**（作者 A. Dolzmann、A. Seidl、T. Sturm、M. Kosta），它被公认为 CAD 实现最完整的参考之一：`packages/redlog/ofsf/ofsfcad.red` 是其 CAD 主循环，由 Dolzmann / Seidl / Sturm 于 2000–2017 年持续实现，含 Collins / Hong / McCallum 多种投影算子与符号不变性支持。
 
-使用时遵守 `reference.md` 的既有纪律：**抄语义不抄代码**；本系统裁定（`cas_v5_arch.md` + `AGENTS.md`）高于参考实现行为。参考实现自身的缺口如实记录在 §16。
+使用时遵守 `reference.md` 的既有纪律：**抄语义不抄代码**；本系统裁定（`cas_v5_arch.md` + `AGENTS.md`）高于参考实现行为。
+
+2026-10-28：本报告的工具细节完整保留。旧 pyCAS 的“一维 CAD/实根隔离已存在”等状态是历史快照，当前 v5 状态只看 progress；引用 `.rlg`、文件体量或搜索结果不构成整个库的能力证明。完整目标保留实代数输入、投影/lifting、全部胞腔覆盖、量词消去和无量词解公式，算法依赖与施工波次见架构 §23、§30.12。工具清单不等于每种 CAD 实现的共同串行前置。
 
 
 报告只列**工具**（可独立实现、可独立测试、被 CAD 消费的可复用模块），CAD 主循环自身内联的逻辑**不算**工具（界分见 §0）。本文件**不含计划、阶段划分、优先级与顺序裁定**。
