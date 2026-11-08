@@ -238,3 +238,33 @@ def test_parent_options_must_match_the_ring_representation():
     lex = PolynomialRing((X, Y), Q, MonomialOrder.LEX)
     with pytest.raises(ValueError, match="option"):
         other.intern(spec, lex)
+
+
+def test_bulk_sum_collects_terms_and_preserves_ownership():
+    x, y = R.generator(0), R.generator(1)
+    values = (R.add(x, y), R.neg(x), R.constant(Fraction(2)), R.neg(y))
+    assert R.equal(R.sum(iter(values)), R.constant(Fraction(2)))
+    assert R.is_zero(R.sum(()))
+    assert R.equal(values[0], R.add(x, y))
+    foreign = PolynomialRing((X, Y), Q)
+    with pytest.raises(ValueError):
+        R.sum((x, foreign.one()))
+
+
+def test_constant_members_are_detected_in_the_declared_generators():
+    assert R.is_constant(R.zero())
+    assert R.is_constant(R.constant(Fraction(3)))
+    assert not R.is_constant(R.generator(1))
+    foreign = PolynomialRing((X, Y), Q)
+    with pytest.raises(ValueError):
+        R.is_constant(foreign.one())
+
+
+def test_bulk_sum_works_over_polynomial_coefficients():
+    outer = PolynomialRing((Y,), UX)
+    a = outer.constant(UX.generator(0))
+    y = outer.generator(0)
+    assert outer.is_constant(a)
+    assert not outer.is_constant(y)
+    result = outer.sum((a, y, outer.neg(a), outer.neg(y)))
+    assert outer.is_zero(result)

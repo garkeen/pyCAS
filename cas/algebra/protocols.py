@@ -58,6 +58,11 @@ class Ring(ABC, Generic[E]):
     def equal(self, left: E, right: E) -> bool:
         """Decide equality of two members."""
 
+    @property
+    def characteristic(self) -> int | None:
+        """The characteristic, or None when this structure does not declare one."""
+        return None
+
     def sub(self, left: E, right: E) -> E:
         return self.add(left, self.neg(right))
 
@@ -126,6 +131,24 @@ class Euclidean(Ring[E], ABC):
             current, following = following, remainder
         return current
 
+    def xgcd(self, left: E, right: E) -> tuple[E, E, E]:
+        """Extended Euclid: return `(g, s, t)` with `s*left + t*right == g`."""
+        old_remainder, remainder = left, right
+        old_left, left_coefficient = self.one(), self.zero()
+        old_right, right_coefficient = self.zero(), self.one()
+        while not self.is_zero(remainder):
+            quotient, next_remainder = self.divmod(old_remainder, remainder)
+            old_remainder, remainder = remainder, next_remainder
+            old_left, left_coefficient = (
+                left_coefficient,
+                self.sub(old_left, self.mul(quotient, left_coefficient)),
+            )
+            old_right, right_coefficient = (
+                right_coefficient,
+                self.sub(old_right, self.mul(quotient, right_coefficient)),
+            )
+        return old_remainder, old_left, old_right
+
 
 class Ordered(Ring[E], ABC):
     """A ring with a total order, exposed through the sign of a difference."""
@@ -150,6 +173,30 @@ class IntegerEmbedding(ABC, Generic[E]):
     @abstractmethod
     def of_int(self, value: int) -> E:
         """Embed an integer."""
+
+
+@runtime_checkable
+class ExactDivision(Protocol[E]):
+    """Exact division, defined only when the divisor divides the dividend."""
+
+    def div_exact(self, left: E, right: E) -> E:
+        """Return the unique quotient, or raise when the division is not exact."""
+
+
+@runtime_checkable
+class Characteristic(Protocol):
+    """The characteristic of a coefficient structure."""
+
+    @property
+    def characteristic(self) -> int: ...
+
+
+@runtime_checkable
+class CharacteristicZero(Characteristic, Protocol[E]):
+    """A characteristic-zero structure that can divide by nonzero integers."""
+
+    def div_int(self, value: E, factor: int) -> E:
+        """Return `value / factor` for a nonzero integer factor."""
 
 
 class RationalEmbedding(ABC, Generic[E]):
@@ -204,10 +251,13 @@ class Derivation(ABC, Generic[E]):
 
 
 __all__ = [
+    "Characteristic",
+    "CharacteristicZero",
     "CoefficientRing",
     "Derivation",
     "DescribedRing",
     "Euclidean",
+    "ExactDivision",
     "Field",
     "GeneratorRing",
     "IntegerEmbedding",

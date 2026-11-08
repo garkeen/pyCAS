@@ -64,6 +64,25 @@ class IntegerRing(
         """Greatest common divisor, normalised to a nonnegative value."""
         return abs(super().gcd(left, right))
 
+    def xgcd(self, left: int, right: int) -> tuple[int, int, int]:
+        """Bezout coefficients for the nonnegative gcd."""
+        gcd, left_coefficient, right_coefficient = super().xgcd(left, right)
+        if gcd < 0:
+            return -gcd, -left_coefficient, -right_coefficient
+        return gcd, left_coefficient, right_coefficient
+
+    def div_exact(self, left: int, right: int) -> int:
+        if right == 0:
+            raise ZeroDivisionError("integer division by zero")
+        quotient, remainder = divmod(left, right)
+        if remainder != 0:
+            raise ValueError("the integer division is not exact")
+        return quotient
+
+    @property
+    def characteristic(self) -> int:
+        return 0
+
     def sign(self, value: int) -> int:
         return (value > 0) - (value < 0)
 

@@ -78,6 +78,18 @@ class RationalField(
     def of_fraction(self, value: Fraction) -> Fraction:
         return Fraction(value)
 
+    def div_exact(self, left: Fraction, right: Fraction) -> Fraction:
+        return self.div(left, right)
+
+    def div_int(self, value: Fraction, factor: int) -> Fraction:
+        if factor == 0:
+            raise ZeroDivisionError("division by zero")
+        return value / factor
+
+    @property
+    def characteristic(self) -> int:
+        return 0
+
     def deriv(self, value: Fraction) -> Fraction:
         return Fraction(0)
 
