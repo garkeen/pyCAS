@@ -227,6 +227,8 @@ def test_specialization_without_a_family_is_unsupported():
     outcome = workspace.specialize(source, {a_id: 1})
     assert outcome.status is OperationStatus.UNSUPPORTED
     assert "differentiate" in outcome.detail
+    assert outcome.blocker is not None
+    assert "derivative_family" in outcome.blocker.missing
     assert runtime.store.stats() == before
     assert len(workspace.expressions()) == 1
 
@@ -342,6 +344,163 @@ def test_a_hidden_source_cannot_be_specialized():
     outcome = workspace.specialize(source, {a_id: 1})
     assert outcome.status is OperationStatus.INVALID
     assert "visible" in outcome.detail
+
+
+def test_an_integral_family_is_refused_not_refuted():
+    runtime = bootstrap_parameterized()
+    workspace = Workspace(runtime)
+    a_id = runtime.request.parameters[0]
+    a = T.symbol(a_id, "a")
+    source = workspace.intake(square_source(runtime, a), "F")
+    integrated = workspace.integrate(source, runtime.variable)
+    assert integrated.status is OperationStatus.VERIFIED
+    assert integrated.generic is not None
+    assert workspace.generic_result(source) is integrated.generic
+    assert workspace.derivative_family(source) is None
+
+    before = runtime.store.stats()
+    links = workspace.links()
+    outcome = workspace.specialize(source, {a_id: 3})
+    assert outcome.status is OperationStatus.UNSUPPORTED
+    assert "derivative families" in outcome.detail
+    assert outcome.blocker is not None
+    assert "derivative_family" in outcome.blocker.missing
+    assert runtime.store.stats() == before
+    assert workspace.links() == links
+
+
+def test_a_direct_specialization_of_an_integral_family_is_unsupported():
+    runtime = bootstrap_parameterized()
+    workspace = Workspace(runtime)
+    a_id = runtime.request.parameters[0]
+    a = T.symbol(a_id, "a")
+    source = workspace.intake(square_source(runtime, a), "F")
+    assert workspace.integrate(
+        source, runtime.variable
+    ).status is OperationStatus.VERIFIED
+    family = workspace.generic_result(source)
+    assert family is not None
+
+    before = runtime.store.stats()
+    outcome = workspace.apply(
+        "specialize",
+        (source,),
+        target=runtime.variable,
+        parameters=(
+            ("family", GenericResultInput(family)),
+            ("values", ValueMappingInput({a_id: 3})),
+        ),
+    )
+    assert outcome.status is OperationStatus.UNSUPPORTED
+    assert "derivative families" in outcome.detail
+    assert outcome.blocker is not None
+    assert "derivative_family" in outcome.blocker.missing
+    assert runtime.store.stats() == before
+
+
+def test_after_diff_and_integrate_specialization_selects_the_derivative_family():
+    runtime = bootstrap_parameterized()
+    workspace = Workspace(runtime)
+    a_id = runtime.request.parameters[0]
+    a = T.symbol(a_id, "a")
+    source = workspace.intake(square_source(runtime, a), "F")
+    differentiated = workspace.differentiate(source, runtime.variable)
+    integrated = workspace.integrate(source, runtime.variable)
+    assert differentiated.generic is not None
+    assert integrated.generic is not None
+
+    families = workspace.generic_results(source)
+    assert families == (differentiated.generic, integrated.generic)
+    assert workspace.generic_result(source) is integrated.generic
+    assert workspace.derivative_family(source) is differentiated.generic
+
+    outcome = workspace.specialize(source, {a_id: 3})
+    assert outcome.status is OperationStatus.VERIFIED
+    assert outcome.result is not None
+    assert outcome.result.term == head_app(
+        runtime.signature,
+        StructuralHead.TIMES,
+        T.number(6),
+        variable(runtime),
+    )
+
+
+def test_a_family_for_another_target_is_not_selected_by_specialization():
+    runtime = bootstrap_parameterized()
+    workspace = Workspace(runtime)
+    a_id = runtime.request.parameters[0]
+    a = T.symbol(a_id, "a")
+    source = workspace.intake(square_source(runtime, a), "F")
+    differentiated = workspace.differentiate(source, a_id)
+    assert differentiated.status is OperationStatus.VERIFIED
+    assert differentiated.generic is not None
+    assert workspace.generic_result(source) is differentiated.generic
+    assert workspace.derivative_family(source) is None
+
+    before = runtime.store.stats()
+    links = workspace.links()
+    outcome = workspace.specialize(source, {a_id: 3})
+    assert outcome.status is OperationStatus.UNSUPPORTED
+    assert outcome.blocker is not None
+    assert "derivative_family" in outcome.blocker.missing
+    assert runtime.store.stats() == before
+    assert workspace.links() == links
+
+
+def test_undo_and_redo_keep_each_revisions_family_tuple():
+    runtime = bootstrap_parameterized()
+    workspace = Workspace(runtime)
+    a_id = runtime.request.parameters[0]
+    a = T.symbol(a_id, "a")
+    source = workspace.intake(square_source(runtime, a), "F")
+    differentiated = workspace.differentiate(
+        source, runtime.variable
+    )
+    after_diff = workspace.revision
+    integrated = workspace.integrate(source, runtime.variable)
+    after_integrate = workspace.revision
+    assert differentiated.generic is not None
+    assert integrated.generic is not None
+    assert workspace.generic_results(source) == (
+        differentiated.generic,
+        integrated.generic,
+    )
+
+    assert workspace.undo()
+    assert workspace.revision.id == after_diff.id
+    assert workspace.generic_results(source) == (differentiated.generic,)
+    assert workspace.derivative_family(source) is differentiated.generic
+    assert workspace.redo()
+    assert workspace.revision.id == after_integrate.id
+    assert workspace.generic_results(source) == (
+        differentiated.generic,
+        integrated.generic,
+    )
+    assert workspace.derivative_family(source) is differentiated.generic
+    assert workspace.specialize(
+        source, {a_id: 3}
+    ).status is OperationStatus.VERIFIED
+
+
+def test_merge_keeps_both_families_for_one_source():
+    runtime, workspace, a_id, _, source, differentiated = setup()
+    parent = workspace.revision
+    workspace.branch("left")
+    integrated = workspace.integrate(source, runtime.variable)
+    assert integrated.generic is not None
+    left_head = workspace.revision
+    workspace.switch_to(parent.id)
+    merged = workspace.merge(left_head.id, "join")
+
+    assert merged.id == workspace.revision.id
+    assert workspace.generic_results(source) == (
+        differentiated.generic,
+        integrated.generic,
+    )
+    assert workspace.derivative_family(source) is differentiated.generic
+    assert workspace.specialize(
+        source, {a_id: 3}
+    ).status is OperationStatus.VERIFIED
 
 
 def test_multiple_parameters_must_all_be_supplied():

@@ -7,6 +7,7 @@ from support import head_app, runtime_proposition, variable
 
 from cas.frontend.errors import ParseError, SessionError
 from cas.frontend.pprint import to_str
+from cas.frontend.repl import run
 from cas.frontend.session import Session
 from cas.kernel.commit import Deferred
 from cas.language import sorts as S
@@ -343,6 +344,38 @@ def test_candidates_check_and_edit_commands(runtime):
         "[state=unchecked; applicability=applicable; "
         "coverage=unclaimed; language=satisfies]" in listed
     )
+
+
+def test_decide_on_an_unchecked_edited_candidate_is_a_session_error(runtime):
+    session = new_session(runtime)
+    session.execute("expr A := x^3")
+    assert session.execute("diff @A").startswith("verified")
+    assert session.execute("edit C0 = 2*x").startswith("edited C1:")
+    with pytest.raises(SessionError) as caught:
+        session.execute("decide C1")
+    assert "no certificate" in str(caught.value)
+    assert "unchecked" in str(caught.value)
+
+
+def test_decide_on_an_unknown_candidate_is_a_session_error(runtime):
+    session = new_session(runtime)
+    with pytest.raises(SessionError) as caught:
+        session.execute("decide C9")
+    assert "not visible" in str(caught.value)
+
+
+def test_the_repl_survives_decide_on_an_uncheckable_candidate(runtime):
+    session = new_session(runtime)
+    session.execute("expr A := x^3")
+    session.execute("diff @A")
+    session.execute("edit C0 = 2*x")
+    outputs: list[str] = []
+    run(session, ("decide C1", "expr B := x"), outputs.append)
+    assert outputs[0].startswith("error:")
+    assert "certificate" in outputs[0]
+    assert outputs[1] == "@B: x"
+    assert not session.closed
+    assert session.label_of(session.focus) == "B"
 
 
 def test_candidates_displays_solve_coverage_and_out_of_scope_edit(runtime):

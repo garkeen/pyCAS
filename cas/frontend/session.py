@@ -624,13 +624,24 @@ class Session:
         return self._report(result)
 
     def _decide(self, argument: str) -> str:
+        """Decide one visible candidate without publishing it.
+
+        The workspace raises `ValueError` when a candidate is unknown, hidden
+        or has no evidence (for example after `edit`, which creates an
+        unchecked record).  The frontend must translate that refusal into a
+        `SessionError`; otherwise it escapes the REPL, which only reports
+        `FrontendError` values, and terminates the session.  Manual evidence
+        entry is not implemented: an edited candidate stays unchecked until an
+        operation supplies a new certificate.
+        """
         if not argument:
             raise SessionError("usage: decide ID")
-        return self._verdict_line(
-            self.workspace.decide_candidate(
-                self._candidate_id(argument)
-            )
-        )
+        identifier = self._candidate_id(argument)
+        try:
+            verdict = self.workspace.decide_candidate(identifier)
+        except ValueError as error:
+            raise SessionError(str(error)) from error
+        return self._verdict_line(verdict)
 
     def _verdict_line(self, verdict: Verdict) -> str:
         """Render one three-valued decision without claiming publication."""

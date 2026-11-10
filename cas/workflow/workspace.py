@@ -2166,7 +2166,7 @@ class Workspace:
                         "a generic result is outside the current frame",
                     )
             if not any(
-                self.generic_result(expression) == family
+                self._generic_family_visible(family, expression)
                 for expression in inputs
             ):
                 return self._failure(
@@ -2678,12 +2678,13 @@ class Workspace:
         self._tasks[task.id] = task
         generic_results = self.revision.generic_results
         if generic is not None:
-            source_version = inputs[0].version
-            generic_results = tuple(
-                (version, family)
-                for version, family in generic_results
-                if version != source_version
-            ) + ((source_version, generic),)
+            # A source can carry several families with different orientations
+            # (for example a derivative family and an antiderivative family).
+            # Recording a new family must not erase an earlier one; selection
+            # belongs to the consumer that knows which relation it needs.
+            generic_results = generic_results + (
+                (inputs[0].version, generic),
+            )
         structured_results = self.revision.structured_results
         if proposal.structured is not None and result is not None:
             structured_results = tuple(
@@ -2789,33 +2790,95 @@ class Workspace:
                 return structured
         return None
 
+    def generic_results(self, source: Expression) -> tuple[GenericResult, ...]:
+        """All verified parameter families visible for `source`, oldest first.
+
+        The source must be this workspace's exact handle and visible in the
+        revision.  Several families can belong to one source version (for
+        example a derivative family and an antiderivative family); the revision
+        snapshot preserves their recording order.
+        """
+        if self._expressions.get(source.version) is not source:
+            return ()
+        if source.version not in self.revision.objects:
+            return ()
+        return tuple(
+            family
+            for version, family in self.revision.generic_results
+            if version == source.version
+        )
+
     def generic_result(self, source: Expression) -> GenericResult | None:
-        """The verified parameter family visible with `source` in this view.
+        """The latest verified parameter family visible for `source`.
 
         The family is part of the revision snapshot, so undo hides a family
         recorded later and redo restores it.  The source must also be this
-        workspace's exact handle, not merely a matching version id.
+        workspace's exact handle, not merely a matching version id.  This
+        reader returns the latest recorded family regardless of orientation;
+        consumers that need a particular relation use `derivative_family` or a
+        relation-specific selector of their own.
         """
-        if self._expressions.get(source.version) is not source:
-            return None
-        if source.version not in self.revision.objects:
-            return None
-        for version, family in self.revision.generic_results:
-            if version == source.version:
-                return family
-        return None
+        families = self.generic_results(source)
+        return families[-1] if families else None
+
+    def derivative_family(self, source: Expression) -> GenericResult | None:
+        """The latest family whose result is the derivative of `source`.
+
+        Orientation is read from the family's correctness specification: it
+        must be this runtime's `HasDerivative` claim with
+        `claim.source == source.term`, `claim.candidate == family.result` and
+        `claim.variable.symbol_id == self._runtime.variable`.  The variable
+        check keeps specialization on its declared target: a family derived
+        from the same source with respect to a formal parameter is a different
+        relation and is not selected.  An antiderivative family records the
+        opposite orientation and is not selected.  The workflow uses the
+        vocabulary object assembled by the runtime; it does not import the
+        derivative module or hardcode the predicate name and argument
+        positions.
+        """
+        selected: GenericResult | None = None
+        for family in self.generic_results(source):
+            claim = self._runtime.vocabulary.parse_claim(
+                family.correctness_specification.term
+            )
+            if claim is None:
+                continue
+            if claim.source != source.term:
+                continue
+            if claim.candidate != family.result:
+                continue
+            if claim.variable.symbol_id != self._runtime.variable:
+                continue
+            selected = family
+        return selected
+
+    def _generic_family_visible(
+        self, family: GenericResult, source: Expression
+    ) -> bool:
+        """Whether `family` is recorded for `source` in this revision."""
+        return any(
+            version == source.version and recorded == family
+            for version, recorded in self.revision.generic_results
+        )
 
     def specialize(
         self,
         source: Expression,
         values: Mapping[SymbolId, Fraction],
     ) -> OperationResult:
-        """Client helper: resolve a visible verified family and specialize it.
+        """Client helper: resolve a visible derivative family and specialize it.
 
         This method only assembles the operation's declared parameters; the
         semantics of specialisation live in the registered operation.  The
         family is taken from the current revision, never from a caller-supplied
         snapshot, so undo/redo and future associations cannot be bypassed.
+
+        Current scope: only a family whose correctness specification states
+        that its result is the derivative of `source` is selected.  An
+        antiderivative family (or any other relation) is refused with a
+        structured fragment gap rather than being handed to the derivative
+        checker, which would report a spurious mathematical refutation.
+        General integral-family specialisation is not implemented.
         """
         if not self._runtime.request.parameters:
             return self._failure(
@@ -2826,13 +2889,37 @@ class Workspace:
         issue = self._input_issue(source)
         if issue is not None:
             return self._failure("specialize", *issue)
-        family = self.generic_result(source)
+        family = self.derivative_family(source)
         if family is None:
+            if self.generic_results(source):
+                detail = (
+                    "specialization currently supports derivative families; "
+                    "the visible family states another relation"
+                )
+                return self._failure(
+                    "specialize",
+                    OperationStatus.UNSUPPORTED,
+                    detail,
+                    blocker=Blocker(
+                        Reason.FRAGMENT,
+                        detail,
+                        missing=frozenset({"derivative_family"}),
+                    ),
+                )
+            detail = (
+                "specialization currently supports derivative families; "
+                "differentiate the source first so a verified derivative "
+                "family exists"
+            )
             return self._failure(
                 "specialize",
                 OperationStatus.UNSUPPORTED,
-                "differentiate the source first so a verified parameter "
-                "family exists",
+                detail,
+                blocker=Blocker(
+                    Reason.FRAGMENT,
+                    detail,
+                    missing=frozenset({"derivative_family"}),
+                ),
             )
         try:
             mapping = ValueMappingInput(values)
@@ -2893,24 +2980,19 @@ class Workspace:
         This is a history-view merge, not a mathematical branch merge.  Objects
         from another frame keep their original frame and become visible in the
         merged revision, but they are not automatically usable in the current
-        frame.  Conflicting generic or structured results for the same object
-        version are refused.  The merged revision keeps the target revision's
+        frame.  Generic families from both sides are preserved (identical
+        recordings are deduplicated), because one source can carry several
+        relations; conflicting structured results for the same object version
+        are still refused.  The merged revision keeps the target revision's
         focus; the other revision's focus is not invented as a new pointer.
         """
         if other not in self._revisions:
             raise KeyError(f"unknown revision: {other}")
         current = self.revision
         other_revision = self._revisions[other]
-        merged_generic: dict[
-            ObjectVersionId, GenericResult
-        ] = dict(current.generic_results)
-        for version, family in other_revision.generic_results:
-            existing_family = merged_generic.get(version)
-            if existing_family is not None and existing_family != family:
-                raise ValueError(
-                    "the revisions contain conflicting generic results"
-                )
-            merged_generic[version] = family
+        merged_generic = self._merge_generic_results(
+            current.generic_results, other_revision.generic_results
+        )
         merged_structured: dict[
             ObjectVersionId, StructuredResult
         ] = dict(current.structured_results)
@@ -2986,7 +3068,7 @@ class Workspace:
                 )
             ),
             construction_relations=merged_relations,
-            generic_results=tuple(merged_generic.items()),
+            generic_results=merged_generic,
             structured_results=tuple(merged_structured.items()),
             world=self._runtime.world.id,
             producing_event=event.id,
@@ -3252,22 +3334,9 @@ class Workspace:
                     split,
                     detail="the case branches have no common base",
                 )
-            merged_generic: dict[
-                ObjectVersionId, GenericResult
-            ] = dict(positive.generic_results)
-            for version, family in negative.generic_results:
-                existing_family = merged_generic.get(version)
-                if (
-                    existing_family is not None
-                    and existing_family != family
-                ):
-                    return CaseMergeResult(
-                        OperationStatus.INVALID,
-                        split,
-                        detail="the branches contain conflicting generic "
-                        "results",
-                    )
-                merged_generic[version] = family
+            merged_generic = self._merge_generic_results(
+                positive.generic_results, negative.generic_results
+            )
             merged_structured: dict[
                 ObjectVersionId, StructuredResult
             ] = dict(positive.structured_results)
@@ -3360,7 +3429,7 @@ class Workspace:
                     )
                 ),
                 construction_relations=merged_relations,
-                generic_results=tuple(merged_generic.items()),
+                generic_results=merged_generic,
                 structured_results=tuple(merged_structured.items()),
                 world=self._runtime.world.id,
                 producing_event=event.id,
@@ -4149,6 +4218,26 @@ class Workspace:
                 )
             merged[record.id] = record
         return tuple(merged.values())
+
+    @staticmethod
+    def _merge_generic_results(
+        first: tuple[tuple[ObjectVersionId, GenericResult], ...],
+        second: tuple[tuple[ObjectVersionId, GenericResult], ...],
+    ) -> tuple[tuple[ObjectVersionId, GenericResult], ...]:
+        """Union two family snapshots without collapsing a source to one row.
+
+        A source version may carry several families with different
+        orientations, so the merge key is the recorded family, not only its
+        source version.  Exact duplicate recordings inherited from a common
+        ancestor are kept once; different families for the same source stay
+        side by side in recording order.
+        """
+        merged: list[tuple[ObjectVersionId, GenericResult]] = []
+        for item in first + second:
+            if any(item == existing for existing in merged):
+                continue
+            merged.append(item)
+        return tuple(merged)
 
     @staticmethod
     def _merge_construction_relations(

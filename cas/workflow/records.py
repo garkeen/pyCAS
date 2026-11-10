@@ -1017,7 +1017,10 @@ class Revision:
     `generic_results` is part of the snapshot: a parameter family recorded in a
     later revision must not be visible after undo.  Keeping it here, rather
     than in a workspace-wide side table, makes visibility follow the same rule
-    as objects and verification links.
+    as objects and verification links.  One source version can carry several
+    families (for example a derivative family and an antiderivative family
+    computed from the same expression); the tuple keeps every recorded family
+    in recording order, so a selector can distinguish their orientations.
 
     `focus` is a UI pointer only.  It names an object version, task, candidate
     or occurrence, or is `None` when the revision sets no focus; it never
@@ -1135,9 +1138,6 @@ class Revision:
         ]
         if len(set(relation_keys)) != len(relation_keys):
             raise ValueError("a revision repeats a construction relation")
-        versions = [version for version, _ in self.generic_results]
-        if len(set(versions)) != len(versions):
-            raise ValueError("a revision repeats a generic result")
         if any(
             not isinstance(family, GenericResult)
             for _, family in self.generic_results

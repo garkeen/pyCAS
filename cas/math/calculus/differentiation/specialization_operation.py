@@ -4,6 +4,17 @@ The operation receives the source term, the verified family and exact rational
 values. It either substitutes the generic formula or recomputes in the concrete
 view; both paths end in a fresh `HasDerivative` specification verified by the
 specialised checker.
+
+Current scope: the family must state the derivative orientation, i.e. its
+correctness specification is a `HasDerivative` claim whose source is the same
+source term and whose variable is this operation's target.  A family produced
+by integration stores the opposite orientation (the family result is the
+source of the claim); specialising it as if it were a derivative family would
+ask the checker to refute a true formula, so the operation refuses it as a
+fragment gap.  A recorded derivative family whose result does not match its own
+claim is still handed to the independent checker, which reports the refutation
+instead of the workflow inventing one.  General integral-family and other
+relation-family specialisation are not implemented.
 """
 
 from __future__ import annotations
@@ -13,6 +24,7 @@ from dataclasses import dataclass
 
 from cas.foundation.ids import SymbolId
 from cas.language import typing as Ty
+from cas.language.decisions import Reason
 from cas.language.problems import Coverage, ResultLanguage
 from cas.language.roles import CandidateRole
 from cas.language.signatures import LanguageSignature
@@ -121,7 +133,15 @@ _SPECIALIZATION_PARAMETER_SCHEMA: ParameterSchema[
 
 @dataclass(frozen=True, slots=True)
 class SpecializationOperation:
-    """Problem and proposal builders for exact point specialisation."""
+    """Problem and proposal builders for exact point specialisation.
+
+    The proposal path accepts only a derivative-oriented family: the family's
+    correctness specification must itself be a derivative claim with the
+    problem input as its source and this operation's target variable.  Other
+    orientations are refused as a fragment gap; they are never handed to the
+    derivative checker as if they claimed a derivative.  An inconsistent
+    derivative record is left to the checker's refutation.
+    """
 
     signature: LanguageSignature
     frames: FrameStore
@@ -262,13 +282,29 @@ class SpecializationOperation:
         family_input = parameters.value.family
         values_input = parameters.value.values
         source = problem.inputs[0]
+        family = family_input.result
+        claim = self.vocabulary.parse_claim(
+            family.correctness_specification.term
+        )
+        if (
+            claim is None
+            or claim.source != source.term
+            or claim.variable.symbol_id != self.variable
+        ):
+            return ProposalUnsupported(
+                Reason.FRAGMENT,
+                "specialization currently supports derivative families; "
+                "the generic result does not state the derivative of the "
+                "source",
+                missing=frozenset({"derivative_family"}),
+            )
         try:
             specialization = Specialization(values_input.values)
         except (TypeError, ValueError) as error:
             return ProposalInvalid(f"invalid specialization: {error}")
 
         outcome = specialize_family(
-            family_input.result,
+            family,
             self.parameter_request,
             specialization,
             self.signature,

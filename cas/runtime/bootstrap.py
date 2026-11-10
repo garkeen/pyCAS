@@ -586,12 +586,18 @@ def _q_polynomial(
 
 def _integration_views(
     views: tuple[DifferentiationView[Any], ...],
+    *,
+    checker_id: str | None = None,
 ) -> tuple[IntegrationView[Any], ...]:
     """One integration view per differentiation target.
 
-    The antiderivative service uses the same bridge and the same registered
-    derivative checker as differentiation; integration is verified by the
-    derivative relation, not by a second trust path.
+    The antiderivative service uses the same bridge as differentiation, and
+    integration is verified by the derivative relation, not by a second trust
+    path.  By default the view binds the derivative checker its service names.
+    An assembly whose differentiation checker verifies a different fragment
+    (the elementary runtime) passes the registered polynomial checker explicitly
+    so integration uses the polynomial subfragment without changing the
+    differentiation trust path.
     """
     return tuple(
         IntegrationView(
@@ -599,9 +605,11 @@ def _integration_views(
             view.ring,
             view.bridge,
             PolynomialAntiderivativeService(
-                view.bridge, view.service.checker_id, "HasDerivative"
+                view.bridge,
+                view.service.checker_id if checker_id is None else checker_id,
+                "HasDerivative",
             ),
-            view.service.checker_id,
+            view.service.checker_id if checker_id is None else checker_id,
         )
         for view in views
     )
@@ -1285,6 +1293,19 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         frames,
         request,
     )
+    # Integration of the polynomial subfragment produces a plain derivative
+    # certificate, not a rule-instance derivation.  It therefore binds the
+    # polynomial derivative checker over the same Q[x] bridge and request;
+    # differentiation keeps the elementary checker and its declaration basis.
+    polynomial_checker = DerivativeChecker(
+        ring,
+        signature,
+        vocabulary,
+        bridge,
+        frames,
+        request,
+        identifier="calculus.derivative.polynomial",
+    )
     hermite_field = RationalFunctionField(ring)
     hermite_parent = registry.intern(
         ParentSpec(
@@ -1326,8 +1347,12 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         checker.id: _derivative_spec(
             checker,
             frames.world.id,
-            extra_problem_kinds=("integrate",),
             dependencies=(basis,),
+        ),
+        polynomial_checker.id: _derivative_spec(
+            polynomial_checker,
+            frames.world.id,
+            problem_kind="integrate",
         ),
         hermite_checker.id: CheckerSpec(
             hermite_checker,
@@ -1377,7 +1402,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         signature,
         frames,
         vocabulary,
-        _integration_views((view,)),
+        _integration_views((view,), checker_id=polynomial_checker.id),
         table.name_of,
         variable,
     )

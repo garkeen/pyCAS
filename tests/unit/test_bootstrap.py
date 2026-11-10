@@ -99,10 +99,18 @@ def test_elementary_bootstrap_admits_the_declaration_basis():
     assert spec.trusted_dependencies == (basis,)
     assert runtime.store.bases.verify(basis)
     assert len(runtime.store.bases) == 1
-    assert spec.accepted_problem_kinds == frozenset(
-        {"differentiate", "integrate"}
-    )
+    assert spec.accepted_problem_kinds == frozenset({"differentiate"})
     assert spec.accepted_specification_kinds == frozenset({"HasDerivative"})
+
+    polynomial_spec = runtime.store.checkers.spec(
+        "calculus.derivative.polynomial"
+    )
+    assert polynomial_spec is not None
+    assert polynomial_spec.accepted_problem_kinds == frozenset({"integrate"})
+    assert polynomial_spec.trusted_dependencies == ()
+    assert polynomial_spec.accepted_specification_kinds == frozenset(
+        {"HasDerivative"}
+    )
 
 
 def test_parameterized_bootstrap_separates_roles():
