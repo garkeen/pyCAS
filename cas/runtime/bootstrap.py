@@ -61,6 +61,12 @@ from cas.math.algebra.resultant_specification import (
     ResultantCertificate,
     ResultantVocabulary,
 )
+from cas.math.algebra.root_count_checker import RootCountChecker
+from cas.math.algebra.root_count_operation import RootCountOperation
+from cas.math.algebra.root_count_specification import (
+    RootCountCertificate,
+    RootCountVocabulary,
+)
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
 )
@@ -156,6 +162,7 @@ _POLYNOMIAL_RUNTIME_CAPABILITIES: CapabilityRequirements = frozenset(
     {
         Capability.FIELD,
         Capability.FUNCTION_VALUE,
+        Capability.ORDERED_FIELD,
         Capability.POLYNOMIAL_RING,
         Capability.RATIONAL_FUNCTION_FIELD,
     }
@@ -276,6 +283,7 @@ def _start(
     SolutionSetVocabulary,
     GcdVocabulary,
     ResultantVocabulary,
+    RootCountVocabulary,
     LanguageSignature,
     FrameStore,
 ]:
@@ -314,6 +322,10 @@ def _start(
     resultant_vocabulary = ResultantVocabulary(
         resultant_symbol, "HasResultant"
     )
+    root_count_symbol = actual.intern("HasRootCount")
+    root_count_vocabulary = RootCountVocabulary(
+        root_count_symbol, "HasRootCount"
+    )
     extras = {
         predicate: vocabulary.signature,
         hermite_predicate: hermite_vocabulary.signature,
@@ -323,6 +335,7 @@ def _start(
         sound_solutions: solution_vocabulary.signature,
         gcd_symbol: gcd_vocabulary.signature,
         resultant_symbol: resultant_vocabulary.signature,
+        root_count_symbol: root_count_vocabulary.signature,
     }
     signature = (
         standard_language(actual, operators=extras)
@@ -338,6 +351,7 @@ def _start(
         solution_vocabulary,
         gcd_vocabulary,
         resultant_vocabulary,
+        root_count_vocabulary,
         signature,
         FrameStore(world),
     )
@@ -542,6 +556,41 @@ def _resultant_operation(
     )
 
 
+def _root_count_spec(
+    checker: Checker,
+    world: WorldId,
+) -> CheckerSpec:
+    """The trust registration for real-root-count checkers."""
+    return CheckerSpec(
+        checker,
+        CertificateSchema("root_count", "1", RootCountCertificate),
+        frozenset({"root_count"}),
+        frozenset({"HasRootCount"}),
+        world,
+        requires_problem=True,
+    )
+
+
+def _root_count_operation(
+    signature: LanguageSignature,
+    frames: FrameStore,
+    vocabulary: RootCountVocabulary,
+    checker_id: str,
+    ring: UnivariatePolynomialRing[Any],
+    bridge: PolynomialBridge[Any],
+    request: AlgebraRequest,
+) -> RootCountOperation[Any]:
+    return RootCountOperation(
+        signature,
+        frames,
+        vocabulary,
+        checker_id,
+        ring,
+        bridge,
+        request,
+    )
+
+
 def _q_coefficient(
     registry: ParentRegistry,
 ) -> tuple[RationalField, Parent[Fraction]]:
@@ -625,6 +674,7 @@ def bootstrap() -> Runtime[Fraction]:
         solution_vocabulary,
         gcd_vocabulary,
         resultant_vocabulary,
+        root_count_vocabulary,
         signature,
         frames,
     ) = _start()
@@ -705,6 +755,9 @@ def bootstrap() -> Runtime[Fraction]:
     resultant_checker = ResultantChecker(
         ring, signature, resultant_vocabulary, bridge, frames, request
     )
+    root_count_checker = RootCountChecker(
+        ring, signature, root_count_vocabulary, bridge, frames, request
+    )
     specs = {
         checker.id: _derivative_spec(
             checker, frames.world.id, extra_problem_kinds=("integrate",)
@@ -726,6 +779,9 @@ def bootstrap() -> Runtime[Fraction]:
         gcd_checker.id: _gcd_spec(gcd_checker, frames.world.id),
         resultant_checker.id: _resultant_spec(
             resultant_checker, frames.world.id
+        ),
+        root_count_checker.id: _root_count_spec(
+            root_count_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -801,6 +857,15 @@ def bootstrap() -> Runtime[Fraction]:
         table.name_of,
         request,
     )
+    root_count_operation = _root_count_operation(
+        signature,
+        frames,
+        root_count_vocabulary,
+        root_count_checker.id,
+        ring,
+        bridge,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -811,6 +876,7 @@ def bootstrap() -> Runtime[Fraction]:
             solution.id: solution,
             gcd_operation.id: gcd_operation,
             resultant_operation.id: resultant_operation,
+            root_count_operation.id: root_count_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
@@ -878,6 +944,7 @@ def _assemble_parameterized(
         _solution_vocabulary,
         _gcd_vocabulary,
         _resultant_vocabulary,
+        _root_count_vocabulary,
         signature,
         frames,
     ) = _start()
@@ -1235,6 +1302,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         solution_vocabulary,
         gcd_vocabulary,
         resultant_vocabulary,
+        root_count_vocabulary,
         signature,
         frames,
     ) = _start(table=table, declarations=source)
@@ -1343,6 +1411,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     resultant_checker = ResultantChecker(
         ring, signature, resultant_vocabulary, bridge, frames, request
     )
+    root_count_checker = RootCountChecker(
+        ring, signature, root_count_vocabulary, bridge, frames, request
+    )
     specs = {
         checker.id: _derivative_spec(
             checker,
@@ -1371,6 +1442,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         gcd_checker.id: _gcd_spec(gcd_checker, frames.world.id),
         resultant_checker.id: _resultant_spec(
             resultant_checker, frames.world.id
+        ),
+        root_count_checker.id: _root_count_spec(
+            root_count_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -1459,6 +1533,15 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         table.name_of,
         request,
     )
+    root_count_operation = _root_count_operation(
+        signature,
+        frames,
+        root_count_vocabulary,
+        root_count_checker.id,
+        ring,
+        bridge,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -1469,6 +1552,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             solution.id: solution,
             gcd_operation.id: gcd_operation,
             resultant_operation.id: resultant_operation,
+            root_count_operation.id: root_count_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )

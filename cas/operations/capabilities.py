@@ -17,6 +17,7 @@ class Capability(StrEnum):
     """One structure an operation may require from its assembly."""
 
     FIELD = "field"
+    ORDERED_FIELD = "ordered_field"
     POLYNOMIAL_RING = "polynomial_ring"
     RATIONAL_FUNCTION_FIELD = "rational_function_field"
     FUNCTION_VALUE = "function_value"

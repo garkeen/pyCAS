@@ -95,3 +95,7 @@ FriCAS 的**域参数化体系**（Category → Domain → Package）是本系�
 - **多项式 gcd 与结式核验**：gcd 的 Bezout 判据见 Geddes 等 §2.2 与 Cohen §2.2；结式的 Sylvester 行列式定义见 Geddes 等 §7；整数分式自由行列式见 Bareiss (1968) 与 Cohen §2.2.6。实现落点：`cas/math/algebra/gcd_checker.py`（整除性 + Bezout）与 `cas/math/algebra/resultant_checker.py`（清分母 + `IntegerMatrixSpace.determinant`）；操作分别为 `polynomial_gcd` 与 `resultant`。
 - **手动出现位置与改写**：架构 §19.4–§19.5 的方程变换方向与代换动作；实现落点：`cas/syntax/occurrences.py` 的结构路径/捕获规避替换，`cas/workflow/workspace.py` 的 `occurrences`/`rewrite`/`substitute`。改写方向是记录，不自动成为 kernel 判断。
 - **两情形分裂、历史合并与 case-analysis**：架构 §18.1 的 Task 状态与 §19 的手动研究分支；实现落点：`cas/workflow/workspace.py` 的 `case_split`/`merge_cases`/`merge_case_conclusion` 与 `cas/kernel/case_merge.py` 的 `CaseMergeChecker`。checker 要求两个纯互补假设的直接子 frame、同一结论、分支判断无未决义务，并拒绝结论本身作为分支假设；带局部声明/定义、未决义务或超过两情形的合并仍未实现。
+
+## 2026-11-10 R0 实根计数参考
+
+- **Sturm 定理与开区间端点**：Sturm (1829) 的实根计数定理；系统表述与端点/符号变差约定见 Basu, Pollack, Roy, *Algorithms in Real Algebraic Geometry*, 2nd ed., Chapter 2。链为 `p0=p`、`p1=p'`、`p_{i+1}=-rem(p_{i-1},p_i)`，终止于非零常数；`V(x)` 为跳过零项的符号变差数。对平方自由 `p` 与 `a<b`，`(a,b)` 内相异实根数为 `V(a)-V(b)-[p(b)=0]`：`V` 在单根处与右极限一致，故差值先计数 `(a,b]`，再排除上端点根。实现落点：`cas/algebra/real_roots.py`；checker 独立重建同一递推：`cas/math/algebra/root_count_checker.py`。参考实现检索入口：Maxima `src/polyrz.lisp:29-111`（`sturmseq`/`sturm1`/`sturm` 与符号变差）与 REDUCE `packages/redlog/ofsf/ofsfdpep.red`（区间隔离与符号判定）；本项目本批不实现隔离区间或 `RootOf`。

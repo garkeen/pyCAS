@@ -16,6 +16,14 @@ from cas.math.algebra.resultant_specification import (
     ResultantVocabulary,
     has_resultant,
 )
+from cas.math.algebra.root_count_checker import RootCountChecker
+from cas.math.algebra.root_count_operation import RootCountOperation
+from cas.math.algebra.root_count_specification import (
+    RootCountCertificate,
+    RootCountClaim,
+    RootCountVocabulary,
+    has_root_count,
+)
 
 __all__ = [
     "GcdCertificate",
@@ -28,6 +36,12 @@ __all__ = [
     "ResultantClaim",
     "ResultantOperation",
     "ResultantVocabulary",
+    "RootCountCertificate",
+    "RootCountChecker",
+    "RootCountClaim",
+    "RootCountOperation",
+    "RootCountVocabulary",
     "has_gcd",
     "has_resultant",
+    "has_root_count",
 ]
