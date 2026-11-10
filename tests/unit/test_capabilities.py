@@ -38,9 +38,15 @@ from cas.runtime import (
         (bootstrap, "polynomial_gcd", Capability.FIELD),
         (bootstrap, "resultant", Capability.POLYNOMIAL_RING),
         (bootstrap, "root_count", Capability.ORDERED_FIELD),
+        (bootstrap, "isolate_roots", Capability.ORDERED_FIELD),
         (
             bootstrap_elementary,
             "root_count",
+            Capability.ORDERED_FIELD,
+        ),
+        (
+            bootstrap_elementary,
+            "isolate_roots",
             Capability.ORDERED_FIELD,
         ),
         (

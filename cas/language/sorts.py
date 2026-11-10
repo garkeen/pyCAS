@@ -126,6 +126,16 @@ class SetSort(Sort):
 
 
 @dataclass(frozen=True, slots=True)
+class IntervalSort(Sort):
+    """The sort of an open real interval used as a root-isolation witness.
+
+    An interval value is a structural pair of real endpoints, not a
+    mathematical function value.  It carries no root by itself: membership and
+    uniqueness are supplied by a verified root-isolation claim.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class PropositionSort(Sort):
     """The sort of a formula that can be true or false."""
 
@@ -179,6 +189,7 @@ __all__ = [
     "COMPLEX",
     "FunctionSort",
     "INTEGER",
+    "IntervalSort",
     "MatrixSort",
     "NumberSystem",
     "PROPOSITION",

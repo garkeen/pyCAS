@@ -502,7 +502,7 @@ def test_the_checker_rejects_a_mismatched_problem():
     assert "problem inputs" in outcome.detail
 
 
-def test_the_checker_rejects_a_non_squarefree_chain_without_a_terminator():
+def test_the_checker_reports_a_complete_non_squarefree_chain_as_a_fragment():
     runtime = bootstrap()
     source = polynomial(runtime, "(x - 1)^2")
     lower = polynomial(runtime, "-2")
@@ -517,6 +517,21 @@ def test_the_checker_rejects_a_non_squarefree_chain_without_a_terminator():
     chain = (source, polynomial(runtime, "2*x - 2"))
     certificate = RootCountCertificate(
         source, lower, upper, count, chain
+    )
+    outcome = _check(runtime, issued, certificate, count)
+    assert isinstance(outcome, Unverified)
+    assert outcome.missing == frozenset({"squarefree_polynomial"})
+    assert "not squarefree" in outcome.detail
+
+
+def test_the_checker_rejects_a_truncated_squarefree_chain():
+    runtime = bootstrap()
+    source, lower, upper, count, certificate, issued = root_count_fixture(
+        runtime, source_text="(x - 1)*(x - 2)*(x - 3)", count=3
+    )
+    truncated = certificate.chain[:-1]
+    certificate = RootCountCertificate(
+        source, lower, upper, count, truncated
     )
     outcome = _check(runtime, issued, certificate, count)
     assert isinstance(outcome, InvalidEvidence)

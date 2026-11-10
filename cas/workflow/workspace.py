@@ -2789,6 +2789,19 @@ class Workspace:
             "root_count", (source, lower, upper), target=variable
         )
 
+    def isolate_roots(
+        self,
+        source: Expression,
+        variable: SymbolId,
+    ) -> OperationResult:
+        """Client helper: isolate every distinct real root as open intervals."""
+        return self.apply(
+            "isolate_roots",
+            (source,),
+            target=variable,
+            coverage=Coverage.COMPLETE_SET,
+        )
+
     def structured_result(
         self, source: Expression
     ) -> StructuredResult | None:

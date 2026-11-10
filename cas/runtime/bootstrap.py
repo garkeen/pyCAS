@@ -67,6 +67,12 @@ from cas.math.algebra.root_count_specification import (
     RootCountCertificate,
     RootCountVocabulary,
 )
+from cas.math.algebra.root_isolation_checker import RootIsolationChecker
+from cas.math.algebra.root_isolation_operation import RootIsolationOperation
+from cas.math.algebra.root_isolation_specification import (
+    RootIsolationCertificate,
+    RootIsolationVocabulary,
+)
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
 )
@@ -284,6 +290,7 @@ def _start(
     GcdVocabulary,
     ResultantVocabulary,
     RootCountVocabulary,
+    RootIsolationVocabulary,
     LanguageSignature,
     FrameStore,
 ]:
@@ -326,6 +333,13 @@ def _start(
     root_count_vocabulary = RootCountVocabulary(
         root_count_symbol, "HasRootCount"
     )
+    root_isolation_symbol = actual.intern("HasRootIsolation")
+    interval_symbol = actual.intern("Interval")
+    root_isolation_vocabulary = RootIsolationVocabulary(
+        root_isolation_symbol,
+        "HasRootIsolation",
+        interval_symbol,
+    )
     extras = {
         predicate: vocabulary.signature,
         hermite_predicate: hermite_vocabulary.signature,
@@ -336,6 +350,8 @@ def _start(
         gcd_symbol: gcd_vocabulary.signature,
         resultant_symbol: resultant_vocabulary.signature,
         root_count_symbol: root_count_vocabulary.signature,
+        root_isolation_symbol: root_isolation_vocabulary.signature,
+        interval_symbol: root_isolation_vocabulary.interval_signature,
     }
     signature = (
         standard_language(actual, operators=extras)
@@ -352,6 +368,7 @@ def _start(
         gcd_vocabulary,
         resultant_vocabulary,
         root_count_vocabulary,
+        root_isolation_vocabulary,
         signature,
         FrameStore(world),
     )
@@ -591,6 +608,43 @@ def _root_count_operation(
     )
 
 
+def _root_isolation_spec(
+    checker: Checker,
+    world: WorldId,
+) -> CheckerSpec:
+    """The trust registration for real-root-isolation checkers."""
+    return CheckerSpec(
+        checker,
+        CertificateSchema(
+            "root_isolation", "1", RootIsolationCertificate
+        ),
+        frozenset({"isolate_roots"}),
+        frozenset({"HasRootIsolation"}),
+        world,
+        requires_problem=True,
+    )
+
+
+def _root_isolation_operation(
+    signature: LanguageSignature,
+    frames: FrameStore,
+    vocabulary: RootIsolationVocabulary,
+    checker_id: str,
+    ring: UnivariatePolynomialRing[Fraction],
+    bridge: PolynomialBridge[Fraction],
+    request: AlgebraRequest,
+) -> RootIsolationOperation:
+    return RootIsolationOperation(
+        signature,
+        frames,
+        vocabulary,
+        checker_id,
+        ring,
+        bridge,
+        request,
+    )
+
+
 def _q_coefficient(
     registry: ParentRegistry,
 ) -> tuple[RationalField, Parent[Fraction]]:
@@ -675,6 +729,7 @@ def bootstrap() -> Runtime[Fraction]:
         gcd_vocabulary,
         resultant_vocabulary,
         root_count_vocabulary,
+        root_isolation_vocabulary,
         signature,
         frames,
     ) = _start()
@@ -758,6 +813,9 @@ def bootstrap() -> Runtime[Fraction]:
     root_count_checker = RootCountChecker(
         ring, signature, root_count_vocabulary, bridge, frames, request
     )
+    root_isolation_checker = RootIsolationChecker(
+        ring, signature, root_isolation_vocabulary, bridge, frames, request
+    )
     specs = {
         checker.id: _derivative_spec(
             checker, frames.world.id, extra_problem_kinds=("integrate",)
@@ -782,6 +840,9 @@ def bootstrap() -> Runtime[Fraction]:
         ),
         root_count_checker.id: _root_count_spec(
             root_count_checker, frames.world.id
+        ),
+        root_isolation_checker.id: _root_isolation_spec(
+            root_isolation_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -866,6 +927,15 @@ def bootstrap() -> Runtime[Fraction]:
         bridge,
         request,
     )
+    root_isolation_operation = _root_isolation_operation(
+        signature,
+        frames,
+        root_isolation_vocabulary,
+        root_isolation_checker.id,
+        ring,
+        bridge,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -877,6 +947,7 @@ def bootstrap() -> Runtime[Fraction]:
             gcd_operation.id: gcd_operation,
             resultant_operation.id: resultant_operation,
             root_count_operation.id: root_count_operation,
+            root_isolation_operation.id: root_isolation_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
@@ -945,6 +1016,7 @@ def _assemble_parameterized(
         _gcd_vocabulary,
         _resultant_vocabulary,
         _root_count_vocabulary,
+        _root_isolation_vocabulary,
         signature,
         frames,
     ) = _start()
@@ -1303,6 +1375,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         gcd_vocabulary,
         resultant_vocabulary,
         root_count_vocabulary,
+        root_isolation_vocabulary,
         signature,
         frames,
     ) = _start(table=table, declarations=source)
@@ -1414,6 +1487,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     root_count_checker = RootCountChecker(
         ring, signature, root_count_vocabulary, bridge, frames, request
     )
+    root_isolation_checker = RootIsolationChecker(
+        ring, signature, root_isolation_vocabulary, bridge, frames, request
+    )
     specs = {
         checker.id: _derivative_spec(
             checker,
@@ -1445,6 +1521,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         ),
         root_count_checker.id: _root_count_spec(
             root_count_checker, frames.world.id
+        ),
+        root_isolation_checker.id: _root_isolation_spec(
+            root_isolation_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -1542,6 +1621,15 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         bridge,
         request,
     )
+    root_isolation_operation = _root_isolation_operation(
+        signature,
+        frames,
+        root_isolation_vocabulary,
+        root_isolation_checker.id,
+        ring,
+        bridge,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -1553,6 +1641,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             gcd_operation.id: gcd_operation,
             resultant_operation.id: resultant_operation,
             root_count_operation.id: root_count_operation,
+            root_isolation_operation.id: root_isolation_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )

@@ -64,6 +64,8 @@ def _sort_key(sort: S.Sort) -> object:
         )
     if isinstance(sort, S.SetSort):
         return ("set", _sort_key(sort.element), sort.empty)
+    if isinstance(sort, S.IntervalSort):
+        return ("interval",)
     if isinstance(sort, S.PropositionSort):
         return ("proposition",)
     if isinstance(sort, S.RegionSort):
