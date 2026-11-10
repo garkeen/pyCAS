@@ -73,6 +73,8 @@ _HELP = """commands:
                         solve a linear polynomial as a finite set
   gcd @A @B             compute the monic polynomial gcd
   resultant @A @B       compute the univariate resultant
+  root_count [@LABEL] A B
+                        count distinct real roots in the open interval (A,B)
   specialize [@LABEL] a=VALUE ...
                         apply exact parameter values to a verified family
   show [@LABEL]         show an expression
@@ -326,6 +328,8 @@ class Session:
             return self._gcd(argument)
         if command == "resultant":
             return self._resultant(argument)
+        if command == "root_count":
+            return self._root_count(argument)
         if command == "declare":
             return self._declare(argument)
         if command == "define":
@@ -562,6 +566,36 @@ class Session:
         right = self._resolve(parts[1], "resultant")
         result = self.workspace.resultant(
             left, right, self._runtime.variable
+        )
+        if result.status in (
+            OperationStatus.VERIFIED,
+            OperationStatus.CONDITIONAL,
+        ):
+            assert result.result is not None
+            self._register(result.result, self._choose_label(None))
+            return self._success_line(result)
+        return self._report(result)
+
+    def _root_count(self, argument: str) -> str:
+        """Count roots from two endpoint expressions around a source object.
+
+        The endpoint texts are parsed by the ordinary term parser and admitted
+        as workspace objects; the operation decides whether each one is an
+        exact rational constant and refuses structurally when it is not.
+        """
+        parts = argument.split()
+        if len(parts) == 3 and parts[0].startswith("@"):
+            source = self._resolve(parts[0], "root_count")
+            lower_text, upper_text = parts[1], parts[2]
+        elif len(parts) == 2:
+            source = self._resolve("", "root_count")
+            lower_text, upper_text = parts
+        else:
+            raise SessionError("usage: root_count [@LABEL] A B")
+        lower = self.intake(lower_text)
+        upper = self.intake(upper_text)
+        result = self.workspace.root_count(
+            source, lower, upper, self._runtime.variable
         )
         if result.status in (
             OperationStatus.VERIFIED,

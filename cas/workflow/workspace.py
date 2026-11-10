@@ -2777,6 +2777,18 @@ class Workspace:
         """Client helper: compute the univariate resultant."""
         return self.apply("resultant", (left, right), target=variable)
 
+    def root_count(
+        self,
+        source: Expression,
+        lower: Expression,
+        upper: Expression,
+        variable: SymbolId,
+    ) -> OperationResult:
+        """Client helper: count distinct real roots in an open interval."""
+        return self.apply(
+            "root_count", (source, lower, upper), target=variable
+        )
+
     def structured_result(
         self, source: Expression
     ) -> StructuredResult | None:

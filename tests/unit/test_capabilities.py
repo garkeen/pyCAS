@@ -37,6 +37,12 @@ from cas.runtime import (
         (bootstrap, "solve_linear", Capability.FIELD),
         (bootstrap, "polynomial_gcd", Capability.FIELD),
         (bootstrap, "resultant", Capability.POLYNOMIAL_RING),
+        (bootstrap, "root_count", Capability.ORDERED_FIELD),
+        (
+            bootstrap_elementary,
+            "root_count",
+            Capability.ORDERED_FIELD,
+        ),
         (
             bootstrap_parameterized,
             "specialize",
