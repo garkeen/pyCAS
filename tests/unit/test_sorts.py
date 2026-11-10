@@ -76,3 +76,13 @@ def test_sorts_are_structural_values():
     assert S.REAL == S.ScalarSort(S.NumberSystem.REAL)
     assert hash(S.REAL) == hash(S.ScalarSort(S.NumberSystem.REAL))
     assert S.REAL != S.RATIONAL
+
+
+def test_interval_sort_is_a_structural_non_scalar_sort():
+    interval = S.IntervalSort()
+    assert interval == S.IntervalSort()
+    assert not S.is_scalar(interval)
+    assert not S.is_ordered(interval)
+    assert interval.embeds_into(interval)
+    assert not interval.embeds_into(S.REAL)
+    assert S.join(interval, interval) == interval

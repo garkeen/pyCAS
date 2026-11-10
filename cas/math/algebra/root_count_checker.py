@@ -10,12 +10,16 @@ constant.  It does not rebuild a fresh chain from the polynomial.  The sign
 variations and the open-interval formula ``V(a) - V(b) - [p(b) = 0]`` are then
 computed from the verified certificate chain.
 
-A wrong count for a verified squarefree chain is `Refuted` with a detail.  A
-malformed certificate, a certificate/claim mismatch, a candidate mismatch, or a
-chain that is missing, extra, mistyped, non-terminating or does not satisfy the
-recurrence is `InvalidEvidence`.  A zero polynomial, a nonconstant endpoint or
-a reversed interval is `Unverified(FRAGMENT)` with the missing capability: a
-fragment boundary is not a mathematical refutation.
+Chain verification is shared with the root-isolation checker through
+`cas.math.algebra.sturm_certificate`; this module never imports the search
+implementation.  A wrong count for a verified squarefree chain is `Refuted` with
+a detail.  A malformed certificate, a certificate/claim mismatch, a candidate
+mismatch, or a chain that is missing, extra, mistyped, non-terminating or does
+not satisfy the recurrence is `InvalidEvidence`.  A complete Euclidean chain
+ending at a nonconstant gcd proves a repeated factor; it is
+`Unverified(FRAGMENT)` with `squarefree_polynomial`, because a fragment boundary
+is not a mathematical refutation.  A zero polynomial, a nonconstant endpoint or
+a reversed interval is also `Unverified(FRAGMENT)` with the missing capability.
 """
 
 from __future__ import annotations
@@ -45,6 +49,12 @@ from cas.math.algebra.root_count_specification import (
     RootCountVocabulary,
     certificate_matches_claim,
     parse_root_count,
+)
+from cas.math.algebra.sturm_certificate import (
+    ChainFragmentGap,
+    ChainMismatch,
+    open_interval_count,
+    verify_sturm_chain,
 )
 from cas.semantics.bridge import (
     AlgebraView,
@@ -246,23 +256,24 @@ class RootCountChecker(Generic[E]):
                     "certificate"
                 )
             chain_values.append(view.value)
-        chain_issue = self._chain_mismatch(
-            polynomial, tuple(chain_values)
+        chain_result = verify_sturm_chain(
+            self._ring, polynomial, tuple(chain_values)
         )
-        if chain_issue is not None:
-            return InvalidEvidence(chain_issue)
-        lower_variations = _sign_variations(
-            self._ring, coefficients, tuple(chain_values), lower
+        if isinstance(chain_result, ChainFragmentGap):
+            return Unverified(
+                Reason.FRAGMENT,
+                chain_result.detail,
+                missing=chain_result.missing,
+            )
+        if isinstance(chain_result, ChainMismatch):
+            return InvalidEvidence(chain_result.detail)
+        expected_count = open_interval_count(
+            self._ring,
+            polynomial,
+            tuple(chain_values),
+            lower,
+            upper,
         )
-        upper_variations = _sign_variations(
-            self._ring, coefficients, tuple(chain_values), upper
-        )
-        upper_root = (
-            1
-            if coefficients.is_zero(_evaluate(self._ring, polynomial, upper))
-            else 0
-        )
-        expected_count = lower_variations - upper_variations - upper_root
         if claimed_count != expected_count:
             return Refuted(
                 conclusion,
@@ -272,54 +283,6 @@ class RootCountChecker(Generic[E]):
             )
         return Verified((conclusion,))
 
-    def _chain_mismatch(
-        self,
-        polynomial: Polynomial[E],
-        chain: tuple[Polynomial[E], ...],
-    ) -> str | None:
-        """Why the supplied chain is not a Sturm chain for ``polynomial``.
-
-        This verifies the certificate instead of rebuilding a second chain
-        from the polynomial.  The recurrence is checked with the ring's own
-        exact primitives; every non-final entry must be nonzero so the next
-        division is defined, and the terminator must be a nonzero constant.
-        """
-        ring = self._ring
-        if not chain:
-            return "the certificate Sturm chain is empty"
-        for entry in chain:
-            if entry.is_zero():
-                return "the Sturm chain contains a zero entry"
-        if not ring.equal(chain[0], polynomial):
-            return "the first Sturm-chain entry is not the polynomial"
-        if ring.is_constant(polynomial):
-            if len(chain) != 1:
-                return (
-                    "a constant polynomial needs a one-entry Sturm chain"
-                )
-            return None
-        if len(chain) < 2:
-            return "the Sturm chain is missing the derivative entry"
-        derivative = ring.derivative(polynomial, 0)
-        if not ring.equal(chain[1], derivative):
-            return "the second Sturm-chain entry is not the derivative"
-        for index in range(len(chain) - 2):
-            _, remainder = ring.divmod(chain[index], chain[index + 1])
-            if remainder.is_zero():
-                return (
-                    "the Sturm chain reaches a zero remainder before a "
-                    "constant terminator"
-                )
-            following = ring.neg(remainder)
-            if not ring.equal(chain[index + 2], following):
-                return (
-                    "the certificate chain does not satisfy the Sturm "
-                    "recurrence"
-                )
-        if not ring.is_constant(chain[-1]):
-            return "the Sturm chain does not end at a constant"
-        return None
-
 
 def _rational(term: T.Term) -> Fraction | None:
     if isinstance(term, T.IntLit):
@@ -327,41 +290,6 @@ def _rational(term: T.Term) -> Fraction | None:
     if isinstance(term, T.RatLit):
         return term.value
     return None
-
-
-def _evaluate(
-    ring: UnivariatePolynomialRing[E],
-    value: Polynomial[E],
-    point: E,
-) -> E:
-    coefficients = ring.coefficients
-    result = coefficients.zero()
-    if value.is_zero():
-        return result
-    for exponent in range(ring.degree(value, 0), -1, -1):
-        result = coefficients.add(
-            coefficients.mul(result, point),
-            ring.coefficient(value, (exponent,)),
-        )
-    return result
-
-
-def _sign_variations(
-    ring: UnivariatePolynomialRing[E],
-    coefficients: Ordered[E],
-    chain: tuple[Polynomial[E], ...],
-    point: E,
-) -> int:
-    variations = 0
-    previous = 0
-    for value in chain:
-        sign = coefficients.sign(_evaluate(ring, value, point))
-        if sign == 0:
-            continue
-        if previous != 0 and sign != previous:
-            variations += 1
-        previous = sign
-    return variations
 
 
 __all__ = ["RootCountChecker"]

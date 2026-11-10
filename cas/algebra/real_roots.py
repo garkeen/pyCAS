@@ -1,10 +1,11 @@
-"""Exact Sturm counting of distinct real roots of a squarefree polynomial.
+"""Exact Sturm counting and open-interval isolation of real roots.
 
-This module owns the *search* side of the first R0 slice: it builds the Sturm
-chain of a univariate polynomial over an ordered characteristic-zero field and
-counts the distinct real roots in an open interval.  Root isolation, interval
-objects, multiplicity output and real algebraic numbers are deliberately not
-part of this file; they are later R0/R1 capabilities.
+This module owns the *search* side of the R0 real-algebra slice: it builds the
+Sturm chain of a univariate polynomial over an ordered characteristic-zero
+field, counts the distinct real roots in an open interval, and isolates all
+distinct real roots into disjoint open rational intervals.  The isolation
+result is a finite set of witnesses, not real algebraic numbers: root objects,
+multiplicity output and `RootOf` are later R1 capabilities.
 
 Sturm's theorem
 ---------------
@@ -47,8 +48,22 @@ and Roy, *Algorithms in Real Algebraic Geometry*, 2nd ed., Chapter 2.  The
 remainder recurrence is the classical Euclidean Sturm sequence; the polynomial
 ring provides the required exact ``divmod`` and ``derivative``.  Maxima's
 ``src/polyrz.lisp:29-111`` (``sturmseq``/``sturm1``/``sturm``) is the
-corresponding reference implementation.  This module only counts roots; it
-does not isolate them and does not build `RootOf`.
+corresponding reference implementation.  Root isolation uses the Cauchy root
+bound (Cauchy, *Exercices de mathématiques*, 1829) and repeated exact
+bisection; the bound and the Sturm count together certify that every real root
+lies in exactly one open output interval.  This module does not build `RootOf`
+or any real algebraic number.
+
+Termination and budget
+----------------------
+
+The polynomial has finitely many roots and is squarefree.  Each bisection
+strictly reduces the width of every remaining multi-root interval, so distinct
+roots are eventually separated.  A root-valued midpoint is never used as a
+split point: the search probes deterministic dyadic offsets around the
+midpoint until it finds a non-root.  `budget` counts split and probe steps and
+is resource control only; exhaustion raises `RealRootBudgetError` instead of
+returning a partial set as if it were complete.
 """
 
 from __future__ import annotations
@@ -71,6 +86,25 @@ class RealRootFragmentError(ValueError):
     """
 
     def __init__(self, detail: str, *, missing: frozenset[str]) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.missing = frozenset(missing)
+
+
+class RealRootBudgetError(RuntimeError):
+    """The isolation budget was exhausted before a complete answer existed.
+
+    This is a resource boundary, not a mathematical statement: no partial set
+    of intervals may be published as the complete isolation.  `missing` names
+    the resource the caller must enlarge to obtain an answer.
+    """
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        missing: frozenset[str] = frozenset({"root_isolation_budget"}),
+    ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.missing = frozenset(missing)
@@ -187,6 +221,75 @@ def sign_variations(
     return variations
 
 
+def _require_ordered(
+    ring: UnivariatePolynomialRing[E], operation: str
+) -> Ordered[E]:
+    coefficients = ring.coefficients
+    if not isinstance(coefficients, Ordered):
+        raise RealRootFragmentError(
+            f"{operation} needs an ordered coefficient field",
+            missing=frozenset({"ordered_coefficient_field"}),
+        )
+    return coefficients
+
+
+def _absolute(coefficients: Ordered[E], value: E) -> E:
+    return value if coefficients.sign(value) >= 0 else coefficients.neg(value)
+
+
+def cauchy_bound(
+    ring: UnivariatePolynomialRing[E],
+    value: Polynomial[E],
+) -> E:
+    """Cauchy's strict rational root bound of a nonzero polynomial.
+
+    For ``p = a_n x^n + ... + a_0`` with ``a_n != 0`` the returned bound is
+
+        ``1 + max_{i < n} |a_i / a_n|``.
+
+    Every real root ``r`` satisfies ``|r| < bound``.  A nonzero constant has
+    the bound ``1``; there is no root to bound.  The coefficient structure must
+    be an ordered field of characteristic zero.  The zero polynomial is refused
+    because every real number is a root.
+    """
+    _require_characteristic_zero(ring, "the Cauchy root bound")
+    ordered = _require_ordered(ring, "the Cauchy root bound")
+    coefficients = ring.coefficients
+    if value.is_zero():
+        raise RealRootFragmentError(
+            "the zero polynomial has every real number as a root",
+            missing=frozenset({"nonzero_polynomial"}),
+        )
+    if ring.is_constant(value):
+        return coefficients.one()
+    degree = ring.degree(value, 0)
+    leading = ring.coefficient(value, (degree,))
+    maximum = coefficients.zero()
+    for exponent in range(degree):
+        ratio = coefficients.div(
+            ring.coefficient(value, (exponent,)), leading
+        )
+        magnitude = _absolute(ordered, ratio)
+        if ordered.sign(ordered.sub(magnitude, maximum)) > 0:
+            maximum = magnitude
+    return coefficients.add(coefficients.one(), maximum)
+
+
+def _count_from_chain(
+    ring: UnivariatePolynomialRing[E],
+    chain: tuple[Polynomial[E], ...],
+    value: Polynomial[E],
+    lower: E,
+    upper: E,
+) -> int:
+    """The open-interval count using an already built Sturm chain."""
+    coefficients = _require_ordered(ring, "root counting")
+    lower_variations = sign_variations(ring, chain, lower)
+    upper_variations = sign_variations(ring, chain, upper)
+    upper_root = 1 if coefficients.is_zero(evaluate(ring, value, upper)) else 0
+    return lower_variations - upper_variations - upper_root
+
+
 def count_real_roots_open(
     ring: UnivariatePolynomialRing[E],
     value: Polynomial[E],
@@ -201,28 +304,136 @@ def count_real_roots_open(
     minus one when ``upper`` is a root; see the module docstring for the
     endpoint convention.
     """
-    coefficients = ring.coefficients
-    if not isinstance(coefficients, Ordered):
-        raise RealRootFragmentError(
-            "root counting needs an ordered coefficient field",
-            missing=frozenset({"ordered_coefficient_field"}),
-        )
+    coefficients = _require_ordered(ring, "root counting")
     if not coefficients.less(lower, upper):
         raise RealRootFragmentError(
             "a root-count interval needs lower < upper",
             missing=frozenset({"ordered_endpoints"}),
         )
     chain = sturm_chain(ring, value)
-    lower_variations = sign_variations(ring, chain, lower)
-    upper_variations = sign_variations(ring, chain, upper)
-    upper_root = 1 if coefficients.is_zero(evaluate(ring, value, upper)) else 0
-    return lower_variations - upper_variations - upper_root
+    return _count_from_chain(ring, chain, value, lower, upper)
+
+
+def _nonroot_split(
+    ring: UnivariatePolynomialRing[E],
+    value: Polynomial[E],
+    lower: E,
+    upper: E,
+    budget: int,
+    spent: int,
+) -> tuple[E, int]:
+    """A non-root split point strictly inside ``(lower, upper)``.
+
+    The midpoint is tried first.  If it is a root, deterministic dyadic offsets
+    around it are probed; the polynomial has finitely many roots, so a non-root
+    is found whenever the budget permits.  Both child intervals retain at least
+    one quarter of the parent width, which keeps the bisection progressing.
+    """
+    _require_ordered(ring, "root isolation")
+    coefficients = ring.coefficients
+    two = coefficients.add(coefficients.one(), coefficients.one())
+    width = coefficients.sub(upper, lower)
+    middle = coefficients.add(lower, coefficients.div(width, two))
+    if not coefficients.is_zero(evaluate(ring, value, middle)):
+        return middle, spent
+    four = coefficients.mul_int(coefficients.one(), 4)
+    offset = coefficients.div(width, four)
+    positive = True
+    while True:
+        if spent >= budget:
+            raise RealRootBudgetError(
+                "the root-isolation budget was exhausted while avoiding a "
+                "root-valued split point",
+                missing=frozenset({"root_isolation_budget"}),
+            )
+        spent += 1
+        candidate = (
+            coefficients.add(middle, offset)
+            if positive
+            else coefficients.sub(middle, offset)
+        )
+        if not coefficients.is_zero(evaluate(ring, value, candidate)):
+            return candidate, spent
+        if positive:
+            positive = False
+        else:
+            positive = True
+            offset = coefficients.div(offset, two)
+
+
+def isolate_real_roots_open(
+    ring: UnivariatePolynomialRing[E],
+    value: Polynomial[E],
+    *,
+    budget: int,
+) -> tuple[tuple[E, E], ...]:
+    """Isolate every distinct real root in a disjoint open rational interval.
+
+    Preconditions: ``value`` is a nonzero squarefree polynomial over an ordered
+    characteristic-zero field, and ``budget`` is a nonnegative integer count of
+    split/probe steps.  The search radius is strictly larger than Cauchy's
+    bound, so every real root lies inside it and neither outer endpoint is a
+    root.  Intervals are returned in increasing order, have non-root endpoints,
+    and each has exactly one distinct root.  Open intervals may share a
+    non-root endpoint; their interiors are disjoint.
+
+    A budget refusal raises `RealRootBudgetError`; no partial tuple is
+    returned.  The zero polynomial and a non-squarefree polynomial raise
+    `RealRootFragmentError` exactly as `sturm_chain` does.
+    """
+    if isinstance(budget, bool) or not isinstance(budget, int):
+        raise TypeError("a root-isolation budget must be an integer")
+    if budget < 0:
+        raise ValueError("a root-isolation budget cannot be negative")
+    _require_characteristic_zero(ring, "root isolation")
+    coefficients = _require_ordered(ring, "root isolation")
+    chain = sturm_chain(ring, value)
+    radius = coefficients.add(cauchy_bound(ring, value), coefficients.one())
+    lower = coefficients.neg(radius)
+    total = _count_from_chain(ring, chain, value, lower, radius)
+    if total == 0:
+        return ()
+    stack: list[tuple[E, E, int]] = [(lower, radius, total)]
+    intervals: list[tuple[E, E]] = []
+    spent = 0
+    while stack:
+        current_lower, current_upper, count = stack.pop()
+        if count == 0:
+            continue
+        if count == 1:
+            intervals.append((current_lower, current_upper))
+            continue
+        if spent >= budget:
+            raise RealRootBudgetError(
+                "the root-isolation budget was exhausted before every root "
+                "was separated",
+                missing=frozenset({"root_isolation_budget"}),
+            )
+        spent += 1
+        split, spent = _nonroot_split(
+            ring,
+            value,
+            current_lower,
+            current_upper,
+            budget,
+            spent,
+        )
+        left_count = _count_from_chain(
+            ring, chain, value, current_lower, split
+        )
+        right_count = _count_from_chain(ring, chain, value, split, current_upper)
+        stack.append((split, current_upper, right_count))
+        stack.append((current_lower, split, left_count))
+    return tuple(intervals)
 
 
 __all__ = [
+    "RealRootBudgetError",
     "RealRootFragmentError",
+    "cauchy_bound",
     "count_real_roots_open",
     "evaluate",
+    "isolate_real_roots_open",
     "sign_at",
     "sign_variations",
     "sturm_chain",
