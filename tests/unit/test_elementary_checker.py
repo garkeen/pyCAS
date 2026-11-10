@@ -2,7 +2,12 @@
 
 from dataclasses import replace
 
-from support import runtime_proposition, variable
+from support import (
+    runtime_proposition,
+    typed_in,
+    variable,
+    verification_context,
+)
 
 from cas.frontend import parse
 from cas.kernel.evidence import (
@@ -12,6 +17,13 @@ from cas.kernel.evidence import (
     Verified,
 )
 from cas.language.decisions import Reason
+from cas.language.problems import (
+    Coverage,
+    DomainRequirement,
+    ProblemSpec,
+    ResultLanguage,
+)
+from cas.language.roles import CandidateRole
 from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.elementary import (
     ElementaryDifferentiator,
@@ -62,9 +74,17 @@ def certificate(runtime, source, candidate, region=None, variable_term=None):
     )
 
 
-def check(runtime, proposition, cert):
+def check(runtime, proposition, cert, candidate, role=CandidateRole.RESULT):
     return runtime.checker.check(
-        CheckRequest(runtime.frame.id, (proposition,), (), cert)
+        CheckRequest(
+            runtime.frame.id,
+            (proposition,),
+            (),
+            cert,
+            candidate=candidate,
+            candidate_role=role,
+            context=verification_context(runtime, algebra=runtime.request),
+        )
     )
 
 
@@ -76,9 +96,82 @@ def test_the_checker_accepts_the_expected_candidate():
         runtime,
         claim(runtime, source, candidate),
         certificate(runtime, source, candidate),
+        candidate,
     )
     assert isinstance(outcome, Verified)
     assert outcome.checked == (claim(runtime, source, candidate),)
+
+
+def test_a_missing_candidate_is_invalid_evidence():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        certificate(runtime, source, candidate),
+        None,
+    )
+    assert isinstance(outcome, InvalidEvidence)
+    assert "candidate" in outcome.detail
+
+
+def test_a_candidate_different_from_the_claim_is_invalid_evidence():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        certificate(runtime, source, candidate),
+        term(runtime, "exp(x)"),
+    )
+    assert isinstance(outcome, InvalidEvidence)
+    assert "candidate" in outcome.detail
+
+
+def test_a_missing_candidate_role_is_invalid_evidence():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        certificate(runtime, source, candidate),
+        candidate,
+        role=None,
+    )
+    assert isinstance(outcome, InvalidEvidence)
+    assert "candidate role" in outcome.detail
+
+
+def test_a_wrong_candidate_role_is_invalid_evidence():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        certificate(runtime, source, candidate),
+        candidate,
+        role=CandidateRole.SET,
+    )
+    assert isinstance(outcome, InvalidEvidence)
+    assert "candidate role" in outcome.detail
+
+
+def test_the_source_role_publishes_the_antiderivative():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    outcome = check(
+        runtime,
+        claim(runtime, source, candidate),
+        certificate(runtime, source, candidate),
+        source,
+        role=CandidateRole.SOURCE,
+    )
+    assert isinstance(outcome, Verified)
 
 
 def test_a_different_candidate_is_unverified_not_refuted():
@@ -89,6 +182,7 @@ def test_a_different_candidate_is_unverified_not_refuted():
         runtime,
         claim(runtime, source, wrong),
         certificate(runtime, source, wrong),
+        wrong,
     )
     assert isinstance(outcome, Unverified)
     assert outcome.reason is Reason.FRAGMENT
@@ -103,6 +197,7 @@ def test_a_differently_shaped_equivalent_candidate_is_not_refuted():
         runtime,
         claim(runtime, source, candidate),
         certificate(runtime, source, candidate),
+        candidate,
     )
     assert isinstance(outcome, Unverified)
     assert outcome.reason is Reason.FRAGMENT
@@ -117,6 +212,7 @@ def test_a_certificate_must_match_the_claim():
         runtime,
         claim(runtime, source, candidate),
         certificate(runtime, other, candidate),
+        candidate,
     )
     assert isinstance(outcome, InvalidEvidence)
     assert "does not match" in outcome.detail
@@ -129,11 +225,12 @@ def test_the_conclusion_must_be_a_derivative_specification():
         runtime,
         proposition,
         certificate(runtime, T.number(1), T.number(0)),
+        T.number(0),
     )
     assert isinstance(outcome, InvalidEvidence)
 
 
-def test_a_different_region_is_unverified():
+def test_a_global_derivative_can_be_restricted_to_a_subregion():
     runtime = setup()
     source = term(runtime, "sin(x)")
     candidate = term(runtime, "cos(x)")
@@ -142,10 +239,9 @@ def test_a_different_region_is_unverified():
         runtime,
         claim(runtime, source, candidate, region=region),
         certificate(runtime, source, candidate, region=region),
+        candidate,
     )
-    assert isinstance(outcome, Unverified)
-    assert outcome.reason is Reason.FRAGMENT
-    assert "region" in outcome.detail
+    assert isinstance(outcome, Verified)
 
 
 def test_the_claim_must_use_this_fragments_variable():
@@ -157,6 +253,7 @@ def test_the_claim_must_use_this_fragments_variable():
         runtime,
         claim(runtime, source, candidate, variable_term=pi),
         certificate(runtime, source, candidate, variable_term=pi),
+        candidate,
     )
     assert isinstance(outcome, Unverified)
     assert outcome.reason is Reason.FRAGMENT
@@ -171,6 +268,7 @@ def test_conditional_claims_are_verified_on_their_region():
         runtime,
         claim(runtime, source, candidate, region=region),
         certificate(runtime, source, candidate, region=region),
+        candidate,
     )
     assert isinstance(outcome, Verified)
 
@@ -178,6 +276,7 @@ def test_conditional_claims_are_verified_on_their_region():
         runtime,
         claim(runtime, source, candidate),
         certificate(runtime, source, candidate),
+        candidate,
     )
     assert isinstance(without_region, Unverified)
     assert without_region.reason is Reason.FRAGMENT
@@ -187,6 +286,7 @@ def test_conditional_claims_are_verified_on_their_region():
         runtime,
         claim(runtime, source, T.number(0), region=region),
         certificate(runtime, source, T.number(0), region=region),
+        T.number(0),
     )
     assert isinstance(wrong_candidate, Unverified)
 
@@ -205,6 +305,7 @@ def test_a_tampered_child_rule_instance_is_unverified():
         runtime,
         claim(runtime, source, candidate),
         replace(cert, derivation=tampered),
+        candidate,
     )
     assert isinstance(outcome, Unverified)
     assert "inconsistent" in outcome.detail
@@ -219,6 +320,81 @@ def test_a_weaker_region_is_unverified():
         runtime,
         claim(runtime, source, candidate, region=region),
         certificate(runtime, source, candidate, region=region),
+        candidate,
     )
     assert isinstance(outcome, Unverified)
     assert "region" in outcome.detail
+
+
+def test_the_problem_region_binds_an_elementary_claim():
+    runtime = setup()
+    source = term(runtime, "sin(x)")
+    candidate = term(runtime, "cos(x)")
+    positive = term(runtime, "x > 0")
+    negative = term(runtime, "x < 0")
+    proposition = claim(runtime, source, candidate, region=positive)
+    cert = certificate(runtime, source, candidate, region=positive)
+    problem = ProblemSpec(
+        "differentiate",
+        (
+            typed_in(
+                runtime.frames,
+                runtime.frame.id,
+                runtime.signature,
+                source,
+            ),
+        ),
+        runtime.request.roles,
+        runtime_proposition(runtime, negative),
+        ResultLanguage.EXPRESSION,
+        Coverage.ONE_VERIFIED,
+        interpretation_requirement=(
+            runtime.request.interpretation_requirement
+        ),
+        domain_requirement=DomainRequirement(
+            coefficient=runtime.request.coefficient_domain,
+            values=runtime.request.value_domain,
+        ),
+    )
+    rejected = runtime.checker.check(
+        CheckRequest(
+            runtime.frame.id,
+            (proposition,),
+            (),
+            cert,
+            problem=problem,
+            candidate=candidate,
+            candidate_role=CandidateRole.RESULT,
+            context=verification_context(runtime, algebra=runtime.request),
+        )
+    )
+    assert isinstance(rejected, InvalidEvidence)
+    assert "problem region" in rejected.detail
+    allowed = ProblemSpec(
+        "differentiate",
+        problem.inputs,
+        runtime.request.roles,
+        runtime_proposition(runtime, positive),
+        ResultLanguage.EXPRESSION,
+        Coverage.ONE_VERIFIED,
+        interpretation_requirement=(
+            runtime.request.interpretation_requirement
+        ),
+        domain_requirement=DomainRequirement(
+            coefficient=runtime.request.coefficient_domain,
+            values=runtime.request.value_domain,
+        ),
+    )
+    verified = runtime.checker.check(
+        CheckRequest(
+            runtime.frame.id,
+            (proposition,),
+            (),
+            cert,
+            problem=allowed,
+            candidate=candidate,
+            candidate_role=CandidateRole.RESULT,
+            context=verification_context(runtime, algebra=runtime.request),
+        )
+    )
+    assert isinstance(verified, Verified)

@@ -67,6 +67,11 @@ class InferenceRecord:
 
     `certificate` is opaque here: only the checker that produced it interprets
     it, and only after the checker was selected by `checker_id`/version.
+    `certificate_schema` and `certificate_schema_version` name the admitted
+    schema that interpreted the certificate, so an audit can tell which
+    certificate format the inference actually used.  A record constructed
+    outside the commit boundary without those names carries the explicit
+    `"unrecorded"` placeholder rather than silently omitting the identity.
     """
 
     id: InferenceId
@@ -78,6 +83,16 @@ class InferenceRecord:
     certificate: object
     reads: tuple[tuple[str, str], ...] = ()
     basis: tuple[BasisRef, ...] = ()
+    certificate_schema: str = "unrecorded"
+    certificate_schema_version: str = "unrecorded"
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("certificate schema", self.certificate_schema),
+            ("certificate schema version", self.certificate_schema_version),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"an inference needs a {label}")
 
 
 @dataclass(frozen=True, slots=True)

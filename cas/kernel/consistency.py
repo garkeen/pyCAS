@@ -13,7 +13,12 @@ pair leaves the frame `Unassessed` rather than declaring it consistent.
 from __future__ import annotations
 
 from cas.foundation.ids import FrameId
-from cas.kernel.commit import CommitProposal, Committed, commit
+from cas.kernel.commit import (
+    CommitProposal,
+    ValidatedCommitBatch,
+    publish_commit,
+    validate_commit,
+)
 from cas.kernel.evidence import (
     CheckOutcome,
     CheckRequest,
@@ -103,7 +108,7 @@ def assess_consistency(
     )
     if not isinstance(false_proposition, Pr.Proposition):
         return current
-    outcome = commit(
+    validated = validate_commit(
         store,
         CommitProposal(
             frame,
@@ -114,9 +119,10 @@ def assess_consistency(
             certificate=None,
         ),
     )
-    if isinstance(outcome, Committed):
-        return store.record_inconsistency(frame, outcome.judgments[0])
-    return store.consistency(frame)
+    if not isinstance(validated, ValidatedCommitBatch):
+        return store.consistency(frame)
+    outcome = publish_commit(store, validated)
+    return store.record_inconsistency(frame, outcome.judgments[0])
 
 
 __all__ = ["ContradictionChecker", "assess_consistency"]

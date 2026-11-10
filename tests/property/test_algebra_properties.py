@@ -163,3 +163,88 @@ def test_rational_function_field_laws():
                 field.mul(a, field.derivative(b)),
             ),
         )
+
+
+def random_integer_polynomial(
+    rng: random.Random,
+    ring,
+    *,
+    max_degree: int = 4,
+    max_terms: int = 5,
+):
+    value = ring.zero()
+    for _ in range(rng.randint(1, max_terms)):
+        degree = rng.randint(0, max_degree)
+        coefficient = rng.randint(-6, 6)
+        value = ring.add(
+            value, ring.monomial((degree,), coefficient)
+        )
+    return value
+
+
+def test_xgcd_bezout_law_for_random_polynomials():
+    rng = random.Random(SEED + 5)
+    ring = UnivariatePolynomialRing(X, RationalField())
+    for _ in range(80):
+        left = random_polynomial(rng, ring)
+        right = random_polynomial(rng, ring)
+        gcd, left_coefficient, right_coefficient = ring.xgcd(left, right)
+        assert ring.equal(
+            ring.add(
+                ring.mul(left_coefficient, left),
+                ring.mul(right_coefficient, right),
+            ),
+            gcd,
+        )
+        if not gcd.is_zero():
+            assert ring.equal(
+                gcd,
+                ring.monic(gcd),
+            )
+
+
+def test_pseudo_division_identity_over_random_integer_polynomials():
+    rng = random.Random(SEED + 6)
+    ring = PolynomialRing((X,), IntegerRing())
+    for _ in range(80):
+        left = random_integer_polynomial(rng, ring)
+        right = random_integer_polynomial(rng, ring)
+        if right.is_zero():
+            continue
+        quotient, remainder, multiplier = ring.pseudo_divmod(left, right)
+        assert ring.equal(
+            ring.mul(ring.constant(multiplier), left),
+            ring.add(ring.mul(quotient, right), remainder),
+        )
+        assert ring.degree(remainder, 0) < ring.degree(right, 0)
+
+
+def test_resultant_is_multiplicative_in_the_second_argument():
+    rng = random.Random(SEED + 7)
+    ring = UnivariatePolynomialRing(X, RationalField())
+    for _ in range(50):
+        first = random_polynomial(rng, ring)
+        second = random_polynomial(rng, ring)
+        third = random_polynomial(rng, ring)
+        assert ring.coefficients.equal(
+            ring.resultant(first, ring.mul(second, third)),
+            ring.coefficients.mul(
+                ring.resultant(first, second),
+                ring.resultant(first, third),
+            ),
+        )
+
+
+def test_subresultant_chain_degrees_and_gcd_associate():
+    rng = random.Random(SEED + 8)
+    ring = UnivariatePolynomialRing(X, RationalField())
+    for _ in range(60):
+        first = random_polynomial(rng, ring)
+        second = random_polynomial(rng, ring)
+        if first.is_zero() or second.is_zero():
+            continue
+        chain = ring.subresultant_chain(first, second)
+        assert chain
+        for previous, following in zip(chain[1:], chain[2:]):
+            assert ring.degree(previous, 0) > ring.degree(following, 0)
+        assert ring.equal(ring.monic(chain[-1]), ring.gcd(first, second))

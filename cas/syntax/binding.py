@@ -203,6 +203,30 @@ def free_symbols(term: T.Term) -> frozenset[SymbolId]:
     return frozenset(found)
 
 
+def variable_symbols(term: T.Term) -> frozenset[SymbolId]:
+    """Free symbols used as variables, excluding operator-position symbols.
+
+    A region condition mentions structural heads and declared functions in
+    operator position; those are not coordinates of the region.  The remaining
+    free symbols are the variables the condition is read over.  A scalar
+    variable cannot be an operator, so no real coordinate is lost.
+    """
+    found: set[SymbolId] = set()
+    stack: list[T.Term] = [term]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, T.SymbolRef):
+            found.add(current.symbol_id)
+        elif isinstance(current, T.Apply):
+            if not isinstance(current.operator, T.SymbolRef):
+                stack.append(current.operator)
+            stack.extend(current.arguments)
+        elif isinstance(current, T.Binder):
+            stack.extend(current.annotations)
+            stack.append(current.body)
+    return frozenset(found)
+
+
 def well_scoped(term: T.Term, depth: int = 0) -> bool:
     """Whether every bound index names an enclosing binder."""
     stack: list[tuple[T.Term, int]] = [(term, depth)]
@@ -226,5 +250,6 @@ __all__ = [
     "instantiate",
     "shift",
     "substitute_free",
+    "variable_symbols",
     "well_scoped",
 ]

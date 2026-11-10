@@ -23,10 +23,14 @@ ObjectVersionId = NewType("ObjectVersionId", int)
 RevisionId = NewType("RevisionId", int)
 EventId = NewType("EventId", int)
 TaskId = NewType("TaskId", int)
+ExecutionAttemptId = NewType("ExecutionAttemptId", int)
+CaseSplitId = NewType("CaseSplitId", int)
 
 __all__ = [
     "CandidateId",
+    "CaseSplitId",
     "EventId",
+    "ExecutionAttemptId",
     "FrameId",
     "IdIssuer",
     "InferenceId",

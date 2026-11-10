@@ -1,12 +1,14 @@
 """Parameterized coefficients through the frontend, workflow and kernel."""
 
 import pytest
+from support import view_of
 
 from cas.frontend.errors import SessionError
 from cas.frontend.session import Session
 from cas.language.problems import ParameterMode
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.runtime import bootstrap, bootstrap_parameterized
+from cas.semantics.regions import RegionSpec
 from cas.semantics.specialization import CoverageClaim
 from cas.syntax import binding as B
 from cas.syntax import term as T
@@ -39,10 +41,8 @@ def test_a_is_a_coefficient_parameter_and_x_is_the_target():
     assert claim.candidate == session.object("E0").term
     assert claim.variable.symbol_id == runtime.variable
 
-    source_value = runtime.bridge.to_value(session.object("F").term)
-    result_value = runtime.bridge.to_value(session.object("E0").term)
-    assert source_value is not None
-    assert result_value is not None
+    source_value = view_of(runtime, session.object("F").term).value
+    result_value = view_of(runtime, session.object("E0").term).value
     assert runtime.ring.equal(
         result_value, runtime.differential.deriv(source_value)
     )
@@ -56,7 +56,8 @@ def test_a_is_a_coefficient_parameter_and_x_is_the_target():
     assert generic.coverage_claim is CoverageClaim.ALL_VALUES
     assert generic.is_unconditional
     assert generic.excluded_cases == ()
-    assert generic.valid_on.term == T.TRUE
+    assert isinstance(generic.valid_on, RegionSpec)
+    assert generic.valid_on.condition.term == T.TRUE
     assert generic.result == session.object("E0").term
     assert generic.correctness_specification == link.specification
 
@@ -159,22 +160,29 @@ def test_specialization_joins_the_revision_history():
     assert session.execute("specialize @F a=3") == "verified @E1: 6*x"
     assert runtime.store.stats()["judgments"] == 2
 
-    assert session.execute("undo") == "undo: @E0"
+    assert session.execute("undo") == "undo: @E0 (differentiate 0)"
     assert runtime.store.stats()["judgments"] == 2
     assert [label for label, _ in session.visible()] == ["F", "E0"]
-    assert session.execute("redo") == "redo: @E1"
+    assert session.execute("redo") == "redo: @E1 (specialize 0)"
     assert len(session.workspace.links()) == 2
 
 
-def test_the_parameter_is_not_a_differentiation_target():
+def test_a_parameter_can_become_the_differentiation_target():
     runtime = bootstrap_parameterized()
     session = Session(runtime)
     session.execute("a*x")
     source = session.object("E0")
     parameter = runtime.request.parameters[0]
     result = session.workspace.differentiate(source, parameter)
-    assert result.status is OperationStatus.UNSUPPORTED
-    assert runtime.store.stats()["judgments"] == 0
+    assert result.status is OperationStatus.VERIFIED
+    assert result.result is not None
+    assert result.result.term == T.symbol(runtime.variable, "x")
+    claim = parse_has_derivative(
+        runtime.vocabulary, result.verifications[0].specification.term
+    )
+    assert claim is not None
+    assert claim.variable.symbol_id == parameter
+    assert runtime.store.stats()["judgments"] == 1
 
 
 def test_a_constant_parameter_differentiates_to_zero():

@@ -1,9 +1,10 @@
 """Differential structures pair a parent with one explicitly chosen derivation."""
 
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
-from support import head_app
+from support import head_app, view_of
 
 from cas.algebra.parents import ParentRegistry, ParentSpec
 from cas.algebra.polynomial import PolynomialRing, UnivariatePolynomialRing
@@ -11,7 +12,11 @@ from cas.algebra.rational import RationalFunctionField
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import SymbolId
 from cas.language.signatures import StructuralHead
-from cas.semantics.bridge import to_polynomial
+from cas.math.calculus.differentiation.view import (
+    DifferentiationView,
+    SpecializationView,
+)
+from cas.runtime.bootstrap import bootstrap_parameterized
 from cas.semantics.differential import (
     DifferentialStructure,
     PolynomialDerivation,
@@ -27,9 +32,7 @@ def x_term(runtime) -> T.SymbolRef:
 
 
 def polynomial(runtime, term: T.Term):
-    value = to_polynomial(runtime.ring, term, runtime.signature)
-    assert value is not None
-    return value
+    return view_of(runtime, term).value
 
 
 def test_the_runtime_derivation_differentiates_polynomials(runtime):
@@ -128,3 +131,56 @@ def test_a_rational_derivation_differentiates_constants_to_zero():
     )
     derivation = RationalDerivation(field)
     assert field.equal(derivation.deriv(field.one()), field.zero())
+
+
+def test_a_differentiation_view_requires_the_request_differential(runtime):
+    view = runtime.views[0]
+    assert isinstance(view, DifferentiationView)
+    assert view.request.differential is view.differential
+    without = replace(view.request, differential=None)
+    with pytest.raises(ValueError, match="request"):
+        replace(view, request=without)
+
+
+def test_a_differentiation_view_rejects_a_second_differential(runtime):
+    view = runtime.views[0]
+    other = polynomial_structure(runtime.parent, 0)
+    assert other is not view.differential
+    with pytest.raises(ValueError, match="single derivation authority"):
+        replace(view, differential=other)
+
+
+def test_a_differentiation_view_accepts_the_request_differential(runtime):
+    view = runtime.views[0]
+    rebuilt = replace(
+        view, request=view.request, differential=view.differential
+    )
+    assert rebuilt.request.differential is rebuilt.differential
+
+
+def test_a_specialization_view_requires_the_request_differential():
+    runtime = bootstrap_parameterized()
+    view = runtime.specialization
+    assert isinstance(view, SpecializationView)
+    assert view.request.differential is view.differential
+    without = replace(view.request, differential=None)
+    with pytest.raises(ValueError, match="request"):
+        replace(view, request=without)
+
+
+def test_a_specialization_view_rejects_a_second_differential():
+    runtime = bootstrap_parameterized()
+    view = runtime.specialization
+    assert isinstance(view, SpecializationView)
+    other = polynomial_structure(view.parent, 0)
+    assert other is not view.differential
+    with pytest.raises(ValueError, match="single derivation authority"):
+        replace(view, differential=other)
+
+
+def test_a_specialization_view_accepts_the_request_differential():
+    runtime = bootstrap_parameterized()
+    view = runtime.specialization
+    assert isinstance(view, SpecializationView)
+    rebuilt = replace(view, request=view.request)
+    assert rebuilt.request.differential is rebuilt.differential

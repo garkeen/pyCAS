@@ -3,9 +3,18 @@
 import random
 from fractions import Fraction
 
-from support import head_app, runtime_proposition, variable
+from support import (
+    head_app,
+    render_value,
+    runtime_proposition,
+    typed_in,
+    variable,
+    verification_context,
+    view_of,
+)
 
 from cas.kernel.evidence import CheckRequest, Verified
+from cas.language.roles import CandidateRole
 from cas.language.signatures import StructuralHead
 from cas.math.calculus.differentiation.certificate import (
     Derivation,
@@ -33,12 +42,13 @@ def test_polynomials_agree_with_the_polynomial_view():
     rng = random.Random(SEED)
     for _ in range(100):
         source = random_polynomial(rng, runtime.ring)
-        source_term = runtime.bridge.to_term(source)
-        assert source_term is not None
-        outcome = runtime.derivative.candidate(source_term)
+        source_term = render_value(runtime, source)
+        typed_source = typed_in(
+            runtime.frames, runtime.frame.id, runtime.signature, source_term
+        )
+        outcome = runtime.derivative.candidate(typed_source, runtime.request)
         assert isinstance(outcome, Derived)
-        candidate = runtime.bridge.to_value(outcome.term)
-        assert candidate is not None
+        candidate = view_of(runtime, outcome.term).value
         assert runtime.ring.equal(
             candidate, runtime.ring.derivative(source, 0)
         )
@@ -97,7 +107,10 @@ def test_random_declared_expressions_reach_the_independent_checker():
     x = variable(runtime)
     for _ in range(30):
         source = random_elementary(rng, runtime)
-        outcome = runtime.derivative.candidate(source)
+        typed_source = typed_in(
+            runtime.frames, runtime.frame.id, runtime.signature, source
+        )
+        outcome = runtime.derivative.candidate(typed_source, runtime.request)
         assert isinstance(outcome, Derived)
         proposition = runtime_proposition(
             runtime,
@@ -118,7 +131,17 @@ def test_random_declared_expressions_reach_the_independent_checker():
             outcome.evidence,
         )
         checked = runtime.checker.check(
-            CheckRequest(runtime.frame.id, (proposition,), (), certificate)
+            CheckRequest(
+                runtime.frame.id,
+                (proposition,),
+                (),
+                certificate,
+                candidate=outcome.term,
+                candidate_role=CandidateRole.RESULT,
+                context=verification_context(
+                    runtime, algebra=runtime.request
+                ),
+            )
         )
         assert isinstance(checked, Verified)
 
@@ -140,7 +163,10 @@ def test_random_conditional_expressions_keep_their_region():
     checked_count = 0
     for _ in range(40):
         source = random_conditional_expression(rng, runtime)
-        outcome = runtime.derivative.candidate(source)
+        typed_source = typed_in(
+            runtime.frames, runtime.frame.id, runtime.signature, source
+        )
+        outcome = runtime.derivative.candidate(typed_source, runtime.request)
         if not isinstance(outcome, Derived):
             continue
         checked_count += 1
@@ -162,7 +188,17 @@ def test_random_conditional_expressions_keep_their_region():
             region, source, runtime.variable, outcome.term, outcome.evidence
         )
         checked = runtime.checker.check(
-            CheckRequest(runtime.frame.id, (proposition,), (), certificate)
+            CheckRequest(
+                runtime.frame.id,
+                (proposition,),
+                (),
+                certificate,
+                candidate=outcome.term,
+                candidate_role=CandidateRole.RESULT,
+                context=verification_context(
+                    runtime, algebra=runtime.request
+                ),
+            )
         )
         assert isinstance(checked, Verified)
     assert checked_count > 0

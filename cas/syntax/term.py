@@ -57,6 +57,15 @@ class Term:
     def __lt__(self, other: Term) -> bool:
         return self._key < other._key
 
+    def structural_key(self) -> tuple[object, ...]:
+        """The immutable structural identity used for content serialization.
+
+        The key is built from literal values and `SymbolId`s, never display
+        names or object identity.  Every nested element is itself an immutable
+        tuple, so the returned value can be hashed or rendered without copying.
+        """
+        return self._key
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
 

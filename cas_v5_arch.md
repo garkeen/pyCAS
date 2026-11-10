@@ -49,9 +49,9 @@
 
 本文设计 pyCAS 的数学对象、有效表示、算法接口、计算管线、验证模型、工作簿和工程终态。设计从数学契约与数据流推导模块，而不是由现有目录或历史实现决定。
 
-- `roadmap.md`：从当前实现走向完整目标的施工路线、算法选择、阶段依赖与交付条件。
-- `AGENTS.md`：开发约定、代码风格和验收流程，遵循本文的数据模型。
-- `progress.md`：已实现能力、实测结果和下一批工作，不将规划等同于实现。
+- `roadmap.md`：从当前实现走向完整目标的施工路线、算法选择、阶段依赖与交付条件；不记录当前进度或缺陷。
+- `AGENTS.md`：项目定位、目标、代码风格、语义要求、实现纪律，以及当前进度与缺陷。
+- `progress.log`：只追加的已完成施工、验收与经验教训记录；不记录计划、未实现项或下一批工作。
 - `reference.md`：数学依据和参考源码证据。
 - `risch.md`、`cad.md`：保留细粒度工具与研究线索，实施时核对对应算法的具体前提。
 
@@ -643,7 +643,7 @@ Hypothesis 有独立身份、命题、定义性前提和来源。frame 中的名
 
 旧世界中的结论不可静默移入新世界。允许复用的仅是经明确意义兼容检查的结构与数学对象；否则重新整理输入并重新验证。
 
-算法优化版本可以不改变数学意义，但证书解码和重放必须记录相关 checker/codec 版本。
+算法优化版本可以不改变数学意义，但证书解码和重放必须记录相关 checker/codec 版本。当前 `World`/`Frame`/`Declaration`/`Definition`/`Hypothesis` 已提供基于规范序列化的 SHA-256 内容摘要；`Revision.frame_digest`/`Event.frame_digest` 记录该摘要，摘要不使用进程内 WorldId/FrameId。
 
 ### 6.6 上下文一致性
 
@@ -769,11 +769,15 @@ validity_conditions
 conversion_witness
 ```
 
-其中 interpretation 明确是形式域元素、参数族、某个具体嵌入下的值，还是区域上的函数表示。
+其中 interpretation 明确是形式域元素、参数族、某个具体嵌入下的值，还是区域上的函数表示。当前实现的 `ConversionWitness` 固定 `kind`、`injective`、`preserves_equality`、`preserves_nonzero`、`preserves_definedness`；`typed_view` 消费这些标志，而不是只看 `ConversionKind`。表示同构与嵌入要求四个标志全部为真；一般同态可以失败。带有显式 `source_domain`/`valid_on` 的视图必须使用保留定义性的 witness，否则 `typed_view` 以 `conversion_witness` 拒绝；全定义视图没有区域声明，非保定义同态仍可在单射且保等号时传递等式。`source_domain`/`valid_on` 在发行时校验类型与子区域关系。
+
+实现切片（2026-11-09，定义性保留 witness）：`ConversionWitness` 增加 `preserves_definedness`；表示同构/嵌入要求该标志为真，`representation_isomorphism()` 固定为真。`AlgebraView.__post_init__`、`_issue_view` 与 `_admit_view_relation` 在视图携带 `source_domain`/`valid_on` 时要求 witness 保留定义性，`typed_view` 以 `ViewRefused(missing={"conversion_witness"})` 拒绝不保留定义性的区域视图；全定义视图不发明定义性声明，非保定义同态仍按单射/保等号规则传递等式。多项式桥、参数多项式桥与有理桥继续发行 `preserves_definedness=True` 的表示同构。嵌入/同态的具体实现、混域消解与 `AlgebraRequest` 的嵌入字段仍未建。
+
+实现切片（2026-11-09，解释与 witness 一致性）：`semantics.bridge` 新增 `_interpretation_witness_refusal`，由 `AlgebraView.__post_init__` 与 `_issue_view` 共同消费。`EMBEDDED` 只允许 `EMBEDDING`/`REPRESENTATION_ISOMORPHISM` witness，`HOMOMORPHISM` 与“值是嵌入像”矛盾；`PARAMETER_FAMILY` 只允许 `REPRESENTATION_ISOMORPHISM`，`EMBEDDING`/`HOMOMORPHISM` 不足以声称形式参数族表示；`FORMAL` 保留三种 kind，仍由 witness 的 `injective`/`preserves_equality`/`preserves_nonzero`/`preserves_definedness` 标志决定可传递事实。`_issue_view` 在建造前以 `ViewRefused(Reason.FRAGMENT, missing={"interpretation_witness"})` 拒绝，直接构造边界抛 `ValueError`。该规则与区域/定义性保留规则独立叠加；具体嵌入/同态桥、混域消解与 `AlgebraRequest` 嵌入字段仍未建。
 
 转换必须保留原表达式的定义域信息。约去因子不会消除 source 的孔洞。
 
-代数幂与表达式幂要通过解释桥区分：环内 a^0=1 是幺半群定义（含 a=0），而当前实/复偏函数解释的 Power(0,0) 未定义。将 Power(f,0) 投影为环元素 1 时，必须保留 f 定义且非零的条件或在该桥片段拒绝；不能据此发行无条件的函数导数/等价规格。空代数乘积为 1，语法层是否允许空参数由签名决定。
+代数幂与表达式幂要通过解释桥区分：环内 a^0=1 是幺半群定义（含 a=0），而当前实/复偏函数解释的 Power(0,0) 未定义。将 Power(f,0) 投影为环元素 1 时，必须保留 f 定义且非零的条件或在该桥片段拒绝；不能据此发行无条件的函数导数/等价规格。当前多项式桥采用保守片段：只有底数是全局非零常数时才投影，形式参数不算全局非零；其他情形诚实拒答。空代数乘积为 1，语法层是否允许空参数由签名决定。
 
 转换回 Term 必须使用原符号映射或显式引入的新生成元绑定，不自行发明全局同名字母。
 
@@ -790,6 +794,14 @@ conversion_witness
 - 目标表示要求与共享预算。
 
 planner 可根据已声明类型与操作需求构造请求，但必须把结果固定并可查看。禁止通过遍历叶节点猜测整个任务的数学域。
+
+实现切片（2026-11-09）：`AlgebraRequest.differential` 已作为请求局部导子载荷落地；缺省 `None` 表示该请求不假设任何导子（不以零导子兜底），存在时必须是 `DifferentialStructure`，并由请求唯一固定本次计算使用的导子。`DifferentiationView`/`SpecializationView` 只接受与请求同一对象的 `DifferentialStructure`。嵌入、参数关系、实嵌入与 `VariableRoles` 绑定位置与 binder-aware 角色仍未建；目标/参数排序已由后续切片闭合（world 已固定），不能把本切片写成完整 §7.9 请求载荷。
+
+实现切片（2026-11-09，世界作用域角色）：`VariableRoles` 增加 `world: WorldId | None`，`ProblemSpec` 与 `AlgebraRequest` 都拒绝未绑定 world 的角色集；`SimplePolynomialBridge`/`ParameterPolynomialBridge`/`RationalFunctionBridge` 在 `to_view` 中先于角色/generator 检查，以 `ViewRefused(Reason.FRAGMENT, missing={"request_world"})` 拒绝 `roles.world` 与源 `TypedExpr.meaning.world` 不一致的请求。`SymbolId` 仍是 world 内的局部身份，不建立跨 world 的全局符号表；嵌入、参数关系、实嵌入与绑定位置及 binder-aware 角色仍未建；目标/参数排序已由后续切片闭合。
+
+实现切片（2026-11-10，请求角色排序与解释要求）：`VariableRoles` 增加 `target_sort: Sort | None` 与 `parameter_sorts: tuple[Sort, ...]`，按 target/parameters 是否存在校验；`AlgebraRequest` 要求目标排序和与参数数量匹配的参数排序。`AlgebraRequest.interpretation_requirement` 是 `Interpretation` 到语言层 `InterpretationRequirement` 的唯一映射，`ProblemBuilt`/`ExecutionRequest` 要求它与固定问题的 `ProblemSpec.interpretation_requirement` 一致。`ProblemSpec` 还要求输入 `BindingView` 中与角色同名的符号排序一致。嵌入、参数关系、实嵌入、完整绑定位置与 binder-aware 角色、近似精确性仍未建（目标/参数排序已闭合）；本切片不声称完整 §7.9 请求载荷。
+
+实现切片（2026-11-10，系数范围与值域）：`AlgebraRequest` 增加必需的 `coefficient_domain: ValueDomain`，由装配显式声明而不是从 parent 类型嗅探（当前 Q 基座全部声明 `RATIONAL`，Z 测试声明 `INTEGER`）；`value_domain` 由 `roles.target_sort` 经语言层 `value_domain_of_sort` 单一映射派生（`INTEGER`/`RATIONAL`/`REAL`/`COMPLEX`，其他排序精确 `ValueError`）。`ProblemSpec.domain_requirement` 的 coefficient/value 两半与 `ProblemBuilt`/`ExecutionRequest` 绑定同一请求，`problem_mismatch` 消费固定请求的 coefficient/value domain。嵌入、参数关系、实嵌入、完整绑定位置与 binder-aware 角色、一般值域代数仍未建（目标/参数排序与 coefficient/value domain 已闭合）；本切片不声称完整 §7.9。
 
 ---
 
@@ -858,6 +870,8 @@ coverage_claim
 
 允许使用分式自由算法减少人为引入的异常条件；不允许通过忘记中间除法使结果看起来无条件。
 
+实现切片（2026-11-09）：`GenericResult.valid_on`/`excluded_cases` 已使用 §10.3 的 `RegionSpec`，不再保存裸 `Proposition`。`cas.semantics.regions.region_from_proposition` 是现有 Proposition 载荷进入区域的唯一桥：坐标取 `coordinate_symbols(proposition.term)` 的排序结果，因此同一命题总得到确定坐标。`GenericResult` 的构造/覆盖准入、`specialize` 的真值检查以及 `OutsideValidity`/`NeedsRecomputation` 都读取 `RegionSpec.condition`；workspace 在由 `MathematicalProposal` 构造泛结果时经该桥包装，`MathematicalProposal` 的公开字段在本切片仍为 `Proposition`。该切片不建立第二套区域语法，也不声称一般区域代数或完整 S1 闭合。
+
 ### 8.5 特化协议
 
 特化输入为：原 AlgebraView/ProblemSpec、参数映射、新 frame 和目标 parent。
@@ -911,6 +925,8 @@ DifferentialStructure(parent, derivation, constant_structure, witnesses)
 导子满足加法与 Leibniz 法则。没有导子能力时拒绝微分域算法，不使用零导子兜底。`witnesses` 包含系数导子、生成元导数及延拓依据：自由多项式环上的延拓由构造定理保证，商结构还须证明 D(I)⊆I，分式延拓使用商法则及非零分母条件。仅在几个生成元上做采样不能证明任意算法实现满足导子法则。
 
 `constant_structure` 必须区分“已知嵌入常数子域”和“已证明为完整常数域”，并声明算法实际需要的判等、分解、线性相关等能力。不用“没有出现 x”替代一般常数域认定，也不把待解决的常数问题藏在 bool oracle 中。
+
+实现切片（2026-11-09）：当前 `DifferentialStructure(parent, derivation)` 仍以私有 seal 限制构造，`polynomial_structure`/`rational_structure` 是唯一入口；它已作为 `AlgebraRequest.differential` 的请求局部载荷，由 `DifferentiationView`/`SpecializationView` 按对象同一性消费。`witnesses`、完整常数域、导子塔、商结构 `D(I)⊆I` 证明与持久化/重放载荷仍未建，不能用本切片宣称一般微分域能力。
 
 ### 9.2 系数扩张与函数扩张
 
@@ -1006,7 +1022,13 @@ Risch 等算法只能接收真正提供了所需精确算法的常数域。
 
 一个中性表达式 g 可以在 U 外有意义，同时只在 U 上被证明是 f 的导数。把 g 当独立表达式求导是新问题；要得到 f 的二阶导数关系，需要组合两条关系并核验共同区域。这个区分比给所有表达式附一个混合语义的 region 字段更准确。
 
+固有定义域与表示有效区域彼此独立。源表达式可以在整个片段上有定义（`source_domain=None`），而选定的代数表示只在某个真子区域上等于它（`valid_on` 非 None）；这时记录为 `SUFFICIENT`，桥的 `ConversionWitness` 就是该充分区域的证据，不伪造 `SubregionCertificate`。只有源本身带有非平凡固有域、且表示只在它的真子区域上有效时，才需要并携带 `SubregionCertificate`。`TOTAL` 仍是两个区域都为 None，`EXACT` 仍是固有域存在且表示区域为空或与固有域相同。
+
 精确域描述与充分子域证据分别标识。SamePartialFunction 使用完整域等价；充分子域只支持 EqualOn。
+
+区域坐标空间可以大于源的绑定视图：`Definedness` 要求每个区域的坐标包含源的全部自由符号，但允许额外坐标，并保留区域自己的坐标顺序。两个区域若同时存在，必须在同一意义环境（同一 world 与 frame）中读取；每个区域所在 world 必须等于源所在 world。区域可以在源 world 的后代 frame 中读取，但不同 frame 的两个区域不能配对成同一视图的固有域与表示区域。
+
+实现切片（2026-11-09，区域绑定视图）：`AlgebraView` 增加 sealed `region_bindings: tuple[FreeSymbol, ...]`，默认取 source binding view；它必须覆盖源自由符号与每个现存区域的自由变量，否则 `_issue_view` 以 `ViewRefused(Reason.FRAGMENT, missing={"region_bindings"})` 拒绝、直接构造抛 `ValueError`。`AlgebraView.definedness` 用该绑定视图的坐标与排序构造 `RegionSpec`，因此后代 frame 引入的额外坐标不再被压回源绑定视图；严格子区域需要 `SubregionCertificate` 而绑定排序非稠密时抛精确 `ValueError`，不静默降级。`Definedness` 已 sealed，只由 `_issue_definedness`/`AlgebraView.definedness` 发行。`VariableRoles.world`、`ProblemSpec.function_inputs` 与函数相等 checker 的 problem binding 已由后续批次实现；`ProblemSpec` 的精确域/解释、`VariableRoles` 目标/参数排序与 `externalizable` 正向路径也已由后续批次闭合；完整绑定位置与 binder-aware 角色、跨 frame 前提弱化、结果语言与嵌入字段仍未建，本切片不声称完整 S1，也不把非稠密/离散区域纳入现有证书片段。
 
 ### 10.2 函数与偏函数相等
 
@@ -1029,6 +1051,18 @@ SamePartialFunction(f, g)
 
 `Region` 本身复用 §12.1 的 `Proposition`：一个已整理、绑定合法、意义环境明确的条件公式。区间、半代数集、离散集合、复域描述都是这个命题公式的解析形式，不引入第二套区域语法。`RegionSpec` 是它的描述，`RegionCertificate` 是它的证明。因此 §12.2 的 `Covers(region, pieces)` 的参数就是命题公式，`GenericResult.valid_on`/`excluded_cases`（§8.4）也是同一类型。
 
+实现切片（2026-11-09）：`cas.semantics.regions` 已建立 `RegionSpec`（有序坐标 + `Proposition` 条件）、封闭 `RegionCertificate`（`NonemptyCertificate`/`SubregionCertificate`/`CoversCertificate`）与 `certify_*`/`verify_region_certificate`。证书只在受限条件片段（ground truth、单原子线性区间、受限蕴含）能证明时发行，验证独立重检而非信任 `method`；一般半代数区域、连通性、内部/边界/相对拓扑和无限覆盖仍未建。`RegionSpec` 的坐标只需包含条件的自由变量，允许比源绑定视图更大的坐标空间；`Definedness` 要求区域坐标包含源的全部自由符号而不要求元组相等。视图发行时还要求每个区域与源同 world，两个区域同时存在时共享同一 `MeaningKey`；`valid_on` 可以在 `source_domain` 为 None（源全定义）时单独存在。
+
+实现切片（2026-11-09，函数表示覆盖）：`cas.math.functions.equality` 用 `RegionSpec`/`CoversCertificate` 把函数固有域与每个表示有效区域统一为区域，并提供确定坐标的 `function_region`、`function_coverage_regions`、`function_coverage_certificate` 与结构匹配的 `coverage_matches_value`。`extend_function` 要求新函数值的表示覆盖其声明固有域，`FunctionEqualityChecker` 独立重检该覆盖并核对证书精确匹配新值。该检查只在受限条件片段成立；一般半代数区域、无限覆盖、表示重叠一致性与最大固有域仍未建。
+
+实现切片（2026-11-09，泛结果区域）：`region_from_proposition` 把现有 Proposition 载荷转换为 `RegionSpec`，坐标固定为 `coordinate_symbols(proposition.term)` 的排序元组；`GenericResult.valid_on`/`excluded_cases` 已消费该类型，`MathematicalProposal` 仍以 Proposition 为公开字段并在 workspace 构造泛结果时转换。该桥只统一现有区域描述，不新增区域语法，也不宣称一般半代数区域运算。
+
+实现切片（2026-11-09，函数区域消费侧修正）：`FunctionValue`/`FunctionRepresentation` 本批只接受总条件（`definedness` 为空），因为 workspace 的定义域检查、函数相等 checker、覆盖 helper 与 `same_partial_function` 仍按条件 term/命题读取；部分条件在构造时以 `ValueError` 拒绝，`FunctionExtensionOperation.propose` 对部分新域/新表示区域返回结构化 `ProposalUnsupported`。`FunctionEqualityChecker._check_equal_on` 先独立发行 claim region，再用 `proved_subregion` 证明它是各固有域与表示区域的全定义子区域；`_check_same` 拒绝带开放前提的完整域参与者；workspace 的 `define_function`/`extend_function` 与 extension operation 使用同一前提感知规则。`proved_subregion` 的 `same_meaning=False` 只供已独立校验同 world/可见 frame 的 checker 比较祖先 frame 区域。`FunctionValue` 的 `RegionSpec` 迁移、声明函数定义域与一般偏函数定义域仍未建。
+
+实现切片（2026-11-09，区域绑定排序与稠密证书边界）：`RegionSpec` 增加按 `SymbolId` 规范化的 `sorts`，非空时必须恰好覆盖全部坐标；`sort_of` 查询单坐标绑定，`is_dense` 只在全部坐标为 `RATIONAL`/`REAL` 时为真（空坐标集 vacuously dense）。`certify_nonempty`/`certify_subregion`/`certify_covers` 在任一参与区域非稠密时返回 `None`，`verify_region_certificate` 对非稠密区域上的证书返回 `False`；`condition_satisfiable`/`is_empty_condition` 的稠密序假设因此只在 `is_dense` 为真时被消费。`function_region` 只为函数参数坐标写入 `FunctionParameter.sort`，条件含非参数自由变量时整体省略 `sorts`，使覆盖证书被诚实拒绝。该切片仍不声称一般半代数区域、离散集合运算或无限覆盖代数。
+
+实现切片（2026-11-10，区域绑定排序一致性）：`AlgebraView.region_bindings` 现在要求与源自由符号同 `SymbolId` 的条目排序等于源 `BindingView` 的排序；`semantics.bridge._region_binding_refusal` 在 `_issue_view` 与 sealed `AlgebraView.__post_init__` 两处拒绝不一致绑定，`_issue_view` 返回 `missing={"region_bindings"}`，直接构造抛 `ValueError`。该规则防止显式绑定把非稠密源坐标（如 `INTEGER`）伪装成 `REAL`，从而让 `definedness` 发行稠密 `SubregionCertificate`；后代 frame 的额外坐标仍由桥声明排序，本切片不为它们推断排序，也不声称一般半代数区域代数。
+
 区间端点可以是精确有理数、实代数数或尚未比较的符号值。比较未决时不能自行排序。
 
 区域的内部、边界、连通分支和相对拓扑必须明确；不能把低维集合上的恒等验证当作全维开集上的多项式恒等验证。
@@ -1044,6 +1078,10 @@ SamePartialFunction(f, g)
 普通 And/Or 的代数逻辑化简只在其命题操作数已具备相应定义性证明时进行。
 
 作用域导出的 `H→P` 使用守卫蕴含：H 必须在父语境良定义，P 的定义性只在 H 成立的子语境中要求。未闭合的后件定义性导出为 `H→Defined(P)`，不在 H 为假的点提前求值 P。它在双方均良定义时与普通经典蕴含一致，但不得未经定义性检查就改写为严格求值的 `¬H Or P`。
+
+实现切片（2026-11-09，结构定义性前提）：`Proposition` 已记录非正指数整数幂的 `Ne(base,0)` 前提，并对和/积/比较/`And`/`Or`/`Not`/`Implies`/`Guarded`/`Piecewise` 的操作数做结构递归；`Guarded`/`Piecewise` 的分支局部求值语义、声明函数定义域、binder-aware premises 与一般偏函数定义域仍未实现，不能把结构递归当作完整偏函数语义。
+
+实现切片（2026-11-09，条件求值消费侧）：`specialize` 的 `_truth` 先递归求值 `Proposition.definedness` 前提；假前提使条件在该点未定义（有效性区域视为点在外，排除情形视为不适用），未决前提返回 `None` 并转为 `NeedsRecomputation`，只有全部前提为真才求主条件。函数相等/延拓与 workspace 函数区域检查改用 `proved_subregion`，不再直接比较 `Proposition.term`；`ProblemSpec.region`、`OperationRequest.region`、`FunctionValue`/`FunctionRepresentation` 区域与 `MathematicalProposal` 区域等裸 Proposition 载荷在构造器拒绝非空 `definedness`，避免 term 级消费者静默忽略前提。`Guarded`/`Piecewise` 分支局部语义、binder-aware premises 与一般偏函数定义域仍未建。
 
 ### 10.5 分段的值语义
 
@@ -1105,7 +1143,7 @@ Verdict 禁止隐式转换成 bool。调用方必须显式处理变体。
 
 Receipt 引用受验证的数学依据；字符串 detail 是解释，不是证明。
 
-公开 `decide` 可以返回绑定语义快照的受检回执而不写账本。回执不是已发行的 JudgmentRef；其来源、支持与闭合性由验证设施保证，持久化前提必须经过 §13 的发行边界。必要条件尚未在查询 frame 中闭合时，只能返回 Unknown(GUARDED)，不能把条件证明包装成 Yes 或 No。
+公开 `decide` 可以返回绑定语义快照的受检回执而不写账本。回执不是已发行的 JudgmentRef；其来源、支持与闭合性由验证设施保证，持久化前提必须经过 §13 的发行边界。必要条件尚未在查询 frame 中闭合时，只能返回 Unknown(GUARDED)，不能把条件证明包装成 Yes 或 No。当前实现为 `VerdictYes(LocalReceipt)`/`VerdictNo(RefutationReceipt)`/`VerdictUnknown(blockers)`；`decide` 只调用 `validate_commit`，不调用 `publish_commit`。
 
 ### 11.2 Blocker
 
@@ -1249,6 +1287,10 @@ Proposition 不是“任意 Term 加一个字段名”。它必须经可信语�
 
 数学谓词通过声明注册扩展，不把所有未来数学关系写成内核封闭枚举。
 
+实现切片（2026-11-09，结构定义性前提）：`Proposition` 已增加 `definedness: tuple[Proposition, ...]`，由 `propositions.check` 在定型后收集非正指数整数幂的 `Ne(base,0)`，并递归和/积/比较/`And`/`Or`/`Not`/`Implies`/`Guarded`/`Piecewise` 的操作数；`Quote`/`Set` 载荷与 `Binder` body/annotations 明确不检查，声明函数应用只递归参数。前提必须与命题同 `MeaningKey`、不得重复、不得等于命题自身，并参与相等/hash 与 seal。声明函数定义域、`Guarded`/`Piecewise` 分支局部语义、binder-aware premises 与一般偏函数定义域仍未建；这不是完整的 Proposition definedness 语义。
+
+实现切片（2026-11-09，定义性前提的载荷边界）：结构前提已由 `Proposition` 记录，但 `ProblemSpec.region`、`OperationRequest.region`、`FunctionValue.intrinsic_domain`、`FunctionRepresentation.valid_on`、`MathematicalProposal.result_region`/`valid_on`/`excluded_cases` 的当前消费者仍按条件 term 读取，因此这些构造器在 `definedness` 非空时明确抛出 `ValueError`；`Proposition` 本身不被拒绝，`RegionSpec`/`GenericResult`/`AlgebraView` 继续按前提感知规则消费。该保守边界不是 `RegionSpec` 迁移完成；声明函数定义域、`Guarded`/`Piecewise` 分支局部语义与 binder-aware premises 仍未建。
+
 ### 12.2 标准规格族
 
 | 规格 | 承诺 |
@@ -1272,6 +1314,16 @@ Proposition 不是“任意 Term 加一个字段名”。它必须经可信语�
 HasDerivative(U,f,x,g) 表示 U 的每个点上，按所选导数约定有 D_x(f)=g。经典导数需要 f 在点的邻域有定义；U 本身可以是闭集或有限点集，函数的固有域和邻域要求另行检查。在 V 上已证的关系可以限制到已证满足 U⊆V 的区域，这是一条明确的规格限制规则。
 
 因此，全局多项式残差为零可以验证任何合法子区域上的同一关系；全局残差非零却未必否定一个受限区域上的关系。要否定后者，需要适配该区域的恒等判定或反例证据。
+
+空区域不是合法的关系声明；请求区域必须是已证区域的子区域，否则操作拒绝，而不是把结果静默收缩到更小的区域。候选记录保留原 `ProblemSpec`；实际达到的区域属于 `OperationResult.region` 与 `VerificationLink.condition`，不写回原问题的 `region`。
+
+实现切片（2026-11-09）：`Covers(region,pieces)` 已由 `RegionSpec`/`CoversCertificate` 在受限条件片段上发行并由 `verify_region_certificate` 独立重检；函数延拓把 `Covers(intrinsic_domain, representation_regions)` 作为新函数值的表示覆盖义务，`EqualOn` 仍只证明旧域上的一致性。一般覆盖代数、无限覆盖、表示重叠一致性与最大固有域未建。
+
+实现切片（2026-11-09，定义性前提消费）：`conditions.premises_proved` 是唯一前提蕴含规则；`regions.premises_proved_from`/`proved_subregion` 要求 `certify_nonempty`/`certify_subregion`/`certify_covers` 与 `verify_region_certificate` 只在区域条件能证明参与命题的定义性前提时发行/接受证书。子区域证书检查子区域自身前提与目标区域前提从子区域条件成立；覆盖证书检查被覆盖区域自身前提与每个 piece 的前提从区域条件成立（严格 Or 读法）。`AlgebraView._issue_view`/`definedness` 与 `DefinednessService.covers` 消费同一规则；未证明前提不会被当作成立。该切片不声称一般半代数区域或完整偏函数定义域语义。
+
+实现切片（2026-11-09，函数区域的前提感知包含）：`proved_subregion` 现在支持 `same_meaning=False`，仅用于调用方已独立校验两个命题同 world 且 frame 可见的情形；`FunctionEqualityChecker._check_equal_on` 用它要求 claim region 是各固有域与表示区域的全定义子区域，`_check_same` 对带开放前提的完整域条件返回 `Unverified(GUARDED)`；`FunctionExtensionOperation.propose` 与 workspace 的 `define_function`/`extend_function` 全部改用 `proved_subregion`。裸 Proposition 区域载荷在构造器拒绝部分条件。该切片仍不声称一般半代数区域、声明函数定义域或完整偏函数语义。
+
+实现裁定（2026-11-10，`Covers` 当前片段）：本片段不建立独立的 `Covers(region, pieces)` Proposition 词汇、checker 或 operation。`CoversCertificate` 只是函数延拓表示覆盖的内部证书：由 `function_coverage_certificate` 在受限区域片段发行，并由 `FunctionEqualityChecker` 在 `EqualOn` 延拓证书中独立重检；它不发行独立 judgment，也没有注册的 `Covers` 规格或操作消费者。注册 `Covers` 规格/checker 属于未来 K1/S1 工作，必须与真实发布消费者同批加入。该裁定是范围明确的实现边界，不声称 §12.2 已完整实现（一般覆盖代数、无限覆盖、表示重叠一致性与最大固有域仍未建）。
 
 ### 12.3 Judgment
 
@@ -1383,7 +1435,7 @@ verification_function
 trusted_dependencies
 ```
 
-证书 schema 与 checker 标识不可任意错配。加载时进行 schema 验证，检查大小与深度预算。
+证书 schema 与 checker 标识不可任意错配。加载时进行 schema 验证，检查大小与深度预算。当前 `InferenceRecord` 同时记录证书 schema 的 name/version，发布记录因此能说明实际准入的格式。
 
 checker 必须从输入问题、数学数据和证书中得到实际验证的命题；不能只看证书里的 `success=True`，也不能接受任意调用方提供的 conclusion。
 
@@ -1402,7 +1454,9 @@ checker 必须从输入问题、数学数据和证书中得到实际验证的命
 - 明确的代数请求与转换接口；
 - 支持收集器。
 
-通过判定服务取得并实际使用的事实必须形成语义支持。细粒度读日志可以关闭，作用域、世界版本和必要证明引用不能关闭。
+通过判定服务取得并实际使用的事实必须形成语义支持。细粒度读日志可以关闭，作用域、世界版本和必要证明引用不能关闭。当前实现已提供 world/frame/frames、`DecisionService`、`SupportsService`、`BudgetService`、`AlgebraService`、`DefinednessService`、`AxiomRef` 集合与 `readable` 检查；完整支持收集仍按真实消费者逐步补齐。
+
+实现切片（2026-11-10，固定请求 checker 的上下文代数）：`cas.kernel.evidence.context_algebra_mismatch` 是 Derivative/Elementary/Hermite/Linear/Gcd/Resultant checker 消费 `VerificationContext.algebra` 的唯一规则；无 context、context 无 algebra、与 checker 预装配 request 非同一对象分别返回结构化 detail。同一性比较是有意的：`AlgebraRequest` 是冻结的预装配对象，结构相等副本仍可能携带不同 parent/parameter/differential。`Candidate.algebra` 保存提出时的请求快照并由 `check_candidate`/`decide_candidate` 原样重提；函数问题没有代数视图，`FunctionEqualityChecker` 拒绝 algebra 快照，核心逻辑规则不要求 algebra。`validate_commit` 仍只从 `proposal.algebra` 构造上下文，缺失/不同由 checker 报 `InvalidEvidence`。该切片不声称完整支持收集、嵌入、跨 frame `externalizable` 前提弱化或结果语言覆盖。
 
 ### 13.5 commit 输入
 
@@ -1445,7 +1499,7 @@ Deferred(blockers_or_case_requests)
 Rejected(issues_or_refutation)
 ```
 
-Rejected 中必须区分：证书无效、请求不合法、条件被否定和数学规格被否定。
+Rejected 中必须区分：证书无效、请求不合法、条件被否定和数学规格被否定。当前 `RejectedKind` 明确记录这四类；workspace 对条件否证返回 `UNSUPPORTED` 并保留 `refuted_conditions`，不把它伪装成结论否证或无效证据。
 
 条件被否定不等于目标命题的否定。例如不能使用要求 a≠0 的公式，不代表 a=0 时原方程必无解。
 
@@ -1720,7 +1774,7 @@ explanation_schema
 capability_requirements
 ```
 
-添加一个数学功能主要修改其数学模块和装配声明，不修改 kernel 的变体清单或 workflow 的数学分派。
+添加一个数学功能主要修改其数学模块和装配声明，不修改 kernel 的变体清单或 workflow 的数学分派。当前 `explanation_schema` 尚未接线：没有记录或渲染解释配方的消费者，因此不创建空字段；待真实消费者出现时与 `MathematicalProposal` 的解释载荷同批建立。
 
 ### 16.2 操作输入
 
@@ -1814,7 +1868,7 @@ presentation_metadata
 
 对象名字存放在 revision 的对象名字映射中，不属于数学符号命名空间。对象改名不修改 SymbolId，也不创建 DefinitionBinding；用户编辑表达式产生新版本，不原地修改旧值。ObjectVersion 的显示元数据只保存该版本的排版和来源定位等信息。
 
-对象引用使用与数学符号不同的显式语法，例如 `@E`。执行时它解析为当前 revision 中 E 对应的不可变数学值快照，不是会追随未来编辑的动态变量，也不把公式对象提升为真。要建立数学别名，必须另行执行定义动作。
+对象引用使用与数学符号不同的显式语法，例如 `@E`。执行时它解析为当前 revision 中 E 对应的不可变数学值快照，不是会追随未来编辑的动态变量，也不把公式对象提升为真。要建立数学别名，必须另行执行定义动作。当前 `Session.parse` 已支持在公式中嵌入 `@LABEL`：先用私有占位符解析，再用捕获规避替换嵌入对象 term；缺失/隐藏 label 拒绝，`@LABEL` 不进入数学符号命名空间。`Artifact`/`ObjectVersion` 已作为 `Expression`/`FunctionObject` 的不可变类型视图接入；现有对象记录仍是唯一存储权威。
 
 ### 17.3 ProblemSpec
 
@@ -1834,6 +1888,16 @@ presentation_metadata
 预算属于执行请求，不是数学问题本身。相同问题在更大预算下重试不改变其语义。允许保存条件 Judgment 的 ConditionPolicy 不会改写问题对完整答案的要求。
 
 求解目标变量在问题中显式绑定。输入方程不会因为成为 ProblemSpec 就被加入 frame 假设。
+
+实现切片（2026-11-09，函数问题绑定）：`ProblemSpec` 增加 `function_inputs: tuple[FunctionValue, ...] = ()`，固定函数问题所涉及的 `FunctionValue` 对象身份：参数绑定、固有域和每个表示区域都是函数身份的一部分，裸表示项不足以标识被证明的函数。非空时要求 `roles.target is None`；每个固有域与表示区域必须与类型化输入同 world。`roles.world`、`region` 与每个 `externalizable` 前提也必须与输入同 world。`compare_functions`/`extend_function` 的 `build_problem` 已传入解析载荷中的函数值。精确域/解释、`VariableRoles` 目标/参数排序与 `externalizable` 正向路径已由后续切片闭合；完整绑定位置与 binder-aware 角色、跨 frame 前提弱化、结果语言与一般完备性字段仍未建，不能把本切片写成完整 §17.3，本切片不声称完整 S1。
+
+实现切片（2026-11-10，精确性、解释要求与稠密区域绑定）：`ProblemSpec` 增加 `exactness: Exactness = EXACT` 与 `interpretation_requirement: InterpretationRequirement | None = None`；`APPROXIMATE` 在构造期以 `ValueError` 拒绝（没有近似 checker），函数问题不得携带解释要求。`VariableRoles` 的目标/参数排序被 `ProblemSpec` 要求并与输入 `BindingView` 的同名符号排序核对。`ProblemSpec` 从输入绑定、角色与函数参数建立已知排序表，要求 `region` 与每个 `externalizable` 前提（含定义性前提）的自由变量都在表中且排序为 `RATIONAL`/`REAL`；未知、整数、复数或未绑定坐标在构造期拒绝。系数范围/值域字段与 `externalizable` 正向路径后由同日后续切片闭合；嵌入/实嵌入、参数关系、结果语言、完整绑定位置与 binder-aware 角色、注册 `Covers` 规格/checker 与一般完备性仍未建；本切片不声称完整 §17.3。
+
+实现切片（2026-11-10，`externalizable` 正向路径）：`define_problem` 不再因 `problem.allows_unresolved()` 整体拒绝问题；它保留外部前提的 world、稠密排序与 frame 可读性检查，并把请求的显式 `externalizable` 集固定进唯一的 `ProblemSpec`。`apply`/`_apply` 增加显式 `externalizable` 参数；`operation.build_problem` 返回 `ProblemBuilt` 后，workspace 用 `dataclasses.replace` 把固定问题的集合替换为请求的显式集合，再执行维度检查、构造 `ExecutionRequest`、提案与提交。operation 自己构造的集合不构成第二权威；`run_task` 传入 `task.problem.externalizable`，`_same_problem` 继续精确比较该集合。该集合是可枚举、可比较的显式请求数据，不是 kernel obligation，也不是第二套 `ProblemSpec`。跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系、结果语言、完整绑定位置与 binder-aware 角色、一般完备性仍未建；系数范围/值域字段由同日后续切片闭合，本切片不声称完整 §17.3。
+
+实现切片（2026-11-10，系数范围与值域）：`ProblemSpec` 增加 `domain_requirement: DomainRequirement | None`，固定语言层系数范围 `coefficient` 与允许值域 `values`。有 target 的问题两者都必需，且 `values` 必须等于 `VariableRoles.target_sort` 经 `value_domain_of_sort` 的映射；函数问题固定 `coefficient=None`、`values=REAL` 且无 target；既无 target 又无函数输入的核心/实用问题保持 `None`。解析后的系数 parent 仍在 `AlgebraRequest`，问题不导入具体 Parent。`ProblemBuilt`/`ExecutionRequest` 要求 problem 与 algebra 的 coefficient/value domain 相等；`problem_mismatch` 消费固定请求值。跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系、结果语言、完整绑定位置与 binder-aware 角色、一般完备性仍未建；本切片不声称完整 §17.3。
+
+实现切片（2026-11-10，固定问题比较闭合）：`workspace._same_problem` 在既有 operation/输入/roles/function_inputs/region/result_language/coverage/externalizable 比较之外，精确比较 `ProblemSpec.exactness`、`interpretation_requirement` 与 `domain_requirement`；`run_task` 仍只通过该唯一比较器接受执行重建的问题，重建出不同答案标准、解释要求或系数/值域的执行被记录为 blocked。该切片只闭合工作流对固定 `ProblemSpec` 的比较，不新增第二套比较器，也不声称 §17.3 全部字段或 S1 终态已闭合。
 
 ### 17.4 Task 与 Candidate
 
@@ -1860,6 +1924,12 @@ CandidateRecord(
 Candidate 的 proposed specifications 是搜索方声明要验证的承诺，不是已成立事实。验证关联单独追加，记录候选、确切规格、校验结果、查询 frame、证书以及成功发行的 JudgmentRef。一个候选可以有多个验证关联，不因后来增加完备性证明而改写原 CandidateRecord。
 
 验证映射按规格索引，而不是只有一个 `validated=True`：同一答案可以已经验证成员正确，但尚未验证完备性。适用性与覆盖状态从这些记录及原请求导出，缓存不是第二份权威状态。
+
+实现切片（2026-11-09）：函数延拓的 `Candidate` 证书携带 `CoversCertificate`；`FunctionEqualityChecker` 在核验 `EqualOn` 时独立重检覆盖并核对它精确匹配候选的右函数值。覆盖失败是 `InvalidEvidence`，不是 `Refuted`；普通 `EqualOn`/`SamePartialFunction` 证书不要求覆盖，`SamePartialFunction` 携带覆盖字段时明确拒绝。该覆盖只证明声明固有域被表示区域覆盖，不证明表示重叠一致性或最大固有域。
+
+实现切片（2026-11-09，checker 绑定函数问题）：`FunctionEqualityChecker` 在 `problem_mismatch` 之后、按规格分派之前，要求 `compare_functions` 证书的左右 `FunctionValue` 精确等于 `problem.function_inputs` 的两项，`extend_function` 证书的旧函数等于唯一函数输入；缺失或不匹配是 `InvalidEvidence`，不是 `Refuted`/`Verified`。`EqualOn` 在 problem 有区域时把 `claim.region` 交给 `problem_mismatch`，由同一子区域规则检查 `problem.region ⊆ claim.region`；`SamePartialFunction` 在 problem 有区域时要求该区域可证位于两侧完整固有域内。每个 `FunctionValue` 的每个表示区域必须是其固有域的可证子区域；非稠密参数排序返回 `Unverified(GUARDED)`，claim region 含非参数自由变量返回 `Unverified(FRAGMENT)`。该切片不声称一般函数定义域语义或完整 §17.4 闭合。
+
+实现切片（2026-11-10，候选代数快照）：`Candidate` 增加 `algebra: AlgebraRequest | None`，记录候选被提出时的精确预装配请求；非空时要求 `algebra.roles == problem.roles` 与 `algebra.target == problem.target`，函数问题（`problem.function_inputs` 非空）必须为 `None`。workspace 在 `_apply` 保存 `execution.algebra`，`edit_candidate` 在清除证书时保留该快照，`_candidate_proposal` 原样提交，因此 `check_candidate`/`decide_candidate` 复核同一 target/parameter/interpretation/differential，而不是重新装配另一个视图。该字段是候选数据，不是第二套角色权威；`externalizable` 正向路径已由同日后续切片闭合；跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入与结果语言仍未建，本切片不声称完整 §17.4 闭合。
 
 Draft 属于尚未完成整理的 TaskDraft；整理成功后才创建具有完整 ProblemSpec 的 TaskRecord。不用一个可为空的 problem_spec 字段让运行中任务混入未整理输入。
 
@@ -1896,7 +1966,7 @@ ConstructionRelation(
 
 结果槽属于专用元变量/模板层，不是普通 Sym，也不是可以进入假设集合的自由数学变量。
 
-实例化所有结果槽后，得到候选组合。该组合必须验证原问题规格。
+实例化所有结果槽后，得到候选组合。该组合必须验证原问题规格。当前已实现 `function_extension` 构造关系：`extend_function` 在独立 `EqualOn` checker 成功后记录 source/target 对象版本、specification 与 frame；一般多结果槽联立关系仍待真实消费者。
 
 ### 17.7 四种图
 
@@ -1939,7 +2009,7 @@ WorkspaceRevision(
 )
 ```
 
-普通 revision 有一个父版本，显式研究历史合并可以有多个；对象与任务集合采用持久化映射共享，不复制整本工作簿。引用其他分支的结果仍保留其原 frame，出现在工作区不等于在当前 frame 可用。
+普通 revision 有一个父版本，显式研究历史合并可以有多个；对象与任务集合采用持久化映射共享，不复制整本工作簿。引用其他分支的结果仍保留其原 frame，出现在工作区不等于在当前 frame 可用。当前内存实现把可见的 `TaskRecord`/`Candidate` 版本作为 revision 快照保存，undo/redo 因此不会把未来状态泄漏回旧视图；`Occurrence` 选择记录同时携带 path 与 expected subterm。`Revision.object_names` 记录对象版本的稳定显示名；`Event.actor_kind` 区分用户、脚本与策略，`operation_version` 固定注册操作版本。
 
 动作记录至少包含：
 
@@ -2015,6 +2085,8 @@ CompletedConditional 只接受原请求允许外置的前提；必须分类的�
 | Cancelled | 执行被取消（已有候选保留） |
 
 Blocked 与 PartiallySolved 的分界是“有没有任何已验证规格”；CompletedConditional 与 Completed 的分界是“未闭合义务是否都落在请求允许的外置集合内”。
+
+实现切片（2026-11-10，`externalizable` 正向路径）：`derive_task_state` 继续把已验证/条件链接的 `condition` 与 `obligations` 作为开放条件；只有全部开放条件都等于固定 `ProblemSpec.externalizable` 中的显式前提时才派生 `COMPLETED_CONDITIONAL`，无开放条件仍为 `COMPLETED`，否则为 `PARTIALLY_SOLVED`。proposal 的 `result_region` 进入 `VerificationLink.condition`，它是工作流条件，不写成 kernel obligation；无条件验证结果不会因为请求允许某些外置前提而变成 `COMPLETED_CONDITIONAL`。当前比较是命题意义相等（同 term、同 meaning 环境），跨 frame 的前提弱化、超过两情形的条件合并与一般条件证明合并仍未建；本切片不声称完整 §18.1。
 
 ### 18.2 Candidate 状态
 
@@ -2903,7 +2975,7 @@ InternalError 保留堆栈与相关不可变快照，禁止伪装成“数学上
 
 ### 27.3 预算对象
 
-`BudgetTicket` 在一次顶层请求、子任务和 checker 之间按明确策略共享或分配。
+`BudgetTicket` 在一次顶层请求、子任务和 checker 之间按明确策略共享或分配。当前实现的 `BudgetTicket` 记录 `ExecutionBudget` 与已消耗节点/深度，`spend` 超限返回 `None`；它不改变已给出答案的真假。
 
 至少限制：
 
@@ -2999,7 +3071,7 @@ InternalError 保留堆栈与相关不可变快照，禁止伪装成“数学上
 
 ### 28.3 哈希与身份
 
-持久化摘要使用稳定的规范编码与密码学摘要，用于完整性和内容索引；不使用 Python hash。
+持久化摘要使用稳定的规范编码与密码学摘要，用于完整性和内容索引；不使用 Python hash。当前 `World.digest`/`FrameStore.digest(frame)` 已使用 `hashlib.sha256` 和确定性结构 key；持久化索引与重放仍待实现。
 
 数学相等仍不能只靠摘要相等。自由符号、parent 和语义环境必须保留完整身份，避免不同参数被序列化归并。
 
@@ -3204,7 +3276,7 @@ Risch、CAD、Gröbner 和 ODE 共用域、变量、条件、任务与证书设�
 
 本节定义完整设计的能力依赖、施工次序和验收门槛，不提供虚构工期或假完成记录。
 
-实际完成状态、失败案例与下一批工作写入 progress。未施工的终态能力继续保留在本节，不因暂缓实现而删除；存在目录、协议或算法名字不算完成。
+已完成记录追加到 `progress.log`；施工路线写入 `roadmap.md`；当前未实现项、已知缺陷、失败案例与下一批工作写入 `AGENTS.md` 第五节。未施工的终态能力继续保留在本节，不因暂缓实现而删除；存在目录、协议或算法名字不算完成。
 
 ### 30.8 终态能力总表
 
@@ -3591,21 +3663,47 @@ pyCAS v5 不是“表达式等式链外面加证明壳”，也不是“每次�
 | ProblemSpec | 操作类别、固定输入、VariableRoles、语言层域/解释要求、请求区域、结果语言、覆盖要求 | language/problems；操作和 checker 消费，不导入具体 Parent |
 | AlgebraRequest | 同一 VariableRoles、已解析基系数 parent、参数结构及关系、导子/嵌入、解释视图 | semantics/request；桥和算法准入消费 |
 | ExecutionRequest | ProblemSpec、与之匹配的 AlgebraRequest、frame、执行预算和条件策略 | operations/protocols；一次构造后供提案与核验共同消费 |
-| AlgebraView[E] | source TypedExpr、Parent[E]、value:E、生成元映射、转换见证、源定义域、表示有效区域 | semantics 的桥；数学操作与 checker 消费 |
+| AlgebraView[E] | source TypedExpr、Parent[E]、value:E、生成元映射、`ConversionWitness`、源定义域、表示有效区域 | semantics 的桥；数学操作与 checker 消费 |
 | RegionSpec | 坐标/绑定、条件 Proposition、意义环境 | semantics；区域算法/函数视图消费 |
 | Definedness | 源对象及其定义域描述、已证精确性或仅充分区域的证据 | semantics 定义性服务；转换/微积分 checker 消费 |
 | MathematicalProposal | 原 ProblemSpec 引用、结果数据、所求核验规格、证书、达到区域/残余区域、必要条件、局部计划/解释 | operations 契约、math 构造；workflow/验证器消费 |
-| CheckRequest | 固定问题、候选数学数据、所请求规格、内核解析的可见前提、可信上下文与证书 | kernel 构造；绑定的数学 checker 消费 |
+| CheckRequest | 固定问题、候选数学数据、所请求规格、内核解析的可见前提、可信上下文、结构化组件与证书 | kernel 构造；绑定的数学 checker 消费 |
 | CheckOutcome | Verified / Refuted / Unverified / InvalidEvidence 的具体联合载荷 | kernel/evidence；提交与状态投影消费 |
-| ValidatedCommitBatch | 已核验规格、实际支持、义务/清偿、局部回执解析结果和版本快照 | kernel 私有构造；发布协调器只读消费 |
+| ValidatedCommitBatch | 已核验规格、实际支持、义务/清偿、局部回执解析结果和版本快照 | kernel 私有构造；发布协调器只读消费；seal 不是 init 字段，`dataclasses.replace` 不能伪造 |
 | ObjectVersion | 中性表达式值或 FunctionValue、版本、来源事件；显式函数保留其固有域 | workflow；后续操作和显示消费 |
-| Candidate/VerificationLink | 原问题、候选版本、确切规格、核验结果/判断引用、作用域 | workflow；完成性与适用性视图消费 |
+| Candidate/VerificationLink | 原问题、候选版本、提出时的 `AlgebraRequest` 快照、确切规格、核验结果/判断引用、作用域 | workflow；完成性、适用性与手动复核消费 |
 | Event/Revision | 固定输入输出/作用域/参数、实际执行结果与父 revision，对象/任务/核验关联可见集 | workflow；历史、恢复与显示消费 |
 
 角色只允许一处权威设定：请求构造器先固定 language 拥有的 VariableRoles，ProblemSpec 与 AlgebraRequest 共享它；禁止操作、运行时和 checker 各自设置可能不同的 target/parameter_mode。语言层只保存域/解释要求，不反向导入 semantics 的 AlgebraRequest 或 algebra 的 Parent；operations 中的 ExecutionRequest 验证并绑定已解析结构与原要求。
-完整数学查询键包含 ProblemSpec、AlgebraRequest 和必要意义快照，不能只按表达式或 operation id 缓存。预算属于执行尝试，不改变数学问题身份。请求全域答案时不能把收到的局部结果写回 ProblemSpec.region。
+完整数学查询键包含 ProblemSpec、AlgebraRequest 和必要意义快照，不能只按表达式或 operation id 缓存。预算属于执行尝试，不改变数学问题身份。请求全域答案时不能把收到的局部结果写回 ProblemSpec.region；候选记录保留原 ProblemSpec，实际达到区域属于验证关联。
 
-Definedness 中“精确原定义域”和“已证明可工作的子区域”必须分清。SamePartialFunction 需要两边完整定义域等价；只有充分区域证据时最多证明 EqualOn，不得把保守区域误当精确域。
+参数族结果、对象和验证关联都属于 revision 快照：undo 之后不能继续使用只在未来 revision 中可见的家族，redo 恢复同一快照。工作区输入句柄必须校验所属 workspace、存在性和当前可见性；版本号相同不足以证明是同一对象。
+
+Definedness 中“精确原定义域”和“已证明可工作的子区域”必须分清。SamePartialFunction 需要两边完整定义域等价；只有充分区域证据时最多证明 EqualOn，不得把保守区域误当精确域。源全定义时表示仍可能只在充分子区域有效；该情形是 `SUFFICIENT`，不是 `EXACT`，其证据是桥的转换 witness 而不是伪造的完整域。
+
+实现切片（2026-11-09）：`RegionSpec` 已固定有序坐标与条件 `Proposition`；`RegionCertificate` 已以 `NonemptyCertificate`/`SubregionCertificate`/`CoversCertificate` 三种封闭变体落地，并由 `certify_*`/`verify_region_certificate` 在受限条件片段上发行/重检。`Definedness` 已改为 `DefinednessExactness`（`TOTAL`/`EXACT`/`SUFFICIENT`）+ `RegionSpec` + 可选 `RegionCertificate`，由 `AlgebraView.definedness` 单一派生；`EXACT` 的证据仍是桥的 `ConversionWitness`；`SUFFICIENT` 覆盖两种情形：非平凡固有域上的严格子区域必须携带匹配的 `SubregionCertificate`，源全定义（`domain` 为 None）而表示只在充分子区域有效时由桥的 `ConversionWitness` 作证据、不携带区域证书。`Definedness` 的区域坐标必须包含源的全部自由符号，允许额外坐标并保留区域自身顺序；`AlgebraView` 发行时要求每个区域与源同 world，两个区域同时存在时共享同一 `MeaningKey`，`valid_on` 不再要求 `source_domain` 存在。声明函数定义域、`Guarded`/`Piecewise` 分支局部语义、binder-aware premises、一般偏函数定义域、`ProblemSpec`/`FunctionValue` 的 `RegionSpec` 迁移与结果语言覆盖仍未建；`GenericResult.valid_on`/`excluded_cases` 的 `RegionSpec` 迁移已在本批闭合，`region_from_proposition` 提供确定坐标桥并由 workspace/`specialize` 消费；`Proposition` 的结构定义性前提由后续切片记录，其消费边界见下两段。
+
+实现切片（2026-11-09，Proposition 结构定义性前提）：`Proposition` 已增加 `definedness` 字段并由 `propositions.check` 收集结构前提；`RegionSpec` 的证书消费 `conditions.premises_proved`/`regions.premises_proved_from`/`proved_subregion`，`AlgebraView` 发行/`definedness` 与 `DefinednessService.covers` 同样拒绝未证明前提。该切片只覆盖非正指数整数幂的 `Ne(base,0)` 与和/积/比较/布尔连接词的结构递归；声明函数定义域、`Guarded`/`Piecewise` 分支局部语义、binder-aware premises、一般偏函数定义域、`ProblemSpec`/`FunctionValue` 的区域迁移与结果语言覆盖仍未建，不能把本切片写成完整 Proposition definedness 或 Guarded 支持。
+
+实现切片（2026-11-09，定义性前提的消费者修正）：`specialize` 对 `RegionSpec.condition` 递归求值定义性前提（假前提 → 点在外/排除情形不适用，未决前提 → `NeedsRecomputation`）；`FunctionEqualityChecker`/`FunctionExtensionOperation`/workspace 函数区域检查改用 `proved_subregion`，`proved_subregion` 增加仅供已校验可见性的调用方使用的 `same_meaning=False`；`ProblemSpec.region`、`OperationRequest.region`、`FunctionValue`/`FunctionRepresentation` 区域与 `MathematicalProposal` 区域等仍按 term 消费的裸 Proposition 载荷在构造器拒绝非空 `definedness`。`ProblemSpec`/`FunctionValue` 的 `RegionSpec` 迁移、声明函数定义域、`Guarded`/`Piecewise`、binder-aware premises、一般偏函数定义域与结果语言覆盖仍未建。
+
+实现切片（2026-11-09，请求局部导子载荷）：`AlgebraRequest` 已增加可选 `differential`，缺省 `None` 表示无导子假设，存在时必须为 `DifferentialStructure`；请求是唯一导子权威，`DifferentiationView`/`SpecializationView` 要求视图导子与请求导子为同一对象。`bootstrap`/`bootstrap_parameterized`/`bootstrap_elementary` 已把既有 Q[x]、`K[parameters][target]`、特化 Q[x] 与初等导子写入对应请求。嵌入、参数关系、实嵌入、`VariableRoles` 绑定位置与 binder-aware 角色（目标/参数排序已闭合）与 `DifferentialStructure` 的持久化/重放载荷仍未建。
+
+实现切片（2026-11-09，定义性保留 witness）：`AlgebraView` 的区域载荷与 `ConversionWitness.preserves_definedness` 在发行与准入边界一致。携带 `source_domain`/`valid_on` 的视图必须由保留定义性的 witness 支撑；`AlgebraView.__post_init__` 与 `_issue_view` 在发行时拒绝不保留定义性的区域视图，`_admit_view_relation`/`typed_view` 在准入边界再次检查并以 `ViewRefused(missing={"conversion_witness"})` 拒绝。全定义视图不作出定义性声明，非保定义同态仍按单射/保等号规则传递等式。多项式桥、参数多项式桥与有理桥继续发行 `preserves_definedness=True` 的表示同构。嵌入/同态的具体实现、混域消解与 `AlgebraRequest` 嵌入字段仍未建。
+
+实现切片（2026-11-09，解释与 witness 一致性）：`AlgebraView` 的 `interpretation` 与 `ConversionWitness.kind` 不能互相矛盾，由 `semantics.bridge._interpretation_witness_refusal` 单一判定并在 `AlgebraView.__post_init__`/`_issue_view` 消费：`EMBEDDED` 只接受 `EMBEDDING`/`REPRESENTATION_ISOMORPHISM`，`PARAMETER_FAMILY` 只接受 `REPRESENTATION_ISOMORPHISM`，`FORMAL` 接受三种 kind 并由 witness 标志约束可传递事实。`_issue_view` 在建造前以 `ViewRefused(Reason.FRAGMENT, missing={"interpretation_witness"})` 拒绝，直接构造边界抛 `ValueError`。该规则不替代区域/定义性保留检查，也不构成嵌入/同态桥、混域消解或请求嵌入字段的实现。
+
+实现切片（2026-11-09，区域载荷绑定与 sealed Definedness）：`RegionSpec` 的载荷现为有序坐标、条件 `Proposition` 与 binding `sorts`；`sorts` 非空时必须恰好覆盖坐标，`is_dense` 只在全部坐标为 `RATIONAL`/`REAL` 时为真。区域证书只在所有参与区域稠密时发行/重检，整数、复数、未知或缺失排序区域不继承 `condition_satisfiable`/`is_empty_condition` 的稠密序推理。`AlgebraView` 的 sealed `region_bindings` 是 `definedness` 构造 `RegionSpec` 的唯一坐标/排序来源，默认 source binding view，并可显式加入后代 frame 的额外坐标；未覆盖源或任一区域自由变量时 `_issue_view` 以 `missing={"region_bindings"}` 拒绝。`Definedness` 已 sealed，只由 `_issue_definedness`/`AlgebraView.definedness` 发行，`dataclasses.replace` 不能伪造；`EXACT` 与源全定义的 `SUFFICIENT` 仍以桥的 `ConversionWitness` 为证据。`function_region` 只为参数坐标记录排序，含非参数自由变量时省略整个 `sorts` 并因此拒绝覆盖证书。`ProblemSpec` 的精确域/解释、`VariableRoles` 目标/参数排序与 `externalizable` 正向路径已由后续切片闭合；完整绑定位置与 binder-aware 角色、跨 frame 前提弱化、注册 `Covers` 规格/checker、结果语言、嵌入字段与一般完备性仍未建，本切片不声称完整 S1。
+
+实现切片（2026-11-09，函数问题绑定与世界作用域角色）：`ProblemSpec` 增加 `function_inputs`，函数问题固定 `FunctionValue` 的参数绑定、固有域与全部表示区域，并要求 `roles.target is None`、函数域/表示区域与类型化输入同 world。`VariableRoles` 增加 `world`，`ProblemSpec`/`AlgebraRequest` 拒绝未绑定 world 的角色集，并要求 `roles.world`、`region`、`externalizable` 与输入同 world。`SimplePolynomialBridge`/`ParameterPolynomialBridge`/`RationalFunctionBridge` 在 `to_view` 中以 `ViewRefused(missing={"request_world"})` 拒绝跨 world 请求。`FunctionEqualityChecker` 在 `problem_mismatch` 后绑定 `problem.function_inputs`（compare 两项、extension 旧函数一项），`EqualOn` 消费 problem-region ⊆ claim-region，`SamePartialFunction` 要求 problem region 位于两侧完整域内，并逐个检查表示区域是固有域的可证子区域；非稠密参数与非参数自由变量分别返回 `GUARDED`/`FRAGMENT`。该切片不声称完整 S1、一般函数定义域语义或 `ProblemSpec` 全部字段闭合。
+
+实现切片（2026-11-10，请求契约全绑定）：`ProblemSpec` 的 `exactness`（仅 `EXACT`）与 `interpretation_requirement`、`VariableRoles.target_sort`/`parameter_sorts`、问题区域与 `externalizable` 前提的稠密排序校验已落地。`AlgebraRequest.interpretation_requirement` 是语言层解释要求的唯一映射；`ProblemBuilt`/`ExecutionRequest` 在 problem 与 algebra 之间强制该绑定，无 algebra 时必须为 `None`。`problem_mismatch` 增加 `roles`/`interpretation_requirement`/`exactness` 检查，数学 checker 传入固定 request 的 roles 与 interpretation；函数 checker 不传 roles/interpretation，保留 `function_inputs` 绑定。系数范围/值域字段与 `externalizable` 正向路径后由同日后续切片闭合；嵌入/实嵌入、参数关系、结果语言、完整绑定位置与 binder-aware 角色、注册 `Covers` 规格/checker 与一般完备性仍未建；本切片不声称完整 S1 或一般区域代数。
+
+实现切片（2026-11-10，候选代数快照与上下文代数）：`Candidate` 增加 `algebra: AlgebraRequest | None`，非空时要求与 `ProblemSpec` 共享 `roles` 与 `target`，函数问题必须为 `None`；workspace 在 `_apply` 保存 `execution.algebra`，`edit_candidate` 清除证书时保留，`_candidate_proposal` 原样提交，因此手动复核不会切换到另一个预装配视图。`cas.kernel.evidence.context_algebra_mismatch` 是 Derivative/Elementary/Hermite/Linear/Gcd/Resultant checker 消费 `VerificationContext.algebra` 的唯一规则，按对象同一性比较；函数 checker 拒绝 algebra 快照，核心逻辑规则不要求 algebra。`validate_commit` 仍只从 `proposal.algebra` 构造上下文，缺失/不同由 checker 报 `InvalidEvidence`，不是 `Refuted`。跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、结果语言、完整绑定位置与 binder-aware 角色仍未建；系数范围/值域字段与 `externalizable` 正向路径已由同日后续切片闭合，本切片不声称完整 S1。
+
+实现切片（2026-11-10，ProblemSpec/AlgebraRequest 域绑定）：`ProblemSpec.domain_requirement`（`DomainRequirement`：语言层 coefficient range + allowed value domain）与 `AlgebraRequest.coefficient_domain`/`value_domain` 已绑定并由 `ProblemBuilt`/`ExecutionRequest` 强制一致；`AlgebraRequest.coefficient_domain` 是装配声明的数据（Q 为 `RATIONAL`，Z 测试为 `INTEGER`），`value_domain` 由 `roles.target_sort` 经 `value_domain_of_sort` 唯一派生。`problem_mismatch` 增加 coefficient/value domain 检查，固定请求 checker 传入自身请求值，函数 checker 传 `None`/`REAL`。`CoversCertificate` 仍是函数延拓内部证书，由 `FunctionEqualityChecker` 独立重检，没有独立 `Covers` judgment；注册 `Covers` 仍是未来 K1/S1 工作。嵌入/实嵌入、参数关系、结果语言覆盖、完整绑定位置与 binder-aware 角色、一般完备性仍未建；本切片不声称完整 S1。
+
+实现切片（2026-11-10，固定问题比较与区域绑定排序）：`workspace._same_problem` 精确比较 `ProblemSpec.exactness`/`interpretation_requirement`/`domain_requirement`，`run_task` 以该唯一比较器拒绝重建出不同请求契约的执行；`AlgebraView.region_bindings` 对与源自由符号同 `SymbolId` 的条目要求排序等于源 `BindingView`，`semantics.bridge._region_binding_refusal` 在 `_issue_view` 与 sealed `__post_init__` 两处拒绝不一致绑定，避免非稠密源坐标被显式绑定伪装成稠密坐标。后代 frame 额外坐标仍由桥声明排序；本切片不替代一般区域代数、嵌入/同态实现或完整 S1。
 
 ### 32.5 静态类型怎样贯穿注册边界
 
@@ -3635,6 +3733,8 @@ Definedness 中“精确原定义域”和“已证明可工作的子区域”�
 
 桥必须说明其数学关系：表示同构可双向传递相等；嵌入可传递相等和不等；一般同态只能保证源相等推出目标相等，不能把源非零推出目标非零。把形式生成元代入 sin/exp 等函数可用于证明多项式恒等式，但不能因此宣称函数代数独立或成立一个任意表达式域。
 
+实现切片（2026-11-09，定义性保留 witness）：桥的 `ConversionWitness` 现在区分是否保留定义性；只有保留定义性的 witness 才能把 `source_domain`/`valid_on` 区域声明读回源表达式，`typed_view` 在准入边界拒绝不保留定义性的区域视图。多项式桥、参数多项式桥与有理桥仍发行保留定义性的表示同构；一般嵌入/同态实现、混域消解与请求嵌入字段仍未建。
+
 参数特化是映射而非文本替换；需要在求值前核验关系和局部化条件。转换回 Term 使用原映射或显式新绑定，不能发明同名全局变量。
 
 ### 32.7 候选到可信结果的数据流
@@ -3654,6 +3754,12 @@ Definedness 中“精确原定义域”和“已证明可工作的子区域”�
 
 checker 的结果应绑定原问题，而不是只证明证书自行声明的另一个命题。命题本身已验证不等于问题已完成：一个受限区域导数、一组正确但不全的根、一个泛参数公式均可有有效 Judgment，而原请求仍为部分完成。
 
+实现切片（2026-11-09，函数问题的候选绑定）：`FunctionEqualityChecker` 的证书 `left`/`right` 必须与 `ProblemSpec.function_inputs` 精确一致；只比较表示项会接受“同项不同固有域”的伪造函数值。`EqualOn` 在 problem 有区域时要求 problem region 被 claim region 覆盖；`SamePartialFunction` 要求 problem region 位于两侧完整域内。每个 `FunctionValue` 的每个表示区域必须是其固有域的可证子区域；不可证为 `Unverified(GUARDED)`，可证在外为 `InvalidEvidence`，都不伪造 `Refuted`/`Verified`。该切片不替代完整 §32.7 数据流或一般函数定义域核验。
+
+实现切片（2026-11-10，候选代数快照）：`Candidate.algebra` 固定候选被提出时的预装配 `AlgebraRequest`，workspace `_apply` 保存 `execution.algebra`，`edit_candidate` 清除证书时保留，`_candidate_proposal` 原样提交；`check_candidate`/`decide_candidate` 因此把同一 target/parameter/interpretation/differential 快照交给 kernel，而不是重新选择一个视图。固定请求 checker 通过 `context_algebra_mismatch` 统一消费 `VerificationContext.algebra`，按对象同一性比较；函数问题没有代数视图，`FunctionEqualityChecker` 拒绝 algebra 快照，核心逻辑规则不要求 algebra。缺失/不同由 checker 报 `InvalidEvidence`，不是 `Refuted`。该切片不替代完整 §32.7 数据流、跨 frame `externalizable` 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入或结果语言覆盖。
+
+实现切片（2026-11-10，`externalizable` 正向路径）：workspace 在 operation 返回固定问题后，用请求的显式 `externalizable` 集替换该问题的集合，并让同一问题对象贯穿 `ExecutionRequest`、候选、提交与任务；operation 自己构造的集合不成为第二权威。`run_task` 传入任务的集合，`_same_problem` 精确比较；不匹配的执行被记录为 blocked，而不是悄悄运行另一个问题。checker 仍只核验规格与候选；proposal 的 `result_region` 作为 `VerificationLink.condition` 参与任务完成性派生，不伪造 kernel obligation。`COMPLETED_CONDITIONAL` 只在全部开放条件都属于该显式集时成立；跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系与结果语言覆盖仍未建。
+
 证书结构校验不等于数学核验；Refuted 必须确实否定所请求规格。区域未证明等价、载荷形状不同、格式不合法，只能产生对应失败，不能伪造否证。
 
 ### 32.8 条件与发布的数据流
@@ -3663,6 +3769,8 @@ checker 的结果应绑定原问题，而不是只证明证书自行声明的另
 workflow 先构造对象/候选/事件/revision 的暂存记录，关联暂存判断句柄，再与内核批次在同一发布边界转换为真实引用。它可以决定放弃批次，不能修改其中数学结论。发布失败无半个用户动作；取消已提交动作不回滚数学历史。
 
 数学核验不持有长时间的发布锁。并发结果仍属于启动时的输入和语义快照，不强行挂到用户后来切换的焦点。缓存与工作区旁路关联也必须服从 revision 可见性，不能在 undo 后悄悄复用未来事件。
+
+实现切片（2026-11-10，`externalizable` 正向路径）：条件结果的 `result_region` 走工作流条件通道而非 kernel obligation；`derive_task_state` 把链接条件与 kernel obligations 一起列为开放条件，并只在固定 `ProblemSpec.externalizable` 显式允许全部开放条件时给出 `COMPLETED_CONDITIONAL`。无条件验证结果保持 `COMPLETED`；不属于显式集的开放条件保持 `PARTIALLY_SOLVED`。该切片不改变 kernel 的条件处理策略，也不声称一般条件证明合并、跨 frame 前提弱化或完整 §32.8 数据流。
 
 ### 32.9 手动积分的完整数据流
 
@@ -3688,7 +3796,7 @@ workflow 先构造对象/候选/事件/revision 的暂存记录，关联暂存�
  → 分裂/微分 Hermite/留数/RDE/PRDE 的局部代数状态
  → 分解 (v, 对数项, residual, residual 的已知状态)
  → 表达式回译及实/复区域条件
- → 正向原函数 checker 或有明确完备性依据的 NonElementary checker
+ → 正向原函数 checker 或有明确完备性依据的 NonElementary checker；当前有理 Hermite checker 已在 `den != 0` 上验证区域化恒等式（源域覆盖、`v`/`r` 分母整除、K(x) 形式等式）
  → 条件/覆盖处理与边界提交
 ```
 

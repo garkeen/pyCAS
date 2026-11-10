@@ -92,6 +92,40 @@ class FunctionSort(Sort):
 
 
 @dataclass(frozen=True, slots=True)
+class SetSort(Sort):
+    """A set whose members have the element sort.
+
+    `empty` distinguishes the empty set from a nonempty set whose member sort
+    is still unknown.  The empty set has no member, so its element sort is
+    `UNKNOWN_SCALAR` and it embeds into every set.  A nonempty set of
+    unknown-scalar members is `SetSort(UNKNOWN_SCALAR, empty=False)`; it does
+    not embed into a set of reals, because its members may not be real.
+    """
+
+    element: Sort
+    empty: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.element, Sort):
+            raise TypeError("a set sort needs an element sort")
+        if not isinstance(self.empty, bool):
+            raise TypeError("a set sort needs an explicit emptiness flag")
+        if self.empty and self.element != UNKNOWN_SCALAR:
+            raise ValueError(
+                "the empty set has no member sort; use UNKNOWN_SCALAR"
+            )
+
+    def embeds_into(self, target: Sort) -> bool:
+        if not isinstance(target, SetSort):
+            return False
+        if target.empty:
+            return self.empty
+        if self.empty:
+            return True
+        return self.element.embeds_into(target.element)
+
+
+@dataclass(frozen=True, slots=True)
 class PropositionSort(Sort):
     """The sort of a formula that can be true or false."""
 
@@ -133,6 +167,11 @@ def join(left: Sort, right: Sort) -> Sort | None:
         return right
     if right.embeds_into(left):
         return left
+    if isinstance(left, SetSort) and isinstance(right, SetSort):
+        # The empty-set cases already returned through `embeds_into`, so both
+        # sets here are nonempty and their join stays nonempty.
+        element = join(left.element, right.element)
+        return None if element is None else SetSort(element, empty=False)
     return None
 
 
@@ -150,6 +189,7 @@ __all__ = [
     "RegionSort",
     "SYNTAX",
     "ScalarSort",
+    "SetSort",
     "Sort",
     "SyntaxSort",
     "UNKNOWN_SCALAR",

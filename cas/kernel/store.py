@@ -13,7 +13,8 @@ shaped so that `_publish` is the only place to implement it.
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import TypeVar
 
 from cas.foundation.ids import (
@@ -38,6 +39,7 @@ from cas.kernel.model import (
     OutOfScope,
     Unassessed,
 )
+from cas.kernel.trust import BasisRegistry
 from cas.language.propositions import Proposition, negates
 from cas.semantics.frames import FrameStore
 from cas.syntax import term as T
@@ -63,13 +65,26 @@ class KernelStore:
         "_obligation_issuer",
         "_judgment_issuer",
         "_inference_issuer",
+        "_token",
         "frames",
         "checkers",
+        "bases",
     )
 
-    def __init__(self, frames: FrameStore, checkers: CheckerRegistry) -> None:
+    def __init__(
+        self,
+        frames: FrameStore,
+        checkers: CheckerRegistry,
+        bases: BasisRegistry | None = None,
+    ) -> None:
+        if bases is not None and not isinstance(bases, BasisRegistry):
+            raise TypeError(
+                "a kernel store bases must be a BasisRegistry or None"
+            )
         self.frames = frames
         self.checkers = checkers
+        self.bases = bases if bases is not None else BasisRegistry()
+        self._token = object()
         self._obligations: dict[ObligationId, Obligation] = {}
         self._judgments: dict[JudgmentId, Judgment] = {}
         self._inferences: dict[InferenceId, InferenceRecord] = {}
@@ -92,6 +107,34 @@ class KernelStore:
 
     # --- the single write site ---
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Roll back an unpublished batch if the surrounding action fails.
+
+        The ledger's records are immutable after publication, so this context
+        manager is only for the failure path of one synchronous action: if an
+        exception escapes, every dictionary is restored to its pre-action
+        contents.  Issued ids are deliberately not rewound; a burned id is
+        harmless and reusing one would weaken monotonicity.
+        """
+        obligations = dict(self._obligations)
+        judgments = dict(self._judgments)
+        inferences = dict(self._inferences)
+        discharges = {
+            identifier: list(records)
+            for identifier, records in self._discharges.items()
+        }
+        consistency = dict(self._consistency)
+        try:
+            yield
+        except BaseException:
+            self._obligations = obligations
+            self._judgments = judgments
+            self._inferences = inferences
+            self._discharges = discharges
+            self._consistency = consistency
+            raise
+
     def _publish(
         self,
         *,
@@ -102,8 +145,8 @@ class KernelStore:
     ) -> None:
         """Insert one validated batch, or nothing.
 
-        This is the only insertion point; it is called by `commit`, never by a
-        frontend. Duplicate ids and dangling references
+        This is the only insertion point; it is called by `publish_commit`,
+        never by a frontend. Duplicate ids and dangling references
         are refused before any insertion, and every stored proposition must be
         readable in the frame that stores it. After validation, insertion cannot
         fail.
@@ -165,20 +208,11 @@ class KernelStore:
                 raise KernelError(
                     "an obligation is stored outside its inference frame"
                 )
-            if not self.frames.is_visible(
-                obligation.proposition.meaning.frame, obligation.frame
-            ):
-                raise KernelError(
-                    "an obligation proposition is not readable in its frame"
-                )
-            escaped = self.frames.escapes(
-                obligation.frame, obligation.proposition.term
+            self._require_readable(
+                obligation.proposition,
+                obligation.frame,
+                "an obligation proposition",
             )
-            if escaped:
-                raise KernelError(
-                    "an obligation proposition contains a symbol outside "
-                    "its frame"
-                )
         for judgment in judgments:
             self._require_frame(judgment.frame)
             owner = inference_of(judgment.inference)
@@ -199,20 +233,11 @@ class KernelStore:
                     raise KernelError(
                         f"obligation does not exist: {obligation_id!r}"
                     )
-            if not self.frames.is_visible(
-                judgment.proposition.meaning.frame, judgment.frame
-            ):
-                raise KernelError(
-                    "a judgment proposition is not readable in its frame"
-                )
-            escaped = self.frames.escapes(
-                judgment.frame, judgment.proposition.term
+            self._require_readable(
+                judgment.proposition,
+                judgment.frame,
+                "a judgment proposition",
             )
-            if escaped:
-                raise KernelError(
-                    "a judgment proposition contains a symbol outside "
-                    "its frame"
-                )
         seen_discharges: set[tuple[ObligationId, JudgmentId, FrameId]] = set()
         for discharge in discharges:
             self._require_frame(discharge.frame)
@@ -246,6 +271,16 @@ class KernelStore:
                 raise KernelError("the discharge proof is outside its frame")
             if not self.frames.is_visible(target.frame, discharge.frame):
                 raise KernelError("the discharged obligation is outside its frame")
+            self._require_readable(
+                proof.proposition,
+                discharge.frame,
+                "the discharge proof proposition",
+            )
+            self._require_readable(
+                target.proposition,
+                discharge.frame,
+                "the discharged obligation proposition",
+            )
         for obligation in obligations:
             self._obligations[obligation.id] = obligation
         for judgment in judgments:
@@ -260,6 +295,26 @@ class KernelStore:
             self.frames.get(identifier)
         except KeyError:
             raise KernelError(f"frame does not exist: {identifier!r}") from None
+
+    def _require_readable(
+        self,
+        proposition: Proposition,
+        frame: FrameId,
+        label: str,
+    ) -> None:
+        """Refuse a proposition that another world or frame would reinterpret.
+
+        `FrameStore.readable` is the single predicate: it checks the meaning
+        world, the ancestor chain and free-symbol escapes.  The separate
+        messages keep the three failures distinguishable in a kernel error.
+        """
+        if self.frames.readable(proposition, frame):
+            return
+        if proposition.meaning.world != self.frames.world.id:
+            raise KernelError(f"{label} belongs to another meaning world")
+        if not self.frames.is_visible(proposition.meaning.frame, frame):
+            raise KernelError(f"{label} is not readable in its frame")
+        raise KernelError(f"{label} contains a symbol outside its frame")
 
     @staticmethod
     def _reject_duplicates(
@@ -313,11 +368,17 @@ class KernelStore:
         """An existing obligation that states the same formula in `frame`.
 
         A proposition issued in an ancestor keeps its meaning in a descendant
-        (the explicit weakening rule in `FrameStore.agree_in`), so an ancestor
-        obligation can be reused. A sibling or descendant obligation is not
-        visible and is never reused.
+        (the explicit weakening rule in `FrameStore.agree_in`) only while the
+        name environment is unchanged.  A declaration, definition or
+        hypothesis introduced between the obligation's frame and `frame`
+        changes that environment, so the ancestor obligation is not reused.  A
+        sibling or descendant obligation is not visible and is never reused.
         """
         for obligation in self._obligations.values():
+            if not self.frames.environment_unchanged(
+                obligation.frame, frame
+            ):
+                continue
             if not self.frames.agree_in(
                 frame, obligation.proposition, proposition
             ):
@@ -432,6 +493,11 @@ class KernelStore:
             raise KernelError(f"judgment does not exist: {witness!r}") from None
         if not self.frames.is_visible(proof.frame, frame):
             raise KernelError("the contradiction proof is outside the frame")
+        self._require_readable(
+            proof.proposition,
+            frame,
+            "the contradiction proof proposition",
+        )
         if proof.proposition.term != T.FALSE:
             raise KernelError("a contradiction proof must state false")
         if not self._is_closed(proof, frame):
@@ -454,6 +520,7 @@ class KernelStore:
             "judgments": len(self._judgments),
             "inferences": len(self._inferences),
             "discharges": sum(len(items) for items in self._discharges.values()),
+            "bases": len(self.bases),
         }
 
 

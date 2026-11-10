@@ -4,7 +4,7 @@
 
 裁定优先级：**本系统裁定（`cas_v5_arch.md` + `AGENTS.md`）高于参考实现行为**。参考实现里与本系统裁定冲突的做法（如 L0 隐式折叠、数值采样判等），一律以本系统裁定为准。
 
-2026-10-28 说明：以下原始参考路径与消化记录完整保留，其中“落地位置”“已消费”等属于早期实现快照，不表示当前 v5 状态；现状只看 progress。参考能力判断必须由实际源码及算法前提支持，不能用文件大小、关键词零命中或只读测试日志代替。完整目标/依赖见架构 §30，取证结论不用于缩减目标。
+2026-10-28 说明：以下原始参考路径与消化记录完整保留，其中“落地位置”“已消费”等属于早期实现快照，不表示当前 v5 状态；已完成记录看 `progress.log`，路线看 `roadmap.md`，当前进度与已知缺陷看 `AGENTS.md`。参考能力判断必须由实际源码及算法前提支持，不能用文件大小、关键词零命中或只读测试日志代替。完整目标/依赖见架构 §30，取证结论不用于缩减目标。
 
 ## 主要参考
 
@@ -77,3 +77,21 @@ FriCAS 的**域参数化体系**（Category → Domain → Package）是本系�
 - Richardson 的函数恒等不可判定结果须保留具体表达式语言，不能直接外推为所有闭合超越常数判零不可判定。[原论文入口](https://www.jstor.org/stable/2271358)；[Constant Problem](https://mathworld.wolfram.com/ConstantProblem.html)。
 - 实指数域的 Schanuel 条件结果不等于无条件可判定：[Wilkie 说明](https://link.springer.com/chapter/10.1007/978-94-015-8923-9_11)；[2026 年相关预印本引言](https://arxiv.org/html/2603.08365v1)仍说明开放性。
 - 上述取证只支持准确的能力/理论边界，不作为删除代数积分、参数分类或完整交互目标的理由。
+
+## 2026-11-05 W1 代数与积分参考
+
+以下条目只记录参考依据与实现落点，不表示契约闭合；当前缺口见 `AGENTS.md` §5.3。
+
+- **伪除法 / 结式 / 判别式**：Knuth, *The Art of Computer Programming*, vol. 2, §4.6.1（多项式除法与伪除法）；Geddes, Czapor, Labahn, *Algorithms for Computer Algebra*, §2.3（伪除法）与 §7（结式、子结式）。参考实现：Maxima `src/rat3c.lisp:268-287`（`psquorem1`/`prem`）、`src/result.lisp:95-144`（Brown 子结式 PRS resultant）；FriCAS `src/algebra/prs.spad`（`PseudoRemainderSequence`）。实现落点：`cas/algebra/polynomial.py` 的 `pseudo_divmod`、`resultant`、`discriminant`。
+- **扩展欧几里得**：标准 Euclid/Bezout 递推；Geddes 等 §2.2。实现落点：`cas/algebra/protocols.py` 的 `Euclidean.xgcd` 与 `cas/algebra/polynomial.py` 的 monic 归一。
+- **子结式 PRS 链**：Brown, "The Subresultant PRS Algorithm", TOMS 4(3), 1978；Cohen, *A Course in Computational Algebraic Number Theory*, Algorithm 3.3.7。参考实现：Maxima `src/result.lisp:95-144` 与 `src/rat3c.lisp:252-264`（`subresgcd`）；FriCAS `src/algebra/prs.spad:699-721`（`chainSubResultants`）。实现落点：`UnivariatePolynomialRing.subresultant_chain`，当前是特征零域上的 PRS 版本。
+- **平方自由分解**：Yun (1976), "On square-free decomposition algorithms"；Geddes 等 §8.2。实现落点：`UnivariatePolynomialRing.squarefree_part`/`squarefree_decomposition`。正特征需要独立的 Frobenius 路线，当前诚实拒绝。
+- **有理 Hermite 归约**：Bronstein, *Symbolic Integration I*, §4.4；Geddes 等 §11.2。参考实现：FriCAS `src/algebra/intrf.spad:208-276`（`TranscendentalHermiteIntegration` 的 `normalHermiteIntegrate`）。实现落点：`cas/algebra/hermite.py`，输出 `f = D(v) + r` 且 `r` 的分母平方自由；本项目采用逐因子重复归约，契约与 FriCAS 的并行归约相同。
+- **域上线性代数**：Gauss–Jordan 消元 / RREF；Cohen, *A Course in Computational Algebraic Number Theory*, §2.2。实现落点：`cas/algebra/linear.py`，一次消元同时提供秩、特解、零空间和不相容行组合见证。
+- **整数矩阵与分式自由消元**：Bareiss, "Sylvester's identity and multistep integer-preserving Gaussian elimination", *Math. Comp.* 22 (1968)；Cohen, §2.2.6（Bareiss 行列式）与 §2.4.2/§2.4.3（Hermite/Smith 标准形）。参考实现：FriCAS `src/algebra/smith.spad`、`src/algebra/smith2.spad`（`SmithNormalForm`/`IntegerSmithNormalForm`）。实现落点：`cas/algebra/integer_matrix.py`，返回 `U*A=H` 与 `U*A*V=D` 的实际幺模变换。
+- **参数化基域**：架构 §8.0 的 `K[A]`/`K(A)` 构造；实现落点：`runtime/bootstrap.py` 的 `bootstrap_parameterized_over`，基域、`embed_rational`、`render_base` 均为显式参数。
+- **函数值与工作流状态**：架构 §10.1–§10.2（固有定义域、表示区域、`EqualOn`/`SamePartialFunction`）与 §17–§18（Task/Candidate/ObjectVersion、执行尝试/取消、revision DAG、多动作事务）。实现落点：`cas/language/functions.py` 的保守函数值运算，`cas/math/functions/` 的独立函数等式 checker 与比较/延拓操作，`cas/workflow/records.py` 的 Task/Candidate/ExecutionAttempt/Revision 记录，`cas/workflow/workspace.py` 的 branch/merge/transaction、手动问题、改写/换元与 case split。
+- **结构化与集合结果**：架构 §17.5 的结果语言与 §8.7 的参数线性方程结果；当前实现 `ResultLanguage.DECOMPOSITION`、`ResultLanguage.PROPOSITION`、`ResultLanguage.SET`、`StructuredResult`、`Set`/`SetSort` 与 `Coverage.SOUND_SET`/`COMPLETE_SET`。Hermite 发行 `polynomial_part`/`remainder`；`solve_linear` 发行有限解集，由 `LinearSolutionChecker` 独立核验。
+- **多项式 gcd 与结式核验**：gcd 的 Bezout 判据见 Geddes 等 §2.2 与 Cohen §2.2；结式的 Sylvester 行列式定义见 Geddes 等 §7；整数分式自由行列式见 Bareiss (1968) 与 Cohen §2.2.6。实现落点：`cas/math/algebra/gcd_checker.py`（整除性 + Bezout）与 `cas/math/algebra/resultant_checker.py`（清分母 + `IntegerMatrixSpace.determinant`）；操作分别为 `polynomial_gcd` 与 `resultant`。
+- **手动出现位置与改写**：架构 §19.4–§19.5 的方程变换方向与代换动作；实现落点：`cas/syntax/occurrences.py` 的结构路径/捕获规避替换，`cas/workflow/workspace.py` 的 `occurrences`/`rewrite`/`substitute`。改写方向是记录，不自动成为 kernel 判断。
+- **两情形分裂、历史合并与 case-analysis**：架构 §18.1 的 Task 状态与 §19 的手动研究分支；实现落点：`cas/workflow/workspace.py` 的 `case_split`/`merge_cases`/`merge_case_conclusion` 与 `cas/kernel/case_merge.py` 的 `CaseMergeChecker`。checker 要求两个纯互补假设的直接子 frame、同一结论、分支判断无未决义务，并拒绝结论本身作为分支假设；带局部声明/定义、未决义务或超过两情形的合并仍未实现。

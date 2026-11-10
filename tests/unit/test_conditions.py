@@ -12,6 +12,8 @@ from cas.semantics.conditions import (
     equivalent,
     ground_value,
     implies,
+    is_empty_condition,
+    is_subregion,
     simplify,
 )
 from cas.semantics.symbols import SymbolTable, standard_language
@@ -248,6 +250,33 @@ def test_restricted_implication_and_equivalence():
     assert equivalent(contradictory, T.FALSE, signature) is True
 
 
+def test_empty_regions_are_rejected_before_implication():
+    signature, x = setup()
+    gt = comparison(signature, StructuralHead.GT, x, T.number(0))
+    contradictory = head_app(
+        signature,
+        StructuralHead.AND,
+        gt,
+        comparison(signature, StructuralHead.LT, x, T.number(0)),
+    )
+    assert is_empty_condition(T.FALSE, signature) is True
+    assert is_empty_condition(contradictory, signature) is True
+    assert is_empty_condition(gt, signature) is False
+    assert is_subregion(T.FALSE, gt, signature) is False
+    assert is_subregion(contradictory, gt, signature) is False
+    assert is_subregion(gt, T.TRUE, signature) is True
+    assert is_subregion(gt, contradictory, signature) is False
+
+
+def test_region_inclusion_is_orientation_sensitive():
+    signature, x = setup()
+    gt = comparison(signature, StructuralHead.GT, x, T.number(0))
+    ge = comparison(signature, StructuralHead.GE, x, T.number(0))
+    assert is_subregion(gt, ge, signature) is True
+    assert is_subregion(ge, gt, signature) is None
+    assert is_subregion(gt, gt, signature) is True
+
+
 def test_not_is_not_pushed_through_a_partial_comparison():
     signature, x = setup()
     partial = T.app(T.symbol(SymbolId(10_000), "f"), x)
@@ -287,3 +316,41 @@ def test_zero_to_the_zero_is_not_a_ground_value():
         head_app(signature, StructuralHead.POWER, T.number(2), T.number(0)),
         signature,
     ) == 1
+
+
+def test_a_ground_zero_product_with_a_partial_factor_is_not_absorbed():
+    signature, x = setup()
+    partial = T.app(T.symbol(SymbolId(10_000), "f"), x)
+    zero_times_partial = head_app(
+        signature, StructuralHead.TIMES, T.number(0), partial
+    )
+    with_partial = comparison(
+        signature,
+        StructuralHead.GT,
+        head_app(
+            signature, StructuralHead.PLUS, zero_times_partial, x
+        ),
+        T.number(0),
+    )
+    goal = comparison(signature, StructuralHead.GT, x, T.number(0))
+    assert is_subregion(with_partial, goal, signature) is not True
+    assert implies(with_partial, goal, signature) is not True
+    assert is_empty_condition(with_partial, signature) is False
+
+
+def test_a_ground_zero_product_of_total_factors_still_collapses():
+    signature, x = setup()
+    total = head_app(
+        signature, StructuralHead.PLUS, x, T.number(1)
+    )
+    zero_times_total = head_app(
+        signature, StructuralHead.TIMES, T.number(0), total
+    )
+    condition = comparison(
+        signature,
+        StructuralHead.GT,
+        head_app(signature, StructuralHead.PLUS, zero_times_total, x),
+        T.number(0),
+    )
+    goal = comparison(signature, StructuralHead.GT, x, T.number(0))
+    assert equivalent(condition, goal, signature) is True

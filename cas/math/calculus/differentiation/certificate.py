@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from cas.foundation.ids import SymbolId
+from cas.semantics.specialization import Specialization
 from cas.syntax import term as T
 
 
@@ -42,13 +43,21 @@ class Derivation:
 
 @dataclass(frozen=True, slots=True)
 class DerivativeCertificate:
-    """The exact derivative instance the caller asks to verify."""
+    """The exact derivative instance the caller asks to verify.
+
+    `generic_source` and `specialization` are present only on the
+    point-specialisation path.  They let the checker rebuild the substituted
+    source from the generic problem input instead of trusting the claim's
+    already-specialised source text.
+    """
 
     region: T.Term
     source: T.Term
     variable: SymbolId
     candidate: T.Term
     derivation: Derivation | None = None
+    generic_source: T.Term | None = None
+    specialization: Specialization | None = None
 
 
 __all__ = ["Derivation", "DerivativeCertificate", "Rule"]

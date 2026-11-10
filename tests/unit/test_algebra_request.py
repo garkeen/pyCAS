@@ -10,11 +10,21 @@ from cas.algebra.polynomial import (
 )
 from cas.algebra.rational import RationalFunctionField
 from cas.algebra.rationals import RationalField
-from cas.foundation.ids import SymbolId
-from cas.language.problems import ParameterMode
-from cas.semantics.request import AlgebraRequest, Interpretation, Role
+from cas.foundation.ids import SymbolId, WorldId
+from cas.language import sorts as S
+from cas.language.problems import (
+    InterpretationRequirement,
+    ParameterMode,
+    Role,
+    ValueDomain,
+    VariableRoles,
+    value_domain_of_sort,
+)
+from cas.semantics.differential import polynomial_structure
+from cas.semantics.request import AlgebraRequest, Interpretation
 
 X, A, B = SymbolId(1), SymbolId(2), SymbolId(3)
+WORLD = WorldId(0)
 
 
 def family():
@@ -34,14 +44,41 @@ def family():
     return coefficient, parameters, parameter_ring
 
 
+def differential():
+    coefficient, _, _ = family()
+    ring = UnivariatePolynomialRing(X, RationalField())
+    registry = ParentRegistry()
+    parent = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=coefficient.spec,
+            generators=(X,),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
+        ring,
+    )
+    return coefficient, polynomial_structure(parent, 0)
+
+
 def request(**overrides):
     coefficient, parameters, _ = family()
+    target = overrides.pop("target", X)
+    declared = overrides.pop("parameters", (A, B))
+    mode = overrides.pop(
+        "parameter_mode", ParameterMode.GENERIC_PARAMETERS
+    )
     values = dict(
         coefficient=coefficient,
+        coefficient_domain=ValueDomain.RATIONAL,
         parameter_ring=parameters,
-        parameters=(A, B),
-        target=X,
-        parameter_mode=ParameterMode.GENERIC_PARAMETERS,
+        roles=VariableRoles(
+            target,
+            declared,
+            mode,
+            WORLD,
+            S.REAL,
+            tuple(S.REAL for _ in declared),
+        ),
         interpretation=Interpretation.PARAMETER_FAMILY,
     )
     values.update(overrides)
@@ -53,30 +90,71 @@ def test_an_algebra_request_validates_its_field_kinds():
     with pytest.raises(TypeError):
         AlgebraRequest(
             object(),  # type: ignore[arg-type]
+            ValueDomain.RATIONAL,
             None,
-            (),
-            X,
-            ParameterMode.SPECIFIED_VALUES,
+            VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL),
             Interpretation.FORMAL,
         )
     with pytest.raises(TypeError):
         AlgebraRequest(
             coefficient,
+        ValueDomain.RATIONAL,
+            ValueDomain.RATIONAL,
             None,
-            (),
-            X,
-            "specified_values",  # type: ignore[arg-type]
+            VariableRoles(
+                X,
+                (),
+                "specified_values",  # type: ignore[arg-type]
+                WORLD,
+                S.REAL,
+            ),
             Interpretation.FORMAL,
         )
     with pytest.raises(TypeError):
         AlgebraRequest(
             coefficient,
+        ValueDomain.RATIONAL,
+            ValueDomain.RATIONAL,
             None,
-            (),
-            X,
-            ParameterMode.SPECIFIED_VALUES,
+            VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL),
             "formal",  # type: ignore[arg-type]
         )
+
+
+def test_an_algebra_request_needs_a_world_scoped_role_set():
+    coefficient, _, _ = family()
+    with pytest.raises(ValueError, match="world"):
+        AlgebraRequest(
+            coefficient,
+            ValueDomain.RATIONAL,
+            None,
+            VariableRoles(
+                X,
+                (),
+                ParameterMode.SPECIFIED_VALUES,
+                None,
+                S.REAL,
+            ),
+            Interpretation.FORMAL,
+        )
+
+
+def test_variable_roles_validate_their_world():
+    with pytest.raises(TypeError):
+        VariableRoles(
+            X,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            "world",  # type: ignore[arg-type]
+            S.REAL,
+        )
+    with pytest.raises(TypeError):
+        VariableRoles(
+            X, (), ParameterMode.SPECIFIED_VALUES, True, S.REAL
+        )
+    assert VariableRoles(
+        X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL
+    ).world == WORLD
 
 
 def test_roles_are_local_to_the_request():
@@ -103,10 +181,9 @@ def test_the_same_symbol_can_have_another_role_in_another_request():
     )
     first = AlgebraRequest(
         coefficient,
+        ValueDomain.RATIONAL,
         first_parent,
-        (A, B),
-        X,
-        ParameterMode.GENERIC_PARAMETERS,
+        VariableRoles(X, (A, B), ParameterMode.GENERIC_PARAMETERS, WORLD, S.REAL, (S.REAL, S.REAL)),
         Interpretation.PARAMETER_FAMILY,
     )
     swapped_ring = PolynomialRing((X, B), rationals)
@@ -121,10 +198,9 @@ def test_the_same_symbol_can_have_another_role_in_another_request():
     )
     second = AlgebraRequest(
         coefficient,
+        ValueDomain.RATIONAL,
         swapped_parent,
-        (X, B),
-        A,
-        ParameterMode.GENERIC_PARAMETERS,
+        VariableRoles(A, (X, B), ParameterMode.GENERIC_PARAMETERS, WORLD, S.REAL, (S.REAL, S.REAL)),
         Interpretation.PARAMETER_FAMILY,
     )
     assert first.role_of(A) is Role.PARAMETER
@@ -173,10 +249,9 @@ def test_the_parameter_ring_must_extend_the_coefficient_parent():
     with pytest.raises(ValueError):
         AlgebraRequest(
             coefficient,
+            ValueDomain.RATIONAL,
             unrelated,
-            (A, B),
-            X,
-            ParameterMode.GENERIC_PARAMETERS,
+            VariableRoles(X, (A, B), ParameterMode.GENERIC_PARAMETERS, WORLD, S.REAL, (S.REAL, S.REAL)),
             Interpretation.PARAMETER_FAMILY,
         )
 
@@ -197,10 +272,9 @@ def test_the_parameter_ring_must_use_the_same_coefficient_structure():
     with pytest.raises(ValueError, match="coefficient"):
         AlgebraRequest(
             coefficient,
+            ValueDomain.RATIONAL,
             parameters,
-            (A,),
-            X,
-            ParameterMode.GENERIC_PARAMETERS,
+            VariableRoles(X, (A,), ParameterMode.GENERIC_PARAMETERS, WORLD, S.REAL, (S.REAL,)),
             Interpretation.PARAMETER_FAMILY,
         )
 
@@ -210,10 +284,9 @@ def test_generic_modes_need_parameters():
     with pytest.raises(ValueError):
         AlgebraRequest(
             coefficient,
+            ValueDomain.RATIONAL,
             None,
-            (),
-            X,
-            ParameterMode.GENERIC_PARAMETERS,
+            VariableRoles(X, (), ParameterMode.GENERIC_PARAMETERS, WORLD, S.REAL),
             Interpretation.FORMAL,
         )
 
@@ -222,10 +295,9 @@ def test_a_simple_request_has_no_parameter_ring():
     coefficient, _, _ = family()
     simple = AlgebraRequest(
         coefficient,
+        ValueDomain.RATIONAL,
         None,
-        (),
-        X,
-        ParameterMode.SPECIFIED_VALUES,
+        VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL),
         Interpretation.FORMAL,
     )
     assert simple.role_of(X) is Role.TARGET
@@ -247,10 +319,9 @@ def test_a_non_polynomial_parameter_ring_with_generators_is_accepted():
     )
     algebra = AlgebraRequest(
         coefficient,
+        ValueDomain.RATIONAL,
         parameter_ring,
-        (A,),
-        X,
-        ParameterMode.ALL_PARAMETER_VALUES,
+        VariableRoles(X, (A,), ParameterMode.ALL_PARAMETER_VALUES, WORLD, S.REAL, (S.REAL,)),
         Interpretation.PARAMETER_FAMILY,
     )
     assert algebra.parameter_ring is parameter_ring
@@ -263,9 +334,170 @@ def test_a_parameter_ring_without_generators_is_rejected():
     with pytest.raises(ValueError):
         AlgebraRequest(
             coefficient,
+            ValueDomain.RATIONAL,
             coefficient,
-            (A,),
-            X,
-            ParameterMode.ALL_PARAMETER_VALUES,
+            VariableRoles(X, (A,), ParameterMode.ALL_PARAMETER_VALUES, WORLD, S.REAL, (S.REAL,)),
             Interpretation.PARAMETER_FAMILY,
+        )
+
+
+def test_an_algebra_request_accepts_a_request_local_differential():
+    coefficient, structure = differential()
+    algebra = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL),
+        Interpretation.FORMAL,
+        differential=structure,
+    )
+    assert algebra.differential is structure
+
+
+def test_an_algebra_request_without_a_differential_assumes_no_derivation():
+    coefficient, _ = differential()
+    roles = VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL)
+    implicit = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        roles,
+        Interpretation.FORMAL,
+    )
+    explicit = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        roles,
+        Interpretation.FORMAL,
+        differential=None,
+    )
+    assert implicit.differential is None
+    assert explicit.differential is None
+
+
+def test_an_algebra_request_rejects_a_non_differential_payload():
+    coefficient, _ = differential()
+    with pytest.raises(TypeError, match="differential"):
+        AlgebraRequest(
+            coefficient,
+            ValueDomain.RATIONAL,
+            None,
+            VariableRoles(
+                X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL
+            ),
+            Interpretation.FORMAL,
+            differential="not a differential",
+        )
+
+
+def test_role_sorts_are_required_exactly_with_the_roles():
+    with pytest.raises(ValueError, match="target sort"):
+        VariableRoles(X, (), ParameterMode.SPECIFIED_VALUES, WORLD)
+    with pytest.raises(ValueError, match="parameter sorts"):
+        VariableRoles(
+            X,
+            (A,),
+            ParameterMode.GENERIC_PARAMETERS,
+            WORLD,
+            S.REAL,
+        )
+    with pytest.raises(TypeError):
+        VariableRoles(
+            X,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            "real",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="without a target"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            S.REAL,
+        )
+    with pytest.raises(ValueError, match="without parameters"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (S.REAL,),
+        )
+
+
+def test_interpretation_requirement_maps_the_request_interpretation():
+    assert (
+        request().interpretation_requirement
+        is InterpretationRequirement.PARAMETER_FAMILY
+    )
+    coefficient, _, _ = family()
+    formal = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        VariableRoles(
+            X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL
+        ),
+        Interpretation.FORMAL,
+    )
+    assert (
+        formal.interpretation_requirement
+        is InterpretationRequirement.FORMAL
+    )
+    embedded = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        VariableRoles(
+            X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL
+        ),
+        Interpretation.EMBEDDED,
+    )
+    assert (
+        embedded.interpretation_requirement
+        is InterpretationRequirement.EMBEDDED
+    )
+
+
+def test_the_value_domain_is_derived_from_the_target_sort():
+    algebra = request()
+    assert algebra.coefficient_domain is ValueDomain.RATIONAL
+    assert algebra.value_domain is ValueDomain.REAL
+    assert value_domain_of_sort(S.INTEGER) is ValueDomain.INTEGER
+    assert value_domain_of_sort(S.RATIONAL) is ValueDomain.RATIONAL
+    assert value_domain_of_sort(S.REAL) is ValueDomain.REAL
+    assert value_domain_of_sort(S.COMPLEX) is ValueDomain.COMPLEX
+    with pytest.raises(ValueError, match="no scalar value domain"):
+        value_domain_of_sort(S.PROPOSITION)
+
+
+def test_an_algebra_request_needs_a_value_domain_coefficient_domain():
+    coefficient, _, _ = family()
+    with pytest.raises(TypeError, match="coefficient domain"):
+        AlgebraRequest(
+            coefficient,
+            "rational",  # type: ignore[arg-type]
+            None,
+            VariableRoles(
+                X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.REAL
+            ),
+            Interpretation.FORMAL,
+        )
+
+
+def test_an_algebra_request_needs_a_scalar_target_sort():
+    coefficient, _, _ = family()
+    with pytest.raises(ValueError, match="no scalar value domain"):
+        AlgebraRequest(
+            coefficient,
+            ValueDomain.RATIONAL,
+            None,
+            VariableRoles(
+                X, (), ParameterMode.SPECIFIED_VALUES, WORLD, S.PROPOSITION
+            ),
+            Interpretation.FORMAL,
         )

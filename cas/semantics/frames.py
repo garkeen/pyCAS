@@ -17,14 +17,60 @@ visibility or equality.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from cas.foundation.ids import FrameId, IdIssuer, SymbolId, WorldId
 from cas.language import sorts as S
-from cas.language.propositions import MeaningKey, Proposition
+from cas.language.meaning import MeaningKey
+from cas.language.propositions import Proposition
 from cas.language.signatures import LanguageSignature
 from cas.syntax import binding as B
 from cas.syntax import term as T
+
+_CONTENT_VERSION = "pycas.content.v1"
+
+
+def _content_digest(content: object) -> str:
+    """A SHA-256 over the deterministic `repr` of one canonical value.
+
+    Every value passed here is a tuple of strings, integers, booleans, `None`
+    and nested tuples.  Python `hash()` and object ids are never involved, so
+    the digest survives process boundaries when the content is the same.
+    """
+    return hashlib.sha256(repr(content).encode("utf-8")).hexdigest()
+
+
+def _sort_key(sort: S.Sort) -> object:
+    """Canonical structural form of one sort, independent of its display."""
+    if isinstance(sort, S.ScalarSort):
+        return ("scalar", sort.number_system.value)
+    if isinstance(sort, S.VectorSort):
+        return ("vector", _sort_key(sort.element), sort.length)
+    if isinstance(sort, S.MatrixSort):
+        return (
+            "matrix",
+            _sort_key(sort.element),
+            sort.rows,
+            sort.columns,
+        )
+    if isinstance(sort, S.FunctionSort):
+        return (
+            "function",
+            tuple(_sort_key(argument) for argument in sort.arguments),
+            _sort_key(sort.result),
+        )
+    if isinstance(sort, S.SetSort):
+        return ("set", _sort_key(sort.element), sort.empty)
+    if isinstance(sort, S.PropositionSort):
+        return ("proposition",)
+    if isinstance(sort, S.RegionSort):
+        return ("region",)
+    if isinstance(sort, S.SyntaxSort):
+        return ("syntax",)
+    raise TypeError(f"unknown sort: {type(sort).__name__}")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -33,6 +79,83 @@ class World:
 
     id: WorldId
     language: LanguageSignature
+
+    @property
+    def digest(self) -> str:
+        """Stable content identity of the language signature.
+
+        The serialization contains the structural head mapping, arities,
+        binders and operator signatures with their `SymbolId`s, plus every sort
+        in canonical structural form.  The process-local `WorldId` is not part
+        of it, so two independently assembled worlds with the same signature
+        agree.  `SymbolId`s remain part of the content because terms are
+        compared and serialized by them; deterministic assembly gives equal
+        signatures equal ids.
+        """
+        language = self.language
+        heads = tuple(
+            (int(symbol_id), head.value)
+            for symbol_id, head in sorted(
+                language.heads.items(), key=lambda item: int(item[0])
+            )
+        )
+        arities = tuple(
+            (head.value, arity.minimum, arity.maximum)
+            for head, arity in sorted(
+                language.arities.items(), key=lambda item: item[0].value
+            )
+        )
+        binders = tuple(
+            (
+                name,
+                signature.name,
+                signature.arity,
+                tuple(
+                    _sort_key(sort) for sort in signature.parameter_sorts
+                ),
+                (
+                    None
+                    if signature.result is None
+                    else _sort_key(signature.result)
+                ),
+            )
+            for name, signature in sorted(language.binders.items())
+        )
+        operators = tuple(
+            (
+                int(symbol_id),
+                tuple(_sort_key(sort) for sort in signature.arguments),
+                _sort_key(signature.result),
+            )
+            for symbol_id, signature in sorted(
+                language.operators.items(), key=lambda item: int(item[0])
+            )
+        )
+        return _content_digest(
+            (
+                _CONTENT_VERSION,
+                "world",
+                heads,
+                arities,
+                binders,
+                operators,
+            )
+        )
+
+
+_WORLD_IDS = IdIssuer(start=1)
+
+
+def new_world(language: LanguageSignature) -> World:
+    """Create a world with an identity distinct from every other assembly.
+
+    A world id is a trust-boundary identity, not a per-store counter that may
+    restart at zero.  Two runtimes assembled in one process must not make each
+    other's propositions readable merely because both start their frame ids at
+    zero.  The issuer is process-local; persistence must replace it with the
+    stable content identity described in §6.5/§28.3.
+    """
+    return World(WorldId(_WORLD_IDS.issue()), language)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +172,19 @@ class Declaration:
         if not isinstance(self.sort, S.Sort):
             raise TypeError("a declaration needs a sort")
 
+    @property
+    def digest(self) -> str:
+        """Stable content identity of this declaration."""
+        return _content_digest(
+            (
+                _CONTENT_VERSION,
+                "declaration",
+                int(self.symbol_id),
+                self.name,
+                _sort_key(self.sort),
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Definition:
@@ -64,6 +200,23 @@ class Definition:
         if not isinstance(self.body, T.Term):
             raise TypeError("a definition body must be a term")
 
+    @property
+    def digest(self) -> str:
+        """Stable content identity of this definition.
+
+        The body is serialized by `Term.structural_key`, so display names of
+        free symbols do not enter it; the alias's own name is explicit content.
+        """
+        return _content_digest(
+            (
+                _CONTENT_VERSION,
+                "definition",
+                int(self.symbol_id),
+                self.name,
+                self.body.structural_key(),
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Hypothesis:
@@ -74,6 +227,25 @@ class Hypothesis:
     def __post_init__(self) -> None:
         if not isinstance(self.proposition, Proposition):
             raise TypeError("a hypothesis must be a proposition")
+
+    @property
+    def digest(self) -> str:
+        """Stable content identity of this hypothesis.
+
+        Only the proposition term enters this record key.  The meaning world is
+        not repeated as the process-local `WorldId`: it is part of the
+        enclosing `FrameStore.digest` through `World.digest`, which is the only
+        context in which a hypothesis is valid.  Repeating the numeric id here
+        would make two independently assembled worlds with identical content
+        disagree.
+        """
+        return _content_digest(
+            (
+                _CONTENT_VERSION,
+                "hypothesis",
+                self.proposition.term.structural_key(),
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -112,7 +284,92 @@ class FrameStore:
         return self._root
 
     def count(self) -> int:
-        return self._issuer.issued
+        """The number of frames currently published in this store."""
+        return len(self._frames)
+
+    def digest(self, frame: FrameId) -> str:
+        """Stable content identity of one frame and its ancestor chain.
+
+        The digest recursively includes the world digest, the parent frame
+        digest, and the frame's declarations, definitions and hypotheses in
+        their stored order.  Stored order is the order the caller assembled
+        them; duplicate introductions are refused by `create`, and definition
+        order is meaningful because an alias may only use earlier aliases.
+        The world digest is also the meaning world of every hypothesis, so the
+        hypothesis record key does not repeat the process-local `WorldId`.
+
+        Process-local `FrameId`s do not enter the digest, so two stores with
+        identical worlds and frame content agree even when their ids differ.
+        Adding a child frame never changes an existing parent's digest.
+        """
+        current = self.get(frame)
+        if current.world != self._world.id:
+            raise ValueError("the frame belongs to another world")
+        parent_digest = (
+            None
+            if current.parent is None
+            else self.digest(current.parent)
+        )
+        return _content_digest(
+            (
+                _CONTENT_VERSION,
+                "frame",
+                self._world.digest,
+                parent_digest,
+                tuple(
+                    declaration.digest
+                    for declaration in current.declarations
+                ),
+                tuple(
+                    definition.digest
+                    for definition in current.definitions
+                ),
+                tuple(
+                    hypothesis.digest
+                    for hypothesis in current.hypotheses
+                ),
+            )
+        )
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Restore the frame table if one synchronous action fails.
+
+        A frame created by a failed action is unpublished: no judgment can
+        refer to it, and the next action receives a fresh id.  Committed frames
+        are immutable and are never removed by this context manager.
+        """
+        frames = dict(self._frames)
+        introducers = {
+            symbol: set(owners)
+            for symbol, owners in self._introducers.items()
+        }
+        try:
+            yield
+        except BaseException:
+            self._frames = frames
+            self._introducers = introducers
+            raise
+
+    def discard(self, frame_id: FrameId) -> None:
+        """Remove a just-created frame that no committed record refers to.
+
+        This is only for the failure path of one synchronous action: the caller
+        has just created the frame, no judgment was published, and the frame has
+        no children.  It is not a general history rewrite.
+        """
+        frame = self._frames.get(frame_id)
+        if frame is None:
+            raise KeyError(frame_id)
+        if any(
+            other.parent == frame_id
+            for other in self._frames.values()
+            if other.id != frame_id
+        ):
+            raise ValueError("cannot discard a frame with children")
+        del self._frames[frame_id]
+        for owners in self._introducers.values():
+            owners.discard(frame_id)
 
     def create(
         self,
@@ -167,6 +424,44 @@ class FrameStore:
             return False
         return any(current.id == ancestor for current in chain)
 
+    def environment_unchanged(
+        self, ancestor: FrameId, descendant: FrameId
+    ) -> bool:
+        """Whether `descendant` extends `ancestor` without new environment content.
+
+        Declarations, definitions and hypotheses are the name environment a
+        proposition is read in (§6.2/§13.6): adding any of them changes the
+        meaning of a formula even when the formula's own term is unchanged.  An
+        obligation issued in `ancestor` can therefore be reused in `descendant`
+        only while every frame strictly between them introduces none of them.
+
+        The test is by chain position and frame content, never by frame id or
+        registration order.  `ancestor` must lie on the chain of `descendant`; a
+        sibling that happens to have the same content is a different
+        environment and answers False.  A frame is unchanged from itself, so
+        `environment_unchanged(frame, frame)` is True.
+        """
+        try:
+            chain = self.chain(descendant)
+        except KeyError:
+            return False
+        position = next(
+            (
+                index
+                for index, current in enumerate(chain)
+                if current.id == ancestor
+            ),
+            None,
+        )
+        if position is None:
+            return False
+        return all(
+            not current.declarations
+            and not current.definitions
+            and not current.hypotheses
+            for current in chain[position + 1 :]
+        )
+
     def sort_of(self, frame: FrameId, symbol_id: SymbolId) -> S.Sort | None:
         """The declared sort of a symbol, innermost declaration first.
 
@@ -219,19 +514,42 @@ class FrameStore:
         """
         return self.readable(left, frame) and self.readable(right, frame)
 
-    def escapes(self, frame: FrameId, term: T.Term) -> tuple[SymbolId, ...]:
-        """Local symbols of unrelated frames that appear free in `term`."""
+    def escapes(
+        self,
+        frame: FrameId,
+        term: T.Term,
+        *,
+        local: frozenset[SymbolId] = frozenset(),
+    ) -> tuple[SymbolId, ...]:
+        """Free symbols that are not visible from `frame`.
+
+        Every non-language free symbol needs a declaration on the frame chain
+        (§6.4).  A symbol introduced only in an unrelated frame is an escape;
+        a symbol never introduced at all is also an escape, not an implicit
+        global name.  `local` lists symbols introduced by the frame currently
+        being validated, whose introducer records are not published yet.
+        """
         free = B.free_symbols(term)
         if not free:
             return ()
         chain = {current.id for current in self.chain(frame)}
+        language = self._world.language
         escaped = []
         for symbol_id in free:
             owners = self._introducers.get(symbol_id)
             # Every introducer must be on the query chain. Sharing an id with
             # a sibling frame makes the free occurrence ambiguous, so a merely
             # intersecting owner set is not enough.
-            if owners and not owners <= chain:
+            if owners is not None:
+                if not owners <= chain:
+                    escaped.append(symbol_id)
+                continue
+            if symbol_id in local:
+                continue
+            if (
+                language.head_of(symbol_id) is None
+                and language.operator_of(symbol_id) is None
+            ):
                 escaped.append(symbol_id)
         return tuple(sorted(escaped))
 
@@ -247,13 +565,19 @@ class FrameStore:
         introduced: set[SymbolId] = set()
         for declaration in declarations:
             self._require_fresh(parent, declaration.symbol_id, introduced, declaration.name)
+        frame_symbols = frozenset(
+            {declaration.symbol_id for declaration in declarations}
+            | {definition.symbol_id for definition in definitions}
+        )
         for definition in definitions:
             self._require_fresh(parent, definition.symbol_id, introduced, definition.name)
             if not B.well_scoped(definition.body):
                 raise ValueError(
                     f"definition body of {definition.name} is not well scoped"
                 )
-            if parent is not None and self.escapes(parent, definition.body):
+            if parent is not None and self.escapes(
+                parent, definition.body, local=frame_symbols
+            ):
                 raise ValueError(
                     f"definition body of {definition.name} references a local "
                     "symbol of an unrelated frame"
@@ -261,11 +585,17 @@ class FrameStore:
         for hypothesis in hypotheses:
             if parent is None:
                 raise ValueError("the root frame cannot inherit a hypothesis")
-            if not self.is_visible(hypothesis.proposition.meaning.frame, parent):
-                raise ValueError(
-                    "a hypothesis must be meaningful in the parent frame"
-                )
-            if self.escapes(parent, hypothesis.proposition.term):
+            if not self.readable(hypothesis.proposition, parent):
+                if hypothesis.proposition.meaning.world != self._world.id:
+                    raise ValueError(
+                        "a hypothesis belongs to another meaning world"
+                    )
+                if not self.is_visible(
+                    hypothesis.proposition.meaning.frame, parent
+                ):
+                    raise ValueError(
+                        "a hypothesis must be meaningful in the parent frame"
+                    )
                 raise ValueError(
                     "a hypothesis references a local symbol of an "
                     "unrelated frame"
@@ -349,4 +679,5 @@ __all__ = [
     "FrameStore",
     "Hypothesis",
     "World",
+    "new_world",
 ]

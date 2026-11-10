@@ -9,6 +9,7 @@ from cas.foundation.ids import SymbolId
 from cas.language.problems import ParameterMode
 from cas.language.signatures import StructuralHead
 from cas.runtime import bootstrap_parameterized
+from cas.semantics.regions import RegionSpec, region_from_proposition
 from cas.semantics.specialization import (
     Applied,
     CoverageClaim,
@@ -42,8 +43,12 @@ def make_generic(
 ):
     return GenericResult.assemble(
         result=result,
-        valid_on=true if valid_on is None else valid_on,
-        excluded_cases=excluded,
+        valid_on=region_from_proposition(
+            true if valid_on is None else valid_on
+        ),
+        excluded_cases=tuple(
+            region_from_proposition(case) for case in excluded
+        ),
         correctness_specification=true,
         parameter_mode=mode,
     )
@@ -107,7 +112,9 @@ def test_the_validity_region_is_checked_at_the_point():
         runtime.signature,
     )
     assert isinstance(outside, OutsideValidity)
-    assert outside.valid_on == valid_on
+    assert isinstance(outside.valid_on, RegionSpec)
+    assert outside.valid_on == region_from_proposition(valid_on)
+    assert outside.valid_on.condition is valid_on
 
 
 def test_an_excluded_case_forces_recomputation_only_when_it_holds():
@@ -123,7 +130,10 @@ def test_an_excluded_case_forces_recomputation_only_when_it_holds():
         runtime.signature,
     )
     assert isinstance(hits, NeedsRecomputation)
-    assert hits.conditions == (excluded,)
+    assert hits.conditions == (region_from_proposition(excluded),)
+    assert all(
+        isinstance(case, RegionSpec) for case in hits.conditions
+    )
 
     avoids = specialize(
         generic,
@@ -145,7 +155,7 @@ def test_an_undecidable_condition_is_not_treated_as_valid():
         runtime.signature,
     )
     assert isinstance(outcome, NeedsRecomputation)
-    assert outcome.conditions == (unresolved,)
+    assert outcome.conditions == (region_from_proposition(unresolved),)
 
 
 def test_arithmetic_and_logic_conditions_are_evaluated_exactly():
@@ -268,19 +278,192 @@ def test_coverage_claims_follow_the_request_mode():
 def test_an_all_values_claim_cannot_hide_an_exception():
     runtime, _, a, _, true = setup()
     excluded = equation(runtime, a, T.number(0))
+    true_region = region_from_proposition(true)
+    excluded_region = region_from_proposition(excluded)
     with pytest.raises(ValueError):
         GenericResult(
             a,
-            true,
-            (excluded,),
+            true_region,
+            (excluded_region,),
             true,
             CoverageClaim.ALL_VALUES,
         )
     with pytest.raises(ValueError):
         GenericResult(
             a,
-            equation(runtime, a, T.number(0)),
+            region_from_proposition(equation(runtime, a, T.number(0))),
             (),
             true,
             CoverageClaim.ALL_VALUES,
         )
+
+
+def test_generic_result_rejects_bare_propositions_as_regions():
+    runtime, _, a, _, true = setup()
+    excluded = equation(runtime, a, T.number(0))
+    true_region = region_from_proposition(true)
+    with pytest.raises(TypeError):
+        GenericResult(
+            a,
+            true,
+            (),
+            true,
+            CoverageClaim.PARTIAL,
+        )
+    with pytest.raises(TypeError):
+        GenericResult(
+            a,
+            true_region,
+            (excluded,),
+            true,
+            CoverageClaim.PARTIAL,
+        )
+    with pytest.raises(TypeError):
+        GenericResult(
+            a,
+            true_region,
+            (),
+            T.TRUE,
+            CoverageClaim.PARTIAL,
+        )
+    with pytest.raises(TypeError):
+        GenericResult(
+            a,
+            true_region,
+            (),
+            true,
+            "partial",
+        )
+
+
+def _power(runtime, base, exponent):
+    return head_app(
+        runtime.signature, StructuralHead.POWER, base, T.number(exponent)
+    )
+
+
+def _ne(runtime, left):
+    return head_app(
+        runtime.signature, StructuralHead.NE, left, T.number(0)
+    )
+
+
+def test_a_partial_validity_region_is_outside_when_a_premise_is_false():
+    runtime, a_id, a, _, true = setup()
+    valid_on = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.EQ,
+            _power(runtime, a, -1),
+            T.number(1),
+        ),
+    )
+    assert tuple(
+        premise.term for premise in valid_on.definedness
+    ) == (_ne(runtime, a),)
+    generic = make_generic(runtime, true, a, valid_on=valid_on)
+    outcome = specialize(
+        generic,
+        runtime.request,
+        Specialization({a_id: 0}),
+        runtime.signature,
+    )
+    assert isinstance(outcome, OutsideValidity)
+    assert outcome.valid_on == region_from_proposition(valid_on)
+
+
+def test_an_undecidable_validity_premise_requires_recomputation():
+    runtime, a_id, a, x, true = setup()
+    valid_on = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.EQ,
+            _power(runtime, x, -1),
+            T.number(1),
+        ),
+    )
+    assert valid_on.definedness
+    generic = make_generic(runtime, true, a, valid_on=valid_on)
+    outcome = specialize(
+        generic,
+        runtime.request,
+        Specialization({a_id: 2}),
+        runtime.signature,
+    )
+    assert isinstance(outcome, NeedsRecomputation)
+    assert outcome.conditions == (region_from_proposition(valid_on),)
+
+
+def test_a_true_premise_with_a_true_condition_is_applied():
+    runtime, a_id, a, _, true = setup()
+    condition = head_app(
+        runtime.signature,
+        StructuralHead.AND,
+        _ne(runtime, a),
+        head_app(
+            runtime.signature,
+            StructuralHead.EQ,
+            _power(runtime, a, -1),
+            T.number(1),
+        ),
+    )
+    valid_on = runtime_proposition(runtime, condition)
+    assert tuple(
+        premise.term for premise in valid_on.definedness
+    ) == (_ne(runtime, a),)
+    generic = make_generic(runtime, true, a, valid_on=valid_on)
+    outcome = specialize(
+        generic,
+        runtime.request,
+        Specialization({a_id: 1}),
+        runtime.signature,
+    )
+    assert isinstance(outcome, Applied)
+    assert outcome.result == T.number(1)
+
+
+def test_an_excluded_case_with_a_false_premise_does_not_apply():
+    runtime, a_id, a, _, true = setup()
+    excluded = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.EQ,
+            _power(runtime, a, -1),
+            T.number(1),
+        ),
+    )
+    assert excluded.definedness
+    generic = make_generic(runtime, true, a, excluded=(excluded,))
+    outcome = specialize(
+        generic,
+        runtime.request,
+        Specialization({a_id: 0}),
+        runtime.signature,
+    )
+    assert isinstance(outcome, Applied)
+
+
+def test_an_excluded_case_with_an_undecidable_premise_requires_recomputation():
+    runtime, a_id, a, x, true = setup()
+    excluded = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.EQ,
+            _power(runtime, x, -1),
+            T.number(1),
+        ),
+    )
+    assert excluded.definedness
+    generic = make_generic(runtime, true, a, excluded=(excluded,))
+    outcome = specialize(
+        generic,
+        runtime.request,
+        Specialization({a_id: 1}),
+        runtime.signature,
+    )
+    assert isinstance(outcome, NeedsRecomputation)
+    assert outcome.conditions == (region_from_proposition(excluded),)

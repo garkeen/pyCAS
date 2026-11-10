@@ -68,10 +68,12 @@ def test_conditional_laws_are_verified_on_their_region():
     session = Session(runtime)
     session.execute("sqrt(x)")
     assert session.execute("diff") == (
-        "verified on x > 0 @E1: 1/2*sqrt(x)^-1"
+        "verified on x > 0 @E1: 1/2*sqrt(x)^-1 | condition: x > 0"
     )
     session.execute("log(x)")
-    assert session.execute("diff") == "verified on x > 0 @E3: x^-1"
+    assert session.execute("diff") == (
+        "verified on x > 0 @E3: x^-1 | condition: x > 0"
+    )
 
     assert runtime.store.stats()["judgments"] == 2
     assert runtime.store.stats()["obligations"] == 0
@@ -87,13 +89,14 @@ def test_conditional_laws_are_verified_on_their_region():
         assert claim is not None
         assert claim.region == link.condition.term
         candidate = session.workspace.candidate(link.candidate)
-        assert candidate.problem.region == link.condition
+        assert candidate.problem.region is None
+        assert link.condition is not None
         assert runtime.store.applicability(
             link.judgment, runtime.frame.id
         ).is_applicable()
 
 
-def test_a_conditional_result_has_a_restricted_problem():
+def test_a_conditional_result_keeps_the_original_problem_and_records_the_region():
     runtime = bootstrap_elementary()
     session = Session(runtime)
     session.execute("sqrt(x)")
@@ -103,7 +106,7 @@ def test_a_conditional_result_has_a_restricted_problem():
     assert result.verifications
     assert result.verifications[0].condition == result.region
     assert result.candidate is not None
-    assert result.candidate.problem.region == result.region
+    assert result.candidate.problem.region is None
     assert result.result is not None
     assert runtime.store.stats()["judgments"] == 1
 
@@ -116,10 +119,10 @@ def test_definedness_only_cases_and_empty_regions():
     session.execute("sqrt(-1)")
     before = runtime.store.stats()
     output = session.execute("diff")
-    assert output.startswith("unsupported:")
+    assert output.startswith("unknown:")
     assert runtime.store.stats() == before
     session.execute("log(0)")
-    assert session.execute("diff").startswith("unsupported:")
+    assert session.execute("diff").startswith("unknown:")
     assert runtime.store.stats() == before
 
 
@@ -149,7 +152,7 @@ def test_the_elementary_revision_history_keeps_the_ledger():
     session.execute("cos(x)")
     session.execute("diff")
     assert runtime.store.stats()["judgments"] == 1
-    assert session.execute("undo") == "undo: @E0"
+    assert session.execute("undo") == "undo: @E0 (intake 0)"
     assert runtime.store.stats()["judgments"] == 1
-    assert session.execute("redo") == "redo: @E1"
+    assert session.execute("redo") == "redo: @E1 (differentiate 0)"
     assert len(session.workspace.links()) == 1

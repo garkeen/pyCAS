@@ -1,10 +1,10 @@
 """Condition checking and automatic applicability resolution."""
 
-from support import head_app, proposition_in
+from support import commit_now, head_app, proposition_in
 
 from cas.foundation.ids import WorldId
 from cas.kernel.applicability import resolve_applicability
-from cas.kernel.commit import CommitProposal, Committed, ConditionPolicy, commit
+from cas.kernel.commit import CommitProposal, Committed
 from cas.kernel.condition_checker import ConditionChecker
 from cas.kernel.context_rules import HypothesisChecker
 from cas.kernel.evidence import (
@@ -25,6 +25,7 @@ from cas.kernel.model import (
 from cas.kernel.store import KernelStore
 from cas.kernel.trust import CertificateSchema
 from cas.language import sorts as S
+from cas.language.execution import ConditionPolicy
 from cas.language.signatures import StructuralHead
 from cas.semantics.frames import Declaration, FrameStore, Hypothesis, World
 from cas.semantics.symbols import SymbolTable, standard_language
@@ -157,7 +158,7 @@ def setup(*, hypotheses=()):
 
 
 def conditional_target(store, frame, proposition):
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             frame.id,
@@ -174,7 +175,7 @@ def conditional_target(store, frame, proposition):
 
 
 def commit_hypothesis(store, frame, proposition):
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             frame.id,
@@ -294,7 +295,7 @@ def test_resolution_returns_blocked_for_a_refuted_obligation():
         signature,
         head_app(signature, StructuralHead.NOT, proposition.term),
     )
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             child.id,

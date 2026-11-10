@@ -51,10 +51,10 @@ def test_undo_through_the_frontend_keeps_the_ledger(runtime):
     session.execute("x^2")
     session.execute("diff")
     judgment = session.workspace.links()[0].judgment
-    assert session.execute("undo") == "undo: @E0"
+    assert session.execute("undo") == "undo: @E0 (intake 0)"
     assert runtime.store.get_judgment(judgment) is not None
     assert runtime.store.stats()["judgments"] == 1
-    assert session.execute("redo") == "redo: @E1"
+    assert session.execute("redo") == "redo: @E1 (differentiate 0)"
     assert len(session.workspace.links()) == 1
 
 

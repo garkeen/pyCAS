@@ -3,14 +3,20 @@
 import random
 from fractions import Fraction
 
-from support import runtime_proposition, variable
+from support import (
+    render_value,
+    runtime_proposition,
+    variable,
+    verification_context,
+    view_of,
+)
 
 from cas.kernel.evidence import CheckRequest, Refuted, Verified
+from cas.language.roles import CandidateRole
 from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.math.calculus.differentiation.verify import verify_derivative
 from cas.runtime.bootstrap import new_workspace
-from cas.semantics.bridge import to_polynomial, to_term
 from cas.syntax import term as T
 from cas.workflow.records import OperationStatus
 
@@ -33,15 +39,7 @@ def random_polynomial(
 
 
 def render(runtime, value) -> T.Term:
-    term = to_term(
-        runtime.ring,
-        value,
-        runtime.signature,
-        runtime.table.name_of,
-        T.number,
-    )
-    assert term is not None
-    return term
+    return render_value(runtime, value)
 
 
 def claim(runtime, source: T.Term, candidate: T.Term):
@@ -62,7 +60,15 @@ def check(runtime, proposition, source: T.Term, candidate: T.Term):
         T.TRUE, source, runtime.variable, candidate
     )
     return runtime.checker.check(
-        CheckRequest(runtime.frame.id, (proposition,), (), certificate)
+        CheckRequest(
+            runtime.frame.id,
+            (proposition,),
+            (),
+            certificate,
+            candidate=candidate,
+            candidate_role=CandidateRole.RESULT,
+            context=verification_context(runtime, algebra=runtime.request),
+        )
     )
 
 
@@ -144,8 +150,5 @@ def test_the_workspace_publishes_random_derivatives(runtime):
         expression = workspace.intake(source_term)
         result = workspace.differentiate(expression, runtime.variable)
         assert result.status is OperationStatus.VERIFIED
-        value = to_polynomial(
-            runtime.ring, result.result.term, runtime.signature
-        )
-        assert value is not None
+        value = view_of(runtime, result.result.term).value
         assert runtime.ring.equal(value, runtime.ring.derivative(source, 0))

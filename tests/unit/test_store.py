@@ -1,15 +1,19 @@
 """The ledger through its only write boundary: commit, support, discharge."""
 
 import pytest
-from support import equation, head_app, runtime_proposition, variable
+from support import (
+    commit_now,
+    equation,
+    head_app,
+    runtime_proposition,
+    variable,
+)
 
 from cas.foundation.ids import InferenceId, JudgmentId
 from cas.kernel.commit import (
     CommitProposal,
     Committed,
-    ConditionPolicy,
     Rejected,
-    commit,
 )
 from cas.kernel.evidence import (
     CheckerRegistry,
@@ -20,12 +24,18 @@ from cas.kernel.evidence import (
 from cas.kernel.model import (
     Blocked,
     Conditional,
+    Discharge,
+    InferenceRecord,
+    Judgment,
+    Obligation,
     ObligationReason,
     OutOfScope,
 )
-from cas.kernel.store import KernelStore
+from cas.kernel.store import KernelError, KernelStore
 from cas.kernel.trust import CertificateSchema
+from cas.language.execution import ConditionPolicy
 from cas.language.signatures import StructuralHead
+from cas.runtime.bootstrap import bootstrap
 from cas.syntax import term as T
 
 
@@ -78,7 +88,7 @@ def commit_one(
 ):
     checker.conditions = tuple(conditions)
     checker.used_premises = tuple(used)
-    result = commit(
+    result = commit_now(
         store,
         CommitProposal(
             frame=frame,
@@ -221,7 +231,7 @@ def test_discharge_requires_the_exact_proposition(runtime):
     obligation_id = result.obligations[0]
     checker.conditions = ()
     checker.used_premises = ()
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             base,
@@ -255,7 +265,7 @@ def test_discharge_requires_a_visible_proof(runtime):
     obligation_id = result.obligations[0]
     checker.conditions = ()
     checker.used_premises = ()
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             base,
@@ -289,7 +299,7 @@ def test_discharge_refuses_a_conditional_proof(runtime):
     obligation_id = first_result.obligations[0]
     checker.conditions = (other_condition,)
     checker.used_premises = ()
-    outcome = commit(
+    outcome = commit_now(
         store,
         CommitProposal(
             base,
@@ -331,7 +341,7 @@ def test_discharge_is_not_recorded_twice(runtime):
     assert first.discharged == (obligation_id,)
     checker.conditions = ()
     checker.used_premises = ()
-    second = commit(
+    second = commit_now(
         store,
         CommitProposal(
             base,
@@ -476,3 +486,91 @@ def test_a_refutation_in_a_sibling_is_not_visible(runtime):
         store, checker, right.id, negate(runtime, condition, right.id)
     )
     assert store.applicability(target.id, left.id).is_conditional()
+
+
+def test_a_judgment_from_another_world_is_refused(runtime):
+    store, _ = setup(runtime)
+    other = bootstrap()
+    assert other.frame.id == runtime.frame.id
+    foreign = equation(other, variable(other), T.number(1))
+    inference_id = store.new_inference_id()
+    judgment_id = store.new_judgment_id()
+    inference = InferenceRecord(
+        inference_id,
+        runtime.frame.id,
+        "test.checker",
+        "1",
+        (),
+        (judgment_id,),
+        None,
+        certificate_schema="test",
+        certificate_schema_version="1",
+    )
+    judgment = Judgment(
+        judgment_id, runtime.frame.id, foreign, (), inference_id
+    )
+    before = store.stats()
+    with pytest.raises(KernelError, match="another meaning world"):
+        store._publish(judgments=(judgment,), inferences=(inference,))
+    assert store.stats() == before
+
+
+def test_an_obligation_from_another_world_is_refused(runtime):
+    store, _ = setup(runtime)
+    other = bootstrap()
+    assert other.frame.id == runtime.frame.id
+    foreign = equation(other, variable(other), T.number(0))
+    inference_id = store.new_inference_id()
+    obligation_id = store.new_obligation_id()
+    inference = InferenceRecord(
+        inference_id,
+        runtime.frame.id,
+        "test.checker",
+        "1",
+        (),
+        (),
+        None,
+        certificate_schema="test",
+        certificate_schema_version="1",
+    )
+    obligation = Obligation(
+        obligation_id,
+        runtime.frame.id,
+        foreign,
+        ObligationReason.DEFINEDNESS,
+        inference_id,
+    )
+    before = store.stats()
+    with pytest.raises(KernelError, match="another meaning world"):
+        store._publish(
+            obligations=(obligation,), inferences=(inference,)
+        )
+    assert store.stats() == before
+
+
+def test_a_discharge_of_another_worlds_proposition_is_refused(runtime):
+    store, _ = setup(runtime)
+    other = bootstrap()
+    assert other.frame.id == runtime.frame.id
+    foreign = equation(other, variable(other), T.number(0))
+    inference_id = store.new_inference_id()
+    proof_id = store.new_judgment_id()
+    target_id = store.new_obligation_id()
+    proof = Judgment(proof_id, runtime.frame.id, foreign, (), inference_id)
+    target = Obligation(
+        target_id,
+        runtime.frame.id,
+        foreign,
+        ObligationReason.DEFINEDNESS,
+        inference_id,
+    )
+    store._judgments[proof_id] = proof
+    store._obligations[target_id] = target
+    before = store.stats()
+    with pytest.raises(KernelError, match="another meaning world"):
+        store._publish(
+            discharges=(
+                Discharge(target_id, proof_id, runtime.frame.id),
+            )
+        )
+    assert store.stats() == before

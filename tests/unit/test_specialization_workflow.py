@@ -1,16 +1,40 @@
 """Specialization through the workspace: candidates, commits and refusals."""
 
+from dataclasses import replace
 from fractions import Fraction
 
-from support import equation, head_app, runtime_proposition, variable
+from support import (
+    commit_now,
+    equation,
+    head_app,
+    runtime_proposition,
+    variable,
+    view_of,
+)
 
+from cas.kernel.commit import CommitProposal, Committed, Rejected
+from cas.language.execution import ConditionPolicy, ExecutionBudget
 from cas.language.problems import ParameterMode
+from cas.language.roles import CandidateRole
 from cas.language.signatures import StructuralHead
+from cas.math.calculus.differentiation.certificate import (
+    DerivativeCertificate,
+)
 from cas.math.calculus.differentiation.specification import parse_has_derivative
+from cas.operations.protocols import (
+    ExecutionRequest,
+    GenericResultInput,
+    OperationRequest,
+    ProblemBuilt,
+    Proposed,
+    ValueMappingInput,
+)
 from cas.runtime import bootstrap_parameterized
+from cas.semantics.regions import RegionSpec, region_from_proposition
 from cas.semantics.specialization import (
     CoverageClaim,
     GenericResult,
+    Specialization,
 )
 from cas.syntax import binding as B
 from cas.syntax import term as T
@@ -39,6 +63,41 @@ def setup():
     return runtime, workspace, a_id, a, source, differentiated
 
 
+def specialized_algebra(runtime):
+    """The fixed Q[x] request the specialization operation selects."""
+    view = runtime.specialization
+    assert view is not None
+    return view.request
+
+
+def propose_with_family(runtime, source, parameter, family, value):
+    """Build and propose one specialization without bypassing the operation."""
+    operation = runtime.operations.get("specialize")
+    assert operation is not None
+    request = OperationRequest(
+        runtime.frame.id,
+        (source.term,),
+        target=runtime.variable,
+        parameters=(
+            ("family", GenericResultInput(family)),
+            ("values", ValueMappingInput({parameter: value})),
+        ),
+    )
+    problem_outcome = operation.build_problem(request)
+    assert isinstance(problem_outcome, ProblemBuilt)
+    execution = ExecutionRequest(
+        request,
+        problem_outcome.problem,
+        problem_outcome.algebra,
+        request.frame,
+        ConditionPolicy.REQUIRE_PROVED,
+        ExecutionBudget(),
+    )
+    proposal_outcome = operation.propose(execution)
+    assert isinstance(proposal_outcome, Proposed)
+    return operation, proposal_outcome.proposal, problem_outcome.problem
+
+
 def test_differentiation_records_the_parameter_family():
     runtime, workspace, _, _, source, differentiated = setup()
     generic = workspace.generic_result(source)
@@ -46,6 +105,8 @@ def test_differentiation_records_the_parameter_family():
     assert generic is differentiated.generic
     assert generic.coverage_claim is CoverageClaim.ALL_VALUES
     assert generic.is_unconditional
+    assert isinstance(generic.valid_on, RegionSpec)
+    assert generic.valid_on.condition.term == T.TRUE
     assert generic.excluded_cases == ()
     assert generic.result == differentiated.result.term
     assert (
@@ -97,10 +158,18 @@ def test_a_point_reuses_the_generic_formula_and_is_reverified():
 
     specialized = runtime.specialization
     assert specialized is not None
-    source_value = specialized.bridge.to_value(claim.source)
-    candidate_value = specialized.bridge.to_value(claim.candidate)
-    assert source_value is not None
-    assert candidate_value is not None
+    source_value = view_of(
+        runtime,
+        claim.source,
+        bridge=specialized.bridge,
+        request=specialized.request,
+    ).value
+    candidate_value = view_of(
+        runtime,
+        claim.candidate,
+        bridge=specialized.bridge,
+        request=specialized.request,
+    ).value
     assert specialized.ring.equal(
         candidate_value, specialized.differential.deriv(source_value)
     )
@@ -162,6 +231,32 @@ def test_specialization_without_a_family_is_unsupported():
     assert len(workspace.expressions()) == 1
 
 
+def test_a_family_must_be_visible_for_the_input():
+    runtime, workspace, a_id, a, source, differentiated = setup()
+    fabricated = GenericResult.assemble(
+        result=differentiated.result.term,
+        valid_on=region_from_proposition(
+            equation(runtime, a, T.number(1))
+        ),
+        excluded_cases=(),
+        correctness_specification=differentiated.verifications[0].specification,
+        parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
+    )
+    before = runtime.store.stats()
+    outcome = workspace.apply(
+        "specialize",
+        (source,),
+        target=runtime.variable,
+        parameters=(
+            ("family", GenericResultInput(fabricated)),
+            ("values", ValueMappingInput({a_id: 1})),
+        ),
+    )
+    assert outcome.status is OperationStatus.INVALID
+    assert "visible" in outcome.detail
+    assert runtime.store.stats() == before
+
+
 def test_an_incomplete_or_foreign_point_is_invalid():
     runtime, workspace, a_id, _, source, _ = setup()
     before = runtime.store.stats()
@@ -175,54 +270,69 @@ def test_an_incomplete_or_foreign_point_is_invalid():
 
 
 def test_a_point_outside_the_generic_validity_recomputes():
-    runtime, workspace, a_id, a, source, differentiated = setup()
+    runtime, _, a_id, a, source, differentiated = setup()
     family = GenericResult.assemble(
         result=differentiated.result.term,
-        valid_on=equation(runtime, a, T.number(1)),
+        valid_on=region_from_proposition(
+            equation(runtime, a, T.number(1))
+        ),
         excluded_cases=(),
         correctness_specification=differentiated.verifications[0].specification,
         parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
     )
-    outside = workspace.specialize(source, {a_id: 2}, generic=family)
-    assert outside.status is OperationStatus.VERIFIED
+    _, outside, _ = propose_with_family(runtime, source, a_id, family, 2)
     assert outside.trace == ("recomputed",)
-    assert outside.result is not None
-    assert outside.result.term == head_app(
+    assert outside.result == head_app(
         runtime.signature,
         StructuralHead.TIMES,
         T.number(4),
         variable(runtime),
     )
 
-    inside = workspace.specialize(source, {a_id: 1}, generic=family)
-    assert inside.status is OperationStatus.VERIFIED
+    _, inside, _ = propose_with_family(runtime, source, a_id, family, 1)
     assert inside.trace == ("generic_formula",)
 
 
 def test_an_excluded_point_recomputes_instead_of_substituting():
-    runtime, workspace, a_id, a, source, differentiated = setup()
+    runtime, _, a_id, a, source, differentiated = setup()
     true = runtime_proposition(runtime, T.TRUE)
     excluded = equation(runtime, a, T.number(0))
     family = GenericResult.assemble(
         result=T.number(-999),
-        valid_on=true,
-        excluded_cases=(excluded,),
+        valid_on=region_from_proposition(true),
+        excluded_cases=(region_from_proposition(excluded),),
         correctness_specification=differentiated.verifications[0].specification,
         parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
     )
     assert family.coverage_claim is CoverageClaim.PARTIAL
 
-    recomputed = workspace.specialize(source, {a_id: 0}, generic=family)
-    assert recomputed.status is OperationStatus.VERIFIED
+    _, recomputed, _ = propose_with_family(runtime, source, a_id, family, 0)
     assert recomputed.trace == ("recomputed",)
-    assert recomputed.result is not None
-    assert recomputed.result.term == T.number(0)
+    assert recomputed.result == T.number(0)
 
-    bad_substitution = workspace.specialize(source, {a_id: 2}, generic=family)
-    assert bad_substitution.status is OperationStatus.REFUTED
-    assert bad_substitution.result is None
-    assert bad_substitution.verifications
-    assert bad_substitution.verifications[0].judgment is None
+    operation, substituted, problem = propose_with_family(
+        runtime, source, a_id, family, 2
+    )
+    assert substituted.trace == ("generic_formula",)
+    assert substituted.result == T.number(-999)
+    binding = operation.checker_bindings[0]
+    outcome = commit_now(
+        runtime.store,
+        CommitProposal(
+            runtime.frame.id,
+            substituted.specifications,
+            binding.checker_id,
+            binding.problem_kind,
+            substituted.specification_kind,
+            certificate=substituted.certificate,
+            problem=problem,
+            candidate=substituted.result,
+            candidate_role=CandidateRole.RESULT,
+            algebra=specialized_algebra(runtime),
+        ),
+    )
+    assert isinstance(outcome, Rejected)
+    assert outcome.refutation is not None
 
 
 def test_a_hidden_source_cannot_be_specialized():
@@ -262,3 +372,94 @@ def test_multiple_parameters_must_all_be_supplied():
         T.number(6),
         variable(runtime),
     )
+
+
+def test_undo_hides_a_family_and_redo_restores_it():
+    runtime, workspace, a_id, _, source, differentiated = setup()
+    family = differentiated.generic
+    assert workspace.undo()
+    assert workspace.generic_result(source) is None
+    before = runtime.store.stats()
+    assert workspace.specialize(source, {a_id: 3}).status is OperationStatus.UNSUPPORTED
+    assert runtime.store.stats() == before
+    assert workspace.redo()
+    assert workspace.generic_result(source) is family
+    assert workspace.specialize(source, {a_id: 3}).status is OperationStatus.VERIFIED
+
+
+def test_undo_recovers_the_previous_visible_family():
+    runtime, workspace, _, _, source, first = setup()
+    second = workspace.differentiate(source, runtime.variable)
+    assert second.generic is not first.generic
+    assert workspace.generic_result(source) is second.generic
+    assert workspace.undo()
+    assert workspace.generic_result(source) is first.generic
+    assert workspace.redo()
+    assert workspace.generic_result(source) is second.generic
+    assert workspace.undo()
+    workspace.intake(T.number(7))
+    assert not workspace.redo()
+    assert workspace.generic_result(source) is first.generic
+
+
+def commit_proposal(runtime, operation, proposal, problem):
+    binding = operation.checker_bindings[0]
+    return commit_now(
+        runtime.store,
+        CommitProposal(
+            runtime.frame.id,
+            proposal.specifications,
+            binding.checker_id,
+            binding.problem_kind,
+            proposal.specification_kind,
+            certificate=proposal.certificate,
+            problem=problem,
+            candidate=proposal.result,
+            candidate_role=CandidateRole.RESULT,
+            algebra=specialized_algebra(runtime),
+        ),
+    )
+
+
+def test_the_certificate_binds_the_generic_source_and_mapping():
+    runtime, workspace, a_id, _, source, _ = setup()
+    family = workspace.generic_result(source)
+    assert family is not None
+    operation, proposal, problem = propose_with_family(
+        runtime, source, a_id, family, 3
+    )
+    certificate = proposal.certificate
+    assert isinstance(certificate, DerivativeCertificate)
+    assert certificate.generic_source == source.term
+    assert certificate.specialization == Specialization({a_id: 3})
+    outcome = commit_proposal(runtime, operation, proposal, problem)
+    assert isinstance(outcome, Committed)
+
+
+def test_a_tampered_specialization_source_is_refused():
+    runtime, workspace, a_id, _, source, _ = setup()
+    family = workspace.generic_result(source)
+    assert family is not None
+    operation, proposal, problem = propose_with_family(
+        runtime, source, a_id, family, 3
+    )
+    certificate = proposal.certificate
+    assert isinstance(certificate, DerivativeCertificate)
+    tampered = replace(certificate, generic_source=T.number(0))
+    outcome = commit_now(
+        runtime.store,
+        CommitProposal(
+            runtime.frame.id,
+            proposal.specifications,
+            operation.checker_bindings[0].checker_id,
+            operation.checker_bindings[0].problem_kind,
+            proposal.specification_kind,
+            certificate=tampered,
+            problem=problem,
+            candidate=proposal.result,
+            candidate_role=CandidateRole.RESULT,
+            algebra=specialized_algebra(runtime),
+        ),
+    )
+    assert isinstance(outcome, Rejected)
+    assert "generic source" in outcome.detail

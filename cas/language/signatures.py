@@ -39,6 +39,7 @@ class StructuralHead(StrEnum):
     GUARDED = "Guarded"
     PIECEWISE = "Piecewise"
     QUOTE = "Quote"
+    SET = "Set"
 
 
 COMPARISON_HEADS = frozenset(
@@ -93,8 +94,8 @@ class Arity:
     maximum: int | None = None
 
     def __post_init__(self) -> None:
-        if self.minimum < 1:
-            raise ValueError("every operator takes at least one argument")
+        if self.minimum < 0:
+            raise ValueError("an operator arity cannot be negative")
         if self.maximum is not None and self.maximum < self.minimum:
             raise ValueError("an arity maximum cannot be below its minimum")
 
@@ -168,6 +169,7 @@ DEFAULT_ARITIES: Mapping[StructuralHead, Arity] = MappingProxyType(
         StructuralHead.GUARDED: Arity(2, 2),
         StructuralHead.PIECEWISE: Arity(2),
         StructuralHead.QUOTE: Arity(1, 1),
+        StructuralHead.SET: Arity(0),
     }
 )
 

@@ -1,9 +1,12 @@
 """Shared problem construction for one-input expression operations.
 
-Differentiation and specialisation both fix the same kind of problem: one typed
-expression, the operation's target variable, the request region and one verified
-result. The helper keeps that admission rule in one place; it does not choose a
-mathematical candidate.
+Differentiation, integration, Hermite reduction and specialisation all fix the
+same kind of problem: one typed expression, the operation's target role, the
+request region, one result language and one coverage. The helper keeps that
+admission rule in one place; it does not choose a mathematical candidate.
+
+The roles come from the operation's pre-assembled `AlgebraRequest`; this helper
+never invents a target or parameter mode of its own.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from cas.language import typing as Ty
 from cas.language.decisions import Reason
 from cas.language.problems import (
     Coverage,
-    ParameterMode,
+    DomainRequirement,
     ProblemSpec,
     ResultLanguage,
 )
@@ -34,6 +37,7 @@ from cas.operations.protocols import (
 )
 from cas.semantics import elaborate
 from cas.semantics.frames import FrameStore
+from cas.semantics.request import AlgebraRequest
 from cas.syntax import term as T
 
 
@@ -41,43 +45,45 @@ def expression_problem(
     request: OperationRequest,
     *,
     operation: str,
-    variable: SymbolId,
+    algebra: AlgebraRequest,
     frames: FrameStore,
     signature: LanguageSignature,
-    parameter_mode: ParameterMode,
+    result_language: ResultLanguage,
+    coverage: Coverage = Coverage.ONE_VERIFIED,
 ) -> ProblemOutcome:
     """Admit one typed expression and fix its problem statement."""
+    roles = algebra.roles
     if len(request.inputs) != 1:
         return ProblemInvalid(f"{operation} takes one input")
     if request.target is None:
         return ProblemInvalid(f"{operation} needs a target variable")
-    if request.target != variable:
+    if roles.target is None:
+        return ProblemInvalid(f"{operation} has no target role")
+    if request.target != roles.target:
         return ProblemUnsupported(
             Reason.FRAGMENT,
             "the request names a target variable outside this runtime",
         )
-    source = request.inputs[0]
-    typing = elaborate.typing(
-        source, frames, request.frame, signature
+    source = elaborate.typed(
+        request.inputs[0], frames, request.frame, signature
     )
-    if isinstance(typing, Ty.NeedsDeclaration):
-        return ProblemInvalid("the source contains an undeclared symbol")
-    if isinstance(typing, Ty.Unsupported):
-        return ProblemInvalid(typing.detail)
-    if isinstance(typing, Ty.IllTyped):
-        return ProblemInvalid(typing.detail)
-    if not isinstance(typing, Ty.Typed):
-        return ProblemInvalid("the source cannot be typed")
+    if not isinstance(source, Ty.TypedExpr):
+        return ProblemInvalid(source.detail)
     return ProblemBuilt(
         ProblemSpec(
             operation=operation,
             inputs=(source,),
-            target=variable,
+            roles=roles,
             region=request.region,
-            result_language=ResultLanguage.EXPRESSION,
-            parameter_mode=parameter_mode,
-            coverage=Coverage.ONE_VERIFIED,
-        )
+            result_language=result_language,
+            coverage=coverage,
+            interpretation_requirement=algebra.interpretation_requirement,
+            domain_requirement=DomainRequirement(
+                coefficient=algebra.coefficient_domain,
+                values=algebra.value_domain,
+            ),
+        ),
+        algebra=algebra,
     )
 
 

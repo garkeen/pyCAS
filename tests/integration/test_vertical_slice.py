@@ -4,15 +4,14 @@ Expression object -> derivative candidate -> exact specification -> independent
 checker -> kernel publication -> verification link -> undo/redo.
 """
 
-from support import head_app, variable
+from support import head_app, variable, view_of
 
 from cas.language.signatures import StructuralHead
 from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import parse_has_derivative
 from cas.runtime.bootstrap import new_workspace
-from cas.semantics.bridge import to_polynomial
 from cas.syntax import term as T
-from cas.workflow.records import OperationStatus
+from cas.workflow.records import OperationStatus, TaskState
 
 
 def source_term(runtime) -> T.Apply:
@@ -83,6 +82,7 @@ def test_the_slice_publishes_exactly_one_checked_judgment(runtime):
         "judgments": 1,
         "inferences": 1,
         "discharges": 0,
+        "bases": 0,
     }
 
 
@@ -118,7 +118,12 @@ def test_outside_the_fragment_nothing_becomes_trusted(runtime):
     assert runtime.store.stats()["judgments"] == 0
     assert runtime.store.stats()["inferences"] == 0
     assert workspace.links() == ()
-    assert [event.operation for event in workspace.events()] == ["Intake"]
+    assert result.task is not None
+    assert result.task.state is TaskState.BLOCKED
+    assert [event.operation for event in workspace.events()] == [
+        "Intake",
+        "differentiate",
+    ]
 
 
 def test_a_second_derivative_is_a_new_judgment(runtime):
@@ -128,10 +133,7 @@ def test_a_second_derivative_is_a_new_judgment(runtime):
     assert first.status is OperationStatus.VERIFIED
     second = workspace.differentiate(first.result, runtime.variable)
     assert second.status is OperationStatus.VERIFIED
-    value = to_polynomial(
-        runtime.ring, second.result.term, runtime.signature
-    )
-    assert value is not None
+    value = view_of(runtime, second.result.term).value
     x_squared = runtime.ring.monomial((1,), 6)
     assert runtime.ring.equal(value, x_squared)
     assert runtime.store.stats()["judgments"] == 2

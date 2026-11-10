@@ -46,6 +46,73 @@ class ElementaryDifferentiator:
     def derive(self, term: T.Term) -> DerivationOutcome:
         return self._derive(term)
 
+    def supports(self, term: T.Term) -> DerivationUnsupported | None:
+        """Whether `term` is in the declared elementary fragment.
+
+        This is the structural input schema of the differentiator.  It mirrors
+        the rule dispatch in `_derive` without generating a candidate, so the
+        problem builder can refuse an out-of-fragment source before a task is
+        fixed.
+        """
+        if isinstance(term, (T.IntLit, T.RatLit)):
+            return None
+        if isinstance(term, T.SymbolRef):
+            if term.symbol_id == self.variable:
+                return None
+            if self.library.is_constant(term.symbol_id):
+                return None
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                "no dependency contract for "
+                f"{self._name(term.symbol_id)}",
+            )
+        if not isinstance(term, T.Apply):
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                "the source is outside the elementary fragment",
+            )
+        if not isinstance(term.operator, T.SymbolRef):
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                "an applied expression must have a symbol operator",
+            )
+        head = self.signature.head_of(term.operator.symbol_id)
+        if head in (StructuralHead.PLUS, StructuralHead.TIMES):
+            for argument in term.arguments:
+                issue = self.supports(argument)
+                if issue is not None:
+                    return issue
+            return None
+        if head is StructuralHead.POWER:
+            if len(term.arguments) != 2:
+                return DerivationUnsupported(
+                    Reason.FRAGMENT, "Power takes a base and an exponent"
+                )
+            base, exponent = term.arguments
+            if not isinstance(exponent, T.IntLit) or exponent.value < 0:
+                return DerivationUnsupported(
+                    Reason.FRAGMENT,
+                    "only nonnegative integer powers are differentiated",
+                )
+            return self.supports(base)
+        if head is not None:
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                f"{head.value} is not a scalar operation in this fragment",
+            )
+        function = self.library.function_for(term.operator.symbol_id)
+        if function is None or function.law is None:
+            return DerivationUnsupported(
+                Reason.FRAGMENT,
+                "no derivative law for "
+                f"{self._name(term.operator.symbol_id)}",
+            )
+        for argument in term.arguments:
+            issue = self.supports(argument)
+            if issue is not None:
+                return issue
+        return None
+
     def _name(self, symbol_id: SymbolId) -> str:
         try:
             return self.name_of(symbol_id)

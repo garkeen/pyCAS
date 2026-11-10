@@ -47,9 +47,10 @@ def test_structural_arities():
 
 def test_arity_validates_its_range():
     with pytest.raises(ValueError):
-        Arity(0)
+        Arity(-1)
     with pytest.raises(ValueError):
         Arity(2, 1)
+    assert Arity(0).accepts(0)
     assert Arity(2, 4).describe() == "2..4 arguments"
 
 

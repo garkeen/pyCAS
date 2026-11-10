@@ -13,8 +13,8 @@ from cas.frontend.session import Session
 from cas.runtime.bootstrap import bootstrap_elementary
 
 _BANNER = (
-    "pyCAS v5 — polynomial and elementary differentiation. "
-    "Type help for commands."
+    "pyCAS v5 — polynomial/elementary differentiation and polynomial "
+    "integration. Type help for commands."
 )
 
 

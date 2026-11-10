@@ -10,7 +10,12 @@ an undecided condition into `Applicable`; unresolved conditions remain
 from __future__ import annotations
 
 from cas.foundation.ids import FrameId, JudgmentId
-from cas.kernel.commit import CommitProposal, Committed, commit
+from cas.kernel.commit import (
+    CommitProposal,
+    ValidatedCommitBatch,
+    publish_commit,
+    validate_commit,
+)
 from cas.kernel.condition_checker import ConditionChecker
 from cas.kernel.model import Applicability, Conditional, OutOfScope
 from cas.kernel.store import KernelStore
@@ -46,7 +51,7 @@ def resolve_applicability(
         if candidates is None:
             continue
         obligation = store.get_obligation(obligation_id)
-        outcome = commit(
+        validated = validate_commit(
             store,
             CommitProposal(
                 frame,
@@ -58,7 +63,9 @@ def resolve_applicability(
                 discharge_obligations=(obligation_id,),
             ),
         )
-        if not isinstance(outcome, Committed):
+        if isinstance(validated, ValidatedCommitBatch):
+            publish_commit(store, validated)
+        else:
             continue
 
     return store.applicability(judgment, frame)

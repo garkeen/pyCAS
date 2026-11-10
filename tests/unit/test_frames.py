@@ -3,11 +3,18 @@
 import dataclasses
 
 import pytest
-from support import head_app, proposition_in
+from support import (
+    MapEnvironment,
+    head_app,
+    proposition_in,
+    runtime_proposition,
+)
 
 from cas.foundation.ids import FrameId, SymbolId, WorldId
+from cas.language import propositions as Pr
 from cas.language import sorts as S
 from cas.language.signatures import StructuralHead
+from cas.runtime.bootstrap import bootstrap
 from cas.semantics.frames import (
     Declaration,
     Definition,
@@ -15,6 +22,7 @@ from cas.semantics.frames import (
     FrameStore,
     Hypothesis,
     World,
+    new_world,
 )
 from cas.semantics.symbols import SymbolTable, standard_language
 from cas.syntax import term as T
@@ -219,20 +227,23 @@ def test_a_definition_may_reference_a_symbol_declared_in_an_ancestor():
     assert frames.lookup_definition(frame.id, v) is not None
 
 
-def test_escapes_reports_only_unrelated_local_symbols():
+def test_escapes_reports_unrelated_and_undeclared_symbols():
     table, signature, frames, base, x = setup()
     u = table.intern("u")
     frames.create(base.id, declarations=(Declaration(u, "u", S.REAL),))
     sibling = frames.create(frames.root.id)
+    undeclared = SymbolId(10_000)
     term = head_app(
         signature,
         StructuralHead.PLUS,
         T.symbol(x, "x"),
         T.symbol(u, "u"),
-        T.symbol(SymbolId(10_000), "global"),
+        T.symbol(undeclared, "global"),
     )
-    assert frames.escapes(base.id, term) == (u,)
-    assert frames.escapes(sibling.id, term) == tuple(sorted((x, u)))
+    assert frames.escapes(base.id, term) == tuple(sorted((u, undeclared)))
+    assert frames.escapes(sibling.id, term) == tuple(
+        sorted((x, u, undeclared))
+    )
     assert frames.escapes(base.id, T.number(1)) == ()
 
 
@@ -273,6 +284,18 @@ def test_a_hypothesis_must_be_meaningful_in_the_parent():
         frames.create(base.id, hypotheses=(Hypothesis(foreign),))
 
 
+def test_a_hypothesis_from_another_world_is_refused(runtime):
+    other = bootstrap()
+    assert other.frame.id == runtime.frame.id
+    assert other.world.id != runtime.world.id
+    foreign = runtime_proposition(other, T.TRUE)
+    with pytest.raises(ValueError, match="another meaning world"):
+        runtime.frames.create(
+            runtime.frame.id, hypotheses=(Hypothesis(foreign),)
+        )
+    assert runtime.frames.count() == 2
+
+
 def test_a_hypothesis_cannot_reference_a_sibling_symbol():
     table, signature, frames, base, x = setup()
     y = table.intern("y")
@@ -285,12 +308,16 @@ def test_a_hypothesis_cannot_reference_a_sibling_symbol():
         signature,
         head_app(signature, StructuralHead.GT, T.symbol(x, "x"), T.number(0)),
     )
-    foreign = dataclasses.replace(
-        source,
-        term=head_app(
+    environment = MapEnvironment({x: S.REAL, y: S.REAL})
+    foreign = Pr.check(
+        head_app(
             signature, StructuralHead.GT, T.symbol(y, "y"), T.number(0)
         ),
+        signature,
+        environment,
+        source.meaning,
     )
+    assert isinstance(foreign, Pr.Proposition)
     with pytest.raises(ValueError):
         frames.create(base.id, hypotheses=(Hypothesis(foreign),))
 
@@ -325,3 +352,120 @@ def test_frames_are_immutable():
     _, _, _, base, _ = setup()
     with pytest.raises(dataclasses.FrozenInstanceError):
         base.parent = None
+
+
+def _content_frames(
+    *, burn_frame: bool = False, sort: S.Sort = S.REAL
+):
+    """Two stores with identical language and declaration content."""
+    table = SymbolTable()
+    signature = standard_language(table)
+    frames = FrameStore(new_world(signature))
+    if burn_frame:
+        # Consume a frame id so the compared frame has a different process id.
+        frames.create(frames.root.id)
+    x = table.intern("x")
+    base = frames.create(
+        frames.root.id, declarations=(Declaration(x, "x", sort),)
+    )
+    return table, signature, frames, base, x
+
+
+def test_term_structural_keys_use_symbol_identity_not_display_names():
+    first = T.symbol(SymbolId(7), "x")
+    second = T.symbol(SymbolId(7), "y")
+    other = T.symbol(SymbolId(8), "x")
+    assert first.structural_key() == second.structural_key()
+    assert first.structural_key() != other.structural_key()
+
+
+def test_content_digests_ignore_process_local_world_and_frame_ids():
+    _, _, first_frames, first_base, _ = _content_frames()
+    _, _, second_frames, second_base, _ = _content_frames(burn_frame=True)
+    assert first_frames.world.id != second_frames.world.id
+    assert first_base.id != second_base.id
+    assert first_frames.world.digest == second_frames.world.digest
+    assert first_frames.digest(first_frames.root.id) == second_frames.digest(
+        second_frames.root.id
+    )
+    assert first_frames.digest(first_base.id) == second_frames.digest(
+        second_base.id
+    )
+
+
+def test_content_digests_are_stable_for_identical_hypotheses():
+    first = bootstrap()
+    second = bootstrap()
+    first_child = first.frames.create(
+        first.frame.id,
+        hypotheses=(Hypothesis(runtime_proposition(first, T.TRUE)),),
+    )
+    second_child = second.frames.create(
+        second.frame.id,
+        hypotheses=(Hypothesis(runtime_proposition(second, T.TRUE)),),
+    )
+    assert first.world.id != second.world.id
+    assert first.frames.digest(first_child.id) == second.frames.digest(
+        second_child.id
+    )
+
+
+def test_a_changed_declaration_changes_the_frame_digest():
+    _, _, real_frames, real_base, _ = _content_frames(sort=S.REAL)
+    _, _, integer_frames, integer_base, _ = _content_frames(sort=S.INTEGER)
+    assert real_frames.digest(real_base.id) != integer_frames.digest(
+        integer_base.id
+    )
+
+
+def _defined_frame(*, constant_body: bool):
+    table = SymbolTable()
+    signature = standard_language(table)
+    frames = FrameStore(new_world(signature))
+    x = table.intern("x")
+    u = table.intern("u")
+    base = frames.create(
+        frames.root.id, declarations=(Declaration(x, "x", S.REAL),)
+    )
+    body = T.number(1) if constant_body else T.symbol(x, "x")
+    child = frames.create(
+        base.id, definitions=(Definition(u, "u", body),)
+    )
+    return frames, child
+
+
+def test_a_changed_definition_changes_the_frame_digest():
+    first_frames, first = _defined_frame(constant_body=False)
+    second_frames, second = _defined_frame(constant_body=True)
+    assert first_frames.digest(first.id) != second_frames.digest(second.id)
+
+
+def _hypothesis_frame(right: int):
+    table, signature, frames, base, x = setup()
+    proposition = proposition_in(
+        frames,
+        base.id,
+        signature,
+        head_app(
+            signature,
+            StructuralHead.GT,
+            T.symbol(x, "x"),
+            T.number(right),
+        ),
+    )
+    child = frames.create(base.id, hypotheses=(Hypothesis(proposition),))
+    return frames, child
+
+
+def test_a_changed_hypothesis_changes_the_frame_digest():
+    first_frames, first = _hypothesis_frame(0)
+    second_frames, second = _hypothesis_frame(1)
+    assert first_frames.digest(first.id) != second_frames.digest(second.id)
+
+
+def test_adding_a_child_frame_does_not_change_the_parent_digest():
+    _, _, frames, base, _ = setup()
+    before = frames.digest(base.id)
+    child = frames.create(base.id)
+    assert frames.digest(base.id) == before
+    assert frames.digest(child.id) != before

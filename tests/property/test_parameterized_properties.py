@@ -3,14 +3,22 @@
 import random
 from fractions import Fraction
 
-from support import runtime_proposition, variable
+from support import (
+    render_value,
+    runtime_proposition,
+    variable,
+    verification_context,
+    view_of,
+)
 
 from cas.kernel.evidence import CheckRequest, Refuted, Verified
 from cas.language.problems import ParameterMode
+from cas.language.roles import CandidateRole
 from cas.math.calculus.differentiation.certificate import DerivativeCertificate
 from cas.math.calculus.differentiation.specification import has_derivative
 from cas.math.calculus.differentiation.verify import verify_derivative
 from cas.runtime import bootstrap_parameterized
+from cas.semantics.regions import region_from_proposition
 from cas.semantics.specialization import (
     Applied,
     CoverageClaim,
@@ -67,10 +75,8 @@ def test_the_checker_accepts_and_refutes_parameterized_candidates():
     for _ in range(30):
         source = random_target_polynomial(rng, runtime)
         derivative = runtime.ring.derivative(source, 0)
-        source_term = runtime.bridge.to_term(source)
-        candidate_term = runtime.bridge.to_term(derivative)
-        assert source_term is not None
-        assert candidate_term is not None
+        source_term = render_value(runtime, source)
+        candidate_term = render_value(runtime, derivative)
         proposition = runtime_proposition(
             runtime,
             has_derivative(
@@ -85,13 +91,22 @@ def test_the_checker_accepts_and_refutes_parameterized_candidates():
             T.TRUE, source_term, runtime.variable, candidate_term
         )
         outcome = runtime.checker.check(
-            CheckRequest(runtime.frame.id, (proposition,), (), certificate)
+            CheckRequest(
+                runtime.frame.id,
+                (proposition,),
+                (),
+                certificate,
+                candidate=candidate_term,
+                candidate_role=CandidateRole.RESULT,
+                context=verification_context(
+                    runtime, algebra=runtime.request
+                ),
+            )
         )
         assert isinstance(outcome, Verified)
 
         wrong_value = runtime.ring.add(derivative, runtime.ring.one())
-        wrong_term = runtime.bridge.to_term(wrong_value)
-        assert wrong_term is not None
+        wrong_term = render_value(runtime, wrong_value)
         wrong_proposition = runtime_proposition(
             runtime,
             has_derivative(
@@ -107,6 +122,11 @@ def test_the_checker_accepts_and_refutes_parameterized_candidates():
                 (wrong_proposition,),
                 (),
                 wrong_certificate,
+                candidate=wrong_term,
+                candidate_role=CandidateRole.RESULT,
+                context=verification_context(
+                    runtime, algebra=runtime.request
+                ),
             )
         )
         assert isinstance(wrong_outcome, Refuted)
@@ -122,13 +142,11 @@ def test_specialization_commutes_with_differentiation():
     for _ in range(100):
         source = random_target_polynomial(rng, runtime)
         candidate = runtime.ring.derivative(source, 0)
-        source_term = runtime.bridge.to_term(source)
-        candidate_term = runtime.bridge.to_term(candidate)
-        assert source_term is not None
-        assert candidate_term is not None
+        source_term = render_value(runtime, source)
+        candidate_term = render_value(runtime, candidate)
         family = GenericResult.assemble(
             result=candidate_term,
-            valid_on=true,
+            valid_on=region_from_proposition(true),
             excluded_cases=(),
             correctness_specification=true,
             parameter_mode=ParameterMode.ALL_PARAMETER_VALUES,
@@ -148,10 +166,18 @@ def test_specialization_commutes_with_differentiation():
         specialized_source = B.substitute_free(
             source_term, {parameter: T.number(value)}
         )
-        source_value = specialization.bridge.to_value(specialized_source)
-        result_value = specialization.bridge.to_value(outcome.result)
-        assert source_value is not None
-        assert result_value is not None
+        source_value = view_of(
+            runtime,
+            specialized_source,
+            bridge=specialization.bridge,
+            request=specialization.request,
+        ).value
+        result_value = view_of(
+            runtime,
+            outcome.result,
+            bridge=specialization.bridge,
+            request=specialization.request,
+        ).value
         assert specialization.ring.equal(
             result_value, specialization.differential.deriv(source_value)
         )

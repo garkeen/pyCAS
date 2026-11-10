@@ -7,8 +7,14 @@ A `Proposition` is not "any term with a label". It exists only through
 - has proposition sort under the language signature,
 - carries the identity of the world and frame it was read in.
 
-Definedness premises and declared-predicate laws are established later by
-elaboration; this layer refuses a formula it cannot type, and never guesses.
+A proposition also records its structural definedness premises: the conditions
+under which its term is defined.  They are not additional assumptions that make
+the proposition true.  This slice collects the nonzero-base condition of every
+integer power with exponent `<= 0`, recurses through sums, products,
+comparisons and the boolean connectives, and deliberately leaves declared
+function domains, `Guarded`/`Piecewise` branch-local semantics and binder-aware
+premises open.  Declared-predicate laws remain elaboration work; this layer
+refuses a formula it cannot type, and never guesses.
 """
 
 from __future__ import annotations
@@ -16,52 +22,205 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from cas.foundation.ids import FrameId, WorldId
 from cas.language import sorts as S
 from cas.language import typing as Ty
+from cas.language.meaning import MeaningKey
 from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.syntax import binding as B
 from cas.syntax import term as T
 
 _SEAL = object()
+_PROPOSITION_FIELDS = frozenset({"term", "meaning", "definedness"})
 
 
-@dataclass(frozen=True, slots=True)
-class MeaningKey:
-    """The meaning environment a formula was read in.
-
-    Two formulas with the same text but different keys are different
-    propositions: names may resolve to different declarations.
-    """
-
-    world: WorldId
-    frame: FrameId
+def _require_proposition_seal(value: object) -> None:
+    """Refuse a proposition whose factory did not set the module seal."""
+    try:
+        seal = object.__getattribute__(value, "_seal")
+    except AttributeError:
+        seal = None
+    if seal is not _SEAL:
+        raise ValueError(
+            "a proposition is issued only by propositions.check"
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Proposition:
     """A typed formula with an explicit meaning environment.
 
-    Construction requires the module seal; use `check`.
+    `definedness` holds the conditions under which `term` is defined, not
+    assumptions that make it true.  Each premise is itself a proposition read
+    in the same meaning environment, so its own premises are recorded
+    recursively.  Premises are deduplicated by structural equality and may not
+    be the proposition itself.
+
+    Construction requires the module seal; use `check`.  `dataclasses.replace`
+    cannot reproduce a proposition, because the replacement is built through
+    `__init__` without the seal and is refused by `__post_init__`.
     """
 
     term: T.Term
     meaning: MeaningKey
-    _seal: object = field(repr=False, compare=False)
+    definedness: tuple[Proposition, ...] = ()
+    _seal: object | None = field(
+        init=False, default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self._seal is not _SEAL:
-            raise ValueError("a proposition is issued only by propositions.check")
+            raise ValueError(
+                "a proposition is issued only by propositions.check"
+            )
+        if not isinstance(self.term, T.Term):
+            raise TypeError("a proposition needs a term")
+        if not isinstance(self.meaning, MeaningKey):
+            raise TypeError("a proposition needs a meaning key")
+        if not isinstance(self.definedness, tuple):
+            raise TypeError(
+                "a proposition definedness must be a tuple of propositions"
+            )
+        if any(
+            not isinstance(premise, Proposition)
+            for premise in self.definedness
+        ):
+            raise TypeError(
+                "a proposition definedness holds propositions"
+            )
+        for premise in self.definedness:
+            if premise.meaning != self.meaning:
+                raise ValueError(
+                    "a definedness premise must share the proposition's "
+                    "meaning environment"
+                )
+            if premise.term == self.term and premise.meaning == self.meaning:
+                raise ValueError(
+                    "a proposition cannot be its own definedness premise"
+                )
+        if len(set(self.definedness)) != len(self.definedness):
+            raise ValueError(
+                "a proposition cannot repeat a definedness premise"
+            )
+
+    def __getattribute__(self, name: str) -> object:
+        if name in _PROPOSITION_FIELDS:
+            _require_proposition_seal(self)
+        return object.__getattribute__(self, name)
 
 
-@dataclass(frozen=True, slots=True)
-class IllScoped:
-    """The term contains a bound index with no enclosing binder."""
+def _issue_proposition(
+    term: T.Term,
+    meaning: MeaningKey,
+    definedness: tuple[Proposition, ...] = (),
+) -> Proposition:
+    """Construct one proposition after setting the module seal."""
+    value = object.__new__(Proposition)
+    object.__setattr__(value, "term", term)
+    object.__setattr__(value, "meaning", meaning)
+    object.__setattr__(value, "definedness", definedness)
+    object.__setattr__(value, "_seal", _SEAL)
+    value.__post_init__()
+    return value
 
-    detail: str
+
+PropositionOutcome: TypeAlias = Proposition | Ty.TypedExprFailure
 
 
-PropositionOutcome: TypeAlias = Proposition | Ty.Typing | IllScoped
+def _structural_premises(
+    term: T.Term,
+    signature: LanguageSignature,
+) -> tuple[T.Term, ...] | Ty.Unsupported:
+    """Collect structural definedness premises from a typed proposition term.
+
+    The walker is deliberately partial.  It records the nonzero-base condition
+    of every integer power with exponent `<= 0`: the source expression
+    `Power(base, n)` is undefined at a zero base for both `n = 0` and `n < 0`.
+    It recurses through the operands of sums, products, comparisons and the
+    boolean connectives.
+
+    It does not inspect `Quote`/`Set` payloads: quoted syntax and set members
+    are held data, not evaluated mathematics in this proposition.  A declared
+    function application is walked only in its arguments; its own domain is not
+    invented here.  A `Binder` body and its annotations are left uninspected in
+    this batch because their bound indices need binder-aware premises.
+    `Guarded`/`Piecewise` are walked structurally, not with branch-local
+    evaluation; this is a conservative over-approximation, not a full partial
+    function semantics.
+
+    Premises are deduplicated by structural term in first-occurrence order.  A
+    language without an `Ne` head cannot state `base != 0`, so the walker
+    returns `Ty.Unsupported` rather than silently dropping the premise.
+    """
+
+    premises: list[T.Term] = []
+    seen: set[T.Term] = set()
+
+    def add(premise: T.Term) -> None:
+        if premise not in seen:
+            seen.add(premise)
+            premises.append(premise)
+
+    def walk(current: T.Term) -> Ty.Unsupported | None:
+        if isinstance(current, T.Apply):
+            if not isinstance(current.operator, T.SymbolRef):
+                # Typing refuses a non-symbol operator before this walk; a
+                # nested application in operator position cannot carry a
+                # structural power premise this layer knows how to scope.
+                return None
+            head = signature.head_of(current.operator.symbol_id)
+            if head is None:
+                # A declared function application: its domain is not known
+                # here, so only its evaluated arguments are walked.
+                for argument in current.arguments:
+                    failure = walk(argument)
+                    if failure is not None:
+                        return failure
+                return None
+            if head in (StructuralHead.QUOTE, StructuralHead.SET):
+                # Quoted syntax and set members are held data, not evaluated
+                # mathematics in this proposition.
+                return None
+            if head is StructuralHead.POWER and len(current.arguments) == 2:
+                base, exponent = current.arguments
+                if isinstance(exponent, T.IntLit) and exponent.value <= 0:
+                    ne_symbol = signature.symbol_of(StructuralHead.NE)
+                    if ne_symbol is None:
+                        return Ty.Unsupported(
+                            "the language has no inequality head for a "
+                            "nonpositive integer power's nonzero-base "
+                            "definedness premise"
+                        )
+                    add(
+                        T.app(
+                            T.symbol(ne_symbol, StructuralHead.NE.value),
+                            base,
+                            T.number(0),
+                        )
+                    )
+                failure = walk(base)
+                if failure is not None:
+                    return failure
+                return walk(exponent)
+            # Every other structural head (Plus, Times, comparisons,
+            # And/Or/Not/Implies, Guarded, Piecewise) is strict at this
+            # structural level: walk every operand.  Branch-local
+            # Guarded/Piecewise semantics are not modelled here.
+            for argument in current.arguments:
+                failure = walk(argument)
+                if failure is not None:
+                    return failure
+            return None
+        if isinstance(current, T.Binder):
+            # Bound indices need binder-aware premises; the body and its
+            # annotations are left uninspected rather than issuing an
+            # unscoped premise.
+            return None
+        # Literals, symbols and quoted syntax carry no structural premise.
+        return None
+
+    failure = walk(term)
+    if failure is not None:
+        return failure
+    return tuple(premises)
 
 
 def check(
@@ -74,17 +233,34 @@ def check(
 
     A wrong sort is reported as `IllTyped`: calling `x + 1` a proposition is a
     type error, not a false statement.
+
+    After typing, the structural definedness premises of the typed term are
+    collected and issued as propositions in the same signature, environment and
+    meaning.  Each premise recursively records its own premises, so a nested
+    nonpositive power keeps its full chain of nonzero-base conditions.  A
+    premise that cannot be issued is returned unchanged; it is never dropped.
     """
-    if not B.well_scoped(term):
-        return IllScoped("a formula has a bound index outside its binder")
-    typing = Ty.infer(term, signature, environment)
-    if isinstance(typing, Ty.Typed):
-        if typing.sort != S.PROPOSITION:
-            return Ty.IllTyped(
-                f"a proposition needs proposition sort, got {typing.sort!r}"
+    typed = Ty.typed(term, signature, environment, meaning)
+    if not isinstance(typed, Ty.TypedExpr):
+        return typed
+    if typed.sort != S.PROPOSITION:
+        return Ty.IllTyped(
+            f"a proposition needs proposition sort, got {typed.sort!r}"
+        )
+    raw_premises = _structural_premises(typed.term, signature)
+    if isinstance(raw_premises, Ty.Unsupported):
+        return raw_premises
+    premises: list[Proposition] = []
+    for premise_term in raw_premises:
+        if premise_term == typed.term:
+            return Ty.Unsupported(
+                "a definedness premise cannot be the proposition itself"
             )
-        return Proposition(term, meaning, _SEAL)
-    return typing
+        premise = check(premise_term, signature, environment, meaning)
+        if not isinstance(premise, Proposition):
+            return premise
+        premises.append(premise)
+    return _issue_proposition(typed.term, meaning, tuple(premises))
 
 
 def negates(
@@ -106,8 +282,6 @@ def negates(
 
 
 __all__ = [
-    "IllScoped",
-    "MeaningKey",
     "Proposition",
     "PropositionOutcome",
     "check",

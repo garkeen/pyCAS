@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum
 from fractions import Fraction
+from types import MappingProxyType
 
 from cas.foundation.ids import WorldId
 
@@ -53,6 +54,97 @@ class BasisRef:
             raise ValueError("a basis reference needs a version")
         if not self.digest:
             raise ValueError("a basis reference needs a content digest")
+
+
+@dataclass(frozen=True, slots=True)
+class AxiomRef:
+    """One admitted trusted dependency recorded for a verification context.
+
+    The kernel derives it from the checker's admitted `BasisRef` so a receipt
+    can name the trust it used without copying the registry lookup or the
+    basis kind into the context.  It is not a proof: it records the admitted
+    name, version, content digest and meaning world.
+    """
+
+    name: str
+    version: str
+    digest: str
+    world: WorldId
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("name", self.name),
+            ("version", self.version),
+            ("digest", self.digest),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"an axiom reference needs a {label}")
+        if isinstance(self.world, bool) or not isinstance(self.world, int):
+            raise TypeError("an axiom reference needs a WorldId")
+
+    @classmethod
+    def from_basis(cls, basis: BasisRef) -> AxiomRef:
+        """The context-visible axiom record of one admitted basis."""
+        if not isinstance(basis, BasisRef):
+            raise TypeError(
+                "an axiom reference can only be derived from a BasisRef"
+            )
+        return cls(basis.name, basis.version, basis.digest, basis.world)
+
+
+class BasisRegistry:
+    """The bases one assembly admitted, keyed by name and kind.
+
+    Registration is explicit and frozen at assembly time. A checker spec may
+    name any `BasisRef`, but `validate_commit` only accepts it when this table
+    holds the same name, kind, version, digest and world. Comparing the whole
+    reference prevents a caller from reusing an admitted name with another
+    version or content.
+    """
+
+    __slots__ = ("_bases",)
+
+    def __init__(self, bases: tuple[BasisRef, ...] = ()) -> None:
+        if not isinstance(bases, tuple):
+            raise TypeError("a basis registry is built from a tuple of BasisRef")
+        table: dict[tuple[str, BasisKind], BasisRef] = {}
+        for basis in bases:
+            if not isinstance(basis, BasisRef):
+                raise TypeError(
+                    "a basis registry holds BasisRef values, "
+                    f"got {type(basis).__name__}"
+                )
+            key = (basis.name, basis.kind)
+            if key in table:
+                raise ValueError(
+                    f"basis {basis.name!r} of kind {basis.kind} "
+                    "is registered twice"
+                )
+            table[key] = basis
+        self._bases = MappingProxyType(table)
+
+    def get(self, name: str, kind: BasisKind) -> BasisRef | None:
+        return self._bases.get((name, kind))
+
+    def verify(self, basis: BasisRef) -> bool:
+        """Whether this exact reference was admitted, field for field."""
+        if not isinstance(basis, BasisRef):
+            raise TypeError(
+                "only a BasisRef can be verified against a basis registry"
+            )
+        known = self.get(basis.name, basis.kind)
+        if known is None:
+            return False
+        return (
+            known.name == basis.name
+            and known.kind == basis.kind
+            and known.version == basis.version
+            and known.digest == basis.digest
+            and known.world == basis.world
+        )
+
+    def __len__(self) -> int:
+        return len(self._bases)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +215,8 @@ def certificate_limits(
             if isinstance(current, (str, bytes)):
                 size = max(1, len(current))
             return (size, 1) if size <= max_nodes else None
+        if isinstance(current, Enum):
+            return measure(current.value, path)
         if isinstance(current, Mapping):
             identity = id(current)
             if identity in path:
@@ -204,8 +298,10 @@ def certificate_limits(
 
 
 __all__ = [
+    "AxiomRef",
     "BasisKind",
     "BasisRef",
+    "BasisRegistry",
     "CertificateSchema",
     "certificate_limits",
 ]

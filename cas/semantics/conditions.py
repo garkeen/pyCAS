@@ -177,6 +177,104 @@ def equivalent(
     return None
 
 
+def premises_proved(
+    assumption: T.Term,
+    premises: tuple[T.Term, ...],
+    signature: LanguageSignature,
+) -> bool | None:
+    """Whether every premise follows from `assumption`.
+
+    `True` only when the restricted implication logic proves every premise;
+    `False` when it refutes at least one; `None` when at least one is undecided
+    and none is refuted.  An empty premise tuple is vacuously proved.  This is
+    the single premise-entailment rule used by region certificates and
+    containment services; an undecided premise is never read as true.
+    """
+    undecided = False
+    for premise in premises:
+        result = implies(assumption, premise, signature)
+        if result is False:
+            return False
+        if result is None:
+            undecided = True
+    return None if undecided else True
+
+
+def condition_satisfiable(
+    term: T.Term,
+    signature: LanguageSignature,
+) -> bool | None:
+    """Whether the restricted condition logic proves the condition nonempty.
+
+    `True` is returned only for a ground-true condition or a conjunction whose
+    non-ground conjuncts are all linear comparisons of one `SymbolRef` atom and
+    whose collected interval on every atom is non-contradictory.  `False` is
+    returned for a ground-false condition or a contradictory interval.  Opaque,
+    nonlinear, multi-atom, disjunctive and non-normalizable negated conditions
+    return `None`; an undecided condition is never treated as nonempty.
+
+    The interval reading assumes the dense linear order of the existing
+    condition fragment.  It does not infer discreteness or a sort-dependent
+    domain, so a caller that needs such reasoning must extend the fragment.
+    """
+    truth = condition_truth(term, signature)
+    if truth is not None:
+        return truth
+    normalized = _normalize_not(term, signature)
+    intervals: dict[T.Term, _Interval] = {}
+    undecided = False
+    for conjunct in _conjuncts(normalized, signature):
+        conjunct_truth = condition_truth(conjunct, signature)
+        if conjunct_truth is False:
+            return False
+        if conjunct_truth is True:
+            continue
+        comparison = _normalize_comparison(conjunct, signature)
+        if comparison is None or not isinstance(
+            comparison.atom, T.SymbolRef
+        ):
+            undecided = True
+            continue
+        interval = intervals.get(comparison.atom)
+        if interval is None:
+            interval = _Interval()
+            intervals[comparison.atom] = interval
+        interval.add(comparison)
+    if any(interval.is_contradictory() for interval in intervals.values()):
+        return False
+    if undecided:
+        return None
+    return True
+
+
+def is_empty_condition(
+    term: T.Term,
+    signature: LanguageSignature,
+) -> bool:
+    """Whether the restricted condition logic proves the region empty.
+
+    Normalisation catches literal contradictions and one-atom linear
+    contradictions (`x > 0 and x < 0`).  Unknown conditions are not empty.
+    """
+    return condition_truth(and_all(signature, term), signature) is False
+
+
+def is_subregion(
+    subregion: T.Term,
+    region: T.Term,
+    signature: LanguageSignature,
+) -> bool | None:
+    """Whether `subregion` is contained in `region`.
+
+    An empty subregion is rejected rather than treated as vacuously contained:
+    a claim on the empty region is not an admitted mathematical claim.  `None`
+    means the restricted logic cannot decide the inclusion.
+    """
+    if is_empty_condition(subregion, signature):
+        return False
+    return implies(subregion, region, signature)
+
+
 @dataclass(frozen=True, slots=True)
 class _Comparison:
     atom: T.Term
@@ -244,11 +342,20 @@ def _linear(
             constant += part_constant
         return atoms, constant
     if head is StructuralHead.TIMES:
+        factors = term.arguments
+        if _contains_ground_zero(factors, signature) and any(
+            not _is_total(factor, signature) for factor in factors
+        ):
+            # `0 * f(x)` equals zero only where `f` is defined.  Dropping the
+            # product would erase that definedness condition, so a product with
+            # a ground zero factor and a partial factor stays one opaque atom.
+            # `0 * total_expression` may still collapse to zero.
+            return {term: Fraction(1)}, Fraction(0)
         form: tuple[dict[T.Term, Fraction], Fraction] = (
             {},
             Fraction(1),
         )
-        for factor in term.arguments:
+        for factor in factors:
             part = _linear(factor, signature)
             if part is None:
                 return None
@@ -258,6 +365,18 @@ def _linear(
             form = next_form
         return form
     return {term: Fraction(1)}, Fraction(0)
+
+
+def _contains_ground_zero(
+    factors: tuple[T.Term, ...],
+    signature: LanguageSignature,
+) -> bool:
+    """Whether one factor is the exact ground zero in this condition fragment."""
+    for factor in factors:
+        value = ground_value(factor, signature)
+        if isinstance(value, Fraction) and value == 0:
+            return True
+    return False
 
 
 def _multiply_linear(
@@ -796,9 +915,13 @@ def _implies_truth(
 
 __all__ = [
     "and_all",
+    "condition_satisfiable",
     "condition_truth",
     "equivalent",
     "ground_value",
     "implies",
+    "is_empty_condition",
+    "is_subregion",
+    "premises_proved",
     "simplify",
 ]

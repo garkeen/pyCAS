@@ -1,0 +1,679 @@
+# Progress log
+
+本文件是只追加的施工日志，用于日后审查与经验教训记录：每条记录描述已经完成并通过验收的改动、依据、验收结果和值得保留的教训，按时间追加，不重写旧条目。
+
+施工路线只在 `roadmap.md` 维护；当前未实现项、已知缺陷和下一批工作只在 `AGENTS.md` 第五节维护。本文件不记录计划、下一步或未完成项。
+
+文档语言约定：本文件与 `AGENTS.md`、`cas_v5_arch.md` 一律用中文；源码（`.py` / `.dsl`）与测试源码用英文。
+
+## 2026-10-28 — v5 设计核对与文档重写
+
+- 恢复并补全 `cas_v5_arch.md`：§8.0 参数/系数/函数域正交，§29.7–§29.8 命名与代码组织，§30.8–§30.18 完整能力图、波次与节点完成定义，§32.4–§32.13 类型载荷与全程数据流。
+- 新增 `roadmap.md`：从当前代码到完整 CAS 的施工路线、能力图、W0–W5 波次和每批交付规则。
+- 同步 `AGENTS.md`、`README.md`、`reference.md`、`risch.md`、`cad.md` 的文档边界与验收纪律。
+- 本批只改文档，不改源码；设计中的未来能力不表示已实现。
+
+## 2026-10-28 — v5 第一纵线与基础层落地
+
+- foundation：13 个互不混用的身份类型与单调 issuer。
+- syntax：不可变 Term（字面量/符号/绑定变量/应用/binder/Quote）、结构相等/hash/序、捕获规避的绑定原语。
+- language：Sort 层次、结构签名、定型（含 binder）、Proposition、ProblemSpec、未决理由、data-only 声明 DSL。
+- algebra：Ring/Field/Euclidean/Ordered 等协议；ParentSpec/ParentRegistry；Z/Q；K[x₁…xₙ]；K(x) 既约分式域。
+- semantics：World/Frame、符号表、定义展开、Term↔多项式桥、AlgebraRequest 角色、参数特化/覆盖、条件求值、DifferentialStructure、注入式求导服务。
+- kernel：Judgment/Obligation/InferenceRecord/Discharge、CheckerSpec、BasisRef/证书预算、唯一 `_publish` 写入、单批 commit、假设/矛盾/条件检查/适用性。
+- operations：OperationSpec/OperationRequest/MathematicalProposal/CheckerBinding 与冻结注册表；求导与特化移出 workflow。
+- math：Q[x] 多项式求导与独立系数级验证；data-only 初等函数声明、规则实例树、逐节点 checker、条件区域。
+- workflow/runtime/frontend：表达式对象、候选、验证关联、事件、revision、undo/redo；显式 bootstrap；parser/pprint/Session/REPL。
+- 第一条纵线贯通：文本 → Term → 求导候选 → `HasDerivative` → 独立验证 → kernel 发行 → 工作流记录 → 会话显示/undo/redo。
+- 测试：删除 v4 测试，建立 v5 的 unit/integration/property 套件；当时累计 672 个用例通过，mypy/ruff/compileall 通过。
+
+## 2026-10-28 — 操作、条件与信任边界收口
+
+- 操作协议与依赖倒置：workflow 不再导入具体 math；求导/特化通过注册表。
+- 统一 `DerivativeCertificate`；初等 checker 使用唯一 `derivation.py` 规则实例，删除第二套递归搜索。
+- `KernelStore` 唯一写路径；证明与 discharge 同批原子发行；新增 `Blocked` 适用性分支。
+- `CheckerSpec`/`BasisRef`/证书预算、frame 一致性、核心矛盾规则、`ConditionChecker` 与 `resolve_applicability` 分家。
+- 跨 frame 可读性、零因子、`ParentSpec` 选项、`ProblemSpec`/`AlgebraRequest` 边界测试。
+- 修复 `definitions.expand` 预算边界误报、`RationalFunctionField` 非一元环构造期拒绝等缺陷。
+
+## 2026-11-05 — W0 边界修复
+
+- 零次幂：`PolynomialRing` 新增 `sum`、`is_constant`、`is_nonzero_constant`；Term→多项式桥只在底数为全局非零常数时投影 `Power(f, 0)`；`0^0`、`x^0`、形式参数 `a^0` 拒绝；`PolynomialRing.pow(a, 0) == 1` 的代数语义保持不变。
+- 区域：`semantics/conditions.py` 新增统一的 `is_empty_condition` 与 `is_subregion`；`DifferentiationOperation` 消费固定 `ProblemSpec.region`；显式区域必须是已证导数区域的子区域，否则 `UNSUPPORTED` 且零写入；候选保留原 `ProblemSpec`，达到区域记录在 `OperationResult.region` 与 `VerificationLink.condition`。
+- checker：多项式 checker 允许把全局关系限制到非空子区域；全局系数不匹配不再否证受限声明，而是保持 `Unverified`；初等 checker 使用区域包含而不是区域等价。
+- 泛结果：`GenericResult` 进入 `Revision` 快照；undo 隐藏未来家族、redo 恢复；`Workspace.specialize` 只使用当前 revision 可见的家族；通用 `apply` 拒绝不可见家族。
+- 句柄：输入必须是本 workspace 的精确 `Expression` 且在当前 revision 可见；外来或伪造句柄拒绝；`apply` 校验 operation 返回的 `ProblemSpec.region` 与请求一致。
+- 测试：新增/改写 W0 回归；更新旧 integration 对 `candidate.problem` 的断言；新增区域空性/包含与泛结果可见性测试。
+- 经验教训：零次幂等解释边界必须在语义桥解决，不能靠环归约；区域判定要先拒绝空区域再判包含；泛结果必须和对象、验证链接一样进入 revision 快照；工作区输入是句柄，版本号不是身份。
+- 验收：`python -m pytest -q` → 692 passed；`python -m mypy --strict cas` → 76 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过；`git diff --check` 无空白错误。
+
+## 2026-11-05 — 文档职责分离
+
+- `progress.md` 重命名为 `progress.log`，改为只追加的已完成施工与验收日志。
+- 施工路线保留在 `roadmap.md`；当前实现位置、未实现项与已知缺陷归入 `AGENTS.md` 第五节。
+- 同步 `AGENTS.md`、`README.md`、`cas_v5_arch.md`、`reference.md`、`risch.md`、`cad.md` 的文档职责引用。
+
+## 2026-11-05 — W0 类型/角色/函数对象/事务收口
+
+- 结果联合：`CheckOutcome`、`CommitResult`、`ProblemOutcome`、`ProposalOutcome`、`DerivationOutcome`、`SpecializationOutcome` 改为显式 `TypeAlias` 联合，删除可继承基类；边界仍按变体穷尽处理。
+- 请求局部角色：新增 `DifferentiationView`/`IntegrationView`；`DifferentiationOperation`、`IntegrationOperation` 按 `OperationRequest.target` 选择预装配 view。`bootstrap_parameterized` 为 `x` 与每个形式参数各建一个目标视图；同一会话可对 `a` 求导/积分，Q[a][x] 与 Q[x][a] 使用各自的系数结构。
+- 函数对象：新增 `FunctionValue`/`FunctionRepresentation`/`FunctionParameter` 与 `FunctionObject`；固有定义域、表示有效区域和结果 sort 分开保存；表示区域必须是固有域的子区域；`Workspace.define_function`/`differentiate_function` 只使用实际表示区域，中性表达式仍独立计算。
+- 工作区事务：`Workspace.apply`/`assume`/`define_function` 的异常路径同时回滚 kernel 批次、frame 表与工作区记录；失败的假设提交会丢弃刚创建的子 frame；`Revision` 增加直接父指针。
+- 测试：新增 `test_functions.py`、请求局部目标切换、事务回滚与 revision 父指针回归。
+- 经验教训：目标角色必须固定在请求/view 上，不能放在 Runtime 的全局变量里；函数对象的固有域与关系区域不能合并成一个 `region` 字段；失败事务要覆盖 frame 创建，而不只是 kernel 字典。
+
+## 2026-11-05 — W1 公共代数与多项式积分
+
+- A1：`Euclidean.xgcd`、`PolynomialRing.pseudo_divmod`（显式乘子）、`exact_div`、`content`/`primitive_part`、`UnivariatePolynomialRing.xgcd`/`monic`、Yun 平方自由分解、Sylvester 结式、判别式、多项式原函数。
+- A4：新增 `cas/algebra/linear.py`：`MatrixSpace`/`Matrix`、RREF（保留行变换）、秩、仿射解、零空间、不相容行组合见证、行列式与逆；一次消元供多个查询复用。
+- P0：参数化装配重构为 `_assemble_parameterized`，公开 `bootstrap_parameterized_over(base_field, base_spec, ...)`，基域、`embed_rational` 与 `render_base` 显式传入；测试用自定义 `tagged_Q` 域验证 K 不再写死为 Q。
+- I0：新增 `cas/math/calculus/integration/`：多项式原函数候选由 `HasDerivative` checker 验证，`integrate` 操作与前端命令接入；有理 Hermite 在 `cas/algebra/hermite.py` 输出 `f=D(v)+r`，剩余分母平方自由。
+- 参考依据：伪除法/结式见 Knuth, TAOCP vol. 2 §4.6.1 与 Geddes–Czapor–Labahn, *Algorithms for Computer Algebra* §2.3；平方自由见 Yun (1976) 与 Geddes 等 §8.2；Hermite 见 Bronstein, *Symbolic Integration I* §4.4 与 Geddes 等 §11.2；线性代数采用域上 Gauss–Jordan 消元。
+- 测试：新增 `test_linear.py`、`test_polynomial_algebra.py`、`test_hermite.py`、`test_integration_slice.py`、`test_generic_parameterized.py` 及对应固定种子性质测试。
+- 经验教训：伪除法的乘子必须随每次首项消去更新，不能预先假定为 `lc(right)^m`；Hermite 必须对每个平方自由因子从当前重数逐次降到 1，不能只按初始重数分组处理一次；积分复用求导 checker，避免第二套信任路径；通用基域必须同时给出有理字面量嵌入与反向渲染，否则桥接会在核验时失败。
+- 验收：`python -m pytest -q` → 734 passed；`python -m mypy --strict cas` → 83 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-05 — 子结式 PRS 与有理 Hermite 发行
+
+- 参考项目核对：读取 Maxima `src/result.lisp:95-144`（Brown 子结式 PRS）、`src/rat3c.lisp:252-264`（`subresgcd`）与 `src/rat3c.lisp:268-287`（伪余式）；读取 FriCAS `src/algebra/prs.spad:699-721`（`chainSubResultants`）与 `src/algebra/intrf.spad:208-276`（`TranscendentalHermiteIntegration`/`normalHermiteIntegrate`）。
+- 子结式：`UnivariatePolynomialRing.subresultant_chain` 实现特征零域上的子结式 PRS；末端非零项与 `gcd` 相伴，首项之后度数严格下降；固定种子性质测试覆盖。
+- 有理函数桥：`semantics/bridge.py` 新增 `to_rational_function`/`to_rational_term`，接受负整数幂并显式拒绝非整数指数与环外符号。
+- Hermite 发行：新增 `HasHermiteReduction(U,f,x,v,r)` 规格、`HermiteCertificate`、独立 `HermiteChecker`、`HermiteView`/`HermiteReductionOperation`；`hermite_reduce` 与前端 `hermite` 命令接入。checker 独立复核 `f=D(v)+r` 与 `den(r)` 平方自由，不导入 Hermite 搜索模块。
+- 参考实现与本地实现的差异：FriCAS 的 `normalHermiteIntegrate` 采用并行归约；本实现按平方自由因子逐次从当前重数降到 1，契约相同，测试验证身份与平方自由条件。
+- 测试：新增 `test_hermite_slice.py`、子结式固定种子性质测试、有理函数桥往返/拒绝测试。
+- 经验教训：子结式 PRS 的末端非零项是 gcd 的相伴，不是 resultant；不能把 `resultant` 当成 PRS 末项的一般不变量。Hermite checker 必须独立做有理函数微分和分母平方自由检查，不能复用搜索器。
+- 验收：`python -m pytest -q` → 743 passed；`python -m mypy --strict cas` → 87 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — 审计修正：有理桥零幂边界与子结式同次输入
+
+- 审计发现 `to_rational_function` 把 `x^0`、`0^0` 投影为 1，并在 `0^-1` 上抛出 `ZeroDivisionError`；这与 W0 的零次幂边界和片段外诚实拒答冲突，且 `hermite` 命令会让异常越过前端。
+- 修正：有理函数桥对零次幂只接受不含显式逆且转换后为全局非零常数的底，对零的负幂返回 `None`；`HermiteChecker` 在转换阶段把被拒绝的逆或越界项报告为 `Unverified(FRAGMENT)`，不再让异常越过验证边界。
+- 审计发现 `subresultant_chain` 在输入同次时前两项同次，旧文档“首项之后严格下降”不准确；保留算法行为（两个输入允许同次），把契约改为“初始一对之后严格下降”，并新增同次、反序与零输入测试。
+- 文档：修正 README 中“尚未实现的子结式链”和“1/x 一律拒答”的过期表述；明确工作区异常回滚与逻辑拒绝记录的区别；在 AGENTS §5.3 记录尚未接入 workflow/operation 的公共代数方法。
+- 测试：新增有理桥零幂/零逆边界、Hermite 未定义零幂拒绝、checker 非平方自由余项否证、子结式同次/反序/零输入案例。
+- 验收：`python -m pytest -q` → 749 passed；`python -m mypy --strict cas` → 87 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — W0 数据通道扩展与 W1 整数标准形/手动交互
+
+- 整数矩阵：新增 `cas/algebra/integer_matrix.py`，实现 Bareiss 分式自由行列式、行 Hermite 标准形 `U*A=H` 与 Smith 标准形 `U*A*V=D`；变换矩阵由实际行/列操作累积，测试检查幺模性、对角性、整除链和随机小矩阵恒等式。参考 Cohen §2.2.6/§2.4.2/§2.4.3 与 FriCAS `smith.spad`/`smith2.spad`。
+- 函数值：`FunctionValue.applications` 替换参数并返回每个表示的项与区域项；`with_representation` 支持多表示；`same_partial_function`/`equal_on` 使用 `SAME`/`DIFFERENT`/`UNKNOWN` 保守判定；工作区新增 `apply_function`（中性表达式与应用条件）和 `extend_function`（显式新函数版本）。
+- 工作流：`TaskRecord`/`TaskState`/`CandidateState` 记录固定问题、候选和派生状态；`Workspace.branch`/`switch_to`/`merge` 建立 revision DAG；`transaction()` 支持多动作原子回滚；`Expression`/`FunctionObject` 记录 `source_operation`。
+- 结构化结果：新增 `ResultLanguage.DECOMPOSITION`、`StructuredResult` 与 revision 快照；Hermite 发行 `polynomial_part`/`remainder` 组件，undo/redo 与同 frame merge 保持可见性。
+- 手动交互：`candidates`/`check`/`edit` 命令与工作区 `check_candidate`/`edit_candidate`；编辑清空旧证书，显式 check 只重放已记录证书，不把未验证候选提升为可信结果。
+- 经验教训：任务状态必须由验证记录派生，编辑候选不能复用旧证书；revision DAG 的 undo/redo 不再删除旧分支，跨 frame 合并必须留给可信情形协议；整数矩阵标准形必须同时返回实际变换，单看对角线不足以证明实现。
+- 验收：`python -m pytest -q` → 770 passed；`python -m mypy --strict cas` → 88 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — 跨 frame 历史视图合并
+
+- `Workspace.merge` 不再拒绝不同 active frame 的 revision；合并结果采用当前 frame，来自其他 frame 的对象保留原 frame。它们出现在 revision 中，但 `_input_issue` 仍按 frame 可见性拒绝在当前 frame 使用，避免把历史可见性冒充数学可用性。
+- 测试：新增跨 frame branch/assume/merge 案例，验证合并对象可见但求导返回 `unsupported`（outside the current frame）。
+- 经验教训：历史合并与数学分支合并必须分开；视图合并只能合并可见记录，不能自动证明两个 frame 相容，也不能改写对象的 frame。
+- 验收：`python -m pytest -q` → 771 passed；`python -m mypy --strict cas` → 88 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — W0 函数语义/集合结果与 W1 手动工作簿、gcd/结式接线
+
+- 函数值语义：新增 `EqualOn`/`SamePartialFunction` 词汇、证书与 `FunctionEqualityChecker`；`EqualOn` 在声明区域上核验固有域/表示区域包含，结构同一或多项式恒等时接受，`TRUE` 上的非零多项式差可否证；`SamePartialFunction` 要求签名、固有域公式和表示集合结构同一，不同签名可否证，不同公式只报未决。`FunctionExtensionOperation` 在旧域上证明新旧表示一致后才允许工作区记录新函数版本；`FunctionComparisonOperation` 发行 `PROPOSITION` 结果。
+- 集合结果：新增 `Set` 结构头、`SetSort`、有限集合项与 `ResultLanguage.SET`；`HasSolutionSet`/`HasSolutionSubset`、`LinearSolutionCertificate` 与 `LinearSolutionChecker` 接入。`solve_linear` 对一次多项式发行唯一根，对非零常数发行空集；零多项式与二次以上的完整有限解集诚实拒答，`sound` 请求允许空可靠子集。`Coverage.SOUND_SET`/`COMPLETE_SET` 进入问题、候选与任务状态。
+- 历史与任务：新增 `ExecutionAttemptId`/`ExecutionState`/`ExecutionAttempt`、`TaskOrigin`、`TaskRecord.parent`/`depends_on`/`inputs`/`attempts`；`cancel_task` 只取消未完成任务；`define_problem`/`run_task` 固定并执行用户问题，执行任务与手动任务形成构造图；`Expression`/`FunctionObject` 增加 `presentation` 元数据。
+- 手动工作簿：新增 `cas/syntax/occurrences.py` 的结构路径、出现位置与捕获规避替换；`rewrite`/`substitute` 记录改写方向、出现位置和新对象版本；`case_split` 发行互补假设的两个子 frame，`merge_cases` 合并两个分支历史并记录覆盖。
+- 代数接线：新增 `polynomial_gcd` 与 `resultant` 注册操作。gcd checker 用整除性与 Bezout 恒等式独立核验；resultant checker 清分母后用 `IntegerMatrixSpace.determinant`（Bareiss）计算 Sylvester 行列式，域上 `resultant` 的搜索路径不进入 checker。前端新增 `solve`/`gcd`/`resultant` 命令。
+- 参考依据：函数等式见架构 §10.1–§10.2；有限解集见 §8.7/§17.5；gcd 的 Bezout 判据见 Geddes 等 §2.2、Cohen §2.2；结式 Sylvester 行列式见 Geddes 等 §7；整数 Bareiss 见 Bareiss (1968)、Cohen §2.2.6；手动改写与情形分支见架构 §19.4–§19.5 与 §18.1。
+- 经验教训：函数等式 checker 必须区分“结构同一”“多项式恒等”和“仅未决”，不能把公式不同直接否证；结式 checker 使用整数 Bareiss 而非域消元，才能与 ring.resultant 的搜索路径独立；集合覆盖必须区分 sound 与 complete，空集是 sound 但不是 complete；任务输入允许同一对象重复出现（如 gcd(f,f)），不能把去重当成数学约束。
+- 验收：`python -m pytest -q` → 800 passed；`python -m mypy --strict cas` → 105 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — 两情形 case-analysis 判断合并
+
+- 新增 `cas/kernel/case_merge.py`：`CaseMergeCertificate` 携带互补假设、两个直接子 frame 与两个分支判断；`CaseMergeChecker` 验证分支 frame 是提交 frame 的纯假设扩展、两个判断位于对应 frame 且结论同一、分支义务已清偿，并拒绝结论本身作为分支假设的循环用法。
+- `Workspace.merge_case_conclusion` 在基 frame 提交该规则并发行新的 kernel 判断；`JudgmentLookup` 在装配完成后绑定 store，避免 checker 与 store 的循环构造，也不使用全局状态。
+- 测试：两分支分别求导得到同一 `HasDerivative` 结论后，在基 frame 合并发行；非分支判断被拒。`merge_cases` 仍是历史视图合并，`merge_case_conclusion` 是独立的数学 case 证明合并。
+- 经验教训：case-analysis checker 必须拒绝“结论在分支中被假设”的循环证明；只检查两个判断存在不足以证明基 frame 的结论。分支局部声明/定义和未决义务需要显式的提升规则，不能默认忽略。
+- 验收：`python -m pytest -q` → 802 passed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — README 职责收敛
+
+- `README.md` 改为只描述项目定位、目标、设计原则、三个计算平面、数据流、分层、关键对象与文档职责；删除当前状态、能力清单、命令表、验收命令、历史迁移说明和边界规则，避免与 `AGENTS.md` 第五节重复。
+- `AGENTS.md` §1 明确：README 不记录当前进度、缺陷或施工路线；当前状态只在第五节维护，每次提交必须同批更新 `AGENTS.md`，README 不得复制状态。
+- 经验教训：文档也要单一职责；状态类内容一旦在 README 和 AGENTS 各写一份，就会在每次能力变化后产生两份不一致的“权威”。README 保持稳定，状态只在一处更新。
+- 验收：`python -m pytest -q` → 802 passed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — 结构化拒绝：Blocker、missing capability 与 UNKNOWN
+
+- 新增 `cas/language/decisions.py::Blocker`：保留 `Reason`、说明、缺失能力、未决条件、已尝试片段和下一动作。`ProblemUnsupported`/`ProposalUnsupported` 增加 `missing`/`conditions`/`attempted`，不再只留下字符串。
+- `OperationResult`、`TaskRecord`、`ExecutionAttempt` 增加 `blocker`；`_failure`/`_record_blocked_task`/`_record_attempt` 统一传递。`Deferred(GUARDED|UNDECIDABLE|BUDGET)` 映射为 `OperationStatus.UNKNOWN`，只有 `FRAGMENT` 保持 `UNSUPPORTED`。
+- 前端 `Session._report` 显示 `missing`/`conditions`/`attempted`；`differentiate` 的“请求区域未被导数区域覆盖”从 `FRAGMENT` 改为 `GUARDED`，并把请求区域作为未决条件；多项式/有理/初等/求解/gcd/结式/函数扩展/特化操作补上具体缺失能力。
+- 测试：更新 `sqrt(-1)`/`log(0)` 的 `unknown:`、区域未覆盖的 `UNKNOWN`、以及会话拒绝字符串中的 `missing: derivative_rule`。
+- 参考依据：架构 §11.2 `Blocker`、§11.3 搜索结果、§14.5 适用性、§18.1 任务状态、§32.5 封闭结果。
+- 经验教训：`UNSUPPORTED` 不能同时表示“没有片段”和“前提未决”；`GUARDED` 必须保留为 `UNKNOWN`，否则用户会把“判不了”误读成“没实现”。拒绝原因必须进入任务/尝试记录，不能只在返回值里存在。
+- 验收：`python -m pytest -q` → 802 passed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-07 — CheckRequest 绑定原问题
+
+- `CheckRequest` 增加 `problem: ProblemSpec | None`；`CommitProposal` 增加 `problem`。工作区 `apply` 与 `check` 传递原问题，核心逻辑规则（discharge/consistency/assume/case_merge）保持无问题。
+- `CheckerSpec` 增加 `requires_problem`；派生、函数等式、有限解集、gcd、结式与 Hermite 的 checker 注册为 `True`，`commit` 在调用 checker 前拒绝缺失原问题或 problem kind 不匹配的提交。
+- 数学 checker 增加原问题绑定检查：`DerivativeChecker`/`ElementaryDerivativeChecker` 校验 operation/target/input（differentiate 用 source，integrate 用 candidate，specialize 不校验 input），`GcdChecker`/`ResultantChecker` 校验两个输入，`LinearSolutionChecker` 校验输入与 coverage，`HermiteChecker` 校验输入，`FunctionEqualityChecker` 校验函数问题无 target 且输入为两个表示。
+- 测试：新增 kernel 测试“数学 checker 缺原问题”和“问题 kind 不匹配”；特化测试改为从 `build_problem` 取得原问题并传入 `commit`。
+- 参考依据：架构 §13.3 `CheckerSpec`、§13.5 `CommitProposal`、§32.4 `CheckRequest`、§32.7 checker 绑定原问题。
+- 经验教训：只把结论交给 checker 不足以证明“这就是原问题”；`requires_problem` 必须在 kernel 层强制，不能依赖各操作自觉。核心逻辑规则没有 `ProblemSpec`，因此 `CheckRequest.problem` 必须区分数学 checker 与核心规则，而不是给所有 checker 硬塞一个假问题。
+- 验收：`python -m pytest -q` → 804 passed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+## 2026-11-08 — 世界身份与未声明自由符号逃逸
+
+- `WorldId` 不再硬编码 0：`semantics.frames.new_world` 用进程内 issuer 为每次装配发行不同 id；`bootstrap._start` 使用它，`bootstrap_elementary` 在 `_start` 之后用 `frames.world.id` 建立 `BasisRef`，使 checker/basis 的 world 与实际装配一致。
+- `FrameStore.escapes` 现在把“从未引入且不是语言 head/operator”的自由符号也报为逃逸，落实 §6.4；`_validate` 对同一 frame 内的声明/定义传入 `local` 集合，避免把同批定义误报为未声明；`readable` 因此拒绝跨 world 或含未声明符号的命题。
+- 测试：`test_escapes_reports_unrelated_and_undeclared_symbols` 断言未声明符号被报告；`test_separate_assemblies_share_no_state` 断言两个 runtime 的 world id 不同，且第一个 runtime 的命题在第二个 frame 中不可读。
+- 参考依据：架构 §6.4 自由符号可见性、§6.5 更改世界、§26.6 ID 与句柄、§32.4 身份载荷、§32.5 信任边界。
+- 经验教训：`WorldId(0)` 和每 store 从 0 开始的 `FrameId` 会让两个 runtime 的 world/frame 身份重合；`escapes` 只检查“已引入但不在祖先链”的符号，恰好违反了“未声明名字不受逃逸检查”的禁令。身份和自由符号可见性必须先于片段声明修复。
+- 验收：`python -m pytest -q` → 804 passed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas` 通过。
+
+## 2026-11-08 — 请求契约：VariableRoles、请求维度与定义期准入
+
+- 新增 `language.problems.VariableRoles`：target、parameters、parameter_mode 一处固定；`ProblemSpec` 与 `AlgebraRequest` 共享同一个不可变值，`target`/`parameters`/`parameter_mode` 改为派生只读属性。`Role` 归入 language，`semantics.request` 继续导出同一枚举。
+- `OperationRequest` 增加 `coverage`/`parameter_mode`/`result_language`；`None` 表示由操作预装配 view 或 `result_schema` 决定，不冒充用户显式请求。`fit_request` 在 `build_problem` 阶段比较显式维度，不一致时返回带 `missing` 的 `ProblemUnsupported`，不再静默降级。
+- 各操作删除写死的请求维度：求导/积分/特化/Hermite 使用 view roles，gcd/结式/线性求解/函数操作使用装配期固定的 roles；固定结果语言统一取自 `ResultSchema.single_language()`，`result_schema` 成为唯一声明点。
+- `define_problem` 执行与 `apply` 相同的 `build_problem` 准入：`ProblemBuilt` 校验 operation/inputs/roles/region/维度后才标 READY；`ProblemUnsupported` 记录 BLOCKED 任务并保留 blocker；`ProblemInvalid` 在写入前拒绝。
+- blocked problem 保留用户显式请求的 coverage/result_language；`parameter_mode` 仅在重建 `VariableRoles` 合法时保留，否则由 blocker 的 missing 说明。`run_task` 拒绝定义期 blocked 任务（BLOCKED 且无执行尝试），避免用 fallback problem 重新执行并返回 VERIFIED。
+- 测试：新增/转绿 coverage、result_language、parameter_mode、定义期准入、blocked problem 保留与 `run_task` 拒绝的验收；全量 `837 passed, 7 failed`，7 项均为本批范围外的既有 red 验收测试，无新增回归。
+- 参考依据：架构 §16.1 OperationSpec、§32.4 请求维度与唯一 owner、§32.6 输入到域元素、§32.7 候选到可信结果、§32.8 发布边界；AGENTS.md §3.4 域与三值、§4 红线 4/7/9/10。
+- 经验教训：`None` 只能表示“未指定”，不能表示“用默认值悄悄替换”；blocked 任务也必须记录用户请求的问题，否则 `run_task` 会把 fallback problem 当成原问题执行；固定结果语言若在 `result_schema` 和 `build_problem` 各写一份，迟早漂移，必须从 schema 派生。
+- 验收：`python -m pytest -q` → 837 passed，7 failed（均为范围外 red）；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 清零 7 项红债：原子性、义务环境、函数签名、集合规范序与状态载荷
+
+- `case_split` 原子性：两个分支的 `commit` 与 frame 创建放进同一 workspace/frame/store 事务；任一分支持非 `Committed` 时抛模块私有 `_CaseSplitRefused`，事务整体回滚，外层返回 `OperationResult(INVALID)`。删除手工 `frames.discard` 重复清理；`FrameStore.count()` 改为报告当前已发布 frame 数，回滚后的 `stats()` 一致。
+- obligation 环境键：`FrameStore.environment_unchanged(ancestor, descendant)` 按链位置和 declarations/definitions/hypotheses 内容判断；`KernelStore.find_obligation` 只在不新增环境内容的子 frame 复用祖先 obligation，新增声明的子 frame 不再复用。
+- `EqualOn` 参数签名：`same_parameter_signature` 成为唯一判定，checker 的 `EqualOn`/`SamePartialFunction` 与 `compare_functions` 操作共同消费；操作在创建 candidate 前结构化拒绝不同签名，checker 独立 `Refuted`。
+- 集合规范序：`set_term`/`set_members` 统一使用“去重 + 按 `Term` 稳定结构序排序”，置换不再改变结构相等；不使用 Python 随机化 hash 或对象地址。
+- 状态载荷：`TaskRecord` 拒绝 COMPLETED/COMPLETED_CONDITIONAL/PARTIALLY_SOLVED 无 candidate、BLOCKED 无 blocker、READY 带 candidate/attempt/blocker；`OperationResult` 拒绝 VERIFIED/CONDITIONAL 无 candidate 或无 verification、REFUTED 无 candidate。`Rejected` 无 refutation 的路径补上结构化 `Blocker`，不再产生无 blocker 的 BLOCKED 任务。
+- 测试：7 项红验收全部转绿；全量 `844 passed, 0 failed`，没有 xfail/skip，没有放宽断言。
+- 参考依据：架构 §10.1–§10.2 函数/偏函数相等、§18.1 Task 状态、§18.2 Candidate 状态、§32.5 封闭载荷、§32.7 候选到可信结果、§32.8 发布边界；AGENTS.md §4 红线 7/9/10/11。
+- 经验教训：非异常的“失败返回值”不会触发事务回滚，原子动作必须在失败点抛异常让事务看到；obligation 复用不能只看命题可见性，环境内容变化会改变公式意义；集合规范形必须用稳定结构序，不能用插入顺序或随机 hash；状态与载荷的非法组合应在构造时拒绝，不能靠调用方自觉。
+- 验收：`python -m pytest -q` → 844 passed，0 failed；`python -m mypy --strict cas` → 106 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — TypedExpr 与定型 ProblemSpec
+
+- 新增 `language.meaning.MeaningKey`（从 `propositions.py` 移出），`language.typing.IllScoped`/`TypedExpr`/`BindingView`/`FreeSymbol`/`TypedExprFailure`/`TypedExprOutcome`；`Ty.typed` 是唯一 sealed 构造入口，先 `well_scoped`、再 `infer`、最后用 `B.free_symbols` 构造按 SymbolId 排序的自由符号视图。`BindingView` 只记录已声明自由符号，不建无消费者的 bound_depth。
+- `elaborate.typed`/`typed_inputs` 取代 `elaborate.typing`；`Proposition.check` 改用 `Ty.typed`，`Proposition` 仍只存 term/meaning，不把 TypedExpr 塞进 kernel 命题身份。`NeedsDeclaration.detail` 统一失败文案。
+- `ProblemSpec.inputs` 改为 `tuple[TypedExpr, ...]`：裸 Term 拒绝、跨 world 拒绝、不要求同 frame；所有 `build_problem` 先用 `elaborate.typed_inputs` 定型。`OperationRequest.inputs` 保持 Term 草稿层。
+- `workspace._problem_structure_issue` 比较 resolved term 并检查输入 frame 可见；新增 `_same_problem` 供 `run_task` 使用，允许祖先 frame 定义、后代 frame 运行，同时检查 world/frame 可见性与逃逸符号。
+- 测试：新增 `test_typed_expr.py` 的 TypedExpr 字段/别名展开/sealed/ProblemSpec 定型输入/跨 world 验收，以及祖先定义后代运行的任务回归；全量 `850 passed, 0 failed`。
+- 参考依据：架构 §2.1 TypedExpr、§32.4 终态载荷、§32.5 静态类型贯穿注册边界、§32.6 输入到域元素；AGENTS.md §3.4 域与三值、§4 红线 1/4/5/7/9/10。
+- 经验教训：定型输入是 TypedExpr 的第一个真实消费者，不能先建类型再找地方放；`MeaningKey`/`IllScoped` 移动后必须删除旧转发，避免双 owner；`ProblemSpec` 固定的是 resolved term，而 `OperationRequest` 仍是草稿 term，未来引入局部定义时必须让请求层携带展开后的 term，否则 `.term` 比较会误拒。
+- 验收：`python -m pytest -q` → 850 passed，0 failed；`python -m mypy --strict cas` → 107 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — AlgebraView 与 bridge 的 to_view/render
+
+- 新增 `semantics.bridge.AlgebraView[E]`：source TypedExpr、parent、value、target/parameter `SymbolBinding`、interpretation、`ConversionKind`，由私有 `_issue_view` 发行；`generators_for`/`symbol_for` 是 render 与 checker 的消费入口。`SymbolBinding` 校验角色/索引；view 校验 parent 成员关系、scalar source、自由符号覆盖与 binding 规范化。
+- 新增封闭结果：`ViewBuilt`/`ViewRefused`（reason/detail/missing/conditions）与 `Rendered`/`RenderRefused`；失败不再压成 `None`，missing 至少区分 symbol_mapping、scalar_source、target_role、parameter_ring、coefficient_parent、world_identity、nonnegative_power、integer_exponent、defined_zero_power、polynomial_representation、rational_embedding、parameter_family_interpretation。
+- `SimplePolynomialBridge`/`ParameterPolynomialBridge` 增加 parent/world，实现 `to_view`/`render`；render 使用 view 的 target/parameter 符号映射，不直接使用 ring.generators，不新造全局名。多项式桥在其片段上全定义，本阶段不建 source_domain/valid_on 恒真字段；有理函数桥仍用独立的 `to_rational_function`/`to_rational_term`。
+- `bootstrap`/`_assemble_parameterized`/`bootstrap_elementary` 给所有 polynomial bridge 补 parent/world。
+- 测试：新增 `test_algebra_view.py` 9 条行为验收（精确 view、常量 round-trip、符号映射拒绝、负幂/零次幂拒绝、全局非零零次幂、非标量拒绝、sealed 构造、参数桥 target/parameter 映射与 round-trip）；全量 `859 passed, 0 failed`。
+- 参考依据：架构 §7.8 语义桥、§7.9 AlgebraRequest、§32.4 终态载荷、§32.5 静态类型贯穿、§32.6 输入到域元素；AGENTS.md §4 红线 1/4/5/7/9/10。
+- 经验教训：桥的失败必须是封闭联合并携带 missing，不能把“表示失败”压成“非零/不相等”；多项式片段可以声称全定义，但有理片段的孔洞必须显式区域化，不能用恒真字段掩盖；view 的符号映射必须来自请求/装配，不能从 ring.generators 重新猜名字。
+- 验收：`python -m pytest -q` → 859 passed，0 failed；`python -m mypy --strict cas` → 107 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — operation/service/checker 迁移到 AlgebraView，删除旧 bridge API
+
+- calculus：`DerivationUnsupported` 增加 `missing`/`conditions`；`DerivativeService` 的 `supports`/`candidate` 改为接收 `TypedExpr` + `AlgebraRequest`。`PolynomialDerivativeService`/`PolynomialAntiderivativeService` 用 `to_view`/`render`；`ElementaryDerivativeService` 从 TypedExpr 取 term。求导/积分/特化/Hermite operation 使用 `problem.inputs` 的 TypedExpr，特化在替换后重新 `elaborate.typed`。
+- 代数/求解：`PolynomialGcdOperation`/`ResultantOperation`/`LinearSolveOperation` 的 `to_value`/`to_term`/`roles` 替换为 `bridge`/`request`；`_admit_input`/`propose` 用 `to_view`/`render`；`ViewRefused`/`RenderRefused` 进入 `Refused`/`ProposalUnsupported` 的 missing/conditions。
+- checker：新增 `bridge.typed_view`，五个 polynomial checker 改为独立 `elaborate.typed` + `to_view`；`TypedExprFailure`/`ViewRefused` 一律 `Unverified(FRAGMENT)`，不伪造 `Refuted`；`view.source.term`/`symbol_for(TARGET,0)` 校验 claim；bootstrap 传入 `bridge`/`frames`/`request`。
+- 删除旧 API：`PolynomialBridge.to_value`/`to_term`、两个 bridge 的 `to_value`/`to_term`、公开 `to_polynomial`/`to_term`；`to_rational_function`/`to_rational_term` 保留，后者改用私有 `_render_polynomial`。生产代码只剩 Hermite 的 rational `to_value` 回调。
+- 测试：13 个测试文件从旧 API 迁到 `to_view`/`render`/`tests.support` helper；`None` 片段边界断言改为 `ViewRefused`/`RenderRefused` 并检查 missing；数学断言未放宽，未增删测试。
+- 参考依据：架构 §7.8 语义桥、§32.4 终态载荷、§32.6 输入到域元素、§32.7 候选到可信结果；AGENTS.md §4 红线 1/4/5/7/9/10/11。
+- 经验教训：checker 必须独立重建 view，不能信任 operation 的转换结果；表示失败必须是 `Unverified`，不能变成数学否证；旧 API 必须在同一批次删除，否则双 API 会长期残留；测试从 `None` 迁到结构化拒绝是契约收紧，不是放宽断言。
+- 验收：`python -m pytest -q` → 859 passed，0 failed；`python -m mypy --strict cas` → 107 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 消费 view 关系与自由符号 sort，收紧结构化拒绝
+
+- `semantics.bridge._admit_view_relation` 消费 `AlgebraView.interpretation`/`conversion`：view 解释与请求不一致返回 `ViewRefused(FRAGMENT, ..., {"interpretation_mismatch"})`；`HOMOMORPHISM` 不能把目标相等传回源相等，返回 `{"conversion_witness"}`；`REPRESENTATION_ISOMORPHISM` 与 `EMBEDDING` 允许。`typed_view` 在 `to_view` 返回 `ViewBuilt` 后调用该准入，所有 checker 的独立准入路径因此消费这两个字段。
+- `AlgebraView.__post_init__` 增加结构不变量：`PARAMETER_FAMILY` 至少绑定一个 `Role.PARAMETER`，其他解释不得绑定参数；两个 bridge 仍只发行 `REPRESENTATION_ISOMORPHISM`。
+- `_admit_bindings` 先消费 `FreeSymbol.sort`：非标量自由符号返回 `scalar_symbol` 并指出具体符号；原有 `symbol_mapping` 检查保留。`FreeSymbol.sort` 未被删除。
+- `semantics.request` 删除 `Role` 运行时转发，改为 `TYPE_CHECKING` 导入并在 `role_of` 使用 `"Role | None"`；`__all__` 不再导出 `Role`，测试改从 `language.problems` 导入。
+- `ViewRefused`、`RenderRefused`、`Blocker`、`DerivationUnsupported`、`ProblemUnsupported`、`ProposalUnsupported` 统一要求非空 detail（非字符串 `TypeError`、空串 `ValueError`）；后两者补齐 `missing`/`conditions`/`attempted` 的类型校验与规范化。字段顺序未变。
+- 测试：`test_algebra_view.py` 新增 6 条行为验收（homomorphism 拒绝、embedding 允许、interpretation 不匹配拒绝、两条 sealed 不变量、非标量自由符号拒绝）；新增 `test_refusals.py` 验证六类拒绝的空 detail/非字符串 detail 与两个 unsupported 结果的非法载荷；全量 `879 passed, 0 failed`。
+- 参考依据：架构 §7.8 语义桥、§32.4 终态载荷、§32.6 输入到域元素（表示同构/嵌入可传递相等，一般同态只能源到目标）；AGENTS.md §3.4 域与三值、§4 红线 4/5/7/9/10/11。
+- 经验教训：view 的 conversion 不是元数据装饰，checker 的独立准入必须消费它；`EMBEDDING` 是单射所以可传回相等，`HOMOMORPHISM` 不行，不能把“保持运算”误当“保持相等”；结构化拒绝的 detail 是解释而非证明，但空 detail 等于没有解释，必须在构造时拒绝。
+- 验收：`python -m pytest -q` → 879 passed，0 failed；`python -m mypy --strict cas` → 107 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 清理工作流历史死字段，接线核验关联与历史标签
+
+- 删除无真实消费者的字段：`Blocker.next_action`、`TaskRecord.created_by_event`、`ExecutionAttempt.event`、`Event.note`、`VerificationLink.detail`、`FunctionParameter.name`；`TaskRecord` 的四个构造点、`_record_event` 的 `note` 参数与全部 `note=` 实参、`FunctionParameter(symbol, sort)` 的测试构造点同批更新。`VerificationLink` 两处构造改为关键字传参，`condition` 仍分别对应 `candidate.result_region` 与 `proposal.result_region`。
+- `Event.judgments` 接真实消费者：`Workspace._append_revision` 在发布 revision 前检查每条非空 `link.judgment` 都属于该事件的 `judgments`，否则抛出 `ValueError`；`test_workspace.py` 增加一次求导后的链接/事件覆盖验收。
+- `Revision.label` 接真实消费者：`Session.undo`/`redo` 在原有焦点或 `empty view` 后显示当前 revision 的 label，例如 `undo: @E0 (intake 0)`、`undo: empty view (start)`；所有断言 undo/redo 输出的测试按新契约机械迁移。
+- `VerificationLink.condition` 接真实消费者：`Session._report` 对非空链接条件去重后追加 ` | condition: ...`，blocker 为空时也显示；条件结果输出复用同一渲染，`sqrt(x)` 求导显示 `condition: x > 0`。新增命令级条件输出验收与 `_report` 无 blocker 条件验收。
+- 测试：全量 `882 passed, 0 failed`；新增 3 条行为验收（事件判断覆盖、条件命令输出、无 blocker 的链接条件显示）。
+- 参考依据：架构 §32.4 终态载荷（Event/Revision 固定对象/任务/核验关联可见集，VerificationLink 固定核验结果与作用域）、§32.8 条件与发布（workflow 先构造对象/候选/事件/revision 暂存记录，再与内核批次在同一发布边界转换）；AGENTS.md §4 红线 7/9/10/11、§5.3 工作流历史载荷。
+- 经验教训：只声明不消费的字段是债务，必须删除或在本批接线；发布前一致性检查应消费已有的关联载荷，而不是另建平行校验表；历史标签和链接条件只有在用户可见输出中消费才算真实契约；输出字符串变化属于契约收紧，测试必须按新输出更新而不是放宽断言。
+- 验收：`python -m pytest -q` → 882 passed，0 failed；`python -m mypy --strict cas` → 107 source files，无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+
+## 2026-11-08 — 操作参数 schema 与中央 OperationInput 联合移除
+
+- `cas.operations.protocols` 新增 `Parsed[P]`、`ParameterOutcome[P] = Parsed[P] | InvalidRequest` 与 `ParameterSchema[P]`；`ParameterSchema` 校验非空 id 与可调用 parse，`OperationSpec` 增加 `parameter_schema: ParameterSchema[Any]`，`OperationRegistry` 拒绝缺失该字段的注册项。
+- 删除中央 `OperationInput` 联合；`OperationRequest.parameters` 改为 `tuple[tuple[str, object], ...]`，构造时只校验 tuple、参数名非空且不重复；`parameter(name)` 返回 `object | None`。四个共享载荷 dataclass 保留在 protocols，workspace 继续构造它们。
+- 六个无参数操作（differentiate/integrate/hermite_reduce/polynomial_gcd/resultant/solve_linear）共用 `cas.operations.parameters.EMPTY_PARAMETER_SCHEMA`：空元组解析为 `Parsed(None)`，任何参数返回 `InvalidRequest`。`extend_function`/`compare_functions`/`specialize` 各自声明参数 dataclass 与 schema，`build_problem` 先解析、失败转 `ProblemInvalid`，`propose` 解析失败转 `ProposalInvalid`，删除 `request.parameter(...) + isinstance` 的重复检查。
+- 测试：新增 `tests/unit/test_parameter_schema.py` 覆盖错误类型、缺参、无参数操作拒绝意外参数、正常参数路径 ProblemBuilt、schema 构造校验与 registry 缺失校验；`test_operations.py`/`test_bootstrap.py` 的测试操作补 `parameter_schema`，旧 `OperationRequest` 中央联合断言等价迁移为“形状合法但值由 schema 解释”。全量 `898 passed, 0 failed`。
+- 参考依据：架构 §16.1 OperationSpec 的 parameter_schema、§32.5 静态类型贯穿注册边界（每注册项绑定类型化适配器，中央不枚举私有载荷）、§32.6 输入到域元素；AGENTS.md §4 红线 1/4/7/9/10/11。
+- 经验教训：参数形状错误与数学片段拒绝分开——前者是 `InvalidRequest`，后者仍由 `InputSchema` 的 `Refused` 表达；`Parsed` 不做运行期类型限制，具体类型由 schema 自己的解析器在注册边界验证；空参数也必须显式声明，避免“没传参数”和“这个操作没有参数”混淆。
+- 验收：`python -m pytest -q` → 898 passed, 0 failed；`python -m mypy --strict cas` → 108 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — ValidatedCommitBatch 与提交两阶段
+
+- `kernel.commit` 新增 sealed `ValidatedCommitBatch`：固定 frame/world 快照、结论、实际使用前提、本批新义务、判断、推理记录、清偿和 `Committed` 结果；`__post_init__` 校验 seal、记录类型、frame 一致、ID 不重复、推理/判断/清偿与 `Committed` 的对应关系。只有模块私有 `_issue_batch` 能构造。
+- 原 `commit` 改为 `validate_commit`：保留全部准入、checker、义务继承/复用、条件策略、清偿与循环检查，成功时发行 batch 而不写 ledger；新增 `publish_commit` 校验 seal/world/frame 后调用唯一 `_publish`。`CommitResult` 改为 `ValidatedCommitBatch | Deferred | Rejected`，`Committed` 只表示发布成功，公开 `commit` 删除且不留兼容包装。
+- workspace 的六处提交统一走私有 `_commit` helper；`applicability.resolve_applicability` 与 `consistency.assess_consistency` 改为 `validate_commit` + `publish_commit` 两阶段。测试 helper `commit_now` 只放在 `tests/support.py`，`test_case_merge` 的分支失败注入改为包装 `validate_commit`。
+- 测试：新增 `tests/unit/test_commit_batch.py` 覆盖验证不写账、发布后才增加 judgments/inferences/obligations、同批重复发布被 `KernelError` 拒绝且不重复写入、直接构造 batch 抛 `ValueError`、跨 world 发布与已丢弃 frame 发布被拒绝；`test_commit.py`/`test_store.py`/`test_applicability.py`/`test_case_merge.py`/`test_specialization_workflow.py` 等价迁移到 `commit_now`，未放宽数学断言。
+- 参考依据：架构 §13.9 事务与原子性（验证后发行不可修改 batch，发布单位原子）、§32.4 ValidatedCommitBatch 载荷与私有构造、§32.7 候选到可信结果、§32.8 条件与发布；AGENTS.md §4 红线 1/7/9/10/11。
+- 经验教训：验证与发布必须分成两个可检查的边界；`Committed.obligations` 是携带义务集合，可以包含继承/复用 ID，不能误要求它与 batch 的本批新义务相等或互为子集；发布失败只能来自重复发布、world/store 不匹配或 frame 已丢弃，内部记录不一致应在 batch 构造时拒绝；测试便利函数必须留在测试侧，生产代码不得保留“一步提交”的兼容入口。
+- 验收：`python -m pytest -q` → 927 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — S1 支持/核验契约收口：能力声明、执行请求、basis 校验与字段消费
+
+- `capability_requirements`：新增 `Capability` 结构词汇（field/polynomial_ring/rational_function_field/function_value/generic_result）；每个注册操作声明 requirements，`OperationRegistry` 按入口 `provided_capabilities` 拒绝缺能力；三个 bootstrap 入口各自提供实际装配的能力，测试 double 补齐 requirements 与 provided 集合。
+- `ExecutionRequest`：固定 `OperationRequest`、`ProblemSpec`、匹配的 `AlgebraRequest`、frame、`ConditionPolicy`、`ExecutionBudget`；`ProblemBuilt.algebra` 由 `build_problem` 填入选中 view，`propose` 消费 `ExecutionRequest`，代数操作用 `execution.algebra` 做 `to_view`，提交边界用 `execution.frame`/policy/budget。`Workspace.apply` 增加 policy/budget keyword，`commit` 用 execution budget 收紧证书 schema 预算。
+- `BasisRegistry`：`KernelStore` 持有已准入 basis；`validate_commit` 在调用 checker 前按 name/kind/version/digest/world 校验 `trusted_dependencies`；`bootstrap_elementary` 注册真实声明 basis；`stats()` 报告 basis 数。
+- `ValidatedCommitBatch` 字段消费：`publish_commit` 发布前核对 conclusions 与 judgments、used_premises 与 inference 一致；batch 增加 store token，跨 store 发布被拒绝；`ExecutionRequest.algebra`/`frame` 进入提案/提交实际路径。
+- 测试：新增 `test_capabilities.py`、`test_execution_request.py`、`test_basis.py`，扩展 `test_commit_batch.py`；全量 `945 passed, 0 failed`，无 xfail/skip，未放宽数学断言。
+- 参考依据：架构 §13.9 事务与原子性、§16.1 OperationSpec、§32.4 终态载荷、§32.6 输入到域元素、§32.7 候选到可信结果、§32.8 条件与发布；AGENTS.md §4 红线 1/4/7/8/9/10/11。
+- 经验教训：能力声明必须在注册边界被消费，不能只存字段；执行请求必须把固定问题、algebra view、frame 和策略绑定成一个不可变值；batch 的规格/前提字段必须在发布前与记录交叉核对；信任 basis 的 version/digest 必须逐项比较，不能只看名字。
+- 验收：`python -m pytest -q` → 945 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 删除 characteristic 的 getattr 能力探测
+
+- `Ring` 增加默认 `characteristic` 属性：未声明时返回 `None`；`IntegerRing`/`RationalField`/`PolynomialRing` 继续覆盖为具体值。`PolynomialRing.characteristic`、`_require_characteristic_zero` 与 Hermite 的 `_require_characteristic_zero` 改为直接读取该属性，不再用 `getattr(..., "characteristic", None)` 探测能力。
+- 新增回归测试：以 `RationalFunctionField` 作为系数结构时 `characteristic == -1`，squarefree 操作按 characteristic-zero 拒绝；正特征字段的既有拒绝测试保持绿。
+- 参考依据：AGENTS.md §3.4/§4.5（按 parent 能力分派，禁止 getattr 能力探测）、架构 §7.4（系数结构与特征信息）、§32.5（静态类型贯穿注册边界）。
+- 经验教训：`runtime_checkable` 协议只检查属性存在，属性抛 `AttributeError` 时仍可能被判为存在；能力应由结构自身声明并直接读取，不能用 `getattr`/异常捕获补足。
+- 验收：`python -m pytest -q` → 946 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 工作流状态单一派生与候选/验证载荷
+
+- `cas.workflow.records` 新增 `CandidateApplicability`/`CandidateCoverage`/`ResultLanguageFit` 三个封闭枚举；`Candidate` 增加 applicability/coverage/language_fit 字段，`Candidate.checked` 成为唯一维度转移入口；`VerificationLink` 增加 specification_kind/frame/coverage/condition/obligations，验证链接按确切规格、作用域与覆盖记录。
+- 新增 `derive_task_state(problem, candidates, links, blocker, attempts, cancelled)`：READY/BLOCKED/PARTIALLY_SOLVED/COMPLETED/COMPLETED_CONDITIONAL/CANCELLED 全部由记录派生；消费请求 coverage、parameter_mode、候选覆盖/语言适配、链接条件与 kernel obligations。泛参数答案对 `ALL_PARAMETER_VALUES` 请求保持 PARTIALLY_SOLVED。
+- workspace 的 define/run/check/edit/block/cancel 路径全部改为调用 `derive_task_state`；`edit_candidate` 增加未检查候选时不抹掉旧候选的已验证结果；后续 deferred check 不降级已完成任务，也不把失败尝试的 blocker/detail 写回已完成任务；删除无消费者的 `TaskRecord.with_candidate`。
+- 测试：新增 `tests/unit/test_task_state.py` 覆盖状态表每一行、泛参数与 sound/complete 覆盖、kernel obligations、取消与不一致输入；`test_workspace.py` 增加候选维度、complete-set、条件结果、deferred 不降级、编辑不降级等断言。
+- 参考依据：架构 §17.4 Task/Candidate、§18.1 Task 状态、§18.2 Candidate 状态、§32.4 终态载荷；AGENTS.md §3.4/§4 红线 5/7/8/9/10。
+- 经验教训：任务状态不能由搜索器或分支直接赋值；候选的 verification/applicability/coverage/language fit 必须分开；增加未检查候选不等于撤销旧候选的已验证结果；kernel obligations 必须进入链接，否则 `ALLOW_CONDITIONAL` 提交会被误判为无条件完成。
+- 验收：`python -m pytest -q` → 967 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — ResultSchema 结果形状与 workspace 形状检查收口
+
+- `cas.operations.protocols` 新增 `ResultShape`（EXPRESSION/PROPOSITION/SET/DECOMPOSITION）；`ResultSchema` 增加必需的 shape 并校验 shape/language 一致；新增 `validate(result, structured, typed)` 检查 SET 的 `SetSort`、PROPOSITION 的命题 sort、DECOMPOSITION 的组件与 EXPRESSION 不得携带 decomposition。
+- 九个注册操作显式声明 shape；workspace 只按 schema 需要做 elaboration，`_apply` 调用一次 `result_schema.validate`，`_result_language_fit` 对 `edit_candidate` 复用同一 schema，不再维护独立形状分支。SET 的 coverage 规则与非 SET 的 `ONE_VERIFIED` 规则仍留在 workspace。
+- 测试：新增 `ResultSchema` 各形状接受/拒绝、shape/language 不匹配测试；workspace 错误形状测试断言 schema 的具体 detail；更新测试 double 的 `ResultSchema` 构造。
+- 参考依据：架构 §16.1 OperationSpec、§32.4 终态载荷、§32.5 注册边界静态类型；AGENTS.md §4 红线 1/3/4/7/11。
+- 经验教训：结果形状是操作声明的一部分，不能散落在 workspace 分支；elaboration 留在拥有 frame/signature 的 workspace，schema 只检查形状；多语言/多形状 schema 当前显式拒绝，待真实消费者出现再扩展。
+- 验收：`python -m pytest -q` → 971 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — Blocker 目标命题与预算载荷
+
+- `cas.language.decisions.Blocker` 增加 `target: Proposition | None` 与 `budget: ExecutionBudget | None`；workspace 在提案、核验、定义、手动任务、手动复核路径填充已知目标与执行预算；`_block_manual_task` 只补缺省 target，不覆盖调用方更具体的规格目标。
+- `Session._report` 渲染 target 与预算限制（max_nodes/max_depth），与既有 missing/conditions/attempted 一并显示。
+- 测试：`Blocker` 类型校验与默认值、执行 blocker 的规格 target 与预算、定义期/手动任务区域 target、手动复核候选规格 target、前端 target/budget 渲染。
+- 参考依据：架构 §11.2 Blocker、§32.4 终态载荷；AGENTS.md §4 红线 7/8/9/10。
+- 经验教训：拒绝信息必须保留目标与预算，否则前端只能显示字符串；更具体的候选规格目标不能被任务区域覆盖；预算只在真实执行请求存在时填写。
+- 验收：`python -m pytest -q` → 985 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — CheckRequest 携带候选数学数据并由 checker 核对
+
+- `cas.kernel.evidence.CheckRequest` 与 `cas.kernel.commit.CommitProposal` 增加 `candidate: T.Term | None`；`validate_commit` 原样传入，workspace `_apply` 传 `proposal.result`、`check_candidate` 传 `candidate.term`。
+- 数学 checker 强制核对候选：Derivative/Elementary 按 `published_candidate`（`integrate` 发布 `claim.source`，其余发布 `claim.candidate`）；Hermite 对 `claim.remainder`；Gcd 对 `claim.candidate`；Resultant 对 `claim.result`；LinearSolution 对 `claim.set_term`；FunctionEquality 对结论命题或 `extend_function` 的 `claim.right`。缺失或不一致返回 `InvalidEvidence`，不伪造成 `Refuted`；核心逻辑 checker 不要求候选。
+- 测试：更新所有直接 `CheckRequest`/`CommitProposal` 构造；新增每个数学 checker 的缺失/不匹配候选拒绝测试，以及 kernel 转发候选、非 term 候选拒绝测试。
+- 参考依据：架构 §13.3 CheckerSpec、§13.5 commit 输入、§32.4 CheckRequest 载荷、§32.7 候选到可信结果；AGENTS.md §4 红线 3/4/7/8/9/10。
+- 经验教训：checker 必须看到工作流实际要发布的候选，不能只信任证书内部副本；不同操作对同一谓词发布不同侧时必须有显式映射；候选缺失是证据无效，不是数学否证。
+- 验收：`python -m pytest -q` → 998 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — Event/Revision 历史载荷与 history 视图
+
+- `cas.workflow.records.Event` 增加 input_revision、frame、inputs、parameters、output_revision、execution_report；`Revision` 增加 world 与 producing_event。`Revision.world` 是必需字段，start/append/branch/merge/case-merge 全部显式填写；`Event.parameters` 保存请求参数快照，不深拷贝值。
+- `Workspace._record_event` 固定 input revision/frame 并接受输入对象、参数、执行报告；`_apply`/`check_candidate`/`intake`/blocked 路径传递对应快照。`_append_revision` 创建 revision 后用 `replace(event, output_revision=revision.id)` 回填事件，不改写原事件；branch/merge/case-merge 同样记录 world/producing event。`Workspace.events()` 校验 producing event 在当前 revision 的事件集合内。
+- 前端：`Session.history()` 返回不可变的历史行，显示输入 revision、操作、frame、world、输入对象标签/版本、参数、执行状态与输出 revision；REPL `history` 命令经 `Session.execute` 输出同一视图，不复制格式化逻辑。
+- 测试：`Event`/`Revision` 字段校验；workspace 的 differentiate/intake/solve 事件输入、参数、执行报告、输出 revision；session history 与 undo/redo 可见性；REPL history 输出。全量 `1019 passed, 0 failed`。
+- 参考依据：架构 §17.8 Focus、§17.9 Revision 与事件记录、§32.4 Event/Revision 载荷；AGENTS.md §4 红线 7/8/9/10/11。
+- 经验教训：事件与 revision 必须成对记录输入/输出与 world；output revision 只能在 revision 创建后回填，不能改写已记录事件；历史显示必须消费真实字段，不能另造一份展示状态；`Revision.world` 是必需身份，不应允许缺失。
+- 验收：`python -m pytest -q` → 1019 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 前端 declare/define 命令与上下文扩展
+
+- `cas.workflow.records` 新增 `DeclarationResult`/`DefinitionResult` 封闭结果；成功携带子 frame 与 Declaration/Definition，拒绝不携带载荷并保留原 frame；共享 `_check_context_extension` 校验状态/载荷一致。
+- `Workspace.declare(name, sort)`/`define(name, body)` 在 `_transaction()` 内执行：校验标识符、`SymbolTable.intern`、`FrameStore.create` 扩展子 frame；`define` 先用 `elaborate.typed` 在当前 frame 定型 body，失败不建 frame；重复名/别名环/逃逸/非良构 body 的 `ValueError` 转为结构化拒绝。成功记录 `Declare`/`Define` 事件（`execution_report=VERIFIED`）并 append 带子 frame 的 revision；不发行 kernel judgment。
+- 前端 `Session.execute` 新增 `declare NAME : SORT` 与 `define NAME := EXPR`；sort 词汇 integer/rational/real/complex/proposition/scalar 映射到 `language.sorts`；未知 sort 与畸形语法结构化拒绝。`Session.parse` 解析 definition body；成功行显示子 frame 与绑定，不改变 focus。
+- 测试：workspace 声明 frame/重复拒绝/定义展开/自引用与前置引用拒绝/定型失败/事务回滚/结果不变量；session 六种 sort 映射、未知/畸形 sort、定义展开、自引用与重复定义；REPL 命令。全量 `1032 passed, 0 failed`。
+- 参考依据：架构 §5.3 SymbolDeclaration、§6.2 SemanticFrame、§13.8 假设引入（声明/定义走受检上下文扩展）、§17.9、§19.2；AGENTS.md §4 红线 3/7/8/9/10/11。
+- 经验教训：声明/定义不是命题，不发行 judgment；上下文扩展必须走 `FrameStore.create`，不能直接写 ScopeStore；definition body 必须先定型再建 frame；失败动作不得留下子 frame/revision；重定义/遮蔽需要独立的 `SymbolTable.fresh` 设计，当前按重复名拒绝。
+- 验收：`python -m pytest -q` → 1032 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 修复 ResultSchema SET 形状回归
+
+- 独立审查发现 `ResultSchema` 的 SET 形状只检查 `SetSort`，丢掉了原 workspace 的“必须是结构 `Set` 项”检查；一个非 Set 命题结果可能因 sort 不是 `SetSort` 得到错误 detail，且结构检查不再由 schema 负责。
+- `ResultSchema.validate` 增加 `set_term: bool | None`：workspace 用 `set_members(result, signature)` 识别结构 Set 项并把布尔事实传入；schema 先拒绝非 Set 项，再检查 `SetSort`。`workspace._set_term` 是非 SET 语言返回 `None`，SET 语言返回结构识别结果。
+- 回归测试：schema 的 `set_term=False` 返回 `"a set problem needs a Set result"`；`test_a_set_problem_needs_a_set_result` 恢复该精确 detail，不再接受弱化后的 sort-only 消息。
+- 参考依据：架构 §17.5 解集表示、§32.4 结果载荷、§32.5 注册边界静态类型；AGENTS.md §4 红线 4/7/11。
+- 经验教训：把形状检查收进 schema 时不能丢掉原有的结构检查；elaborated sort 不能替代“结果项必须是结构 Set”的表示要求；测试 detail 被改写时要核对它是否弱化了原语义。
+- 验收：`python -m pytest -q` → 1032 passed，0 failed；`python -m mypy --strict cas` → 110 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 用 CheckerBinding.candidate_role 替代 operation 名候选选择
+
+- 新增 `cas/language/roles.py` 的 `CandidateRole`（RESULT/SOURCE/REMAINDER/SET/CONCLUSION/RIGHT）；`CheckerBinding` 增加可选 `candidate_role`，数学绑定显式声明，核心逻辑/测试 double 留 `None`。
+- `CommitProposal`/`CheckRequest` 增加 `candidate_role` 并由 `validate_commit` 原样转发；`Candidate` 记录该角色，`edit_candidate` 保留，`check_candidate` 手动复核复用同一角色。
+- 数学 checker 改为按 `request.candidate_role` 选择规格中的项：Derivative/Elementary 支持 RESULT/SOURCE，Hermite 用 REMAINDER，Gcd/Resultant 用 RESULT，LinearSolution 用 SET，FunctionEquality 用 CONCLUSION/RIGHT；缺失或错误角色返回 `InvalidEvidence`。删除 `published_candidate` 的 operation 名分支。
+- 测试：更新所有 `CommitProposal`/`CheckRequest` 构造与 checker 测试；新增每个数学 checker 的缺失/错误角色拒绝、kernel 角色转发、workspace 的 differentiate/solve 候选角色记录与手动复核测试。全量 `1048 passed, 0 failed`。
+- 参考依据：架构 §13.3 CheckerSpec、§13.5 commit 输入、§16.1 OperationSpec、§32.4 终态载荷、§32.7 候选到可信结果；AGENTS.md §4 红线 3/4/7/8/9/10。
+- 经验教训：候选角色必须由注册数据声明并经内核传递，不能由 checker 按 operation 名猜测；数学绑定必须显式声明角色，缺失角色是证据无效而不是数学否证；手动复核必须复用候选记录的角色，不能重新推断。
+- 验收：`python -m pytest -q` → 1048 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 有理桥接入 AlgebraView 区域
+
+- `AlgebraView` 增加 `source_domain`/`valid_on`（`Proposition | None`）；多项式桥在其片段上全定义，保持 `None`；有理桥对分母项发行 `Ne(den, 0)` 区域，并保留消去前的洞（如 `x/x` 仍要求 `x != 0`）。
+- 新增 `RationalFunctionBridge`，实现 `to_view`/`render`；删除公共 `to_rational_function`/`to_rational_term`，其逻辑收为桥私有。bootstrap 通过 `ParentRegistry.intern(ParentSpec("rational_function", ...))` 为 `RationalFunctionField` 建立 `Parent`。
+- `HermiteChecker` 改用 `typed_view`；非全定义 `valid_on` 返回 `Unverified(GUARDED, missing={"regional_hermite"}, conditions=(region,))`，全定义输入保持原形式恒等式验证。`HermiteOperation` 把区域写入规格/证书与 `result_region`，区域被 result/blocker/link 消费。
+- 测试：`AlgebraView` 区域字段校验、多项式桥 `None`、有理桥 total/denominator/cancelled-hole/refusal、Hermite 区域发行与 GUARDED 拒绝、session 显示。全量 `1057 passed, 0 failed`。
+- 参考依据：架构 §8.5 区域与定义性、§32.4 AlgebraView 载荷、§32.6 输入到域元素；AGENTS.md §3.4/§4 红线 5/7/8/9/10/11。
+- 经验教训：源表达式的洞不能因为形式分数约分而消失；`source_domain`/`valid_on` 必须有真实消费者，不能只存字段；非全定义结果应诚实返回 GUARDED，而不是在无条件区域下声称 VERIFIED；旧桥 API 必须在同批删除，不能留下第二套转换入口。
+- 验收：`python -m pytest -q` → 1057 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — Focus 进入 revision 并由 Session 单一派生
+
+- `cas.workflow.records` 新增封闭 `Focus` 联合：`ObjectFocus`/`TaskFocus`/`CandidateFocus`/`OccurrenceFocus`；`Revision` 增加 `focus` 并校验；start revision 为 `None`。
+- workspace 的 `_append_revision(..., focus=...)` 记录焦点：intake/apply 结果用 `ObjectFocus`，manual task/run/cancel 用 `TaskFocus`，edit candidate 用 `CandidateFocus`，rewrite 用 `OccurrenceFocus`，substitute 用 `ObjectFocus`；declare/define/assume 保持当前焦点；branch/switch/merge 按目标 revision 的焦点处理。
+- `Session._focus` 可变指针删除；`Session.focus` 从 `workspace.revision.focus` 派生（ObjectFocus 解析为可见 Expression，其他焦点返回 `None`，无焦点回退最后可见表达式）；`Session.focus_ref` 暴露类型化焦点；`Session.history()` 显示 focus 种类与目标。
+- 测试：Focus 变体/Revision 校验、intake/differentiate/edit/manual task/context extension/rewrite/substitute/branch/merge 焦点、session 派生与 undo/redo、history focus、REPL。全量 `1080 passed, 0 failed`。
+- 参考依据：架构 §17.8 Focus、§17.9 Revision 快照、§18.5 undo/redo；AGENTS.md §4 红线 7/8/9/10/11。
+- 经验教训：焦点是 revision 快照的一部分，不能是 Session 的第二个可变权威；焦点不改变数学输入，命令仍需显式解析为固定快照；任务/候选/出现位置焦点没有表达式来源时必须诚实返回无源，不能猜测。
+- 验收：`python -m pytest -q` → 1080 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — SET 结构检查硬化与可选字段审计
+
+- `ResultSchema.validate` 的 SET 分支现在要求 `set_term` 显式提供：`True` 进入 `SetSort` 检查，`False` 返回“需要 Set 结果”，`None` 返回“需要显式结构 Set 检查”。调用方不能再因省略结构事实而绕过“必须是结构 Set 项”的规则。
+- 审计近期可选字段：`CheckRequest`/`CommitProposal` 的 `candidate` 与 `candidate_role` 由所有数学 checker 强制要求，核心逻辑 checker 可省略；`VerificationLink.frame`/`specification_kind` 已由 `_task_links` 检查；`Candidate.candidate_role` 由 `check_candidate` 复用；`Revision.focus` 与 `Blocker.target`/`budget` 是合法的 UI/诊断可空值。未发现其他真实绕过。
+- 测试：SET `set_term=None` 拒绝、`set_term=True` 接受、`set_term=False` 拒绝；有效 SET 测试改为显式传 `True`；保留既有断言。全量 `1081 passed, 0 failed`。
+- 参考依据：架构 §16.1 OperationSpec、§32.4 终态载荷、§32.5 注册边界静态类型；AGENTS.md §4 红线 4/7/8/11。
+- 经验教训：可选参数不能同时承担“未知”和“通过”；结构事实缺失应拒绝而不是默认接受；审计可选字段时要把“合法可空”和“可绕过信任检查”分开记录。
+- 验收：`python -m pytest -q` → 1081 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — candidates 命令显示候选四维
+
+- `Session._candidates` 现在显示 `state`/`applicability`/`coverage`/`language` 四个维度（枚举 `.value`），不再只显示验证状态；候选 id 与 term 渲染保持不变。
+- 测试：differentiate 候选显示 verified/applicable/complete/satisfies；solve_linear 候选显示 complete/satisfies；set 候选编辑成标量显示 unchecked/out_of_scope/unclaimed/does_not_satisfy；deferred check 显示 unverified/blocked/complete/satisfies。全量 `1083 passed, 0 failed`。
+- 参考依据：架构 §18.2 Candidate 状态、§32.4 Candidate/VerificationLink 载荷；AGENTS.md §4 红线 7/9/10/11。
+- 经验教训：记录的维度必须有显示或派生消费者；`OUT_OF_SCOPE` 只在完成性派生中消费不够，前端展示让 `APPLICABLE`/`CONDITIONAL`/`BLOCKED` 也有真实出口；维度展示使用枚举值，避免另造字符串映射。
+- 验收：`python -m pytest -q` → 1083 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — FunctionValue 意义可见性检查
+
+- `FunctionEqualityChecker` 新增 `_require_visible`：消费 `FunctionValue.intrinsic_domain` 与每个表示 `valid_on` 的 `MeaningKey`，要求 world 一致且 frame 从 request frame 可见；不可见返回 `InvalidEvidence`（不是 `Refuted`），祖先 frame 仍可用。
+- `_check_equal_on` 检查两侧固有域与所选表示区域；`_check_same` 检查两侧固有域与全部表示区域。`FunctionValue` 类型不新增 frame 字段；证书按 request frame 解释。
+- 测试：左侧/右侧固有域或表示区域来自无关 frame 被拒绝；`SamePartialFunction` 检查未选中的表示；祖先 frame 的组件仍通过。全量 `1087 passed, 0 failed`。
+- 参考依据：架构 §8.0 关系与区域、§17.2 函数 Artifact、§32.4 终态载荷；AGENTS.md §3.4/§4 红线 5/7/8/9/10。
+- 经验教训：`FunctionValue` 的 frame/meaning 已由域/表示命题携带，不需要重复字段；checker 必须消费 `MeaningKey` 的 world/frame，不能只比较 term；不可见证据是证据无效，不是数学否证。
+- 验收：`python -m pytest -q` → 1087 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 最小 VerificationContext 与输入可见性
+
+- `cas.kernel.evidence` 新增 `VerificationContext`（world/frame/frames），由 `validate_commit` 从提交 frame 构造并传入 `CheckRequest`；supports/budget/decision/definedness/algebra 服务按真实消费者后续补齐。
+- `problem_mismatch` 要求数学 checker 必须拿到 context；校验每个问题输入的 `MeaningKey.world` 与 `MeaningKey.frame` 可见性，foreign world/frame 返回结构化 mismatch。`FunctionEqualityChecker` 的问题检查统一走该 helper。
+- 测试：context/CheckRequest 校验、kernel 构造、无 context 拒绝、foreign world/frame 拒绝、当前 frame/祖先 frame 接受、function checker 无 context 拒绝。全量 `1096 passed, 0 failed`。
+- 参考依据：架构 §13.4 校验上下文、§32.4 CheckRequest 载荷、§32.7 候选到可信结果；AGENTS.md §4 红线 5/7/8/9/10。
+- 经验教训：checker 不能只比较问题输入 term，必须消费输入的 meaning world/frame；上下文由内核构造，调用方不能注入另一 frame；最小上下文只建已消费字段，其余服务等真实消费者。
+- 验收：`python -m pytest -q` → 1096 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-08 — 信任边界、数学正确性与工作流快照闭合
+
+- 跨 world 信任边界：`validate_commit` 对 conclusion/premise/obligation/discharge 使用 `FrameStore.readable`；`KernelStore._publish` 与 `record_inconsistency` 校验 judgment/obligation/discharge proposition 的 world/frame/逃逸；`FrameStore.create` 的 hypothesis 同样要求 `readable`。两个 runtime 的同号 frame 不再互通。
+- 真 seal：`ValidatedCommitBatch`、`Proposition`、`TypedExpr`、`AlgebraView` 的 `_seal` 改为 `init=False`，唯一工厂用 `object.__new__` 设置 seal 后调用 `__post_init__`；`dataclasses.replace` 产生的未 sealed 值被拒绝，伪造 batch 不能发布。
+- `Rejected` 增加 `RejectedKind`（INVALID_EVIDENCE/INVALID_REQUEST/REFUTED_CONDITION/REFUTED_SPECIFICATION）；workspace 的 `_rejected_projection` 区分四类，条件被否定返回 `UNSUPPORTED` 并保留 `refuted_conditions`，不再冒充结论否证或无效证据。
+- `InferenceRecord` 记录 `certificate_schema`/`certificate_schema_version`；`VerificationContext` 增加 `readable`，`problem_mismatch` 校验问题输入与显式 problem region 的覆盖；`CaseMergeChecker` 要求两个分支 judgment 作为 premises 并返回 `used_premises=(0,1)`。
+- 数学正确性：`FunctionValue` 拒绝重复表示，`same_partial_function`/`SamePartialFunction` 使用双向多重集比较和完整 `Proposition` 意义相等；参数符号不同只返回 `UNKNOWN`，不伪造成 `Refuted`。`conditions._linear` 不再零吸收偏函数因子。`DerivativeChecker`/初等/Hermite checker 绑定 problem region；`DerivativeCertificate` 增加 `generic_source`/`specialization`，specialize 必须由 checker 重建特化源。Hermite 同时消费 `source_domain`/`valid_on`，非全定义区域保持 `UNKNOWN(GUARDED)`。
+- 工作流：`Revision` 增加 `task_records`/`candidate_records` 快照，undo/redo 恢复旧任务/候选状态；取消状态从 `ExecutionAttempt` 派生，后续 check/edit 不复活已取消任务。`merge_cases` 使用分支最新单亲后代、校验 split 身份/可见性、parents/children 一致，`merge_case_conclusion` 传入两个分支 premises 并保留 case_splits。`Occurrence` 增加 `expected`，rewrite 校验路径仍指向所选子项。`VerificationLink` 的 verified/conditional 必须有 judgment；verified `Candidate` 必须有 specifications/checker/certificate；completed task 不能带 blocker。
+- 语言/桥接：`AlgebraView` 增加 `ConversionWitness`（kind/injective/preserves_equality/preserves_nonzero）并消费 witness；`source_domain`/`valid_on` 在发行时校验可读性与子区域关系。`SetSort` 增加 `empty` 区分空集与 unknown-scalar 非空集；`CheckerBinding` 注册拒绝同一 kind 的 generic+specific 歧义。`StructuredResult` 的组件通过 `CommitProposal`/`CheckRequest`/`Candidate` 传到 Hermite checker，显示分解必须与已验证分解一致。
+- 工作流历史补强：`Revision` 增加 `object_names` 快照，`Event` 增加 `ActorKind` 与 `operation_version`；`Session` 优先使用 session label、再使用 revision object name、最后回退 `v{version}`，history 显示 actor/operation version。
+- 前端：workspace 创建但未注册 label 的表达式显示为 `v{version}`，不再 KeyError；`Session.focus` 不再回退到最后可见表达式；conditional 结果统一显示条件/义务，不再把无 region 的条件结果断言成 `verified`。
+- 测试：新增跨 world、seal、RejectedKind、schema 身份、region 绑定、specialize 绑定、function equality、零吸收、快照/取消、case merge、occurrence、SetSort、witness、structured 分解等回归。全量 `1165 passed, 0 failed`。
+- 参考依据：架构 §7.8/§8.5/§12.1/§13.3–§13.9/§14/§15.6/§17.4/§17.9/§18.5/§19.6/§32.4–§32.7；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：seal 不能是普通 dataclass 字段；world 可见性必须与 frame 可见性同时检查；checker 必须绑定原问题 region/映射而不是只比较候选；任务/候选状态必须进入 revision 快照；case merge 的分支证明必须成为 kernel premises；结构化展示必须与 checker 验证的分解绑定；条件规范化不能在未证明全定义时做零吸收。
+- 验收：`python -m pytest -q` → 1165 passed，0 failed；`python -m mypy --strict cas` → 111 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — 区域化 Hermite、Verdict 与核验上下文服务
+
+- I0 区域化 Hermite：`HermiteChecker` 从 `source_domain` 提取 `Ne(D,0)`，要求 claim region 非空且位于 `source_domain`/`valid_on` 内；对 `v`、`r` 的每个非平凡分母用 `exact_div` 证明整除 `D`；再在 K(x) 中验证 `f = D(v)+r`。全局 `TRUE` 对非全定义源仍返回 `GUARDED`；受限 claim 的全局失配不伪造 `Refuted`。`1/x`、`1/x^2` 在分母非零区域上可验证。
+- K1 上下文服务：`VerificationContext` 增加 `DecisionService`、`SupportsService`、`BudgetService`；`problem_mismatch` 与 Hermite checker 消费 decision，`CaseMergeChecker` 消费 supports，`LocalReceipt`/`decide` 携带 budget。现有三参数 context 构造保持兼容，内核构造路径填充全部服务。
+- U1 `Verdict`：新增 `VerdictYes`/`VerdictNo`/`VerdictUnknown`、`LocalReceipt`、`RefutationReceipt` 与 `decide`。`decide` 只调用 `validate_commit`，不发布 judgment、不写工作流；开放义务为 `Unknown(GUARDED)`，条件否证不伪装成 `No`。`Workspace.decide_candidate` 与前端 `decide` 命令已接入，`Verdict` 拒绝隐式 bool。
+- 测试：区域化 Hermite、context 服务、case merge supports、Verdict yes/no/unknown、非发布性、receipt 校验、decide 命令等回归。全量 `1189 passed, 0 failed`。
+- 参考依据：架构 §11.1、§13.4、§14、§15.6、§17.4、§24.2、§32.4、§32.7；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：区域化恒等式必须同时证明源域覆盖和 `v`/`r` 分母非零，不能只验 K(x) 形式等式；Verdict 的 Yes 是未发布 receipt，不是 JudgmentRef；上下文服务必须有真实 checker 消费者，不能只加字段；条件未闭合只能是 Unknown(GUARDED)。
+- 验收：`python -m pytest -q` → 1189 passed，0 failed；`python -m mypy --strict cas` → 112 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — AxiomRef、BudgetTicket、AlgebraService 与 @LABEL
+
+- `AxiomRef` 进入 `VerificationContext.axioms`，由 `CheckerSpec.trusted_dependencies` 中已准入的 `BasisRef` 唯一转换；`decide` 的 `LocalReceipt` context 同样携带。
+- `BudgetTicket` 记录 `ExecutionBudget` 与已消耗节点/深度，`spend` 拒绝超限；`BudgetService.ticket` 由内核上下文携带，`LocalReceipt.context.budget.ticket` 可观察。
+- `AlgebraService` 进入 `VerificationContext`，`CommitProposal.algebra` 由 `Workspace._apply` 传入 `execution.algebra`；`HermiteChecker` 要求 context algebra 与自身 request 一致，不匹配返回 `InvalidEvidence`。
+- 前端 `@LABEL`：`Session.parse` 先把 `@LABEL` 解析为当前 revision 的不可变对象 term，再用私有占位符和 `substitute_free` 嵌入；缺失/隐藏 label、`Quote` 内引用和残留占位符都拒绝。`@LABEL` 不进入数学符号命名空间，也不创建 DefinitionBinding。
+- 测试：AxiomRef 转换/上下文、BudgetTicket 消耗、AlgebraService 匹配/拒绝、@LABEL 快照嵌入/捕获/隐藏 label、Verdict receipt 上下文。全量 `1212 passed, 0 failed`。
+- 参考依据：架构 §11.1、§13.4、§17.2、§27.3、§32.4；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：AxiomRef 必须从已准入 BasisRef 转换，不能由调用方另造信任；BudgetTicket 只记录消耗，不改变数学真假；context algebra 必须与 checker 实际使用的 request 一致；@LABEL 必须用结构化替换而不是文本替换，且不能把显示名变成数学符号。
+- 验收：`python -m pytest -q` → 1212 passed，0 failed；`python -m mypy --strict cas` → 112 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — World/Frame 内容身份与 frame_digest
+
+- `Term` 增加公开 `structural_key()`；`World.digest` 对语言签名做确定性序列化，`Declaration`/`Definition`/`Hypothesis` 的 digest 使用 SymbolId、结构 key、sort/term/proposition 内容；`FrameStore.digest(frame)` 递归包含父 frame 与世界内容，不使用进程内 ID。
+- `Revision`/`Event` 增加 `frame_digest`（空或 64 位小写 hex），`_record_event`/`_append_revision`/`merge`/`merge_cases` 记录目标 frame 的 digest；`Session.history` 显示摘要前缀。相同内容在不同 runtime 中得到相同 digest，修改声明/定义/假设会改变 digest。
+- 测试：digest 稳定性、声明/定义/假设变更、子 frame 隔离、revision/event 记录、history 显示、伪造 digest 拒绝。全量 `1223 passed, 0 failed`。
+- 参考依据：架构 §6.5/§17.9/§28.3/§32.4；AGENTS.md §3–§4 红线 7/8/9/10/11。
+- 经验教训：内容身份不能使用 Python hash 或对象地址；SymbolId 属于内容，WorldId/FrameId 不属于内容；frame digest 必须递归包含父环境，否则同一声明在不同父 frame 下会碰撞。
+- 验收：`python -m pytest -q` → 1223 passed，0 failed；`python -m mypy --strict cas` → 112 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — DefinednessService 与上下文闭合
+
+- `VerificationContext` 增加 `DefinednessService`（decision + frames + 明确验证 frame）；`covers(region, domain)` 对不可读命题返回 `False`，否则委托 `DecisionService.is_subregion`。
+- `validate_commit` 与 `decide` 构造该服务；`HermiteChecker` 用 `context.definedness.covers` 检查 claim region/source domain，缺失服务时保留直接 condition fallback。
+- 测试：线性覆盖 true/false/None、foreign/invisible frame、kernel context、Hermite service 路径、receipt context。全量 `1233 passed, 0 failed`。
+- 参考依据：架构 §13.4、§14、§24.2、§32.4；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：definedness 检查必须同时消费 world/frame 可见性与区域包含，不能只看 term；服务必须由内核构造并传给 checker，不能由 checker 自造第二份上下文。
+- 验收：`python -m pytest -q` → 1233 passed，0 failed；`python -m mypy --strict cas` → 112 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — Definedness 记录
+
+- 新增 `cas.semantics.definedness.Definedness`：固定 source TypedExpr、intrinsic domain、representation valid_on 与 exact 标志；`domain=None` 表示全定义，`valid_on` 不能在全定义 domain 上单独出现。
+- `AlgebraView.definedness` 属性从现有 `source_domain`/`valid_on` 发行该视图，不建立第二份区域权威；`HermiteChecker` 通过 `source_view.definedness` 读取 domain/valid_on，继续执行区域化验证。
+- 测试：view 的 Definedness 字段与 exact 标志；Hermite 区域路径保持通过。全量 `1233 passed, 0 failed`。
+- 参考依据：架构 §8.5、§12.1、§32.4；AGENTS.md §3–§4 红线 7/8/9/10/11。
+- 经验教训：Definedness 是现有 source_domain/valid_on 的命名视图，不能复制成第二个可变区域来源；全定义与“仅充分子区域”必须用 domain/valid_on/exact 明确区分。
+- 验收：`python -m pytest -q` → 1233 passed，0 failed；`python -m mypy --strict cas` → 113 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — function_extension 构造关系
+
+- `ConstructionRelation` 进入 `Revision.construction_relations`，固定 source/target ObjectVersionId、kind、EqualOn specification 与 frame；`extend_function` 仅在独立 `EqualOn` checker 成功并提交后记录 `function_extension` 关系，拒绝路径不写关系。
+- `_append_revision` 支持构造关系继承/追加；`merge`/`merge_cases` 按 `(source,target,kind)` 去重并拒绝冲突载荷。`relations` 命令显示 kind/source/target/specification。
+- 测试：成功/拒绝扩展、undo/redo、merge/merge_cases、关系展示、伪造关系拒绝。全量 `1241 passed, 0 failed`。
+- 参考依据：架构 §17.6/§17.9/§32.4；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：构造关系必须在关系规格通过独立 checker 后记录，不能从候选或调用方文本推断；关系属于 revision 快照，undo/redo 必须一致；一般多结果槽关系仍需要真实联立构造消费者。
+- 验收：`python -m pytest -q` → 1241 passed，0 failed；`python -m mypy --strict cas` → 113 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — Artifact/ObjectVersion 类型视图
+
+- `Artifact`（term 或 FunctionValue 恰一）与 `ObjectVersion`（object/version/artifact/frame/source_operation/presentation）作为 `Expression`/`FunctionObject` 的不可变类型视图；现有对象记录仍是唯一存储权威。
+- `Workspace.object_version(version)` 只返回当前 revision 可见的 expression/function 视图；`object @LABEL` 命令显示 artifact kind 与 source operation，不移动焦点、不写 revision。
+- 测试：expression/function 视图字段、Artifact 互斥载荷、可见/隐藏/未知版本、命令显示、show/list 保持。全量 `1249 passed, 0 failed`。
+- 参考依据：架构 §17.2/§17.9/§32.4；AGENTS.md §3–§4 红线 7/8/9/10/11。
+- 经验教训：Artifact/ObjectVersion 视图不能复制存储；对象版本可见性必须跟随 revision；主存储迁移与持久化仍需要独立批次。
+- 验收：`python -m pytest -q` → 1249 passed，0 failed；`python -m mypy --strict cas` → 113 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过。
+
+## 2026-11-09 — RegionSpec、RegionCertificate 与 DefinednessExactness
+
+- 新增 `cas.semantics.regions`：`RegionSpec` 固定有序坐标与条件 `Proposition`，校验坐标非 bool 整数、互异、条件自由变量均在坐标内；`NonemptyCertificate`/`SubregionCertificate`/`CoversCertificate` 为封闭证书，`certify_nonempty`/`certify_subregion`/`certify_covers` 只在受限条件片段能证明时发行，`verify_region_certificate` 独立重检非空/包含/覆盖且不信任 `method` 文本。
+- `conditions.condition_satisfiable` 只对 ground-true 与单原子线性区间非矛盾合取返回 `True`，对 ground-false/区间矛盾返回 `False`，其余返回 `None`；`is_empty_condition`/`is_subregion`/`implies`/`equivalent` 行为不变。
+- `Definedness` 改为 `DefinednessExactness`（TOTAL/EXACT/SUFFICIENT）+ `RegionSpec` domain/valid_on + 可选 `RegionCertificate`；TOTAL 无区域、EXACT 由桥的 `ConversionWitness` 作证据、SUFFICIENT 必须带匹配的 `SubregionCertificate`。`AlgebraView` 增加 `signature` 并拒绝 `valid_on` 无 `source_domain`；`AlgebraView.definedness` 从既有 `source_domain`/`valid_on` 单一派生，不能证明子区域时抛 `ValueError`。`HermiteChecker` 消费 `Definedness`、独立复核证书，并保留 `DefinednessService.covers` 路径；`1/x`/`1/x^2` 仍在分母非零区域验证，全局 `TRUE` 对非全定义源仍 `GUARDED`。
+- 测试：`RegionSpec` 校验、非空 true/false/unknown、子区域 true/false/unknown、覆盖 identical/complementary/simple、伪造/错配证书拒绝、same-meaning 校验、Definedness 三态与坐标校验、多项式 TOTAL、有理 `1/x` EXACT、合成视图 SUFFICIENT 证书、`AlgebraView.signature`/`valid_on` 无 `source_domain` 拒绝。全量 `1270 passed, 0 failed`。
+- 参考依据：架构 §7.8、§10.1、§10.3、§10.4、§12.1、§12.2、§17.3、§32.4、§32.6；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：区域证书必须重检数学关系，`method` 只能是标签；不可用 `is_empty_condition(...) is False` 证明非空；`Definedness` 只能是桥区域的命名视图，不能建立第二份区域权威；`SUFFICIENT` 与 `EXACT` 必须分开，充分子区域不能冒充完整定义域；视图的 `valid_on` 不能脱离 `source_domain` 存在。
+- 验收：`python -m pytest -q` → 1270 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — 区域/定义性验收修正：全定义源、区域意义环境与坐标超集
+
+- 修正验收发现的三处区域语义问题。`AlgebraView`/`_issue_view` 不再拒绝“源全定义（`source_domain=None`）而表示只在真子区域有效（`valid_on` 非 None）”的视图；固有定义域与表示有效区域按架构 §10.1 保持独立。
+- `DefinednessExactness.SUFFICIENT` 现在覆盖两种情形：非平凡固有域上的严格子区域必须携带匹配的 `SubregionCertificate`；源全定义而表示只在充分子区域有效时 `domain` 为 None、`valid_on` 非 None、`certificate` 为 None，桥的 `ConversionWitness` 是该充分区域的证据。`TOTAL` 仍是两区域都空，`EXACT` 仍是固有域存在且 `valid_on` 为空或等于固有域。
+- `_issue_view` 与 `AlgebraView.__post_init__` 新增区域意义环境校验：每个存在区域的 `meaning.world` 必须等于源的世界；两个区域同时存在时必须共享同一 `MeaningKey`。区域可在源 world 的后代 frame 中读取，但不同 frame 的两个区域不能配对；拒绝分别使用 `region_world` 与 `region_meaning` 结构化 missing。既有子区域包含检查保持不变。
+- `Definedness` 的坐标校验从“与源绑定视图完全相等”改为“包含源的全部自由符号”：区域可以声明在更大的坐标空间上，保留自己的坐标顺序；空坐标或缺少源符号仍拒绝。`AlgebraView.definedness` 继续按源绑定顺序派生，视图坐标保持精确。
+- 测试：全定义源 + 部分表示视图的 SUFFICIENT（domain None、无证书）、原拒绝路径改为接受路径、跨 world 区域拒绝、同 world 不同 frame 成对区域拒绝、后代 frame 区域接受、sealed factory 直接构造的跨 world/跨 frame 拒绝、Definedness 额外坐标接受、原有 TOTAL/EXACT/SUFFICIENT 证书与 Hermite 区域路径保持。全量 `1276 passed, 0 failed`。
+- 参考依据：架构 §10.1、§10.3、§32.4；AGENTS.md §3.4、§4 红线 5/7/9/10/11。
+- 经验教训：固有定义域与表示有效区域不能互相要求；源全定义不代表每个表示都全域有效，`SUFFICIENT` 不能因为没有固有域就伪造证书，也不能把充分区域升级为 `EXACT`；区域条件必须与源同 world，成对区域必须同 meaning，否则不同命名环境的命题会被错误地当作包含关系；区域坐标是条件空间而不是源绑定视图的复制，允许额外坐标但必须覆盖源自由符号。此前 Definedness/区域批次中“`valid_on` 不能脱离 `source_domain` 存在”“`valid_on` 不能在全定义 domain 上单独出现”的表述均由本批修正取代。
+- 验收：`python -m pytest -q tests/unit/test_regions.py tests/unit/test_definedness.py tests/unit/test_algebra_view.py tests/integration/test_hermite_slice.py` → 74 passed，0 failed；`python -m pytest -q` → 1276 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — 函数表示覆盖证书与 extend_function 核验
+
+- `cas.math.functions.equality` 新增 `function_region`/`function_coverage_regions`/`function_coverage_certificate`/`coverage_matches_value`：函数固有域与每个表示 `valid_on` 统一转成 `RegionSpec`，坐标取函数参数与条件自由变量的排序并集；覆盖证明复用 `certify_covers` 的受限条件片段，不建立第二套区域系统。`FunctionEqualityCertificate` 增加可选 `coverage: CoversCertificate`，普通 `EqualOn`/`SamePartialFunction` 证书不要求它。
+- `FunctionExtensionOperation.propose` 在构造新 `FunctionValue` 后要求其固有域被全部表示有效区域覆盖；不可证时返回 `ProposalUnsupported(GUARDED, missing={"representation_coverage"}, conditions=表示区域条件)`，不创建候选、函数版本、构造关系或判断。成功时把证书写入 `FunctionEqualityCertificate.coverage`。
+- `FunctionEqualityChecker` 在 `_check_equal_on` 中独立 `verify_region_certificate` 并用 `coverage_matches_value` 核对证书精确匹配 `certificate.right`；伪造、不匹配或受限片段不能证明的覆盖一律 `InvalidEvidence`，不是 `Refuted`/`Verified`。`SamePartialFunction` 证书携带覆盖字段时明确 `InvalidEvidence`，因为该规格没有覆盖承诺。
+- 测试：成功延拓的覆盖证书与坐标/片段匹配；未覆盖间隙返回 `representation_coverage` 且无函数版本/关系/候选/判断；伪造与错配覆盖证书被拒绝；`SamePartialFunction` 覆盖字段被拒绝；helper 类型校验。全量 `1282 passed, 0 failed`。
+- 参考依据：架构 §10.1、§10.3、§12.2、§17.4、§32.4、§32.6；AGENTS.md §3.2/§3.4/§4 红线 1/5/7/8/9/10/11。
+- 经验教训：覆盖证书只证明“声明固有域被表示区域覆盖”，不证明新表示在旧域外的值、不证明最大固有域、也不证明重叠区域一致；`EqualOn` 与 `Covers` 是两个独立承诺，不能用一个代替另一个。checker 必须自己重建覆盖区域并与右函数值结构匹配，不能信任 operation 的证书。受限片段不能证明的覆盖必须 `GUARDED`，不能冒充 `FRAGMENT` 缺口或完整覆盖。
+- 验收：`python -m pytest -q tests/unit/test_functions.py tests/unit/test_operations.py tests/unit/test_workspace.py tests/integration/test_vertical_slice.py` → 150 passed，0 failed；`python -m pytest -q` → 1282 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — GenericResult 区域载荷迁移
+
+- `GenericResult.valid_on`/`excluded_cases` 从裸 `Proposition` 迁移为 `cas.semantics.regions.RegionSpec`；`assemble`/`coverage_claim`/`is_unconditional`/`validate_coverage_claim` 统一接收 RegionSpec，`specialize` 读取 `valid_on.condition` 与排除情形的 `condition`，`OutsideValidity.valid_on` 与 `NeedsRecomputation.conditions` 同步改为 RegionSpec 并做类型校验。`correctness_specification` 保持 Proposition。
+- 新增 `region_from_proposition`：校验 Proposition，坐标取 `coordinate_symbols(proposition.term)` 的排序结果，作为现有 Proposition 载荷进入区域描述的唯一桥。workspace 由 `MathematicalProposal` 构造泛结果时包装 `valid_on`/`excluded_cases`；`MathematicalProposal` 的公开字段本批不变，其覆盖准入复用同一桥。`differentiate`/`integrate` 的 `coverage_claim` 调用与泛结果可见性检查同步消费 RegionSpec 条件。
+- 测试：`RegionSpec` 坐标确定性、裸 Proposition 进入 `GenericResult` 被 TypeError 拒绝、`ALL_VALUES` 仍拒绝非 TRUE 区域或非空排除情形、`OutsideValidity.valid_on`/`NeedsRecomputation.conditions` 为 RegionSpec；既有特化、参数化纵线与工作流语义保持。全量 `1284 passed, 0 failed`。
+- 参考依据：架构 §8.4、§10.1、§10.3、§17.3、§32.4、§32.6；AGENTS.md §3–§4 红线 3/5/7/8/9/10/11。
+- 经验教训：区域迁移必须复用既有 `RegionSpec` 与坐标逻辑，不能为兼容旧 Proposition 字段建立第二套区域类型或双 API；`MathematicalProposal` 的公开 Proposition 字段只是输入契约，进入 `GenericResult` 前必须经唯一桥转换；覆盖准入的 canonical TRUE 判定读取 `condition`，不能在 RegionSpec 上直接比较 term。
+- 验收：`python -m pytest -q tests/unit/test_specialization.py tests/unit/test_specialization_workflow.py tests/unit/test_generic_parameterized.py tests/unit/test_operations.py tests/integration/test_parameterized_slice.py tests/property/test_parameterized_properties.py` → 80 passed，0 failed；`python -m pytest -q` → 1284 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — Proposition 结构定义性前提与区域消费
+
+- `cas.language.propositions.Proposition` 增加 `definedness: tuple[Proposition, ...] = ()`，进入 `_PROPOSITION_FIELDS`；`__post_init__` 校验 tuple、元素类型、同 `MeaningKey`、不得重复、不得等于命题自身；前提参与相等/hash，seal 与 `dataclasses.replace` 拒绝行为保持。`propositions.check` 在定型后调用唯一 `_structural_premises`：`IntLit <= 0` 的 `Power(base,n)` 记录 `Ne(base,0)`，和/积/比较/`And`/`Or`/`Not`/`Implies`/`Guarded`/`Piecewise` 递归操作数，`Quote`/`Set` 载荷与 `Binder` body/annotations 明确不检查，声明函数应用只递归参数；前提按结构去重、保持首次出现顺序，并递归经 `check` 发行自身前提；语言无 `Ne` 时返回 `Unsupported` 而不是丢弃前提。
+- `cas.semantics.conditions.premises_proved` 成为唯一前提蕴含规则；`cas.semantics.regions.premises_proved_from`/`proved_subregion` 要求参与证书的条件证明自身前提，并让 `certify_nonempty`/`certify_subregion`/`certify_covers`/`verify_region_certificate` 对未证明前提返回 None/False；`AlgebraView._issue_view` 与 `definedness`、`DefinednessService.covers` 消费同一规则。`elaborate.proposition` 经 `check` 自动携带前提。Hermite 的分母非零区域无前提，区域化路径保持绿色。
+- 测试：`tests/unit/test_propositions.py` 覆盖负/零整数幂、嵌套幂、正幂/字面量/符号、`And`/`Or`/`Not`/比较/`Guarded`/`Piecewise` 递归、`Quote`/`Set` 不检查、声明函数应用只递归参数、`Binder` body 不检查、无 `Ne` 语言拒绝、前提 meaning/重复/自引用校验、相等性与 `replace` 拒绝；`tests/unit/test_regions.py` 覆盖可证前提接受、开放前提拒绝、伪造证书拒绝；`tests/unit/test_elaborate.py` 覆盖前提保留与别名展开；`tests/unit/test_algebra_view.py` 覆盖视图区域前提接受/拒绝；`tests/unit/test_evidence.py` 覆盖 `DefinednessService.covers` 的前提消费。全量 `1313 passed, 0 failed`。
+- 参考依据：架构 §10.1、§10.3、§10.4、§12.1、§12.2、§32.4、§32.6；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：定义性前提是“命题在什么条件下有定义”，不是“让命题为真的额外假设”，所以不能参与条件蕴含的假设侧，只能作为证书参与者的可定义性义务；结构递归必须明确跳过 `Quote`/`Set` 与 binder body，不能用未作用域的 bound index 发行前提；语言缺少 `Ne` 时必须拒绝，不能静默丢掉非零前提；区域证书必须对前提和项级包含分别重检，`method` 标签不能代替证明。
+- 验收：`python -m pytest -q tests/unit/test_propositions.py tests/unit/test_elaborate.py tests/unit/test_regions.py tests/integration/test_hermite_slice.py` → 83 passed，0 failed；`python -m pytest -q tests/unit/test_evidence.py` → 39 passed，0 failed；`python -m pytest -q` → 1313 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — 定义性前提的消费者修正
+
+- `specialize` 的 `_truth` 先递归求值 `Proposition.definedness`：假前提使条件在该点未定义（有效性区域返回 `OutsideValidity`，排除情形视为不适用），未决前提返回 `None` 并转为 `NeedsRecomputation`，只有全部前提为真才求主条件；`Applied`/`OutsideValidity`/`NeedsRecomputation` 语义保持不变。
+- `regions.proved_subregion` 增加 `same_meaning=False`，仅供已独立校验两个命题同 world 且 frame 可见的调用方使用；`FunctionEqualityChecker._check_equal_on` 先独立发行 claim region，再用该规则证明它是各固有域与表示区域的全定义子区域；`_check_same` 对带开放前提的完整域条件返回 `Unverified(GUARDED)`。
+- `FunctionExtensionOperation.propose` 与 workspace 的 `define_function`/`extend_function` 全部改用 `proved_subregion`；部分条件的新固有域或新表示区域在 `propose` 中返回结构化 `ProposalUnsupported(GUARDED, missing={"function_region_premises"})`，不构造 `FunctionValue`。
+- 裸 Proposition 区域载荷（`ProblemSpec.region`、`OperationRequest.region`、`FunctionValue.intrinsic_domain`/`FunctionRepresentation.valid_on`、`MathematicalProposal.result_region`/`valid_on`/`excluded_cases`）的当前消费者仍按 term 读取，故构造器在 `definedness` 非空时抛出明确 `ValueError`；`Proposition` 本身不被拒绝，`RegionSpec`/`GenericResult`/`AlgebraView` 继续按前提感知规则消费。该保守边界不等于 `RegionSpec` 迁移完成。
+- 测试：`tests/unit/test_specialization.py` 覆盖部分有效区域的假前提、未决前提、真前提加真条件、排除情形的假前提跳过与未决前提重算；`tests/unit/test_functions.py` 覆盖 `FunctionValue`/`FunctionRepresentation` 拒绝部分条件、`EqualOn` 拒绝开放前提并接受区域自证前提、`proved_subregion` 的前提感知（含项级包含成立但前提开放时拒绝）、extension 对部分新域/新表示区域的拒绝；`tests/unit/test_problems.py`/`tests/unit/test_operations.py` 覆盖 `ProblemSpec.region`、`OperationRequest.region` 与 `MathematicalProposal` 区域载荷拒绝部分条件并接受总条件。
+- 参考依据：架构 §10.1、§10.4、§12.1、§12.2、§32.4；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：定义性前提不能只在命题发行处记录，任何按 `Proposition.term` 求值或比较的消费者都必须先处理前提；无法在本批迁移到 `RegionSpec` 的载荷应在构造边界明确拒绝，而不是让 term 级消费者静默忽略前提。`same_meaning=False` 只适用于调用方已独立校验 world/frame 可见性的场景，不能作为绕过含义环境的通用开关。
+- 验收：`python -m pytest -q tests/unit/test_specialization.py tests/unit/test_functions.py tests/unit/test_operations.py tests/unit/test_problems.py tests/unit/test_regions.py tests/unit/test_propositions.py` → 150 passed，0 failed；`python -m pytest -q` → 1328 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — AlgebraRequest 请求局部导子载荷
+
+- `cas.semantics.request.AlgebraRequest` 新增 `differential: DifferentialStructure[Any] | None = None`：缺省 `None` 表示该请求不假设任何导子（不以零导子兜底），存在时必须为 `DifferentialStructure`；请求是本次计算所选导子的唯一权威，同一 target 在另一请求中可换用另一导子。
+- `DifferentiationView`/`SpecializationView` 增加构造校验：请求必须携带导子，且视图的 `differential` 必须与请求的 `DifferentialStructure` 为同一对象（按 `is`，不是 dataclass 结构相等），否则抛出明确 `ValueError`；视图字段保留为已校验的便利引用，不构成第二套导子选择。
+- `bootstrap` 的 Q[x] 视图、`bootstrap_parameterized` 的每个 `K[parameters][target]` 视图与特化 Q[x] 视图、`bootstrap_elementary` 的初等视图都把既有 `differential`/`base_differential` 写入对应 `AlgebraRequest`；没有新建导子，也没有改动 target/generator/bridge/service/checker 行为。
+- 测试：`tests/unit/test_algebra_request.py` 覆盖接受 `DifferentialStructure`、拒绝非结构载荷、缺省与显式 `None` 保持“无导子”；`tests/unit/test_differential.py` 覆盖两类视图拒绝缺失与不匹配导子、接受匹配导子；`tests/unit/test_bootstrap.py` 覆盖三套装配的 request/view 导子同一性。
+- 参考依据：架构 §7.9、§9.1、§32.4、§32.6；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：请求局部导子必须按对象同一性而不是 dataclass 结构相等校验；两个“相等”的 `DifferentialStructure` 仍是两次导子选择，结构相等会把第二套权威放回视图。缺省 `None` 只能表示“没有导子”，不能由视图或服务补零导子。
+- 验收：`python -m pytest -q tests/unit/test_algebra_request.py tests/unit/test_differential.py tests/unit/test_bootstrap.py tests/unit/test_differentiation_checker.py tests/integration/test_vertical_slice.py tests/integration/test_parameterized_slice.py` → 79 passed，0 failed；`python -m pytest -q` → 1340 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — ConversionWitness 定义性保留与视图准入边界
+
+- `cas.semantics.bridge.ConversionWitness` 增加 `preserves_definedness`：校验为 bool；`REPRESENTATION_ISOMORPHISM` 与 `EMBEDDING` 要求 `injective`/`preserves_equality`/`preserves_nonzero`/`preserves_definedness` 全为真，`HOMOMORPHISM` 仍允许任意标志；`representation_isomorphism()` 固定四个标志为真。
+- 新增唯一规则 `_region_definedness_refusal`：视图携带 `source_domain` 或 `valid_on` 时，witness 必须保留定义性，否则区域声明不能读回源表达式。`AlgebraView.__post_init__` 在最早构造边界拒绝；`_issue_view` 以 `ViewRefused(Reason.FRAGMENT, missing={"conversion_witness"})` 拒绝；`_admit_view_relation`/`typed_view` 在准入边界独立重检。全定义视图（两区域皆无）不作区域声明，非保定义同态仍按既有单射/保等号规则传递等式。
+- 多项式桥、参数多项式桥与有理桥继续发行 `preserves_definedness=True` 的表示同构；有理桥的 `Ne(den, 0)` 区域与 Hermite 区域化验证保持绿色。未改动嵌入/同态的具体实现、混域消解或 `AlgebraRequest` 嵌入字段。
+- 测试：`tests/unit/test_algebra_view.py` 更新全部直接 `ConversionWitness` 构造，新增标准同构四标志、非 bool 标志、同构/嵌入拒绝 `preserves_definedness=False`、区域视图在发行与 sealed factory 边界拒绝、全定义视图经非保定义同态仍可准入；`tests/unit/test_bridge.py` 新增多项式/有理视图 `preserves_definedness=True` 断言；`tests/unit/test_parameterized_bridge.py` 断言参数视图 witness 为完整表示同构；`tests/integration/test_hermite_slice.py` 保持区域 Hermite 绿色。
+- 参考依据：架构 §7.7（Embedding/Homomorphism/RepresentationIsomorphism/Specialization）、§7.8（语义桥与定义域保留）、§10.1（五种区域）、§32.4（AlgebraView 载荷）、§32.6（桥必须保留源定义域）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：`ConversionWitness` 的 kind 只是标签，消费者必须读取具体事实；定义性保留是区域声明可读回源的必要条件，不能从 `injective`/`preserves_equality` 推导。全定义视图没有区域声明，不能因为 witness 不保定义性就拒绝其等式传递；反过来，区域视图不能因为 witness 单射且保等号就默认定义性也被保留。构造边界与准入边界应共享同一规则，但分别以 `ValueError`（非法对象）和 `ViewRefused`（可信准入拒绝）表达。
+- 验收：`python -m pytest -q tests/unit/test_algebra_view.py tests/unit/test_bridge.py tests/unit/test_parameterized_bridge.py tests/integration/test_hermite_slice.py` → 90 passed，0 failed；`python -m pytest -q` → 1345 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — 解释与 ConversionWitness kind 一致性
+
+- `cas.semantics.bridge` 新增唯一规则 `_interpretation_witness_refusal(interpretation, witness)`：`EMBEDDED` 只接受 `EMBEDDING`/`REPRESENTATION_ISOMORPHISM`，`HOMOMORPHISM` 与“值是嵌入像”矛盾；`PARAMETER_FAMILY` 只接受 `REPRESENTATION_ISOMORPHISM`，`EMBEDDING`/`HOMOMORPHISM` 不足以声称形式参数族表示；`FORMAL` 保留三种 kind，仍由既有 `injective`/`preserves_equality`/`preserves_nonzero`/`preserves_definedness` 标志决定可传递事实。该规则与区域/定义性保留规则独立叠加，不替代 `preserves_definedness` 检查。
+- `AlgebraView.__post_init__` 在直接构造边界以 helper 的 detail 抛 `ValueError`；`_issue_view` 在建造前返回 `ViewRefused(Reason.FRAGMENT, detail, missing=frozenset({"interpretation_witness"}))`。多项式桥、参数多项式桥、有理桥与特化 Q[x] 视图继续发行表示同构，因此既有 `FORMAL`/`EMBEDDED`/`PARAMETER_FAMILY` 路径全部保持可用；未新增嵌入/同态桥、混域消解或 `AlgebraRequest` 嵌入字段。
+- 测试：`tests/unit/test_algebra_view.py` 覆盖 `EMBEDDED`+`HOMOMORPHISM` 拒绝（`_issue_view` 与 sealed factory 两个边界）、`PARAMETER_FAMILY`+`EMBEDDING`/`HOMOMORPHISM` 拒绝、`EMBEDDED`+`EMBEDDING`/`REPRESENTATION_ISOMORPHISM` 接受、`PARAMETER_FAMILY`+`REPRESENTATION_ISOMORPHISM` 接受（参数桥与特化 Q[x] 真路径）、`FORMAL`+`HOMOMORPHISM` 仍按 witness 标志接受；`tests/unit/test_bridge.py`/`tests/unit/test_parameterized_bridge.py` 断言真实多项式/有理/参数桥的 interpretation 与表示同构 witness 不变。
+- 参考依据：架构 §7.7（映射种类）、§7.8（语义桥 interpretation/witness）、§32.4（AlgebraView 载荷）、§32.6（桥必须说明数学关系）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：`Interpretation` 与 `ConversionWitness.kind` 描述同一转换的两个面，必须由一条共享规则判定，不能只在 consumer 各自解释；`EMBEDDED` 是“源在具体嵌入下的像”，一般同态可能非单射，不能冒充；`PARAMETER_FAMILY` 是形式参数族表示本身，只有表示同构能支撑，嵌入/同态都会把更粗的关系伪装成族表示。`FORMAL` 仍应保持开放，由四个 witness 标志决定等式/非零/定义性能否传递；构造边界用 `ValueError`、可信准入边界用 `ViewRefused`，二者共享 helper 但不合并错误类型。
+- 验收：`python -m pytest -q tests/unit/test_algebra_view.py tests/unit/test_bridge.py tests/unit/test_parameterized_bridge.py tests/integration/test_hermite_slice.py` → 96 passed，0 failed；`python -m pytest -q` → 1351 passed，0 failed；`python -m mypy --strict cas` → 114 source files 无问题；`python -m ruff check cas tests` 通过；`python -m compileall -q cas tests` 通过；`git diff --check` 退出码 0（仅既有 LF/CRLF 警告）。
+
+## 2026-11-09 — 区域绑定排序、稠密证书边界与 sealed Definedness
+
+- `cas.semantics.regions.RegionSpec` 增加 `sorts: tuple[tuple[SymbolId, Sort], ...] = ()`：每项必须是 `(SymbolId, Sort)`，符号去重；非空时符号集合必须恰好等于 `coordinates`，存储按 `SymbolId` 规范化。新增 `sort_of` 与 `is_dense`：全部坐标为 `RATIONAL`/`REAL` 时为真，空坐标集 vacuously dense；`INTEGER`/`COMPLEX`/未知/缺失排序均非稠密。`RegionSpec` 相等包含 `sorts`。
+- `certify_nonempty`/`certify_subregion`/`certify_covers` 在任一参与区域非稠密时直接返回 `None`；`verify_region_certificate` 对非稠密区域上的 `NonemptyCertificate`/`SubregionCertificate`/`CoversCertificate` 返回 `False`。`condition_satisfiable`/`is_empty_condition` 的稠密序区间推理不再被非稠密区域继承；整数区间 `0 < y < 1` 可被原始区间片段误判非空，但证书层在读取前拒绝。
+- `cas.semantics.bridge.AlgebraView` 增加 sealed `region_bindings: tuple[FreeSymbol, ...]`，默认取 `source.bindings.symbols`；`_build_view`/`_issue_view` 增加可选关键字参数并贯穿三个 bridge 的发行路径。`__post_init__` 校验其为去重 `FreeSymbol` 元组、覆盖源自由符号与每个现存区域自由变量；`_issue_view` 以 `ViewRefused(Reason.FRAGMENT, missing={"region_bindings"})` 在建造前拒绝。`AlgebraView.definedness` 用 `region_bindings` 的坐标与排序构造 `RegionSpec`，修复区域含后代 frame 额外坐标时的自由变量越界；严格子区域需要证书但排序非稠密时抛精确 `ValueError`，源全定义且仅有 `valid_on` 仍为无证书 `SUFFICIENT`。
+- `cas.semantics.definedness.Definedness` 改为 sealed：非 init `_seal`、模块 `_SEAL`、`__post_init__` seal 检查、字段访问检查与唯一 `_issue_definedness` 工厂；`AlgebraView.definedness` 全部经该工厂发行。直接构造与 `dataclasses.replace` 均以 `ValueError` 拒绝，`TOTAL`/`EXACT`/`SUFFICIENT` 的既有合法性校验保留。
+- `cas.math.functions.equality.function_region` 只为函数参数坐标记录 `FunctionParameter.sort`；条件含非参数自由变量时整体省略 `sorts`，不发明排序，`function_coverage_certificate` 因此诚实返回 `None`。`function_coverage_regions`/`function_coverage_certificate`/`coverage_matches_value` 继续共用该 helper。
+- 测试：`tests/unit/test_regions.py` 覆盖排序规范化、非法排序、整数/缺失排序无证书与伪造证书拒绝、有理/实数仍可证书；`tests/unit/test_definedness.py` 改用 `_issue_definedness` 并覆盖 seal/replace 拒绝；`tests/unit/test_algebra_view.py` 覆盖额外坐标 `region_bindings`、未覆盖符号结构化拒绝、非稠密严格子区域拒绝；`tests/unit/test_functions.py` 覆盖参数排序与未知额外变量非稠密；`tests/integration/test_hermite_slice.py` 保持区域化 Hermite 绿色。
+- 参考依据：架构 §10.1（区域坐标可大于源绑定视图）、§10.3（`RegionSpec`/证书与受限片段）、§12.1（Proposition 前提）、§12.2（空区域与 `Covers`）、§32.4（RegionSpec/Definedness 载荷）、§32.6（输入到域元素的数据流）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：区间可满足性只对稠密线性序成立，证书发行与重检都必须在读取条件前检查绑定排序；空坐标集是 vacuously dense，不能把“无排序”一律当成非稠密。区域绑定视图必须同时覆盖源与区域自由变量，否则后代 frame 的额外坐标会被源绑定视图挤压。`Definedness` 的 seal 必须放在语义校验之前，直接构造与 `dataclasses.replace` 才能被同一入口拒绝；测试中的非法组合应经 `_issue_definedness` 验证语义校验，而不是绕过 seal。
+- 验收：`python -m pytest -q tests/unit/test_regions.py tests/unit/test_definedness.py tests/unit/test_algebra_view.py tests/unit/test_functions.py tests/integration/test_hermite_slice.py` → 146 passed，0 failed；`python -m pytest -q` → 1362 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+- 未闭合：`ProblemSpec` 的精确域/解释、`VariableRoles`、函数相等 checker 的 problem binding、`externalizable`、结果语言与嵌入字段仍未完成；本批不声称一般半代数/离散区域代数或无限覆盖。
+
+## 2026-11-09 — 函数问题绑定、世界作用域角色与函数相等核验收口
+
+- `cas.language.problems.ProblemSpec` 增加 `function_inputs: tuple[FunctionValue, ...] = ()`：固定函数问题的 `FunctionValue` 参数绑定、固有域与全部表示区域；非空时要求 `roles.target is None`，每个固有域/表示区域与类型化输入同 world。`compare_functions`/`extend_function` 的 `build_problem` 分别传入解析载荷中的左右函数值与旧函数值；workspace `_same_problem` 同批比较 `function_inputs`，避免手动任务用不同函数值冒充同一问题。
+- `VariableRoles` 增加 `world: WorldId | None`；`ProblemSpec`/`AlgebraRequest` 拒绝未绑定 world 的角色集，并要求 `roles.world`、`region`、每个 `externalizable` 前提与输入同 world。三个 bootstrap 入口的全部 `VariableRoles` 写入 `frames.world.id`。`semantics.bridge` 新增 `_admit_request_world`，三个桥的 `to_view` 以 `ViewRefused(Reason.FRAGMENT, missing={"request_world"})` 拒绝角色 world 与源 TypedExpr 不一致的请求，不改变实际转换。
+- `FunctionEqualityChecker` 在 `problem_mismatch` 后绑定证书：`compare_functions` 要求左右函数值精确等于 `problem.function_inputs` 的两项，`extend_function` 要求旧函数等于唯一函数输入；缺失/不匹配为 `InvalidEvidence`。`EqualOn` 在 problem 有区域时把 `claim.region` 传给 `problem_mismatch`，由同一子区域规则检查 problem.region ⊆ claim.region；`SamePartialFunction` 在 problem 有区域时要求它位于两侧完整固有域内。新增 `_require_value_regions_inside_domain` 逐个检查表示区域是固有域的可证子区域（False → InvalidEvidence，None → Unverified(GUARDED)）；非稠密参数排序返回 Unverified(GUARDED)，claim region 含非参数自由变量返回 Unverified(FRAGMENT)。
+- 测试：`tests/unit/test_problems.py` 覆盖 region/externalizable 跨 world 拒绝、未绑定/跨 runtime 角色拒绝、function_inputs 类型/target/world 校验；`tests/unit/test_algebra_request.py` 覆盖 world 必填与角色 world 类型；`tests/unit/test_bridge.py` 用两个 colliding symbol ID 的 runtime 验证 `request_world` 拒绝；`tests/unit/test_functions.py` 覆盖 problem region 伪造/精确覆盖、证书函数值与 problem 输入不匹配、表示区域超出固有域、整数参数诚实未决、非参数区域变量、SamePartialFunction problem region 拒绝；`test_parameter_schema.py` 断言两个函数操作的 problem.function_inputs。
+- 参考依据：架构 §7.9（请求角色与世界）、§10.1/§10.3（区域与函数表示）、§12.2（请求区域必须是已证区域子区域）、§17.3（ProblemSpec 字段）、§17.4（Candidate/验证）、§32.4（载荷 owner）、§32.6/§32.7（输入与候选到可信结果的数据流）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：函数身份不是表示项；同项不同固有域/表示区域是不同函数，必须由 ProblemSpec 固定并由 checker 精确比较。SymbolId 只在 world 内局部有效，角色集必须与输入同 world，桥要在角色/generator 检查前拒绝跨 world 请求。checker 必须把 problem region 与 claim region、完整域、每个表示区域分别绑定；`False`（可证在外）与 `None`（片段未决）不能压成同一种失败，也不能用 `Refuted` 冒充证据不匹配。
+- 验收：`python -m pytest -q tests/unit/test_functions.py tests/unit/test_problems.py tests/unit/test_algebra_request.py tests/unit/test_execution_request.py tests/unit/test_operations.py tests/unit/test_workspace.py tests/unit/test_bridge.py tests/unit/test_parameterized_bridge.py tests/unit/test_task_state.py tests/unit/test_typed_expr.py` → 265 passed，0 failed；`python -m pytest -q` → 1381 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+- 未闭合：`ProblemSpec` 的精确域/解释、`externalizable` 正向路径、嵌入、结果语言与一般完备性仍未建；本批不声称完整 S1 或一般函数定义域语义。
+
+## 2026-11-09 — 文档状态更正：函数问题绑定与世界作用域角色已闭合
+
+- 本条目只更正文档状态，不改写此前条目，也不改源码或测试。此前“区域绑定排序、稠密证书边界与 sealed Definedness”条目末尾列出的 `VariableRoles` 与函数相等 checker 的 problem binding 两项，已由后续“函数问题绑定、世界作用域角色与函数相等核验收口”批次闭合：`VariableRoles.world`、`ProblemSpec.function_inputs` 与 `FunctionEqualityChecker` 的 problem binding 已实现并接入；该条目同时列出的 `ProblemSpec` 精确域/解释、`externalizable`、结果语言与嵌入字段仍未闭合。
+- 当前仍未闭合：`ProblemSpec` 的精确域/解释、`VariableRoles` 绑定位置/排序、`externalizable` 正向路径、结果语言、嵌入/实嵌入/参数关系、一般区域代数（`Guarded`/`Piecewise`/binder-aware premises）、统一 `AlgebraService` 消费与完整 `problem_mismatch` 角色/参数模式/解释检查；不声称完整 S1。
+- 测试状态：`python -m pytest -q` → 1381 passed，0 failed。
+
+## 2026-11-10 — ProblemSpec 精确性/解释要求、角色排序与 problem_mismatch 全绑定
+
+- `cas.language.problems` 新增 `Exactness`（`EXACT`/`APPROXIMATE`）与 `InterpretationRequirement`（`FORMAL`/`PARAMETER_FAMILY`/`EMBEDDED`）。`ProblemSpec` 增加 `exactness: Exactness = EXACT` 与 `interpretation_requirement: InterpretationRequirement | None = None`；`APPROXIMATE` 在构造期以 `ValueError` 拒绝（当前没有近似 checker），函数问题不得携带解释要求。
+- `VariableRoles` 增加 `target_sort: Sort | None` 与 `parameter_sorts: tuple[Sort, ...]`（追加在 `world` 之后）；按 target/parameters 是否存在校验，缺排序、长度不匹配、无角色却带排序均拒绝。`ProblemSpec` 要求目标/参数排序，并要求输入 `BindingView` 中与角色同名的符号排序一致；`AlgebraRequest` 要求目标排序与参数排序长度匹配。三个 bootstrap 入口按实际声明写入 `S.REAL`。
+- `ProblemSpec` 新增稠密区域绑定检查：从全部输入 `BindingView`、target/parameter roles 与 `function_inputs` 参数建立排序表；`region` 与每个 `externalizable` 前提（含其 `definedness` 前提）的每个自由变量必须在表中，且排序为 `RATIONAL`/`REAL`，否则抛精确 `ValueError`。`cas.syntax.binding.variable_symbols` 是区域坐标遍历的唯一实现，`cas.semantics.regions.coordinate_symbols` 委托它，language 不导入 semantics。
+- `AlgebraRequest.interpretation_requirement` 是 `Interpretation` → `InterpretationRequirement` 的唯一映射；`ProblemBuilt`/`ExecutionRequest` 强制有 algebra 时 problem requirement 非空且等于该映射，无 algebra 时必须为 `None`。`expression_problem`、gcd、resultant、linear 写入 requirement；函数操作保持 `None`。
+- `problem_mismatch` 增加可选 `roles`/`interpretation_requirement`/`exactness`；roles 相等覆盖 target、parameters、parameter mode、world 与 target/parameter 排序。Derivative、Elementary、Hermite、Linear、Gcd、Resultant checker 传入固定 request 的 roles 与 interpretation；函数 checker 只传 exactness，保留既有 `function_inputs` 绑定。
+- 测试：`tests/unit/test_problems.py` 覆盖 APPROXIMATE 构造拒绝、函数问题解释要求拒绝、输入/角色排序冲突、区域未知/整数排序拒绝与稠密绑定接受；`tests/unit/test_algebra_request.py` 覆盖角色排序存在性、解释映射；`tests/unit/test_parameterized_checker.py` 覆盖匹配 problem 验证、另一 parameter mode/target sort/伪造 role world、缺失/不同 interpretation requirement、伪造 APPROXIMATE problem 均被 checker 拒绝；`tests/unit/test_differentiation_checker.py`、`test_elementary_checker.py`、`test_polynomial_gcd.py`、`test_execution_request.py` 同步绑定解释要求与角色排序。
+- 参考依据：架构 §7.9（`AlgebraRequest` 角色/解释/导子载荷）、§10.1（五种区域与原问题目标区域）、§10.3（`Region`/`RegionSpec` 与稠密序边界）、§12.2（请求区域必须是已证区域子区域）、§17.3（`ProblemSpec` 必须固定精确性、覆盖/完备性、参数模式、目标变量/函数及绑定）、§32.4（`ProblemSpec`/`AlgebraRequest`/`ExecutionRequest` 载荷 owner）、§32.6/§32.7（输入到域元素、候选到可信结果）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：问题区域只在所有坐标都有已知稠密排序时才能继承 `condition_satisfiable`/`is_subregion` 的线性序推理；未知、整数、复数与未绑定坐标必须在 `ProblemSpec` 构造期拒绝，而不是让 checker 在稠密假设下误判。角色排序必须与输入 `BindingView` 对同一 `SymbolId` 的声明排序一致，否则“同一符号”在问题与请求中会有两种类型。解释要求是 language-owned 数据，`AlgebraRequest` 的映射是唯一桥；`ProblemBuilt`/`ExecutionRequest` 必须消费它，否则 checker 可能在另一解释下验证同一问题。checker 的 roles 检查必须比较完整 `VariableRoles`，而不是只比较 target 整数。
+- 验收：`python -m pytest -q tests/unit/test_problems.py tests/unit/test_algebra_request.py tests/unit/test_execution_request.py tests/unit/test_operations.py tests/unit/test_functions.py tests/unit/test_task_state.py tests/unit/test_workspace.py tests/unit/test_differentiation_checker.py tests/unit/test_parameterized_checker.py tests/unit/test_elementary_checker.py tests/unit/test_evidence.py tests/unit/test_polynomial_gcd.py tests/unit/test_resultant.py tests/unit/test_solving.py tests/unit/test_parameter_schema.py tests/unit/test_bridge.py tests/unit/test_parameterized_bridge.py` → 393 passed，0 failed；`python -m pytest -q` → 1398 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+- 未闭合：系数范围/值域（coefficient-range/value-domain）字段、`externalizable` 正向路径、嵌入/实嵌入、结果语言覆盖、完整绑定位置与 binder-aware 角色、近似 checker 与一般完备性仍未建；本批不声称完整 S1 或一般区域代数。
+
+## 2026-11-10 — Candidate 代数快照与固定请求 checker 的 VerificationContext.algebra 统一消费
+
+- `cas.workflow.records.Candidate` 增加 `algebra: AlgebraRequest | None = None`：记录候选被提出时的精确 `AlgebraRequest` 快照；非空时要求 `algebra.roles == problem.roles`、`algebra.target == problem.target`，函数问题（`problem.function_inputs` 非空）必须为 `None`。该字段是数据快照，不是第二套角色/系数权威，workflow 不按系数结构分支。
+- `cas.workflow.workspace` 的 `_apply` 用 `execution.algebra` 构造候选；`edit_candidate` 在清除证书、创建新 unchecked 候选时保留 `candidate.algebra`；`_candidate_proposal` 把 `candidate.algebra` 原样提交，因此 `check_candidate`/`decide_candidate` 复核同一 target/parameter/interpretation/differential 快照，而不是重新装配另一个视图。
+- `cas.kernel.evidence.context_algebra_mismatch(context, request)` 成为固定请求 checker 的唯一上下文代数规则：无 context、context 无 algebra、context algebra 与 checker request 非同一对象分别返回结构化 detail。同一性比较是有意的：`AlgebraRequest` 是冻结的预装配对象，结构相等副本仍可能携带不同 parent/parameter/differential 对象。Derivative、Elementary、Hermite、Linear、Gcd、Resultant checker 全部在解析证书前消费该 helper；Hermite 的本地重复检查删除。`FunctionEqualityChecker` 对 `context.algebra is not None` 返回 `InvalidEvidence("a function problem has no algebra request")`；`CaseMergeChecker` 等核心逻辑规则不要求 algebra context。`validate_commit` 仍只从 `proposal.algebra` 构造 `VerificationContext.algebra`，缺失/不同由 checker 报 `InvalidEvidence`，不伪造 `Refuted`。
+- 测试：`tests/unit/test_evidence.py` 覆盖 helper 的无 context/无 algebra/结构相等但非同一对象/同一对象；`tests/unit/test_commit.py` 覆盖导数问题匹配 algebra 通过、`algebra=None` 与结构相等副本均为 `Rejected(INVALID_EVIDENCE)`；`tests/unit/test_workspace.py` 覆盖正常候选保存 `runtime.request`、手动复核通过、编辑后仍保留同一快照；`tests/unit/test_functions.py` 覆盖函数候选 `algebra is None`、直接 checker 与 `validate_commit` 均拒绝携带 algebra 的函数提案；各 checker 直接测试与 property 测试改为显式提供 `verification_context(..., algebra=...)`。
+- 参考依据：架构 §13.4（校验上下文提供明确的代数请求与转换接口）、§17.4（Candidate 记录提议规格与验证关联）、§32.4（`ExecutionRequest`/`AlgebraRequest`/Candidate 载荷 owner）、§32.7（候选到可信结果的数据流）、§32.8（条件与发布边界）；AGENTS.md §3.1/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：候选复核不能只保存证书与问题；如果丢失提出时的代数请求，checker 会在另一个预装配视图上验证同一文本。上下文代数必须按对象同一性绑定，结构相等会把“重建的同一请求”当成同一权威；同时不能把 algebra 设为所有 `CommitProposal` 的全局必填，函数问题与核心逻辑规则本来就没有代数视图，规则应由 checker 声明并由 checker 拒绝伪造快照。
+- 验收：`python -m pytest -q tests/unit/test_evidence.py tests/unit/test_commit.py tests/unit/test_commit_batch.py tests/unit/test_verdict.py tests/unit/test_workspace.py tests/unit/test_functions.py tests/unit/test_differentiation_checker.py tests/unit/test_elementary_checker.py tests/unit/test_solving.py tests/unit/test_polynomial_gcd.py tests/unit/test_resultant.py tests/unit/test_parameterized_checker.py` → 328 passed，0 failed；`python -m pytest -q` → 1403 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+- 未闭合：`externalizable` 正向路径、`Covers`/一般多表示覆盖、嵌入/实嵌入、结果语言覆盖、系数范围/值域字段、完整绑定位置与 binder-aware 角色、近似 checker 与一般完备性仍未建；本批不声称完整 S1。
+
+
+## 2026-11-10 — externalizable 正向路径与 COMPLETED_CONDITIONAL 工作流闭合
+
+- `cas.workflow.workspace`：`define_problem` 删除 `problem.allows_unresolved()` 的整体拒绝，保留外部前提的 world/稠密排序/frame 可读性检查；`apply`/`_apply` 增加显式 `externalizable` 参数，`ProblemBuilt` 返回后用 `dataclasses.replace` 把固定问题的 `externalizable` 固定为请求显式集，再执行维度检查、`ExecutionRequest`、提案与提交。operation 自己构造的集合不成为第二权威；`run_task` 传入 `task.problem.externalizable`，`_same_problem` 继续精确比较该集合。`result_region` 仍作为 `VerificationLink.condition` 进入任务派生，不是 kernel obligation。
+- `cas.workflow.records.derive_task_state` 保持既有规则：链接条件与 kernel obligations 是开放条件；全部开放条件都属于固定 `ProblemSpec.externalizable` 时给出 `COMPLETED_CONDITIONAL`，无开放条件为 `COMPLETED`，否则 `PARTIALLY_SOLVED`。无条件结果不因请求允许外置前提而变成条件完成。
+- 测试：`tests/unit/test_operations.py` 用请求显式集覆盖 operation 内置集并断言候选/任务保留；`tests/unit/test_manual_workbook.py` 覆盖 `sqrt(x)` + `x > 0` 的 `COMPLETED_CONDITIONAL`、无集合/不同集合的 `PARTIALLY_SOLVED`、`x^2` 无条件 `COMPLETED`、直接 `apply`、手动复核条件候选仍为 `COMPLETED_CONDITIONAL`、`_same_problem` 拒绝不同集合、frame 外前提被拒。
+- 参考依据：架构 §17.3（ProblemSpec/externalizable_premises）、§18.1（Task 状态表与 CompletedConditional）、§32.7/§32.8（候选到可信结果、条件与发布数据流）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 教训：请求的显式外置集必须成为固定问题的唯一权威，不能由 operation 的 `build_problem` 静默提供或丢弃；`result_region` 是工作流条件而不是 kernel obligation，不能把它写成 obligation 来“借”条件策略；只有全部开放条件都落在显式集内才可称 `COMPLETED_CONDITIONAL`，无条件结果仍必须保持 `COMPLETED`。当前比较按 Proposition 意义相等，跨 frame 前提弱化仍未建，不能用 term 字符串比较替代。
+- 验收：`python -m pytest -q tests/unit/test_task_state.py tests/unit/test_operations.py tests/unit/test_workspace.py tests/unit/test_manual_workbook.py tests/unit/test_workflow_contracts.py tests/integration/test_elementary_slice.py tests/integration/test_vertical_slice.py` → 215 passed，0 failed；`python -m pytest -q` → 1413 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+
+## 2026-11-10 — ProblemSpec 系数范围/值域与 AlgebraRequest 域绑定闭合，Covers 裁定
+
+- `cas.language.problems` 新增 `ValueDomain`（`INTEGER`/`RATIONAL`/`REAL`/`COMPLEX`，无 `ANY` 逃逸值）、`DomainRequirement`（`coefficient`/`values`）与唯一映射 `value_domain_of_sort`；`ProblemSpec.domain_requirement` 在有 target 时要求 `coefficient` 非空且 `values` 与 `target_sort` 映射一致，函数问题固定 `coefficient=None`/`values=REAL`，既无 target 又无函数输入的核心/实用问题保持 `None`。`AlgebraRequest` 新增必需 `coefficient_domain`，`value_domain` 由 `roles.target_sort` 派生；`ProblemBuilt`/`ExecutionRequest` 用唯一 `_domain_binding_mismatch` 强制 problem/algebra 双向一致；`problem_mismatch` 新增 coefficient/value domain 检查，固定请求 checker 传自身请求值，函数 checker 传 `None`/`REAL`。三个 bootstrap 的 Q 基座声明 `RATIONAL`；测试中的 Z 桥声明 `INTEGER`。
+- `expression_problem`、gcd/resultant/linear 与两个函数问题 builder 写入对应 requirement；所有 `AlgebraRequest`/`ProblemSpec` 测试构造同步更新。
+- Covers 裁定：本片段不建立独立 `Covers(region, pieces)` Proposition/checker/operation；`CoversCertificate` 只是函数延拓内部证书，由 `FunctionEqualityChecker` 独立重检，不发行独立 judgment；注册 `Covers` 属未来 K1/S1，必须与真实发布消费者同批加入。
+- 测试：`test_problems` 覆盖 target 缺 requirement、coefficient 缺失、value 与 target sort 不匹配、函数问题 coefficient/real 值域、无 target 不得携带 requirement、integer target 无 region 可用而有 region 被稠密规则拒绝、`DomainRequirement` 类型；`test_algebra_request` 覆盖 value domain 映射、非标量 target sort 拒绝、coefficient domain 类型；`test_execution_request` 覆盖 `ProblemBuilt`/`ExecutionRequest` 的 coefficient/value 不匹配与缺失 requirement；现有 checker/operation 正向路径保持。
+- 参考依据：架构 §7.9（`AlgebraRequest` 请求载荷）、§12.2（`Covers` 规格族）、§17.3（`ProblemSpec` 系数范围与允许值域）、§32.4（`ProblemSpec`/`AlgebraRequest` 载荷与 owner）、§32.6/§32.7（输入到域元素、候选到可信结果）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：系数范围与值域必须拆成“语言层要求”和“已解析 parent”两层；problem 只保存前者，algebra 保存后者，二者由 problem builder/`ExecutionRequest` 绑定，不能从 parent 类型嗅探，也不能让 checker 重新装配另一个域。target 问题没有 algebra 视图就无法固定系数 parent，因此 `ProblemBuilt`/`ExecutionRequest` 拒绝该组合；核心/实用问题保持 requirement=`None`。`Covers` 不能在无发布消费者时先建空 checker；内部证书与独立规格必须分清。
+- 验收：`python -m pytest -q tests/unit/test_problems.py tests/unit/test_algebra_request.py tests/unit/test_execution_request.py tests/unit/test_operations.py tests/unit/test_functions.py tests/unit/test_workspace.py tests/unit/test_differentiation_checker.py tests/unit/test_parameterized_checker.py tests/unit/test_elementary_checker.py tests/unit/test_evidence.py tests/unit/test_polynomial_gcd.py tests/unit/test_resultant.py tests/unit/test_solving.py tests/unit/test_parameter_schema.py tests/unit/test_bridge.py tests/unit/test_parameterized_bridge.py tests/unit/test_task_state.py tests/unit/test_manual_workbook.py` → 446 passed，0 failed；`python -m pytest -q` → 1424 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 警告）。
+- 未闭合：跨 frame 前提弱化、`Covers`/一般多表示覆盖、嵌入/实嵌入、结果语言覆盖、完整绑定位置与 binder-aware 角色、近似 checker 与一般完备性仍未建；本批不声称完整 S1。
+
+## 2026-11-10 — 文档状态最终校正
+
+- 此前若干批次条目的“未闭合”列表是各批次时点的记录；其中 `ProblemSpec.exactness`、`ProblemSpec.interpretation_requirement`、`VariableRoles.target_sort`、`VariableRoles.parameter_sorts`、问题区域/`externalizable` 稠密排序校验、`problem_mismatch` 的 roles/interpretation/exactness、`externalizable` 正向路径、`ValueDomain`/`DomainRequirement`/`AlgebraRequest.coefficient_domain`/`value_domain` 与 problem/algebra 双向绑定、`Candidate.algebra`/`context_algebra_mismatch` 已由后续批次闭合，当前状态以 AGENTS.md §5 与本条为准。
+- 当前仍未闭合：`VariableRoles` 完整绑定位置与 binder-aware 角色、跨 frame 的 `externalizable` 前提弱化、注册 `Covers` 规格/checker（当前 `CoversCertificate` 仅为函数延拓内部证书）、嵌入/实嵌入/参数关系、结果语言覆盖、近似 checker 与一般完备性、一般半代数/离散区域代数、`Guarded`/`Piecewise` 分支局部语义、binder-aware premises、声明函数定义域。
+- 当前测试状态：`python -m pytest -q` → 1424 passed，0 failed；本状态不声称完整 S1。
+
+## 2026-11-10 — 固定问题比较补全与区域绑定排序一致性
+
+- `cas.workflow.workspace._same_problem` 在既有 operation/输入 term/roles/function_inputs/region/result_language/coverage/externalizable 比较之外，精确比较 `ProblemSpec.exactness`、`interpretation_requirement` 与 `domain_requirement`；`run_task` 仍只经该唯一比较器接受执行重建的问题，重建出不同答案标准、解释要求或系数/值域的执行被记录为 blocked，而不是悄悄运行另一个问题。未新增第二套问题比较器，祖先 frame 输入可读性与逃逸检查保持不变。
+- `cas.semantics.bridge._region_binding_refusal` 对 `region_bindings` 中与源自由符号同 `SymbolId` 的条目要求排序等于源 `BindingView` 的排序；不一致时 `_issue_view` 返回 `ViewRefused(Reason.FRAGMENT, missing={"region_bindings"})`，直接 sealed 构造抛 `ValueError`。该检查阻止显式绑定把 `INTEGER` 源坐标伪装成 `REAL` 以让 `AlgebraView.definedness` 发行稠密 `SubregionCertificate`；后代 frame 额外坐标仍由桥声明排序，本切片不为它们推断排序，也不声称一般半代数区域代数。
+- 测试：`tests/unit/test_manual_workbook.py` 覆盖未变问题仍接受、仅改 `interpretation_requirement`/`domain_requirement`/`exactness` 任一字段即拒绝（`APPROXIMATE` 由 `dataclasses.replace` 正确拒绝，伪造用 `object.__setattr__`，未削弱 `ProblemSpec.__post_init__`）；`tests/unit/test_algebra_view.py` 覆盖源 `x: REAL` + `region_bindings=(FreeSymbol(x, INTEGER),)` 的 `_issue_view`/直接构造拒绝、源 `y: INTEGER` + `REAL` 伪装被拒（诚实绑定读取时仍以 `dense` 拒绝）、以及含额外子 frame `REAL` 坐标的一致绑定仍成功。既有额外坐标正向测试保持通过。
+- 参考依据：架构 §10.3（`RegionSpec`/证书与区域绑定排序）、§17.3（`ProblemSpec` 固定字段与 exactness/interpretation/domain）、§32.4（`ProblemSpec`/`AlgebraView` 载荷 owner）；AGENTS.md §3.2/§3.4/§4 红线 1/4/5/7/8/9/10/11。
+- 经验教训：固定问题的“同一性”必须覆盖全部请求契约字段；只比较数学输入会让重建出不同答案标准或域要求的执行冒充原任务。区域绑定是排序权威，不能允许调用方用显式 `FreeSymbol` 覆盖源已声明排序，否则稠密序证书会把离散坐标当成连续坐标；但也不应为源未绑定的后代 frame 坐标凭空推断排序。exactness 的非法值仍应在构造器拒绝，回归测试只能对合法副本用 `object.__setattr__` 伪造被比较字段，不能放宽构造不变量。
+- 验收：`python -m pytest -q tests/unit/test_manual_workbook.py tests/unit/test_algebra_view.py tests/unit/test_definedness.py tests/unit/test_regions.py tests/unit/test_problems.py tests/unit/test_workspace.py tests/unit/test_task_state.py` → 241 passed，0 failed；`python -m pytest -q` → 1428 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 114 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas tests` → 通过；`git diff --check` → 退出码 0（仅有既有 LF/CRLF 提示）。
+- 未闭合：跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系、结果语言覆盖、完整绑定位置与 binder-aware 角色、近似 checker、一般半代数/离散区域代数、`Guarded`/`Piecewise` 分支局部语义、binder-aware premises、声明函数定义域与一般完备性仍未建；本批不声称完整 S1。
+

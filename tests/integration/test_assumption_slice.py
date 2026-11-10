@@ -22,16 +22,16 @@ def test_an_assumption_scopes_later_operations_and_history():
     assert result.candidate.frame == child
     assert runtime.store.stats()["judgments"] == 2
 
-    assert session.execute("undo") == "undo: @E0"
-    assert session.execute("undo") == "undo: empty view"
+    assert session.execute("undo") == "undo: @E0 (intake 0)"
+    assert session.execute("undo") == "undo: empty view (assume Gt(x, 0))"
     assert session.workspace.frame == child
-    assert session.execute("undo") == "undo: empty view"
+    assert session.execute("undo") == "undo: empty view (start)"
     assert session.workspace.frame == base
     assert runtime.store.stats()["judgments"] == 2
 
-    assert session.execute("redo") == "redo: empty view"
-    assert session.execute("redo") == "redo: @E0"
-    assert session.execute("redo") == "redo: @E1"
+    assert session.execute("redo") == "redo: empty view (assume Gt(x, 0))"
+    assert session.execute("redo") == "redo: @E0 (intake 0)"
+    assert session.execute("redo") == "redo: @E1 (differentiate 0)"
     assert session.workspace.frame == child
 
 
