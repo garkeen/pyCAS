@@ -156,3 +156,46 @@ def test_the_elementary_revision_history_keeps_the_ledger():
     assert runtime.store.stats()["judgments"] == 1
     assert session.execute("redo") == "redo: @E1 (differentiate 0)"
     assert len(session.workspace.links()) == 1
+
+
+def test_polynomial_integration_uses_the_polynomial_subfragment_checker():
+    runtime = bootstrap_elementary()
+    session = Session(runtime)
+    assert session.execute("expr p := 2*x + 3") == "@p: 2*x + 3"
+    assert session.execute("integrate @p") == "verified @E0: 3*x + x^2"
+
+    link = session.workspace.links()[-1]
+    assert link.judgment is not None
+    inference = runtime.store.inference_of(link.judgment)
+    assert inference.checker_id == "calculus.derivative.polynomial"
+    spec = runtime.store.checkers.spec("calculus.derivative.polynomial")
+    assert spec is not None
+    assert spec.accepted_problem_kinds == frozenset({"integrate"})
+    assert spec.accepted_specification_kinds == frozenset({"HasDerivative"})
+    assert spec.trusted_dependencies == ()
+    assert runtime.store.stats()["judgments"] == 1
+
+
+def test_elementary_differentiation_still_uses_the_declared_rule_checker():
+    runtime = bootstrap_elementary()
+    session = Session(runtime)
+    session.execute("x^3 - 3*x")
+    assert session.execute("diff") == "verified @E1: -3 + 3*x^2"
+    link = session.workspace.links()[-1]
+    assert link.judgment is not None
+    inference = runtime.store.inference_of(link.judgment)
+    assert inference.checker_id == "calculus.derivative.elementary"
+    assert runtime.store.stats()["judgments"] == 1
+
+
+def test_reciprocal_integration_stays_outside_the_elementary_fragment():
+    runtime = bootstrap_elementary()
+    session = Session(runtime)
+    session.execute("1/x")
+    before = runtime.store.stats()
+    output = session.execute("integrate")
+    assert output.startswith("unsupported:")
+    assert "polynomial fragment" in output
+    assert "polynomial_antiderivative" in output
+    assert runtime.store.stats() == before
+    assert session.workspace.links() == ()

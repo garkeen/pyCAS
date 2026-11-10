@@ -34,6 +34,15 @@ class DerivativeVocabulary:
             S.PROPOSITION,
         )
 
+    def parse_claim(self, term: T.Term) -> DerivativeClaim | None:
+        """Recognize this vocabulary's claim in `term`, or return `None`.
+
+        Consumers outside `math` (for example the workflow's family selector)
+        receive the vocabulary as assembled data and use this method instead of
+        hardcoding the predicate name or argument positions.
+        """
+        return parse_has_derivative(self, term)
+
 
 @dataclass(frozen=True, slots=True)
 class DerivativeClaim:
