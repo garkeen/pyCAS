@@ -6,8 +6,9 @@ from fractions import Fraction
 from support import verification_context, view_of
 
 from cas.frontend.session import Session
-from cas.kernel.evidence import CheckRequest, Verified
+from cas.kernel.evidence import CheckRequest, InvalidEvidence
 from cas.language.roles import CandidateRole
+from cas.math.algebra.groebner_operation import GroebnerOperation
 from cas.math.algebra.groebner_specification import GroebnerCertificate
 from cas.runtime.bootstrap import bootstrap, new_workspace
 from cas.semantics.bridge import Rendered
@@ -35,16 +36,21 @@ def random_system(rng, ring, *, count=3):
     return tuple(random_polynomial(rng, ring) for _ in range(count))
 
 
+def groebner_operation(runtime):
+    found = runtime.operations.get("groebner_basis")
+    assert isinstance(found, GroebnerOperation)
+    return found
+
+
 def render(runtime, value):
-    setup = runtime.groebner
-    assert setup is not None
+    found = groebner_operation(runtime)
     view = view_of(
         runtime,
         T.number(0),
-        bridge=setup.bridge,
-        request=setup.request,
+        bridge=found.bridge,
+        request=found.request,
     )
-    rendered = setup.bridge.render(view, value)
+    rendered = found.bridge.render(view, value)
     assert isinstance(rendered, Rendered)
     return rendered.term
 
@@ -63,17 +69,16 @@ def verified_basis(runtime, terms):
 
 def test_the_verified_basis_is_invariant_under_permutation_and_scaling():
     runtime = bootstrap()
-    setup = runtime.groebner
-    assert setup is not None
+    found = groebner_operation(runtime)
     rng = random.Random(SEED)
     for _ in range(8):
-        generators = random_system(rng, setup.ring)
+        generators = random_system(rng, found.ring)
         base = verified_basis(
             runtime, tuple(render(runtime, value) for value in generators)
         )
         transformed = [
-            setup.ring.mul(
-                setup.ring.constant(
+            found.ring.mul(
+                found.ring.constant(
                     Fraction(
                         rng.choice([-3, -2, -1, 2, 3]),
                         rng.randint(1, 3),
@@ -93,17 +98,16 @@ def test_the_verified_basis_is_invariant_under_permutation_and_scaling():
 
 def test_the_verified_basis_is_invariant_under_redundant_generators():
     runtime = bootstrap()
-    setup = runtime.groebner
-    assert setup is not None
+    found = groebner_operation(runtime)
     rng = random.Random(SEED + 1)
     for _ in range(8):
-        generators = random_system(rng, setup.ring)
+        generators = random_system(rng, found.ring)
         base = verified_basis(
             runtime, tuple(render(runtime, value) for value in generators)
         )
         redundant = generators + (
-            setup.ring.add(generators[0], generators[-1]),
-            setup.ring.zero(),
+            found.ring.add(generators[0], generators[-1]),
+            found.ring.zero(),
         )
         alternate = verified_basis(
             runtime, tuple(render(runtime, value) for value in redundant)
@@ -111,7 +115,7 @@ def test_the_verified_basis_is_invariant_under_redundant_generators():
         assert alternate.result.term == base.result.term
 
 
-def test_a_tampered_cofactor_certificate_is_never_verified():
+def test_a_tampered_cofactor_certificate_is_invalid_evidence():
     session = Session(bootstrap())
     session.execute("x^2 + y^2 - 1")
     session.execute("x - y")
@@ -148,4 +152,4 @@ def test_a_tampered_cofactor_certificate_is_never_verified():
                 context=context,
             )
         )
-        assert not isinstance(outcome, Verified)
+        assert isinstance(outcome, InvalidEvidence), outcome

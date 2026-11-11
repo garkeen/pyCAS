@@ -385,6 +385,41 @@ def test_an_operation_built_externalizable_set_is_not_trusted():
     assert result.task.problem.externalizable == ()
 
 
+def test_a_complete_set_request_cannot_externalize_premises():
+    runtime = bootstrap()
+    operation = HypothesisOperation(
+        runtime.frames,
+        runtime.signature,
+        algebra=runtime.request,
+        result_language=ResultLanguage.SET,
+        coverage=Coverage.COMPLETE_SET,
+        proposal_coverage=Coverage.COMPLETE_SET,
+    )
+    runtime = replace(
+        runtime,
+        operations=OperationRegistry(
+            {operation.id: operation},
+            provided_capabilities=frozenset(Capability),
+        ),
+    )
+    workspace = Workspace(runtime)
+    source = workspace.intake(variable(runtime))
+    premise = runtime_proposition(runtime, T.TRUE)
+    before = runtime.store.stats()
+    result = workspace.apply(
+        operation.id,
+        (source,),
+        target=runtime.variable,
+        externalizable=(premise,),
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "a complete-set request cannot externalize" in result.detail
+    assert result.candidate is None
+    assert result.result is None
+    assert result.task is None
+    assert runtime.store.stats() == before
+
+
 def test_a_set_problem_needs_a_set_result():
     runtime = bootstrap()
     operation = HypothesisOperation(

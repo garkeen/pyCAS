@@ -2185,7 +2185,20 @@ class Workspace:
             parameter_mode,
             tuple(parameters),
         )
-        problem_outcome = operation.build_problem(request)
+        # Building the fixed problem is the user-input boundary: the operation
+        # and the subsequent request setup may refuse the requested region,
+        # externalizable premises or domain contract through the constructors
+        # themselves.  Those are invalid requests, not crashes; the proposal,
+        # checker and commit stages below must still surface their own errors.
+        try:
+            problem_outcome = operation.build_problem(request)
+        except ValueError as error:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                str(error),
+                budget=budget,
+            )
         if isinstance(problem_outcome, ProblemUnsupported):
             blocker = Blocker(
                 problem_outcome.reason,
@@ -2201,10 +2214,18 @@ class Workspace:
                 budget=budget,
             )
             if problem_outcome.problem is not None:
-                fixed_problem = replace(
-                    problem_outcome.problem,
-                    externalizable=externalizable,
-                )
+                try:
+                    fixed_problem = replace(
+                        problem_outcome.problem,
+                        externalizable=externalizable,
+                    )
+                except ValueError as error:
+                    return self._failure(
+                        operation_id,
+                        OperationStatus.INVALID,
+                        str(error),
+                        budget=budget,
+                    )
                 return self._record_blocked_task(
                     operation_id,
                     blocked_problem(request, fixed_problem),
@@ -2232,17 +2253,25 @@ class Workspace:
             raise TypeError(
                 "an operation returned an unknown problem outcome"
             )
-        problem = replace(
-            problem_outcome.problem, externalizable=externalizable
-        )
-        execution = ExecutionRequest(
-            request,
-            problem,
-            problem_outcome.algebra,
-            request.frame,
-            policy,
-            budget,
-        )
+        try:
+            problem = replace(
+                problem_outcome.problem, externalizable=externalizable
+            )
+            execution = ExecutionRequest(
+                request,
+                problem,
+                problem_outcome.algebra,
+                request.frame,
+                policy,
+                budget,
+            )
+        except ValueError as error:
+            return self._failure(
+                operation_id,
+                OperationStatus.INVALID,
+                str(error),
+                budget=budget,
+            )
         structure_issue = self._problem_structure_issue(request, problem)
         if structure_issue is not None:
             return self._failure(
