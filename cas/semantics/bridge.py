@@ -32,11 +32,9 @@ the product of the source's inverse denominators, so cancelling a factor in
 the fraction field does not erase a hole in the source expression.  The
 multivariate polynomial bridge binds the ring's generators in declared order
 to source symbols with ``Role.GENERATOR``; it refuses a target, a parameter
-ring or a generator order that differs from the ring.  This is the generator
-mode request/view foundation only: the multivariate result model, the
-registered ``groebner_basis`` operation, the independent checker, bootstrap
-registration, workflow/REPL support and the default frame's ``y`` are still
-missing, so no S1 operation is wired.
+ring or a generator order that differs from the ring.  The registered
+``groebner_basis`` operation and bootstrap assembly consume this generator
+mode view.
 """
 
 from __future__ import annotations

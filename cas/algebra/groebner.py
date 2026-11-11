@@ -5,22 +5,21 @@ algorithm, a reduced monic interreduced basis, and cofactor representations of
 every basis element in terms of the original generators.  The pure primitives
 it consumes -- multivariate division with quotients, leading-term helpers and
 S-polynomials -- live in ``cas.algebra.multivariate``, so the independent
-checker of the next batch can import them without importing this search
-module.  This is a low-level API over ``PolynomialRing[E]`` and does not import
-the syntax, semantics, workflow, kernel or ``math`` layers.
+checker can import them without importing this search module.  This is a
+low-level API over ``PolynomialRing[E]`` and does not import the syntax,
+semantics, workflow, kernel or ``math`` layers.
 
 Scope boundary
 --------------
 
-This batch is not an end-to-end G0 capability.  The generator-mode request and
-view foundation exists (``Role.GENERATOR``, ``VariableRoles.variables``/
-``variable_sorts``, generator-mode ``ProblemSpec``/``AlgebraRequest`` and
-``MultivariatePolynomialBridge``), but there is still no multivariate result
-model, no registered ``groebner_basis`` operation, no independent checker, no
-bootstrap registration, no workflow/REPL support and no default-frame ``y``.
-The next batch has to provide that S1 wiring and an independent checker that
-consumes the cofactors recorded here.  In particular, this module never
-publishes a judgment.
+The registered ``groebner_basis`` operation, its bootstrap assembly, the
+workflow helper and the REPL command live outside this module (in
+``cas.math.algebra.groebner_operation`` and ``cas.runtime.bootstrap``) and
+consume this module without changing its trust boundary.  This module itself
+only searches and never publishes a judgment.  The result model is the finite
+set of reduced-basis polynomials; the independent checker verifies the
+Buchberger criterion and the cofactor identities.  This is not G1 elimination
+or ideal intersection/quotient algebra, and it is not a solution set.
 
 Buchberger and cofactors
 ------------------------
@@ -184,8 +183,8 @@ class GroebnerBasis(Generic[E]):
     constructor validates the structural reduced-basis conditions, the
     cofactor identities, ring/order ownership, and that every original
     generator reduces to zero modulo the basis.  The Buchberger criterion is
-    deliberately not rechecked here: the independent checker of the next batch
-    is the trust boundary, and this record is the search-side proposal.
+    deliberately not rechecked here: the independent `GroebnerChecker` is the
+    trust boundary, and this record is the search-side proposal.
 
     Python equality is not mathematical equality (the polynomial type also
     uses identity-based equality).  Compare elements with ``ring.equal`` and
@@ -374,10 +373,10 @@ def ideal_membership(
 
     This helper is defined only on a record issued by ``buchberger``.  The
     sealed record guarantees that the search-side construction used the
-    Buchberger algorithm; the independent checker of the next batch still
-    verifies the Buchberger criterion before any publication.  A merely
-    reduced basis that is not a Groebner basis does not define a correct ideal
-    normal form, which is why direct record construction is rejected.
+    Buchberger algorithm; the independent `GroebnerChecker` still verifies the
+    Buchberger criterion before any publication.  A merely reduced basis that
+    is not a Groebner basis does not define a correct ideal normal form, which
+    is why direct record construction is rejected.
     """
     _require_owned(basis.ring, polynomial, "ideal membership")
     return normal_form(basis.ring, polynomial, basis.basis).is_zero()

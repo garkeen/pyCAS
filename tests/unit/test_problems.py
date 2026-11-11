@@ -524,10 +524,10 @@ def test_an_input_role_sort_must_match_the_binding_view(runtime):
 
 
 def test_a_problem_region_free_symbol_must_be_bound(runtime):
-    unknown = runtime.table.intern("y")
+    unknown = runtime.table.intern("w")
     child = runtime.frames.create(
         runtime.frame.id,
-        declarations=(Declaration(unknown, "y", S.REAL),),
+        declarations=(Declaration(unknown, "w", S.REAL),),
     )
     condition = proposition_in(
         runtime.frames,
@@ -536,7 +536,7 @@ def test_a_problem_region_free_symbol_must_be_bound(runtime):
         head_app(
             runtime.signature,
             StructuralHead.GT,
-            T.symbol(unknown, "y"),
+            T.symbol(unknown, "w"),
             T.number(0),
         ),
     )

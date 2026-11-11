@@ -15,9 +15,9 @@ the Buchberger criterion from the candidate and the certificate.
 
 This module only publishes the language-level claim shape.  The G0 search and
 its sealed record live in ``cas.algebra.groebner``; the independent checker is
-``cas.math.algebra.groebner_checker``.  Neither the registered operation nor the
-bootstrap wiring, the workflow or the REPL is part of this slice, and none of
-this is G1/G2 solution-set semantics.
+``cas.math.algebra.groebner_checker``.  The registered operation and bootstrap
+wiring live in ``cas.math.algebra.groebner_operation`` and
+``cas.runtime.bootstrap``; none of this is G1/G2 solution-set semantics.
 """
 
 from __future__ import annotations

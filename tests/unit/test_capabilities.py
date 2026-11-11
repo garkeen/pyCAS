@@ -39,6 +39,7 @@ from cas.runtime import (
         (bootstrap, "resultant", Capability.POLYNOMIAL_RING),
         (bootstrap, "root_count", Capability.ORDERED_FIELD),
         (bootstrap, "isolate_roots", Capability.ORDERED_FIELD),
+        (bootstrap, "groebner_basis", Capability.POLYNOMIAL_RING),
         (
             bootstrap_elementary,
             "root_count",
@@ -48,6 +49,11 @@ from cas.runtime import (
             bootstrap_elementary,
             "isolate_roots",
             Capability.ORDERED_FIELD,
+        ),
+        (
+            bootstrap_elementary,
+            "groebner_basis",
+            Capability.POLYNOMIAL_RING,
         ),
         (
             bootstrap_parameterized,

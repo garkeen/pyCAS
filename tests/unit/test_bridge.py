@@ -129,7 +129,7 @@ def test_sums_products_and_powers_bridge(runtime):
 
 def test_outside_the_fragment_the_bridge_is_refused(runtime):
     x = x_term(runtime)
-    y = T.symbol(runtime.table.intern("y"), "y")
+    w = T.symbol(runtime.table.intern("w"), "w")
     function = T.app(T.symbol(runtime.table.intern("Sin"), "Sin"), x)
     refused = [
         (power(runtime, x, T.number(-1)), "nonnegative_power"),
@@ -143,7 +143,7 @@ def test_outside_the_fragment_the_bridge_is_refused(runtime):
     ill_typed = [
         power(runtime, x, x),
         T.app(structural(runtime.signature, StructuralHead.POWER), x, T.number(2), T.number(3)),
-        y,
+        w,
         function,
         T.BoundVar(0),
     ]
@@ -204,9 +204,9 @@ def test_rational_bridge_accepts_negative_powers_and_round_trips(runtime):
     )
     assert isinstance(refused, ViewRefused)
     assert "integer_exponent" in refused.missing
-    y = T.symbol(runtime.table.intern("y"), "y")
+    w = T.symbol(runtime.table.intern("w"), "w")
     assert isinstance(
-        admitted(runtime, y, bridge=bridge_value), Ty.TypedExprFailure
+        admitted(runtime, w, bridge=bridge_value), Ty.TypedExprFailure
     )
 
 

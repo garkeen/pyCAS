@@ -471,6 +471,7 @@ def test_help_and_quit(runtime):
     help_text = session.execute("help")
     assert "diff" in help_text
     assert "isolate_roots" in help_text
+    assert "groebner_basis" in help_text
     assert "undo" in help_text
     assert session.execute("quit") == "bye"
     assert session.closed

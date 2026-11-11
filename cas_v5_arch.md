@@ -2563,6 +2563,12 @@ Gröbner 服务固定系数域、变量、单项式序和输入理想。
 
 只证明一个多项式能被候选基约成零，不足以证明该基是原理想的 Gröbner 基。
 
+实现切片（2026-11-11，生成元模式与视图）：`Role.GENERATOR`、`VariableRoles.variables`/`variable_sorts` 与 `shared_variable_sort` 已落地；`ProblemSpec`/`AlgebraRequest` 在生成元模式下要求 `target=None`、有序非空生成元、相同且稠密的 `RATIONAL`/`REAL` 排序、系数范围/值域字段，并拒绝参数环与 `PARAMETER_FAMILY` 解释。`AlgebraRequest.target` 在生成元模式精确抛 `ValueError`；`MultivariatePolynomialBridge` 按环生成元顺序把源自由符号映射为 `Role.GENERATOR`，独立核对每个生成元自由符号的排序，发行全定义表示同构视图并通过生成元绑定渲染；目标模式桥在 `to_view` 入口结构化拒绝生成元请求。该切片是请求/视图地基，不是多元结果模型或端到端能力。
+
+实现切片（2026-11-11，`HasGroebnerBasis` 与独立 checker）：`cas/math/algebra/groebner_specification.py` 声明 `HasGroebnerBasis(G, B, O)`，其中 `G`/`B` 是有限多项式集合，`O` 是 quoted order；语义固定为“`B` 是原理想在固定环/序下的唯一既约 Gröbner 基”，不声称解集、实解、有理解或任何 G1/G2 结果。`GroebnerCertificate` 携带按基/生成元对齐的 cofactor 矩阵，空矩阵合法。`GroebnerChecker`（id `algebra.groebner`）不导入搜索模块或 operation，也不消费 sealed `GroebnerBasis`/`ideal_membership`；它独立 `typed_view` 每个生成元、基元素与 cofactor，检查非零/monic/互约化，重算全部 S-对 `normal_form`，再约化原生成元（在 Buchberger 判据之后，使非零余式成为合法的非属员否证），最后用 cofactor 恒等式证明双向包含。非域系数为 `Unverified(FRAGMENT)`，pair 预算耗尽为 `Unverified(BUDGET)`，cofactor 形状/恒等式失败为 `InvalidEvidence`，数学反例为 `Refuted`。`problem_mismatch` 新增 `input_set` 集合读法，与有序 `inputs` 互斥。
+
+实现切片（2026-11-11，`groebner_basis` operation/bootstrap）：`GroebnerOperation` 注册 id/problem kind `groebner_basis`、specification `HasGroebnerBasis`、candidate role `SET`、capabilities `FIELD`+`POLYNOMIAL_RING`；`build_problem` 固定 `SET`/`COMPLETE_SET` 并把受限区域写入被拒绝的问题，`propose` 把规范生成元集合经 `MultivariatePolynomialBridge` 送入 `buchberger`，预算耗尽返回 `ProposalUnsupported(BUDGET)` 且不发行部分基，cofactor 矩阵按规范基/生成元顺序渲染；operation 只提案、不发布。`bootstrap`/`bootstrap_elementary` 装配固定 `Q[x,y]`/LEX 的 `GroebnerRuntime`、checker 与 operation，并在默认 frame 声明 `x`,`y`；参数化入口不装配。`Workspace.groebner_basis` 以显式 `COMPLETE_SET` 调用唯一 `apply`，REPL 新增 `groebner_basis @A @B [@C ...]`（无参数时使用焦点对象），结果注册为 Set 表达式。这是固定默认装配下的端到端 G0 S1，不是 G1 消元/理想交/商代数、不是 G2 解集语义；不注册理想属员操作、不做多单项式序、参数化多元环或正特征/非域端到端入口；`Set(...)` 是既约基表示，不是解集。
+
 ### 22.7 理想与解集
 
 理想属员、根式理想属员、代数闭包中的零点集、实零点集和有理/整数解集是不同问题。

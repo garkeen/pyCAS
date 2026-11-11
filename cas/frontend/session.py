@@ -77,6 +77,8 @@ _HELP = """commands:
                         count distinct real roots in the open interval (A,B)
   isolate_roots [@LABEL]
                         isolate all distinct real roots as open rational intervals
+  groebner_basis @A @B [@C ...]
+                        compute the reduced Q[x,y] LEX Groebner basis as a Set
   specialize [@LABEL] a=VALUE ...
                         apply exact parameter values to a verified family
   show [@LABEL]         show an expression
@@ -334,6 +336,8 @@ class Session:
             return self._root_count(argument)
         if command == "isolate_roots":
             return self._isolate_roots(argument)
+        if command == "groebner_basis":
+            return self._groebner_basis(argument)
         if command == "declare":
             return self._declare(argument)
         if command == "define":
@@ -616,6 +620,42 @@ class Session:
         result = self.workspace.isolate_roots(
             source, self._runtime.variable
         )
+        if result.status in (
+            OperationStatus.VERIFIED,
+            OperationStatus.CONDITIONAL,
+        ):
+            assert result.result is not None
+            self._register(result.result, self._choose_label(None))
+            return self._success_line(result)
+        return self._report(result)
+
+    def _groebner_basis(self, argument: str) -> str:
+        """Compute the reduced basis of one or more visible generators.
+
+        With no argument the focused expression is the single generator;
+        otherwise every token must name an object with `@LABEL`.  The fixed
+        assembly is Q[x, y] under LEX, so the command takes no target and no
+        monomial-order parameter.
+        """
+        parts = argument.split()
+        if parts:
+            generators: list[Expression] = []
+            for token in parts:
+                if not token.startswith("@"):
+                    raise SessionError(
+                        "usage: groebner_basis @A @B [@C ...]"
+                    )
+                generators.append(self.object(token[1:]))
+            inputs = tuple(generators)
+        else:
+            focus = self.focus
+            if focus is None:
+                raise SessionError(
+                    "there is no focused expression; enter one or name it "
+                    "with @LABEL"
+                )
+            inputs = (focus,)
+        result = self.workspace.groebner_basis(inputs)
         if result.status in (
             OperationStatus.VERIFIED,
             OperationStatus.CONDITIONAL,

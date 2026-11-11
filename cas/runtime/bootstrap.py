@@ -55,6 +55,12 @@ from cas.math.algebra.gcd_specification import (
     GcdCertificate,
     GcdVocabulary,
 )
+from cas.math.algebra.groebner_checker import GroebnerChecker
+from cas.math.algebra.groebner_operation import GroebnerOperation
+from cas.math.algebra.groebner_specification import (
+    GroebnerCertificate,
+    GroebnerVocabulary,
+)
 from cas.math.algebra.resultant_checker import ResultantChecker
 from cas.math.algebra.resultant_operation import ResultantOperation
 from cas.math.algebra.resultant_specification import (
@@ -138,6 +144,7 @@ from cas.operations.capabilities import (
 )
 from cas.operations.registry import OperationRegistry
 from cas.semantics.bridge import (
+    MultivariatePolynomialBridge,
     ParameterPolynomialBridge,
     PolynomialBridge,
     RationalFunctionBridge,
@@ -186,6 +193,25 @@ _PARAMETERIZED_RUNTIME_CAPABILITIES: CapabilityRequirements = frozenset(
         Capability.POLYNOMIAL_RING,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class GroebnerRuntime(Generic[E]):
+    """One pre-assembled multivariate Groebner view of a runtime.
+
+    The ring, its parent, the generator-mode bridge and the matching algebra
+    request are the single authority for the fixed default assembly.  The
+    default slice is ``Q[x, y]`` under LEX; a runtime without a Groebner view
+    leaves `Runtime.groebner` as `None` and registers no operation.
+    """
+
+    variables: tuple[SymbolId, ...]
+    ring: PolynomialRing[E]
+    parent: Parent[Polynomial[E]]
+    bridge: MultivariatePolynomialBridge[E]
+    request: AlgebraRequest
+    checker_id: str
+    operation_id: str
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -239,6 +265,7 @@ class Runtime(Generic[E]):
     views: tuple[DifferentiationView[Any], ...]
     specialization: SpecializationView | None = None
     elementary: ElementaryLibrary | None = None
+    groebner: GroebnerRuntime[E] | None = None
 
     def view_for(self, target: SymbolId) -> DifferentiationView[Any] | None:
         """The pre-assembled view for one request-local target."""
@@ -281,6 +308,7 @@ def _start(
     *,
     table: SymbolTable | None = None,
     declarations: DeclarationSet | None = None,
+    include_groebner: bool = False,
 ) -> tuple[
     SymbolTable,
     DerivativeVocabulary,
@@ -293,12 +321,16 @@ def _start(
     RootIsolationVocabulary,
     LanguageSignature,
     FrameStore,
+    GroebnerVocabulary | None,
 ]:
     """The common world and frame store every assembled runtime starts with.
 
     With declarations, the language is assembled by the declaration DSL; without
-    them it contains only the structural heads and the derivative, Hermite and
-    function-equality predicates.
+    them it contains only the structural heads and the derivative, Hermite,
+    function-equality, solution, gcd, resultant, root and Groebner predicates.
+    ``include_groebner`` interns the `HasGroebnerBasis` predicate and its quoted
+    order symbol; it is the only switch that makes those names part of the
+    world, so assemblies without a Groebner view cannot parse the claim.
     """
     actual = SymbolTable() if table is None else table
     predicate = actual.intern("HasDerivative")
@@ -340,6 +372,16 @@ def _start(
         "HasRootIsolation",
         interval_symbol,
     )
+    groebner_vocabulary: GroebnerVocabulary | None = None
+    if include_groebner:
+        groebner_symbol = actual.intern("HasGroebnerBasis")
+        order_symbol = actual.intern(MonomialOrder.LEX.value)
+        groebner_vocabulary = GroebnerVocabulary(
+            groebner_symbol,
+            "HasGroebnerBasis",
+            order_symbol,
+            MonomialOrder.LEX,
+        )
     extras = {
         predicate: vocabulary.signature,
         hermite_predicate: hermite_vocabulary.signature,
@@ -353,6 +395,8 @@ def _start(
         root_isolation_symbol: root_isolation_vocabulary.signature,
         interval_symbol: root_isolation_vocabulary.interval_signature,
     }
+    if groebner_vocabulary is not None:
+        extras[groebner_vocabulary.symbol] = groebner_vocabulary.signature
     signature = (
         standard_language(actual, operators=extras)
         if declarations is None
@@ -371,6 +415,7 @@ def _start(
         root_isolation_vocabulary,
         signature,
         FrameStore(world),
+        groebner_vocabulary,
     )
 
 
@@ -645,6 +690,101 @@ def _root_isolation_operation(
     )
 
 
+def _groebner_spec(
+    checker: Checker,
+    world: WorldId,
+) -> CheckerSpec:
+    """The trust registration for reduced-Groebner-basis checkers."""
+    return CheckerSpec(
+        checker,
+        CertificateSchema(
+            "groebner", "1", GroebnerCertificate
+        ),
+        frozenset({"groebner_basis"}),
+        frozenset({"HasGroebnerBasis"}),
+        world,
+        requires_problem=True,
+    )
+
+
+def _assemble_groebner(
+    table: SymbolTable,
+    signature: LanguageSignature,
+    frames: FrameStore,
+    registry: ParentRegistry,
+    coefficient: Parent[Fraction],
+    base_ring: UnivariatePolynomialRing[Fraction],
+    variable: SymbolId,
+    second: SymbolId,
+    vocabulary: GroebnerVocabulary,
+) -> tuple[
+    GroebnerRuntime[Fraction],
+    GroebnerChecker[Fraction],
+    GroebnerOperation[Fraction],
+]:
+    """Assemble the fixed default ``Q[x, y]`` LEX Groebner view.
+
+    The ring's coefficient structure is the base assembly's rational field, the
+    generator tuple is the frame order ``(x, y)`` and the order is LEX.  The
+    request is generator-mode: it binds no target and no formal parameters, so
+    the bridge maps source free symbols onto the ring generators in ring order.
+    """
+    ring = PolynomialRing(
+        (variable, second), base_ring.coefficients, MonomialOrder.LEX
+    )
+    parent = registry.intern(
+        _polynomial_spec(coefficient.spec, (variable, second)),
+        ring,
+    )
+    bridge = MultivariatePolynomialBridge(
+        ring,
+        parent,
+        frames.world.id,
+        signature,
+        table.name_of,
+        T.number,
+    )
+    roles = VariableRoles(
+        target=None,
+        parameters=(),
+        parameter_mode=ParameterMode.SPECIFIED_VALUES,
+        world=frames.world.id,
+        target_sort=None,
+        parameter_sorts=(),
+        variables=(variable, second),
+        variable_sorts=(S.REAL, S.REAL),
+    )
+    request = AlgebraRequest(
+        coefficient,
+        ValueDomain.RATIONAL,
+        None,
+        roles,
+        Interpretation.FORMAL,
+    )
+    checker = GroebnerChecker(
+        ring, signature, vocabulary, bridge, frames, request
+    )
+    operation = GroebnerOperation(
+        signature,
+        frames,
+        vocabulary,
+        checker.id,
+        ring,
+        bridge,
+        request,
+    )
+    runtime = GroebnerRuntime(
+        (variable, second),
+        ring,
+        parent,
+        bridge,
+        request,
+        checker.id,
+        operation.id,
+    )
+    return runtime, checker, operation
+
+
 def _q_coefficient(
     registry: ParentRegistry,
 ) -> tuple[RationalField, Parent[Fraction]]:
@@ -732,11 +872,17 @@ def bootstrap() -> Runtime[Fraction]:
         root_isolation_vocabulary,
         signature,
         frames,
-    ) = _start()
+        groebner_vocabulary,
+    ) = _start(include_groebner=True)
+    assert groebner_vocabulary is not None
     variable = table.intern("x")
+    second = table.intern("y")
     frame = frames.create(
         frames.root.id,
-        declarations=(Declaration(variable, "x", S.REAL),),
+        declarations=(
+            Declaration(variable, "x", S.REAL),
+            Declaration(second, "y", S.REAL),
+        ),
     )
     registry = ParentRegistry()
     _, coefficient, ring, parent, differential = _q_polynomial(
@@ -816,6 +962,21 @@ def bootstrap() -> Runtime[Fraction]:
     root_isolation_checker = RootIsolationChecker(
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
+    (
+        groebner_runtime,
+        groebner_checker,
+        groebner_operation,
+    ) = _assemble_groebner(
+        table,
+        signature,
+        frames,
+        registry,
+        coefficient,
+        ring,
+        variable,
+        second,
+        groebner_vocabulary,
+    )
     specs = {
         checker.id: _derivative_spec(
             checker, frames.world.id, extra_problem_kinds=("integrate",)
@@ -843,6 +1004,9 @@ def bootstrap() -> Runtime[Fraction]:
         ),
         root_isolation_checker.id: _root_isolation_spec(
             root_isolation_checker, frames.world.id
+        ),
+        groebner_checker.id: _groebner_spec(
+            groebner_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -948,6 +1112,7 @@ def bootstrap() -> Runtime[Fraction]:
             resultant_operation.id: resultant_operation,
             root_count_operation.id: root_count_operation,
             root_isolation_operation.id: root_isolation_operation,
+            groebner_operation.id: groebner_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
@@ -969,6 +1134,7 @@ def bootstrap() -> Runtime[Fraction]:
         derivative=service,
         operations=operations,
         views=(view,),
+        groebner=groebner_runtime,
     )
 
 
@@ -1019,7 +1185,8 @@ def _assemble_parameterized(
         _root_isolation_vocabulary,
         signature,
         frames,
-    ) = _start()
+        _groebner_vocabulary,
+    ) = _start(include_groebner=False)
     variable = table.intern(target_name)
     parameter_ids = tuple(table.intern(name) for name in parameters)
     declarations = (Declaration(variable, target_name, S.REAL),) + tuple(
@@ -1378,7 +1545,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         root_isolation_vocabulary,
         signature,
         frames,
-    ) = _start(table=table, declarations=source)
+        groebner_vocabulary,
+    ) = _start(table=table, declarations=source, include_groebner=True)
+    assert groebner_vocabulary is not None
     basis = BasisRef(
         source.name,
         BasisKind.DECLARATION_FILE,
@@ -1393,7 +1562,11 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         basis=basis,
     )
     variable = table.intern("x")
-    declarations = (Declaration(variable, "x", S.REAL),) + tuple(
+    second = table.intern("y")
+    declarations = (
+        Declaration(variable, "x", S.REAL),
+        Declaration(second, "y", S.REAL),
+    ) + tuple(
         Declaration(constant.symbol, constant.name, constant.sort)
         for constant in library.constants.values()
     )
@@ -1490,6 +1663,21 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     root_isolation_checker = RootIsolationChecker(
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
+    (
+        groebner_runtime,
+        groebner_checker,
+        groebner_operation,
+    ) = _assemble_groebner(
+        table,
+        signature,
+        frames,
+        registry,
+        coefficient,
+        ring,
+        variable,
+        second,
+        groebner_vocabulary,
+    )
     specs = {
         checker.id: _derivative_spec(
             checker,
@@ -1524,6 +1712,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         ),
         root_isolation_checker.id: _root_isolation_spec(
             root_isolation_checker, frames.world.id
+        ),
+        groebner_checker.id: _groebner_spec(
+            groebner_checker, frames.world.id
         ),
         case_checker.id: _case_spec(case_checker, frames.world.id),
         **_core_specs(frames, signature),
@@ -1642,6 +1833,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             resultant_operation.id: resultant_operation,
             root_count_operation.id: root_count_operation,
             root_isolation_operation.id: root_isolation_operation,
+            groebner_operation.id: groebner_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
@@ -1664,6 +1856,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         operations=operations,
         views=(view,),
         elementary=library,
+        groebner=groebner_runtime,
     )
 
 
@@ -1673,6 +1866,7 @@ def new_workspace(runtime: Runtime[Any]) -> Workspace:
 
 
 __all__ = [
+    "GroebnerRuntime",
     "Runtime",
     "bootstrap",
     "bootstrap_elementary",

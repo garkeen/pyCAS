@@ -297,15 +297,15 @@ def test_an_empty_region_is_not_admitted(runtime):
 
 
 def test_a_claim_in_another_variable_is_outside_the_fragment(runtime):
-    y = runtime.table.intern("y")
+    w = runtime.table.intern("w")
     child = runtime.frames.create(
-        runtime.frame.id, declarations=(Declaration(y, "y", S.REAL),)
+        runtime.frame.id, declarations=(Declaration(w, "w", S.REAL),)
     )
     source, candidate = source_term(runtime), candidate_term(runtime)
     proposition = runtime_proposition(
         runtime,
         claim_term(
-            runtime, source, candidate, variable_term=T.symbol(y, "y")
+            runtime, source, candidate, variable_term=T.symbol(w, "w")
         ),
         child.id,
     )
@@ -313,7 +313,7 @@ def test_a_claim_in_another_variable_is_outside_the_fragment(runtime):
         request(
             runtime,
             proposition,
-            certificate(runtime, source, candidate, variable_id=y),
+            certificate(runtime, source, candidate, variable_id=w),
             candidate,
             frame=child.id,
         )
@@ -323,14 +323,14 @@ def test_a_claim_in_another_variable_is_outside_the_fragment(runtime):
 
 
 def test_a_source_or_candidate_outside_the_fragment_is_unverified(runtime):
-    y = runtime.table.intern("y")
+    w = runtime.table.intern("w")
     child = runtime.frames.create(
-        runtime.frame.id, declarations=(Declaration(y, "y", S.REAL),)
+        runtime.frame.id, declarations=(Declaration(w, "w", S.REAL),)
     )
-    y_term = T.symbol(y, "y")
+    w_term = T.symbol(w, "w")
     for source, candidate in (
-        (y_term, T.number(1)),
-        (variable(runtime), y_term),
+        (w_term, T.number(1)),
+        (variable(runtime), w_term),
     ):
         proposition = runtime_proposition(
             runtime, claim_term(runtime, source, candidate), child.id

@@ -12,9 +12,9 @@ with independent checkers because the polynomial term bridge exists.
 
 The Groebner core is split between `multivariate` (exact multivariate division,
 leading terms and S-polynomials) and `groebner` (Buchberger, reduced bases and
-cofactors).  Both are a public low-level API: they have exact contracts and
-property tests, but no registered multivariate operation, independent checker
-or frontend consumer yet.  The generator-mode request/view foundation lives in
-the language and semantics layers; the multivariate result model and the S1
-wiring are still missing.
+cofactors).  Both remain a public low-level API with exact contracts and
+property tests.  The `HasGroebnerBasis` checker, fixed `Q[x, y]`/LEX operation
+and runtime/workflow/REPL wiring live in the math, semantics and workflow
+layers respectively; the generator-mode request/view foundation stays in the
+language and semantics layers.
 """

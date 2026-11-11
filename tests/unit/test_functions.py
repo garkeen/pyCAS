@@ -983,14 +983,14 @@ def test_same_text_conditions_from_different_meanings_are_not_equal(runtime):
 
 
 def test_alpha_equivalent_parameters_are_unknown(runtime):
-    y = runtime.table.intern("y")
+    w = runtime.table.intern("w")
     child = runtime.frames.create(
-        runtime.frame.id, declarations=(Declaration(y, "y", S.REAL),)
+        runtime.frame.id, declarations=(Declaration(w, "w", S.REAL),)
     )
     true = runtime_proposition(runtime, T.TRUE, child.id)
     left = one_argument_value(runtime, square(runtime), true)
     right = one_argument_value(
-        runtime, square(runtime), true, symbol=y
+        runtime, square(runtime), true, symbol=w
     )
     assert same_parameter_shape(left, right)
     assert not same_parameter_signature(left, right)
