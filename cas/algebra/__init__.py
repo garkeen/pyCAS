@@ -17,4 +17,17 @@ property tests.  The `HasGroebnerBasis` checker, fixed `Q[x, y]`/LEX operation
 and runtime/workflow/REPL wiring live in the math, semantics and workflow
 layers respectively; the generator-mode request/view foundation stays in the
 language and semantics layers.
+
+The A2a1 finite-field and integer-polynomial primitives are split by
+responsibility: `finite_field` provides deterministic 64-bit primality and the
+canonical prime field `F_p`; `modular_polynomial` provides modular
+exponentiation, coefficient reduction, the squarefree predicate and the
+deterministic Rabin irreducibility test; `modular_factorization` provides
+deterministic Berlekamp factorization of monic squarefree polynomials; and
+`integer_polynomial` provides the `Z[x]`/`Q[x]` primitive form, the
+Landau/Mignotte coefficient bound and exact integer coefficient helpers.
+These are a public low-level API with exact contracts and property tests.
+Hensel lifting, Zassenhaus recombination, `Z[x]`/`Q[x]` factorization, a
+factorization specification/checker/operation and any workflow or REPL wiring
+are not implemented; A2 is not complete.
 """
