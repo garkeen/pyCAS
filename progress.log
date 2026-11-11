@@ -725,3 +725,11 @@
 - 测试：`tests/unit/test_groebner.py` 覆盖首项/序、Cox 例的除法恒等式与余式不可约性、空除子/零输入/零除子/混合环/非域系数、非 monic S-多项式与零结果、`<x^2+y^2-1, x-y>` 与 `<x^2-y, x-y^2>` 在 LEX/GRLEX 的约化基、monic/互约化/cofactor 恒等式、零/重复/单位理想、理想属员正反例、预算耗尽无部分结果、正特征 GF(5)、sealed `GroebnerBasis` 直接构造/`replace` 拒绝以及非 int 预算拒绝；`tests/property/test_groebner_properties.py` 以固定种子覆盖随机系统的 cofactor 恒等式、原生成元归零、全部 S-对归零、二次 Buchberger 幂等、生成元顺序/非零缩放下的约化基与理想属员稳定，以及各序自身的 Buchberger 判据。
 - 边界：本批只交付低层代数核心，不注册 operation、不加 checker、不建多元 S1 `ProblemSpec`/`AlgebraView`/结果模型、不改 workflow/REPL；`GroebnerBasis` 已 sealed，只能由 `buchberger` 发行，`ideal_membership`/`ideal_equal` 只定义在这种记录上，但发行路径不重检 Buchberger 判据，独立 checker 必须验证“新生成元属于原理想”“原生成元属于新理想”和全部 S-对归零后才能进入可信发布。未实现判据优化、sugar、模方法、F4/F5、消元、理想交/饱和/商代数、零维标准单项式基/乘法矩阵与解集语义。
 - 验收：`python -m pytest -q` → 1571 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 123 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas` → 通过；`git diff --check` → 无空白错误（仅有 CRLF 提示）。
+
+## 2026-11-11 — G0 S1 规格与独立 Gröbner 检查器
+
+- `cas/math/algebra/groebner_specification.py`：新增 `HasGroebnerBasis(G, B, O)`、`GroebnerVocabulary`（两集合与 quoted order 签名）、`GroebnerClaim`/`GroebnerCertificate`（cofactor 矩阵，空矩阵合法）与 `has_groebner_basis`/`parse_groebner`。模块语义只声明“B 是原理想在固定环/序下的唯一既约 Gröbner 基”，不声称解集或 G1/G2。
+- `cas/kernel/evidence.py`：`problem_mismatch` 新增 `input_set` 集合读法，与有序 `inputs` 互斥；集合读法折叠重复问题输入，用于生成元集合比较。
+- `cas/math/algebra/groebner_checker.py`：id `algebra.groebner`。不导入 `cas.algebra.groebner` 或未来 operation，不使用 sealed `GroebnerBasis`/`ideal_membership`；独立 `typed_view` 每个生成元、基元素与 cofactor，检查非零/monic/互约化，重算全部 S-对 normal form，再约化原生成元（在 Buchberger 判据之后，使非零余式成为合法的非属员否证），最后以 cofactor 恒等式证明双向包含。非域 `Unverified(FRAGMENT)`，pair 预算耗尽 `Unverified(BUDGET)`，cofactor 形状/恒等失败 `InvalidEvidence`；problem 的受限区域、coverage 与结果语言不符同样为 `InvalidEvidence`。
+- 测试：`tests/unit/test_groebner_specification.py`、`tests/unit/test_groebner_checker.py`；`tests/unit/test_evidence.py` 增加集合读法/折叠/反例/双模式拒绝。验收：`python -m pytest -q` → 1644 passed，0 failed；`python -m mypy --strict cas` → Success: no issues found in 126 source files；`python -m ruff check cas tests` → All checks passed；`python -m compileall -q cas` → 通过；`git diff --check` → 无空白错误。
+- 边界：本片未注册 operation、未接线 bootstrap/workflow/REPL，也未声明默认 frame 的 `y`；不是端到端 G0。

@@ -452,6 +452,7 @@ def problem_mismatch(
     operations: tuple[str, ...] | None = None,
     target: SymbolId | None = None,
     inputs: tuple[T.Term, ...] | None = None,
+    input_set: tuple[T.Term, ...] | None = None,
     region: T.Term | None = None,
     roles: VariableRoles | None = None,
     interpretation_requirement: InterpretationRequirement | None = None,
@@ -465,6 +466,14 @@ def problem_mismatch(
     supplied check passed.  Mathematical checkers are required to receive both
     the problem and the kernel-built verification context; every problem input
     must belong to that context's meaning world and be visible from its frame.
+
+    `inputs` compares the problem's input sequence exactly.  `input_set` is the
+    set-reading of the same comparison for a specification whose operands are
+    finite sets of terms (for example the generator set of a Groebner claim):
+    repeated problem inputs fold, because a set names its members without order
+    or multiplicity.  The two modes are mutually exclusive.  This is not a
+    second problem comparator; it is one comparison with an ordered reading and
+    a set reading.
 
     When `region` is supplied, the problem's own region must be covered by that
     specification region.  A problem without a region is read as `TRUE`, so it
@@ -482,6 +491,10 @@ def problem_mismatch(
     function checker supplies `coefficient_domain=None` because a function
     problem has no coefficient structure, and supplies the real value domain.
     """
+    if inputs is not None and input_set is not None:
+        raise ValueError(
+            "problem_mismatch takes one input comparison mode, not both"
+        )
     problem = request.problem
     if problem is None:
         return None
@@ -532,6 +545,12 @@ def problem_mismatch(
         item.term for item in problem.inputs
     ) != inputs:
         return "the problem inputs do not match the specification"
+    if input_set is not None and frozenset(
+        item.term for item in problem.inputs
+    ) != frozenset(input_set):
+        return (
+            "the problem inputs do not match the specification generator set"
+        )
     if region is not None:
         if problem.region is not None and not context.readable(
             problem.region
