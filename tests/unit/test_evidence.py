@@ -914,6 +914,35 @@ def test_problem_mismatch_rejects_an_input_from_another_world(runtime):
     assert "another meaning world" in mismatch
 
 
+def test_problem_mismatch_compares_an_input_set(runtime):
+    term = variable(runtime)
+    typed = typed_in(
+        runtime.frames, runtime.frame.id, runtime.signature, term
+    )
+    fixed = ProblemSpec(
+        "test.problem",
+        (typed, typed),
+        runtime.request.roles,
+        None,
+        ResultLanguage.EXPRESSION,
+        Coverage.ONE_VERIFIED,
+        domain_requirement=DomainRequirement(
+            coefficient=runtime.request.coefficient_domain,
+            values=runtime.request.value_domain,
+        ),
+    )
+    request = request_for(runtime, fixed)
+    assert problem_mismatch(request, input_set=(term,)) is None
+    assert problem_mismatch(request, inputs=(term,)) is not None
+    mismatch = problem_mismatch(request, input_set=(T.number(1),))
+    assert mismatch is not None
+    assert "generator set" in mismatch
+    with pytest.raises(ValueError):
+        problem_mismatch(
+            request, inputs=(term,), input_set=(term,)
+        )
+
+
 def test_an_inference_record_names_its_certificate_schema():
     record = InferenceRecord(
         InferenceId(0), FrameId(0), "checker", "1", (), (), None
