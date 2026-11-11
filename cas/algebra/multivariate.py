@@ -11,15 +11,11 @@ module publishes a judgment; both are low-level algebra.
 Scope boundary
 --------------
 
-This batch is not an end-to-end G0 capability.  The generator-mode request and
-view foundation exists: ``Role.GENERATOR``, ``VariableRoles.variables``/
-``variable_sorts``, generator-mode ``ProblemSpec``/``AlgebraRequest`` and the
-``MultivariatePolynomialBridge`` that maps a source's free symbols onto a
-polynomial ring's generators.  Still missing are the multivariate result model,
-the registered ``groebner_basis`` operation, the independent checker, bootstrap
-registration, workflow/REPL support and the default frame's ``y``.  This module
-itself is a pure low-level algebra API; neither it nor the foundation publishes
-a judgment.
+The generator-mode request and view foundation, the `HasGroebnerBasis` claim,
+the independent checker and the registered `groebner_basis` operation are
+implemented in the language, semantics, math and runtime layers.  This module
+remains a pure low-level algebra API; it never publishes a judgment and does
+not assemble a problem or operation.
 
 Representation and monomial order
 ---------------------------------

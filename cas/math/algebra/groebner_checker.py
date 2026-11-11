@@ -1,7 +1,7 @@
 """Independent checker for `HasGroebnerBasis` over a fixed monomial order.
 
-The checker never imports the Buchberger search module or the future operation
-that will propose a basis.  It re-elaborates every generator, basis element and
+The checker never imports the Buchberger search module or the operation that
+proposes a basis.  It re-elaborates every generator, basis element and
 cofactor through the multivariate bridge and recomputes the basis facts from the
 candidate, the claim and the certificate.  It does not call
 ``ideal_membership``/``ideal_equal``: those read the sealed search-side record,

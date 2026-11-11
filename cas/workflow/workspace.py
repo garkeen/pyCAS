@@ -2802,6 +2802,22 @@ class Workspace:
             coverage=Coverage.COMPLETE_SET,
         )
 
+    def groebner_basis(
+        self,
+        generators: tuple[Expression, ...],
+    ) -> OperationResult:
+        """Client helper: compute a reduced Groebner basis as a finite set.
+
+        The default assembly fixes the ring ``Q[x, y]`` and its LEX order, so
+        this helper passes no target and no order parameter.  Every generator
+        is an ordinary workspace object; there is no second input channel.
+        """
+        return self.apply(
+            "groebner_basis",
+            generators,
+            coverage=Coverage.COMPLETE_SET,
+        )
+
     def structured_result(
         self, source: Expression
     ) -> StructuredResult | None:

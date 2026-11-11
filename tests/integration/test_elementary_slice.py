@@ -131,7 +131,7 @@ def test_negative_powers_and_unknown_symbols_are_refused():
     session = Session(runtime)
     session.execute("1/x")
     assert session.execute("diff").startswith("unsupported:")
-    session.execute("y")
+    session.execute("w")
     output = session.execute("diff")
     assert output.startswith("invalid:")
     assert "undeclared" in output

@@ -129,18 +129,33 @@ def multivariate_setup(
     )
     if len(declared) != len(extras):
         raise ValueError("one extra sort per extra generator is required")
+    extra_declarations: list[Declaration] = []
+    effective: list[S.Sort] = []
+    for symbol, sort in zip(extras, declared):
+        existing = runtime.frames.sort_of(runtime.frame.id, symbol)
+        if existing is not None:
+            # `y` is declared by the default assembly now.  Re-declaring it in
+            # a child frame is refused, so reuse the visible declaration and
+            # require the requested sort to agree with it.
+            if existing != sort:
+                raise ValueError(
+                    "an already declared generator has another sort"
+                )
+            effective.append(existing)
+            continue
+        effective.append(sort)
+        extra_declarations.append(
+            Declaration(symbol, runtime.table.name_of(symbol), sort)
+        )
     frame = (
         runtime.frame
-        if not extras
+        if not extra_declarations
         else runtime.frames.create(
             runtime.frame.id,
-            declarations=tuple(
-                Declaration(symbol, runtime.table.name_of(symbol), sort)
-                for symbol, sort in zip(extras, declared)
-            ),
+            declarations=tuple(extra_declarations),
         )
     )
-    frame_sorts = (S.REAL,) + declared
+    frame_sorts = (S.REAL,) + tuple(effective)
     sorts = frame_sorts if request_sorts is None else tuple(request_sorts)
     ring = PolynomialRing(symbols, runtime.ring.coefficients, order)
     registry = ParentRegistry()

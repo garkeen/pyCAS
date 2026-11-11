@@ -5,11 +5,13 @@ from dataclasses import dataclass, replace
 import pytest
 from support import head_app, runtime_proposition
 
+from cas.algebra.polynomial import MonomialOrder
 from cas.foundation.ids import SymbolId
 from cas.kernel.trust import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode, ResultLanguage, Role
 from cas.language.signatures import StructuralHead
+from cas.math.algebra.groebner_checker import GroebnerChecker
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
 )
@@ -25,6 +27,7 @@ from cas.operations.protocols import (
 )
 from cas.operations.registry import OperationRegistry
 from cas.runtime.bootstrap import (
+    GroebnerRuntime,
     Runtime,
     bootstrap,
     bootstrap_elementary,
@@ -65,6 +68,57 @@ def test_bootstrap_wires_the_world_explicitly():
     assert runtime.request.parameter_mode is ParameterMode.SPECIFIED_VALUES
     assert runtime.request.interpretation is Interpretation.FORMAL
     assert runtime.request.role_of(runtime.variable) is Role.TARGET
+
+
+def test_bootstrap_declares_y_and_assembles_the_groebner_view():
+    runtime = bootstrap()
+    groebner = runtime.groebner
+    assert isinstance(groebner, GroebnerRuntime)
+    y = runtime.table.lookup("y")
+    assert y is not None
+    assert runtime.frames.sort_of(runtime.frame.id, y) is S.REAL
+    assert runtime.frames.sort_of(runtime.frame.id, runtime.variable) is S.REAL
+    assert groebner.variables == (runtime.variable, y)
+    assert groebner.ring.generators == groebner.variables
+    assert groebner.ring.monomial_order is MonomialOrder.LEX
+    assert groebner.parent.ring is groebner.ring
+    assert groebner.bridge.ring is groebner.ring
+    assert groebner.request.parameter_ring is None
+    assert groebner.request.roles.target is None
+    assert groebner.request.roles.variables == groebner.variables
+    assert groebner.request.roles.variable_sorts == (S.REAL, S.REAL)
+    assert groebner.request.roles.role_of(runtime.variable) is Role.GENERATOR
+    assert groebner.request.roles.role_of(y) is Role.GENERATOR
+    symbol = runtime.table.lookup("HasGroebnerBasis")
+    assert symbol is not None
+    assert runtime.signature.operator_of(symbol) is not None
+    spec = runtime.store.checkers.spec(groebner.checker_id)
+    assert spec is not None
+    assert isinstance(spec.checker, GroebnerChecker)
+    assert spec.accepted_problem_kinds == frozenset({"groebner_basis"})
+    assert spec.accepted_specification_kinds == frozenset(
+        {"HasGroebnerBasis"}
+    )
+    assert runtime.operations.get(groebner.operation_id) is not None
+
+
+def test_parameterized_bootstrap_has_no_groebner_view():
+    runtime = bootstrap_parameterized()
+    assert runtime.groebner is None
+    assert runtime.operations.get("groebner_basis") is None
+    assert runtime.table.lookup("y") is None
+    assert runtime.table.lookup("HasGroebnerBasis") is None
+
+
+def test_elementary_bootstrap_declares_y_and_registers_groebner():
+    runtime = bootstrap_elementary()
+    groebner = runtime.groebner
+    assert isinstance(groebner, GroebnerRuntime)
+    y = runtime.table.lookup("y")
+    assert y is not None
+    assert runtime.frames.sort_of(runtime.frame.id, y) is S.REAL
+    assert runtime.operations.get("groebner_basis") is not None
+    assert runtime.store.checkers.get(groebner.checker_id) is not None
 
 
 def test_the_polynomial_checker_is_admitted_with_explicit_metadata():
