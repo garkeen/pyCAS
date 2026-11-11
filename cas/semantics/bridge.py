@@ -5,18 +5,19 @@ source is admitted into an explicit parent under one ``AlgebraRequest``, and a
 member is rendered back through the view's symbol bindings.  Both directions
 report a closed ``ViewRefused``/``RenderRefused`` with the missing capability
 instead of collapsing every reason into the same absence; the former
-``None``-returning helpers have been removed.  The polynomial bridge and the
-rational-function bridge implement the same protocol, but only the latter has
-real holes: its view carries the denominator-nonzero proposition on which the
-fraction-field representation equals the source.
+``None``-returning helpers have been removed.  The univariate polynomial
+bridge, the multivariate polynomial bridge and the rational-function bridge
+implement the same protocol, but only the last has real holes: its view
+carries the denominator-nonzero proposition on which the fraction-field
+representation equals the source.
 
 An ``AlgebraView`` pairs the typed source, the target parent, the element and
-the symbol bindings that interpret the source's free symbols as target or
-parameter generators.  It also records the source's intrinsic domain and the
-region on which the representation equals the source when the bridge is not
-total on its fragment.  The two are independent: a source may be total while
-the chosen representation is valid only on a proper subregion, so a
-``valid_on`` does not require a ``source_domain``.  It is the value
+the symbol bindings that interpret the source's free symbols as a target,
+generator or parameter generator.  It also records the source's intrinsic
+domain and the region on which the representation equals the source when the
+bridge is not total on its fragment.  The two are independent: a source may be
+total while the chosen representation is valid only on a proper subregion, so
+a ``valid_on`` does not require a ``source_domain``.  It is the value
 mathematical operations and checkers consume.  The view also carries a
 `ConversionWitness`: the structural facts the conversion establishes, not just
 its kind.  The witness records whether the conversion preserves definedness;
@@ -28,7 +29,14 @@ The polynomial bridge is total on its fragment: every accepted source is
 defined wherever the polynomial expression is evaluated, so its views leave
 ``source_domain`` and ``valid_on`` as ``None``.  The rational bridge computes
 the product of the source's inverse denominators, so cancelling a factor in
-the fraction field does not erase a hole in the source expression.
+the fraction field does not erase a hole in the source expression.  The
+multivariate polynomial bridge binds the ring's generators in declared order
+to source symbols with ``Role.GENERATOR``; it refuses a target, a parameter
+ring or a generator order that differs from the ring.  This is the generator
+mode request/view foundation only: the multivariate result model, the
+registered ``groebner_basis`` operation, the independent checker, bootstrap
+registration, workflow/REPL support and the default frame's ``y`` are still
+missing, so no S1 operation is wired.
 """
 
 from __future__ import annotations
@@ -72,6 +80,12 @@ E = TypeVar("E")
 V = TypeVar("V")
 
 _VIEW_SEAL = object()
+
+_ROLE_ORDER = {
+    Role.TARGET: 0,
+    Role.GENERATOR: 1,
+    Role.PARAMETER: 2,
+}
 
 
 class ConversionKind(StrEnum):
@@ -300,7 +314,7 @@ def _region_definedness_refusal(
 
 @dataclass(frozen=True, slots=True)
 class SymbolBinding:
-    """One source symbol interpreted as a target or parameter generator."""
+    """One source symbol interpreted as a target, generator or parameter."""
 
     symbol: SymbolId
     role: Role
@@ -349,11 +363,13 @@ class AlgebraView(Generic[E]):
 
     The view is issued only by the bridge through ``_issue_view``.  It fixes
     the source, the parent that owns the element, the element itself, the
-    target/parameter symbol bindings, the interpretation, the conversion
-    witness and the language signature its regions are read in.  The binding
-    tuple is canonical: the target comes first, then the parameters in index
-    order.  The signature is the language of the region propositions, not a
-    second world identity.
+    target/generator/parameter symbol bindings, the interpretation, the
+    conversion witness and the language signature its regions are read in.  The
+    binding tuple is canonical by role and index: the target first, then the
+    generators, then the parameters in index order.  A view binds either
+    exactly one target at index 0 or a nonempty generator tuple with indices
+    0..n-1; a generator view binds no parameters and no target.  The signature
+    is the language of the region propositions, not a second world identity.
 
     ``source_domain`` is the source expression's intrinsic domain when the
     bridge cannot establish that it is total.  ``valid_on`` is the region on
@@ -489,10 +505,31 @@ class AlgebraView(Generic[E]):
         if len({item.symbol for item in symbols}) != len(symbols):
             raise ValueError("an algebra view cannot bind one symbol twice")
         targets = tuple(item for item in symbols if item.role is Role.TARGET)
-        if len(targets) != 1 or targets[0].index != 0:
-            raise ValueError(
-                "an algebra view needs exactly one target binding at index 0"
-            )
+        generators = tuple(
+            item for item in symbols if item.role is Role.GENERATOR
+        )
+        if targets:
+            if len(targets) != 1 or targets[0].index != 0:
+                raise ValueError(
+                    "an algebra view needs exactly one target binding at "
+                    "index 0"
+                )
+            if generators:
+                raise ValueError(
+                    "an algebra view cannot bind both a target and generators"
+                )
+        else:
+            if not generators:
+                raise ValueError(
+                    "an algebra view needs a target binding or generator "
+                    "bindings"
+                )
+            if tuple(sorted(item.index for item in generators)) != tuple(
+                range(len(generators))
+            ):
+                raise ValueError(
+                    "generator bindings need the indices 0..n-1 without gaps"
+                )
         parameters = tuple(
             item for item in symbols if item.role is Role.PARAMETER
         )
@@ -502,6 +539,8 @@ class AlgebraView(Generic[E]):
             raise ValueError(
                 "parameter bindings need the indices 0..n-1 without gaps"
             )
+        if generators and parameters:
+            raise ValueError("a generator view cannot bind parameters")
         if self.interpretation is Interpretation.PARAMETER_FAMILY:
             if not parameters:
                 raise ValueError(
@@ -514,7 +553,7 @@ class AlgebraView(Generic[E]):
         canonical = tuple(
             sorted(
                 symbols,
-                key=lambda item: (item.role is Role.PARAMETER, item.index),
+                key=lambda item: (_ROLE_ORDER[item.role], item.index),
             )
         )
         if canonical != symbols:
@@ -1035,6 +1074,11 @@ class SimplePolynomialBridge(Generic[E]):
             raise TypeError("an algebra view needs a typed source expression")
         if not isinstance(request, AlgebraRequest):
             raise TypeError("an algebra view needs an algebra request")
+        if request.roles.target is None:
+            return _view_refused(
+                "target_role",
+                "the simple bridge needs a target role",
+            )
         refusal = _admit_source(source, self.world)
         if refusal is not None:
             return refusal
@@ -1104,6 +1148,155 @@ class SimplePolynomialBridge(Generic[E]):
             self.name_of,
             self.render_coefficient,
             view.generators_for(Role.TARGET),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MultivariatePolynomialBridge(Generic[E]):
+    """The bridge for ``K[x_1, ..., x_n]`` under a generator-mode request.
+
+    The source's free symbols are mapped onto ``ring.generators`` in the ring's
+    declared order.  The request's `variables` must be exactly that tuple, and
+    each source free symbol that is a ring generator must carry the sort the
+    request records for it; neither the role nor the sort is inferred from
+    names or from the order the symbols happen to appear in the source
+    expression.  The conversion is the same structural polynomial conversion as
+    the univariate bridge and is total on its fragment, so a view carries
+    neither ``source_domain`` nor ``valid_on``.
+
+    A generator view has no single target and no formal parameters in this
+    slice: the differentiation/integration/solve consumers are target-mode, so
+    this bridge refuses those requests instead of choosing a generator as the
+    target.  The bridge issues a representation-isomorphism witness, matching
+    the univariate polynomial bridge.
+    """
+
+    ring: PolynomialRing[E]
+    parent: Parent[Polynomial[E]]
+    world: WorldId
+    signature: LanguageSignature
+    name_of: Callable[[SymbolId], str]
+    render_coefficient: Callable[[E], T.Term]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.parent, Parent):
+            raise TypeError("a polynomial bridge needs a parent")
+        if self.parent.ring is not self.ring:
+            raise ValueError("the parent does not own the bridge's ring")
+        if isinstance(self.world, bool) or not isinstance(self.world, int):
+            raise TypeError("a polynomial bridge needs a WorldId")
+
+    def to_view(
+        self, source: TypedExpr, request: AlgebraRequest
+    ) -> AlgebraViewOutcome[Polynomial[E]]:
+        if not isinstance(source, TypedExpr):
+            raise TypeError("an algebra view needs a typed source expression")
+        if not isinstance(request, AlgebraRequest):
+            raise TypeError("an algebra view needs an algebra request")
+        refusal = _admit_source(source, self.world)
+        if refusal is not None:
+            return refusal
+        refusal = _admit_request_world(source, request)
+        if refusal is not None:
+            return refusal
+        if request.roles.target is not None:
+            return _view_refused(
+                "target_role",
+                "the multivariate bridge has no target role; it binds the "
+                "ordered generator tuple",
+            )
+        if request.roles.parameters or request.parameter_ring is not None:
+            return _view_refused(
+                "parameter_ring",
+                "the multivariate bridge has no parameter structure",
+            )
+        if request.roles.variables != self.ring.generators:
+            return _view_refused(
+                "generator_roles",
+                "the request generator roles are not the ring's generators in "
+                "ring order",
+            )
+        if len(request.roles.variable_sorts) != len(self.ring.generators):
+            return _view_refused(
+                "variable_sort",
+                "the request does not declare one sort per ring generator",
+            )
+        if request.interpretation not in (
+            Interpretation.FORMAL,
+            Interpretation.EMBEDDED,
+        ):
+            return _view_refused(
+                "parameter_family_interpretation",
+                "the multivariate bridge does not interpret a parameter "
+                "family",
+            )
+        if request.coefficient.ring is not self.ring.coefficients:
+            return _view_refused(
+                "coefficient_parent",
+                "the request coefficients are not the bridge's coefficients",
+            )
+        symbols = tuple(
+            SymbolBinding(symbol_id, Role.GENERATOR, index)
+            for index, symbol_id in enumerate(self.ring.generators)
+        )
+        refusal = _admit_bindings(source, symbols)
+        if refusal is not None:
+            return refusal
+        generator_index = {
+            symbol_id: index
+            for index, symbol_id in enumerate(self.ring.generators)
+        }
+        for free in source.bindings.symbols:
+            index = generator_index.get(free.symbol_id)
+            if index is None:
+                continue
+            expected = request.roles.variable_sorts[index]
+            if free.sort != expected:
+                return _view_refused(
+                    "variable_sort",
+                    f"the source binds generator {free.symbol_id} as "
+                    f"{free.sort!r}, but the request declares {expected!r}",
+                )
+        converted = _convert_in_ring(self.ring, source.term, self.signature)
+        if isinstance(converted, ViewRefused):
+            return converted
+        view = _issue_view(
+            source,
+            self.parent,
+            converted,
+            symbols,
+            request.interpretation,
+            ConversionWitness.representation_isomorphism(),
+            None,
+            None,
+            signature=self.signature,
+            region_bindings=source.bindings.symbols,
+        )
+        if isinstance(view, ViewRefused):
+            return view
+        return ViewBuilt(view)
+
+    def render(
+        self, view: AlgebraView[Polynomial[E]], value: Polynomial[E]
+    ) -> RenderOutcome:
+        if not isinstance(view, AlgebraView):
+            raise TypeError("rendering needs an algebra view")
+        if view.parent is not self.parent:
+            raise ValueError("the view belongs to another parent")
+        if not self.parent.contains(value):
+            raise ValueError("the polynomial belongs to another ring")
+        generators = view.generators_for(Role.GENERATOR)
+        if generators != self.ring.generators:
+            raise ValueError(
+                "the view does not bind the bridge's generators in ring order"
+            )
+        return _render_polynomial(
+            self.ring,
+            value,
+            self.signature,
+            self.name_of,
+            self.render_coefficient,
+            generators,
         )
 
 
@@ -1202,6 +1395,11 @@ class ParameterPolynomialBridge(Generic[E]):
             raise TypeError("an algebra view needs a typed source expression")
         if not isinstance(request, AlgebraRequest):
             raise TypeError("an algebra view needs an algebra request")
+        if request.roles.target is None:
+            return _view_refused(
+                "target_role",
+                "the parameter bridge needs a target role",
+            )
         refusal = _admit_source(source, self.world)
         if refusal is not None:
             return refusal
@@ -1391,6 +1589,11 @@ class RationalFunctionBridge(Generic[E]):
             raise TypeError("an algebra view needs a typed source expression")
         if not isinstance(request, AlgebraRequest):
             raise TypeError("an algebra view needs an algebra request")
+        if request.roles.target is None:
+            return _view_refused(
+                "target_role",
+                "the rational bridge needs a target role",
+            )
         refusal = _admit_source(source, self.world)
         if refusal is not None:
             return refusal
@@ -2102,6 +2305,7 @@ __all__ = [
     "AlgebraViewOutcome",
     "ConversionKind",
     "ConversionWitness",
+    "MultivariatePolynomialBridge",
     "ParameterPolynomialBridge",
     "PolynomialBridge",
     "RationalFunctionBridge",

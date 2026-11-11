@@ -8,11 +8,14 @@ import pytest
 from cas.algebra.groebner import (
     BuchbergerBudgetError,
     GroebnerBasis,
-    GroebnerFragmentError,
     GroebnerStatistics,
     buchberger,
     ideal_equal,
     ideal_membership,
+)
+from cas.algebra.integers import IntegerRing
+from cas.algebra.multivariate import (
+    GroebnerFragmentError,
     leading_coefficient,
     leading_monomial,
     leading_term,
@@ -20,7 +23,6 @@ from cas.algebra.groebner import (
     normal_form,
     s_polynomial,
 )
-from cas.algebra.integers import IntegerRing
 from cas.algebra.polynomial import MonomialOrder, Polynomial, PolynomialRing
 from cas.algebra.protocols import Field
 from cas.algebra.rationals import RationalField

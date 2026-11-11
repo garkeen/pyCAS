@@ -514,10 +514,6 @@ class ProblemBuilt:
                     "the algebra view and the problem must share one role "
                     "value"
                 )
-            if self.algebra.target != self.problem.target:
-                raise ValueError(
-                    "the algebra view and the problem must share one target"
-                )
         interpretation = _interpretation_binding_mismatch(
             self.problem, self.algebra
         )
@@ -578,11 +574,6 @@ class ExecutionRequest:
                 raise ValueError(
                     "the execution problem and algebra view must share one "
                     "role value"
-                )
-            if self.problem.target != self.algebra.target:
-                raise ValueError(
-                    "the execution problem and algebra view must share one "
-                    "target"
                 )
         interpretation = _interpretation_binding_mismatch(
             self.problem, self.algebra

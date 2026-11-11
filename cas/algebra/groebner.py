@@ -1,51 +1,26 @@
-"""Exact multivariate division and Buchberger's algorithm over a field.
+"""Buchberger's algorithm and the sealed reduced-basis record over a field.
 
-This module owns the search side of the G0 algebra core: multivariate division
-with quotients, S-polynomials, Buchberger's algorithm, a reduced monic
-interreduced basis, and cofactor representations of every basis element in
-terms of the original generators.  It is a low-level API over
-``PolynomialRing[E]`` and does not import the syntax, semantics, workflow,
-kernel or ``math`` layers.
+This module owns the search side of the G0 algebra core: Buchberger's
+algorithm, a reduced monic interreduced basis, and cofactor representations of
+every basis element in terms of the original generators.  The pure primitives
+it consumes -- multivariate division with quotients, leading-term helpers and
+S-polynomials -- live in ``cas.algebra.multivariate``, so the independent
+checker of the next batch can import them without importing this search
+module.  This is a low-level API over ``PolynomialRing[E]`` and does not import
+the syntax, semantics, workflow, kernel or ``math`` layers.
 
 Scope boundary
 --------------
 
-This batch is not an end-to-end G0 capability.  There is no multivariate
-``ProblemSpec``/``AlgebraView``/result model, no registered operation, no
-independent checker, and no REPL command.  The next batch has to provide that
-S1 wiring and an independent checker that consumes the cofactors recorded
-here.  In particular, this module never publishes a judgment.
-
-Representation and monomial order
----------------------------------
-
-``PolynomialRing`` stores sparse exponent tuples in the ring's declared
-``MonomialOrder`` (LEX, GRLEX or GREVLEX).  Terms are stored in ascending
-order, so the leading term is the last stored term.  Every algorithm in this
-module uses ``ring.monomial_order``; no algorithm chooses a second order.
-The leading helpers refuse the zero polynomial because it has no leading term.
-
-Multivariate division
----------------------
-
-For a polynomial ``f`` and divisors ``d_1, ..., d_s`` over a field, the
-standard division algorithm repeatedly removes the leading term of the current
-remainder by the first divisor whose leading monomial divides it; when no
-divisor applies, that leading term is moved to the remainder.  It returns
-quotients ``q_i`` and a remainder ``r`` with
-
-    f = sum_i q_i * d_i + r
-
-and no monomial of ``r`` divisible by any leading monomial of a divisor.  Each
-reduction strictly lowers the leading monomial under the fixed well-order, so
-the algorithm terminates after finitely many steps.
-
-When the divisors form a Groebner basis, ``r`` is the unique ideal normal form.
-For an arbitrary divisor list, ``r`` is only a division remainder: it can
-depend on the order of the divisors and is not an ideal normal form.  The
-function name ``normal_form`` follows the standard terminology for a Groebner
-basis; callers with an arbitrary divisor list must read the result as a
-division remainder, not as a canonical form.
+This batch is not an end-to-end G0 capability.  The generator-mode request and
+view foundation exists (``Role.GENERATOR``, ``VariableRoles.variables``/
+``variable_sorts``, generator-mode ``ProblemSpec``/``AlgebraRequest`` and
+``MultivariatePolynomialBridge``), but there is still no multivariate result
+model, no registered ``groebner_basis`` operation, no independent checker, no
+bootstrap registration, no workflow/REPL support and no default-frame ``y``.
+The next batch has to provide that S1 wiring and an independent checker that
+consumes the cofactors recorded here.  In particular, this module never
+publishes a judgment.
 
 Buchberger and cofactors
 ------------------------
@@ -136,44 +111,29 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Generic, Iterable, TypeVar, cast
+from typing import Generic, Iterable, TypeVar
 
+from cas.algebra.multivariate import (
+    _divide,
+    _monomial_divides,
+    _require_field,
+    _require_owned,
+    leading_coefficient,
+    leading_monomial,
+    normal_form,
+    s_polynomial_parts,
+)
 from cas.algebra.polynomial import (
-    Exponents,
     MonomialOrder,
     Polynomial,
     PolynomialRing,
 )
-from cas.algebra.protocols import Field
 
 E = TypeVar("E")
 
 _BUDGET_MISSING = frozenset({"buchberger_budget"})
-_FIELD_MISSING = frozenset({"coefficient_field"})
-_NONZERO_POLYNOMIAL_MISSING = frozenset({"nonzero_polynomial"})
-_NONZERO_DIVISOR_MISSING = frozenset({"nonzero_divisor"})
 _SEAL = object()
 _UNSEALED = object()
-
-
-class GroebnerFragmentError(ValueError):
-    """A request is outside this module's declared algebraic fragment.
-
-    ``missing`` is the structured capability or precondition set the caller
-    turns into a fragment report.  This error is never a mathematical
-    refutation; it says that the low-level algorithm cannot apply its
-    assumptions to the supplied data.
-    """
-
-    def __init__(
-        self,
-        detail: str,
-        *,
-        missing: frozenset[str],
-    ) -> None:
-        super().__init__(detail)
-        self.detail = detail
-        self.missing = frozenset(missing)
 
 
 class BuchbergerBudgetError(RuntimeError):
@@ -198,17 +158,6 @@ class BuchbergerBudgetError(RuntimeError):
         self.budget = budget
         self.phase = phase
         self.missing = _BUDGET_MISSING
-
-
-@dataclass(frozen=True, slots=True)
-class MultivariateDivision(Generic[E]):
-    """Quotients and remainder of one multivariate division.
-
-    ``value == sum(quotient_i * divisor_i) + remainder``.
-    """
-
-    quotients: tuple[Polynomial[E], ...]
-    remainder: Polynomial[E]
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,91 +280,6 @@ class GroebnerBasis(Generic[E]):
         object.__setattr__(record, "_seal", _SEAL)
         record.__post_init__()
         return record
-
-
-def leading_term(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-) -> tuple[Exponents, E]:
-    """The leading exponent tuple and coefficient under the ring's order."""
-    _require_owned(ring, polynomial, "leading term")
-    if polynomial.is_zero():
-        raise GroebnerFragmentError(
-            "a zero polynomial has no leading term",
-            missing=_NONZERO_POLYNOMIAL_MISSING,
-        )
-    return polynomial.terms[-1]
-
-
-def leading_monomial(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-) -> Exponents:
-    """The leading monomial (exponent tuple) under the ring's order."""
-    return leading_term(ring, polynomial)[0]
-
-
-def leading_coefficient(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-) -> E:
-    """The coefficient of the leading term under the ring's order."""
-    return leading_term(ring, polynomial)[1]
-
-
-def multivariate_divmod(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-    divisors: Iterable[Polynomial[E]],
-) -> MultivariateDivision[E]:
-    """Divide ``polynomial`` by an ordered list of nonzero divisors.
-
-    Return the quotient tuple and the division remainder.  The coefficient
-    structure must be a field; zero divisors and elements from another ring are
-    refused.  The empty divisor list is allowed and leaves the input as the
-    remainder with an empty quotient tuple.
-
-    If the divisors are not a Groebner basis, the remainder is not an ideal
-    normal form and can depend on divisor order.  See ``normal_form``.
-    """
-    division, _ = _divide(ring, polynomial, tuple(divisors))
-    return division
-
-
-def normal_form(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-    divisors: Iterable[Polynomial[E]],
-) -> Polynomial[E]:
-    """The division remainder of ``polynomial`` by ``divisors``.
-
-    With a Groebner basis this is the unique ideal normal form.  With an
-    arbitrary divisor list it is only the division remainder: it may depend on
-    the order of the divisors and is not a canonical ideal normal form.  The
-    name records the standard use; callers must not treat a non-Groebner
-    remainder as an ideal membership decision.
-    """
-    return multivariate_divmod(ring, polynomial, divisors).remainder
-
-
-def s_polynomial(
-    ring: PolynomialRing[E],
-    left: Polynomial[E],
-    right: Polynomial[E],
-) -> Polynomial[E]:
-    """The exact S-polynomial of two nonzero polynomials.
-
-    With ``L = lcm(LM(left), LM(right))``, return
-
-        (L / LT(left)) * left - (L / LT(right)) * right.
-
-    Leading coefficients are inverted in the coefficient field.  Zero input
-    polynomials are refused because they have no leading monomial; a zero
-    result is valid (for example when the inputs are nonzero scalar
-    multiples).
-    """
-    value, _, _ = _s_polynomial_parts(ring, left, right)
-    return value
 
 
 def buchberger(
@@ -559,125 +423,6 @@ class _WorkBudget:
             )
 
 
-def _require_field(
-    ring: PolynomialRing[E],
-    operation: str,
-) -> Field[E]:
-    coefficients = ring.coefficients
-    if not isinstance(coefficients, Field):
-        raise GroebnerFragmentError(
-            f"{operation} needs a field of coefficients",
-            missing=_FIELD_MISSING,
-        )
-    return cast("Field[E]", coefficients)
-
-
-def _require_owned(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-    operation: str,
-) -> None:
-    if not ring.contains(polynomial):
-        raise ValueError(f"{operation}: a polynomial belongs to another ring")
-
-
-def _monomial_divides(divisor: Exponents, dividend: Exponents) -> bool:
-    return all(
-        left <= right for left, right in zip(divisor, dividend)
-    )
-
-
-def _monomial_lcm(left: Exponents, right: Exponents) -> Exponents:
-    return tuple(
-        max(first, second) for first, second in zip(left, right)
-    )
-
-
-def _divide(
-    ring: PolynomialRing[E],
-    polynomial: Polynomial[E],
-    divisors: tuple[Polynomial[E], ...],
-    *,
-    budget: _WorkBudget | None = None,
-) -> tuple[MultivariateDivision[E], int]:
-    coefficients = _require_field(ring, "multivariate division")
-    _require_owned(ring, polynomial, "multivariate division")
-    for divisor in divisors:
-        _require_owned(ring, divisor, "multivariate division")
-        if divisor.is_zero():
-            raise GroebnerFragmentError(
-                "a divisor must be nonzero",
-                missing=_NONZERO_DIVISOR_MISSING,
-            )
-
-    zero = ring.zero()
-    quotients = [zero for _ in divisors]
-    remainder = zero
-    current = polynomial
-    reductions = 0
-    while not current.is_zero():
-        exponents, coefficient = current.terms[-1]
-        for index, divisor in enumerate(divisors):
-            divisor_exponents, divisor_coefficient = divisor.terms[-1]
-            if not _monomial_divides(divisor_exponents, exponents):
-                continue
-            if budget is not None:
-                budget.spend("leading-term reduction")
-            factor = ring.monomial(
-                tuple(
-                    first - second
-                    for first, second in zip(exponents, divisor_exponents)
-                ),
-                coefficients.div(coefficient, divisor_coefficient),
-            )
-            quotients[index] = ring.add(quotients[index], factor)
-            current = ring.sub(current, ring.mul(factor, divisor))
-            reductions += 1
-            break
-        else:
-            term = ring.monomial(exponents, coefficient)
-            remainder = ring.add(remainder, term)
-            current = ring.sub(current, term)
-    return MultivariateDivision(tuple(quotients), remainder), reductions
-
-
-def _s_polynomial_parts(
-    ring: PolynomialRing[E],
-    left: Polynomial[E],
-    right: Polynomial[E],
-) -> tuple[Polynomial[E], Polynomial[E], Polynomial[E]]:
-    coefficients = _require_field(ring, "an S-polynomial")
-    _require_owned(ring, left, "an S-polynomial")
-    _require_owned(ring, right, "an S-polynomial")
-    if left.is_zero() or right.is_zero():
-        raise GroebnerFragmentError(
-            "an S-polynomial needs nonzero inputs",
-            missing=_NONZERO_POLYNOMIAL_MISSING,
-        )
-    left_exponents, left_coefficient = left.terms[-1]
-    right_exponents, right_coefficient = right.terms[-1]
-    common = _monomial_lcm(left_exponents, right_exponents)
-    left_multiplier = ring.monomial(
-        tuple(
-            exponent - current
-            for exponent, current in zip(common, left_exponents)
-        ),
-        coefficients.div(coefficients.one(), left_coefficient),
-    )
-    right_multiplier = ring.monomial(
-        tuple(
-            exponent - current
-            for exponent, current in zip(common, right_exponents)
-        ),
-        coefficients.div(coefficients.one(), right_coefficient),
-    )
-    value = ring.sub(
-        ring.mul(left_multiplier, left),
-        ring.mul(right_multiplier, right),
-    )
-    return value, left_multiplier, right_multiplier
-
-
 def _monic_element(
     ring: PolynomialRing[E],
     element: _Element[E],
@@ -702,7 +447,7 @@ def _s_pair(
     left: _Element[E],
     right: _Element[E],
 ) -> tuple[Polynomial[E], tuple[Polynomial[E], ...]]:
-    value, left_multiplier, right_multiplier = _s_polynomial_parts(
+    value, left_multiplier, right_multiplier = s_polynomial_parts(
         ring, left.polynomial, right.polynomial
     )
     cofactors = tuple(
@@ -728,7 +473,7 @@ def _reduce_with_cofactors(
         ring,
         value,
         tuple(element.polynomial for element in basis),
-        budget=budget,
+        spend=budget.spend,
     )
     reduced_cofactors = list(cofactors)
     for quotient, element in zip(division.quotients, basis):
@@ -782,16 +527,8 @@ def _reduce_basis(
 __all__ = [
     "BuchbergerBudgetError",
     "GroebnerBasis",
-    "GroebnerFragmentError",
     "GroebnerStatistics",
-    "MultivariateDivision",
     "buchberger",
     "ideal_equal",
     "ideal_membership",
-    "leading_coefficient",
-    "leading_monomial",
-    "leading_term",
-    "multivariate_divmod",
-    "normal_form",
-    "s_polynomial",
 ]

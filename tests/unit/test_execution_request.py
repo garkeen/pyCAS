@@ -4,9 +4,9 @@ from dataclasses import dataclass, field, replace
 from typing import cast
 
 import pytest
-from support import head_app, typed_in, variable
+from support import head_app, multivariate_setup, typed_in, variable
 
-from cas.foundation.ids import FrameId, SymbolId
+from cas.foundation.ids import CandidateId, FrameId, SymbolId, TaskId
 from cas.language import sorts as S
 from cas.language.decisions import Reason
 from cas.language.execution import (
@@ -17,6 +17,7 @@ from cas.language.execution import (
 from cas.language.problems import (
     Coverage,
     DomainRequirement,
+    InterpretationRequirement,
     ParameterMode,
     ProblemSpec,
     ResultLanguage,
@@ -47,7 +48,7 @@ from cas.runtime import bootstrap
 from cas.semantics.frames import FrameStore
 from cas.semantics.request import AlgebraRequest
 from cas.syntax import term as T
-from cas.workflow.records import OperationStatus
+from cas.workflow.records import Candidate, OperationStatus
 from cas.workflow.workspace import Workspace
 
 
@@ -470,5 +471,103 @@ def test_problem_built_binds_the_domain_requirement():
             request.frame,
             ConditionPolicy.REQUIRE_PROVED,
             ExecutionBudget(),
+        )
+
+
+def _generator_problem(runtime):
+    setup = multivariate_setup(runtime)
+    symbol = setup.symbols[0]
+    name = runtime.table.name_of(symbol)
+    source = typed_in(
+        runtime.frames,
+        setup.frame,
+        runtime.signature,
+        T.symbol(symbol, name),
+    )
+    problem = ProblemSpec(
+        operation="groebner_basis",
+        inputs=(source,),
+        roles=setup.request.roles,
+        region=None,
+        result_language=ResultLanguage.PROPOSITION,
+        coverage=Coverage.ONE_VERIFIED,
+        interpretation_requirement=InterpretationRequirement.FORMAL,
+        domain_requirement=DomainRequirement(
+            ValueDomain.RATIONAL, ValueDomain.REAL
+        ),
+    )
+    request = OperationRequest(
+        setup.frame, (T.symbol(symbol, name),)
+    )
+    return setup, problem, request
+
+
+def test_problem_built_and_execution_accept_generator_mode(runtime):
+    setup, problem, request = _generator_problem(runtime)
+    assert problem.target is None
+    assert problem.variables == setup.symbols
+    built = ProblemBuilt(problem, algebra=setup.request)
+    assert built.algebra is setup.request
+    execution = ExecutionRequest(
+        request,
+        problem,
+        setup.request,
+        request.frame,
+        ConditionPolicy.REQUIRE_PROVED,
+        ExecutionBudget(),
+    )
+    assert execution.algebra is setup.request
+    assert execution.problem.roles == setup.request.roles
+
+
+def test_generator_role_equality_is_the_single_role_authority(runtime):
+    setup, problem, request = _generator_problem(runtime)
+    other_roles = replace(
+        setup.request.roles,
+        variables=tuple(reversed(setup.symbols)),
+        variable_sorts=(S.REAL, S.REAL),
+    )
+    other_algebra = replace(setup.request, roles=other_roles)
+    assert problem.roles.target is None
+    assert other_algebra.roles.target is None
+    with pytest.raises(ValueError, match="role"):
+        ProblemBuilt(problem, algebra=other_algebra)
+    with pytest.raises(ValueError, match="role"):
+        ExecutionRequest(
+            request,
+            problem,
+            other_algebra,
+            request.frame,
+            ConditionPolicy.REQUIRE_PROVED,
+            ExecutionBudget(),
+        )
+
+
+def test_a_generator_candidate_keeps_its_algebra_snapshot(runtime):
+    setup, problem, _ = _generator_problem(runtime)
+    symbol = setup.symbols[0]
+    term = T.symbol(symbol, runtime.table.name_of(symbol))
+    candidate = Candidate(
+        CandidateId(1),
+        TaskId(1),
+        problem,
+        term,
+        setup.frame,
+        algebra=setup.request,
+    )
+    assert candidate.algebra is setup.request
+    other_roles = replace(
+        setup.request.roles,
+        variables=tuple(reversed(setup.symbols)),
+        variable_sorts=(S.REAL, S.REAL),
+    )
+    with pytest.raises(ValueError, match="roles"):
+        Candidate(
+            CandidateId(2),
+            TaskId(1),
+            problem,
+            term,
+            setup.frame,
+            algebra=replace(setup.request, roles=other_roles),
         )
 

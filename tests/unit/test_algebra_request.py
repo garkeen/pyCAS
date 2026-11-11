@@ -501,3 +501,166 @@ def test_an_algebra_request_needs_a_scalar_target_sort():
             ),
             Interpretation.FORMAL,
         )
+
+
+def generator_request(**overrides):
+    coefficient, _, _ = family()
+    variables = overrides.pop("variables", (X, A))
+    variable_sorts = overrides.pop("variable_sorts", (S.REAL, S.REAL))
+    values = dict(
+        coefficient=coefficient,
+        coefficient_domain=ValueDomain.RATIONAL,
+        parameter_ring=None,
+        roles=VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            variables,
+            variable_sorts,
+        ),
+        interpretation=Interpretation.FORMAL,
+    )
+    values.update(overrides)
+    return AlgebraRequest(**values)
+
+
+def test_a_generator_request_binds_ordered_variables():
+    algebra = generator_request()
+    assert algebra.variables == (X, A)
+    assert algebra.variable_sorts == (S.REAL, S.REAL)
+    assert algebra.role_of(X) is Role.GENERATOR
+    assert algebra.role_of(A) is Role.GENERATOR
+    assert algebra.role_of(SymbolId(10_000)) is None
+    assert algebra.coefficient_domain is ValueDomain.RATIONAL
+    assert algebra.value_domain is ValueDomain.REAL
+    with pytest.raises(ValueError, match="generator-mode"):
+        algebra.target
+
+
+def test_a_generator_request_needs_one_dense_shared_sort():
+    with pytest.raises(ValueError, match="same sort"):
+        generator_request(variable_sorts=(S.REAL, S.RATIONAL))
+    with pytest.raises(ValueError, match="dense"):
+        generator_request(variable_sorts=(S.INTEGER, S.INTEGER))
+
+
+def test_a_generator_request_cannot_use_a_parameter_family():
+    with pytest.raises(ValueError, match="parameter-family"):
+        generator_request(interpretation=Interpretation.PARAMETER_FAMILY)
+    for interpretation in (Interpretation.FORMAL, Interpretation.EMBEDDED):
+        algebra = generator_request(interpretation=interpretation)
+        assert algebra.interpretation is interpretation
+
+
+def test_a_generator_request_cannot_declare_parameters():
+    _, parameters, _ = family()
+    with pytest.raises(ValueError, match="cannot declare parameters"):
+        generator_request(parameter_ring=parameters)
+
+
+def test_a_generator_request_needs_its_generator_roles():
+    coefficient, _, _ = family()
+    with pytest.raises(ValueError, match="target role or generator roles"):
+        AlgebraRequest(
+            coefficient,
+            ValueDomain.RATIONAL,
+            None,
+            VariableRoles(
+                None, (), ParameterMode.SPECIFIED_VALUES, WORLD
+            ),
+            Interpretation.FORMAL,
+        )
+
+
+def test_variable_roles_reject_invalid_generator_shapes():
+    with pytest.raises(ValueError, match="target and generator"):
+        VariableRoles(
+            X,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            S.REAL,
+            (),
+            (A,),
+            (S.REAL,),
+        )
+    with pytest.raises(ValueError, match="generator roles and parameters"):
+        VariableRoles(
+            None,
+            (A,),
+            ParameterMode.GENERIC_PARAMETERS,
+            WORLD,
+            None,
+            (S.REAL,),
+            (B,),
+            (S.REAL,),
+        )
+    with pytest.raises(ValueError, match="distinct"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            (A, A),
+            (S.REAL, S.REAL),
+        )
+    with pytest.raises(TypeError, match="SymbolId"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            (True,),
+            (S.REAL,),
+        )
+    with pytest.raises(TypeError, match="tuple"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            [A],  # type: ignore[arg-type]
+            (S.REAL,),
+        )
+    with pytest.raises(ValueError, match="without generator roles"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            (),
+            (S.REAL,),
+        )
+    with pytest.raises(ValueError, match="variable sorts must match"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            (A, B),
+            (S.REAL,),
+        )
+    with pytest.raises(TypeError, match="Sort"):
+        VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            WORLD,
+            None,
+            (),
+            (A,),
+            ("real",),  # type: ignore[arg-type]
+        )
