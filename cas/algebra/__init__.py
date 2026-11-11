@@ -27,7 +27,15 @@ deterministic Berlekamp factorization of monic squarefree polynomials; and
 `integer_polynomial` provides the `Z[x]`/`Q[x]` primitive form, the
 Landau/Mignotte coefficient bound and exact integer coefficient helpers.
 These are a public low-level API with exact contracts and property tests.
-Hensel lifting, Zassenhaus recombination, `Z[x]`/`Q[x]` factorization, a
-factorization specification/checker/operation and any workflow or REPL wiring
-are not implemented; A2 is not complete.
+
+The A2a2a Hensel slice lives in `factorization`: `FactorizationBudget`,
+`HenselLift`, `hensel_lift_factorization` (binary-tree linear lifting of a
+complete modular factorization to a prime power) and
+`hensel_witness_for_radical` (deterministic prime scan, independent Berlekamp
+recomputation and the minimal precision above twice the coefficient bound).
+This is also a public low-level API with exact contracts and property tests.
+Zassenhaus subset recombination, `factor_primitive_integer`,
+`factor_polynomial_over_q`, `Z[x]`/`Q[x]` factorization, a factorization
+specification/checker/operation and any workflow or REPL wiring are not
+implemented; A2 is not complete.
 """
