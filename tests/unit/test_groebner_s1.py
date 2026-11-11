@@ -11,8 +11,9 @@ from cas.algebra.polynomial import MonomialOrder, PolynomialRing
 from cas.frontend import parse
 from cas.frontend.errors import SessionError
 from cas.frontend.session import Session
-from cas.kernel.evidence import CheckRequest, InvalidEvidence, Refuted
+from cas.kernel.evidence import CheckRequest, InvalidEvidence
 from cas.kernel.verdict import VerdictYes
+from cas.language import sorts as S
 from cas.language.decisions import Reason
 from cas.language.execution import ConditionPolicy, ExecutionBudget
 from cas.language.problems import (
@@ -62,13 +63,12 @@ def expected_set(runtime, texts):
 
 
 def polynomial(runtime, text):
-    setup = runtime.groebner
-    assert setup is not None
+    found = operation(runtime)
     view = view_of(
         runtime,
         term(runtime, text),
-        bridge=setup.bridge,
-        request=setup.request,
+        bridge=found.bridge,
+        request=found.request,
     )
     return view.value
 
@@ -78,14 +78,13 @@ def assert_basis(runtime, result, texts):
     assert result.result is not None
     members = set_members(result.result.term, runtime.signature)
     assert members is not None
-    setup = runtime.groebner
-    assert setup is not None
+    found = operation(runtime)
     actual = tuple(
         view_of(
             runtime,
             member,
-            bridge=setup.bridge,
-            request=setup.request,
+            bridge=found.bridge,
+            request=found.request,
         ).value
         for member in members
     )
@@ -96,7 +95,7 @@ def assert_basis(runtime, result, texts):
             (
                 index
                 for index, expected in enumerate(remaining)
-                if setup.ring.equal(value, expected)
+                if found.ring.equal(value, expected)
             ),
             None,
         )
@@ -207,13 +206,13 @@ def test_the_candidate_binds_the_set_role_and_generator_mode_algebra(runtime):
     result = workspace.groebner_basis(circle_line(workspace, runtime))
     candidate = result.candidate
     assert candidate is not None
+    found = operation(runtime)
     assert candidate.candidate_role is CandidateRole.SET
-    assert candidate.algebra is runtime.groebner.request
+    assert candidate.algebra is found.request
     assert candidate.algebra.roles.target is None
-    assert candidate.algebra.roles.variables == runtime.groebner.variables
+    assert candidate.algebra.roles.variables == found.ring.generators
     assert candidate.problem.coverage is Coverage.COMPLETE_SET
     assert candidate.problem.result_language is ResultLanguage.SET
-    found = operation(runtime)
     claim = parse_groebner(
         found.vocabulary, candidate.specifications[0].term
     )
@@ -330,6 +329,54 @@ def test_a_restricted_region_is_refused_by_apply(runtime):
     assert runtime.store.stats() == before
 
 
+def test_an_unbound_region_is_translated_to_an_invalid_request(runtime):
+    workspace = new_workspace(runtime)
+    inputs = circle_line(workspace, runtime)
+    declared = workspace.declare("z", S.REAL)
+    assert declared.status is OperationStatus.VERIFIED, declared.detail
+    region = runtime_proposition(
+        runtime, term(runtime, "z > 0"), frame=declared.frame
+    )
+    before = runtime.store.stats()
+    result = workspace.apply(
+        "groebner_basis",
+        inputs,
+        region=region,
+        coverage=Coverage.COMPLETE_SET,
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "problem region free symbol is not bound" in result.detail
+    assert result.candidate is None
+    assert result.result is None
+    assert result.task is None
+    assert workspace.candidates() == ()
+    assert runtime.store.stats() == before
+
+
+@pytest.mark.parametrize("with_region", (False, True))
+def test_a_complete_set_request_cannot_externalize_premises(
+    runtime, with_region
+):
+    workspace = new_workspace(runtime)
+    inputs = circle_line(workspace, runtime)
+    premise = runtime_proposition(runtime, term(runtime, "x > 0"))
+    before = runtime.store.stats()
+    result = workspace.apply(
+        "groebner_basis",
+        inputs,
+        region=premise if with_region else None,
+        coverage=Coverage.COMPLETE_SET,
+        externalizable=(premise,),
+    )
+    assert result.status is OperationStatus.INVALID
+    assert "a complete-set request cannot externalize" in result.detail
+    assert result.candidate is None
+    assert result.result is None
+    assert result.task is None
+    assert workspace.candidates() == ()
+    assert runtime.store.stats() == before
+
+
 def test_a_non_polynomial_generator_is_refused_without_kernel_writes(runtime):
     workspace = new_workspace(runtime)
     inputs = (
@@ -360,11 +407,10 @@ def test_an_explicit_target_is_an_invalid_request(runtime):
 
 
 def test_a_non_field_coefficient_structure_is_refused(runtime):
-    setup = runtime.groebner
-    assert setup is not None
+    found = operation(runtime)
     integers = IntegerRing()
     ring = PolynomialRing(
-        setup.variables, integers, MonomialOrder.LEX
+        found.ring.generators, integers, MonomialOrder.LEX
     )
     registry = ParentRegistry()
     coefficient = registry.intern(ParentSpec("Z"), integers)
@@ -372,7 +418,7 @@ def test_a_non_field_coefficient_structure_is_refused(runtime):
         ParentSpec(
             "polynomial",
             base=ParentSpec("Z"),
-            generators=setup.variables,
+            generators=found.ring.generators,
             options=(("monomial_order", "lex"),),
         ),
         ring,
@@ -389,11 +435,11 @@ def test_a_non_field_coefficient_structure_is_refused(runtime):
         coefficient,
         ValueDomain.INTEGER,
         None,
-        setup.request.roles,
-        setup.request.interpretation,
+        found.request.roles,
+        found.request.interpretation,
     )
     integer_operation = replace(
-        operation(runtime),
+        found,
         ring=ring,
         bridge=bridge,
         request=request,
@@ -466,7 +512,7 @@ def test_check_and_decide_reverify_the_recorded_candidate(runtime):
     assert verdict.receipt.checker_id == "algebra.groebner"
 
 
-def test_a_tampered_cofactor_certificate_is_not_verified(runtime):
+def test_a_tampered_cofactor_certificate_is_invalid_evidence(runtime):
     workspace = new_workspace(runtime)
     result = workspace.groebner_basis(circle_line(workspace, runtime))
     candidate = result.candidate
@@ -481,10 +527,11 @@ def test_a_tampered_cofactor_certificate_is_not_verified(runtime):
     )
     checker = runtime.store.checkers.get("algebra.groebner")
     assert checker is not None
-    outcome = checker.check(
-        _check_request(runtime, candidate, wrong)
-    )
-    assert isinstance(outcome, (InvalidEvidence, Refuted))
+    for supplied in (wrong, GroebnerCertificate(())):
+        outcome = checker.check(
+            _check_request(runtime, candidate, supplied)
+        )
+        assert isinstance(outcome, InvalidEvidence), outcome
 
 
 def _check_request(runtime, candidate, certificate):
@@ -506,19 +553,16 @@ def _check_request(runtime, candidate, certificate):
 
 def test_the_parameterized_runtime_has_no_groebner_operation():
     runtime = bootstrap_parameterized()
-    assert runtime.groebner is None
     assert runtime.operations.get("groebner_basis") is None
     assert runtime.table.lookup("y") is None
 
 
 def test_the_elementary_runtime_registers_the_groebner_operation():
     runtime = bootstrap_elementary()
-    assert runtime.groebner is not None
-    assert runtime.operations.get("groebner_basis") is not None
-    assert runtime.groebner.variables == (
-        runtime.variable,
-        runtime.table.lookup("y"),
-    )
+    found = operation(runtime)
+    y = runtime.table.lookup("y")
+    assert y is not None
+    assert found.ring.generators == (runtime.variable, y)
     workspace = new_workspace(runtime)
     result = workspace.groebner_basis(circle_line(workspace, runtime))
     assert result.status is OperationStatus.VERIFIED, result.detail

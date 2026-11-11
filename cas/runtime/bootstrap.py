@@ -195,25 +195,6 @@ _PARAMETERIZED_RUNTIME_CAPABILITIES: CapabilityRequirements = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class GroebnerRuntime(Generic[E]):
-    """One pre-assembled multivariate Groebner view of a runtime.
-
-    The ring, its parent, the generator-mode bridge and the matching algebra
-    request are the single authority for the fixed default assembly.  The
-    default slice is ``Q[x, y]`` under LEX; a runtime without a Groebner view
-    leaves `Runtime.groebner` as `None` and registers no operation.
-    """
-
-    variables: tuple[SymbolId, ...]
-    ring: PolynomialRing[E]
-    parent: Parent[Polynomial[E]]
-    bridge: MultivariatePolynomialBridge[E]
-    request: AlgebraRequest
-    checker_id: str
-    operation_id: str
-
-
 @dataclass(frozen=True, slots=True, eq=False)
 class Runtime(Generic[E]):
     """One assembled world, its algebra view, ledger and supported operation."""
@@ -265,7 +246,6 @@ class Runtime(Generic[E]):
     views: tuple[DifferentiationView[Any], ...]
     specialization: SpecializationView | None = None
     elementary: ElementaryLibrary | None = None
-    groebner: GroebnerRuntime[E] | None = None
 
     def view_for(self, target: SymbolId) -> DifferentiationView[Any] | None:
         """The pre-assembled view for one request-local target."""
@@ -718,11 +698,10 @@ def _assemble_groebner(
     second: SymbolId,
     vocabulary: GroebnerVocabulary,
 ) -> tuple[
-    GroebnerRuntime[Fraction],
     GroebnerChecker[Fraction],
     GroebnerOperation[Fraction],
 ]:
-    """Assemble the fixed default ``Q[x, y]`` LEX Groebner view.
+    """Assemble the fixed default ``Q[x, y]`` LEX Groebner registration.
 
     The ring's coefficient structure is the base assembly's rational field, the
     generator tuple is the frame order ``(x, y)`` and the order is LEX.  The
@@ -773,16 +752,7 @@ def _assemble_groebner(
         bridge,
         request,
     )
-    runtime = GroebnerRuntime(
-        (variable, second),
-        ring,
-        parent,
-        bridge,
-        request,
-        checker.id,
-        operation.id,
-    )
-    return runtime, checker, operation
+    return checker, operation
 
 
 def _q_coefficient(
@@ -963,7 +933,6 @@ def bootstrap() -> Runtime[Fraction]:
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
     (
-        groebner_runtime,
         groebner_checker,
         groebner_operation,
     ) = _assemble_groebner(
@@ -1134,7 +1103,6 @@ def bootstrap() -> Runtime[Fraction]:
         derivative=service,
         operations=operations,
         views=(view,),
-        groebner=groebner_runtime,
     )
 
 
@@ -1664,7 +1632,6 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
     (
-        groebner_runtime,
         groebner_checker,
         groebner_operation,
     ) = _assemble_groebner(
@@ -1856,7 +1823,6 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         operations=operations,
         views=(view,),
         elementary=library,
-        groebner=groebner_runtime,
     )
 
 
@@ -1866,7 +1832,6 @@ def new_workspace(runtime: Runtime[Any]) -> Workspace:
 
 
 __all__ = [
-    "GroebnerRuntime",
     "Runtime",
     "bootstrap",
     "bootstrap_elementary",
