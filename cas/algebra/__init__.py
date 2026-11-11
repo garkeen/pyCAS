@@ -10,8 +10,11 @@ property tests, but no matrix expression bridge yet, so they are not registered
 as workflow operations.  Polynomial gcd and resultant are registered operations
 with independent checkers because the polynomial term bridge exists.
 
-The Groebner core in `groebner` (multivariate division, Buchberger, reduced
-bases and cofactors) is likewise a public low-level API: it has exact contracts
-and property tests, but no multivariate request/view/result bridge, operation,
-independent checker or frontend consumer yet.
+The Groebner core is split between `multivariate` (exact multivariate division,
+leading terms and S-polynomials) and `groebner` (Buchberger, reduced bases and
+cofactors).  Both are a public low-level API: they have exact contracts and
+property tests, but no registered multivariate operation, independent checker
+or frontend consumer yet.  The generator-mode request/view foundation lives in
+the language and semantics layers; the multivariate result model and the S1
+wiring are still missing.
 """

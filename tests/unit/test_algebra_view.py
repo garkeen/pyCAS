@@ -4,7 +4,14 @@ from dataclasses import replace
 from fractions import Fraction
 
 import pytest
-from support import head_app, runtime_proposition, typed_in, variable
+from support import (
+    InconsistentSortEnvironment,
+    head_app,
+    multivariate_setup,
+    runtime_proposition,
+    typed_in,
+    variable,
+)
 
 from cas.language import sorts as S
 from cas.language import typing as Ty
@@ -1227,34 +1234,116 @@ def test_a_non_parameter_family_view_cannot_bind_parameters():
         )
 
 
-class _InconsistentSortEnvironment:
-    """Return a scalar sort during inference and a function sort afterwards.
+def _issued_generator_view(runtime, setup, symbols):
+    """Issue one generator view through the sealed factory."""
+    source = typed_in(
+        runtime.frames,
+        setup.frame,
+        runtime.signature,
+        T.symbol(
+            setup.symbols[0], runtime.table.name_of(setup.symbols[0])
+        ),
+    )
+    return _issue_view(
+        source,
+        setup.parent,
+        setup.ring.generator(0),
+        symbols,
+        Interpretation.FORMAL,
+        ConversionWitness.representation_isomorphism(),
+        None,
+        None,
+        signature=runtime.signature,
+    )
 
-    A well-typed scalar expression cannot have a non-scalar free symbol.  The
-    bridge still defends that invariant, so this environment issues the one
-    sealed typed expression that exercises the refusal without forging it.
-    """
 
-    def __init__(self, symbol_id, scalar, binding):
-        self._symbol_id = symbol_id
-        self._scalar = scalar
-        self._binding = binding
-        self._calls = 0
+def test_a_generator_view_binds_the_ring_generators_in_index_order(runtime):
+    setup = multivariate_setup(runtime)
+    first, second = setup.symbols
+    view = _issued_generator_view(
+        runtime,
+        setup,
+        (
+            SymbolBinding(second, Role.GENERATOR, 1),
+            SymbolBinding(first, Role.GENERATOR, 0),
+        ),
+    )
+    assert isinstance(view, AlgebraView)
+    assert view.symbol_for(Role.TARGET, 0) is None
+    assert view.generators_for(Role.GENERATOR) == setup.symbols
+    assert view.symbols == (
+        SymbolBinding(first, Role.GENERATOR, 0),
+        SymbolBinding(second, Role.GENERATOR, 1),
+    )
+    assert view.source_domain is None
+    assert view.valid_on is None
+    assert view.definedness.exactness is DefinednessExactness.TOTAL
 
-    def sort_of(self, symbol_id):
-        if symbol_id != self._symbol_id:
-            return None
-        self._calls += 1
-        return self._scalar if self._calls == 1 else self._binding
 
-    def bound_sort(self, index):
-        del index
-        return None
+def test_a_view_cannot_bind_a_target_and_generators(runtime):
+    setup = multivariate_setup(runtime)
+    first, second = setup.symbols
+    with pytest.raises(ValueError, match="both a target and generators"):
+        _issued_generator_view(
+            runtime,
+            setup,
+            (
+                SymbolBinding(first, Role.TARGET, 0),
+                SymbolBinding(second, Role.GENERATOR, 0),
+            ),
+        )
+
+
+def test_a_generator_view_cannot_bind_parameters(runtime):
+    setup = multivariate_setup(runtime)
+    first, second = setup.symbols
+    parameter = runtime.table.intern("view_parameter")
+    with pytest.raises(ValueError, match="cannot bind parameters"):
+        _issued_generator_view(
+            runtime,
+            setup,
+            (
+                SymbolBinding(first, Role.GENERATOR, 0),
+                SymbolBinding(second, Role.GENERATOR, 1),
+                SymbolBinding(parameter, Role.PARAMETER, 0),
+            ),
+        )
+
+
+def test_generator_bindings_need_gapless_indices(runtime):
+    setup = multivariate_setup(runtime)
+    first, _ = setup.symbols
+    with pytest.raises(ValueError, match="0..n-1"):
+        _issued_generator_view(
+            runtime,
+            setup,
+            (SymbolBinding(first, Role.GENERATOR, 1),),
+        )
+
+
+def test_a_view_cannot_bind_one_generator_twice(runtime):
+    setup = multivariate_setup(runtime)
+    first, _ = setup.symbols
+    with pytest.raises(ValueError, match="bind one symbol twice"):
+        _issued_generator_view(
+            runtime,
+            setup,
+            (
+                SymbolBinding(first, Role.GENERATOR, 0),
+                SymbolBinding(first, Role.GENERATOR, 1),
+            ),
+        )
+
+
+def test_a_view_needs_a_target_or_generator_bindings(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="target binding or generator"):
+        _issued_generator_view(runtime, setup, ())
 
 
 def test_a_non_scalar_free_symbol_is_refused(runtime):
     extra = runtime.table.intern("view_function")
-    environment = _InconsistentSortEnvironment(
+    environment = InconsistentSortEnvironment(
         extra, S.REAL, S.FunctionSort((S.REAL,), S.REAL)
     )
     typed = Ty.typed(

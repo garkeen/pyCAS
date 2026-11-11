@@ -163,33 +163,51 @@ class ResultLanguage(StrEnum):
 
 
 class Role(StrEnum):
-    """A symbol's role inside one fixed request."""
+    """A symbol's role inside one fixed request.
+
+    `TARGET` names the single variable a univariate request differentiates,
+    integrates or solves for.  `GENERATOR` names the ordered variables of a
+    multivariate request (a polynomial ring's generators); the order is the
+    ring's generator order, never inferred from names.  `PARAMETER` names the
+    formal parameters of a parameter family.  A request uses exactly one of the
+    target/generator shapes in this slice.
+    """
 
     TARGET = "target"
+    GENERATOR = "generator"
     PARAMETER = "parameter"
 
 
 @dataclass(frozen=True, slots=True)
 class VariableRoles:
-    """The target and parameter roles fixed for one request.
+    """The target, generator and parameter roles fixed for one request.
 
     The value is language-owned and immutable.  A `ProblemSpec` and its matching
-    `AlgebraRequest` hold the very same value, so a target or parameter mode
-    cannot be chosen twice with different results.  `target` is optional only
-    because a problem without an algebra view (for example function equality)
-    has no target role; an algebra request requires one.
+    `AlgebraRequest` hold the very same value, so a target, generator set or
+    parameter mode cannot be chosen twice with different results.  `target` is
+    optional only because a multivariate problem binds `variables` instead and
+    a problem without an algebra view (for example function equality) has no
+    target role; an algebra request requires one of the two shapes.
 
-    `world` is the meaning world whose symbol namespace the target and parameter
-    `SymbolId` values belong to.  A bare integer id is not a global identity: the
-    same integer may name different symbols in two worlds.  `None` means the role
-    set has not yet been bound to a world; `ProblemSpec` and `AlgebraRequest`
-    reject that unbound state at their own boundaries.
+    `variables` is the ordered generator role tuple of a multivariate request.
+    Its order is the ring's generator order and is never inferred from symbol
+    names.  `target` and `variables` are mutually exclusive, and this slice
+    does not combine generator roles with formal parameters: a multivariate
+    request over a parameter family needs the parameterized algebra assembly,
+    which is not wired yet.  `variable_sorts` records each generator's sort and
+    is present exactly when `variables` is nonempty.
 
-    `target_sort` and `parameter_sorts` are the binding sorts of the world-scoped
-    role symbols.  They are required exactly when the corresponding role is
-    present.  Full binding positions remain open with binder-aware typing; these
-    fields only make the current fragment's role symbols sortable and keep the
-    region-density check honest.
+    `world` is the meaning world whose symbol namespace the target, generator
+    and parameter `SymbolId` values belong to.  A bare integer id is not a
+    global identity: the same integer may name different symbols in two worlds.
+    `None` means the role set has not yet been bound to a world; `ProblemSpec`
+    and `AlgebraRequest` reject that unbound state at their own boundaries.
+
+    `target_sort`/`parameter_sorts`/`variable_sorts` are the binding sorts of
+    the world-scoped role symbols.  They are required exactly when the
+    corresponding role is present.  Full binding positions remain open with
+    binder-aware typing; these fields only make the current fragment's role
+    symbols sortable and keep the region-density check honest.
     """
 
     target: SymbolId | None
@@ -198,6 +216,8 @@ class VariableRoles:
     world: WorldId | None = None
     target_sort: S.Sort | None = None
     parameter_sorts: tuple[S.Sort, ...] = ()
+    variables: tuple[SymbolId, ...] = ()
+    variable_sorts: tuple[S.Sort, ...] = ()
 
     def __post_init__(self) -> None:
         if self.world is not None and (
@@ -221,6 +241,23 @@ class VariableRoles:
             raise ValueError("parameters must be distinct")
         if self.target is not None and self.target in self.parameters:
             raise ValueError("a symbol cannot be both the target and a parameter")
+        if not isinstance(self.variables, tuple):
+            raise TypeError("generator roles must be a tuple")
+        if any(
+            isinstance(symbol, bool) or not isinstance(symbol, int)
+            for symbol in self.variables
+        ):
+            raise TypeError("generator roles must be SymbolId values")
+        if len(set(self.variables)) != len(self.variables):
+            raise ValueError("generator roles must be distinct")
+        if self.target is not None and self.variables:
+            raise ValueError(
+                "a role set cannot have both a target and generator roles"
+            )
+        if self.variables and self.parameters:
+            raise ValueError(
+                "a role set cannot have both generator roles and parameters"
+            )
         if not isinstance(self.parameter_mode, ParameterMode):
             raise TypeError("a role set needs a parameter mode")
         if (
@@ -256,6 +293,24 @@ class VariableRoles:
                 raise TypeError(
                     "parameter role sorts must be Sort values"
                 )
+        if not isinstance(self.variable_sorts, tuple):
+            raise TypeError("variable role sorts must be a tuple")
+        if not self.variables:
+            if self.variable_sorts:
+                raise ValueError(
+                    "a role set without generator roles cannot carry variable "
+                    "sorts"
+                )
+        else:
+            if len(self.variable_sorts) != len(self.variables):
+                raise ValueError(
+                    "variable sorts must match the generator roles"
+                )
+            if any(
+                not isinstance(sort, S.Sort)
+                for sort in self.variable_sorts
+            ):
+                raise TypeError("variable role sorts must be Sort values")
 
     def role_of(self, symbol_id: SymbolId) -> Role | None:
         """The role of `symbol_id` in this request, if it has one."""
@@ -263,16 +318,48 @@ class VariableRoles:
             return Role.TARGET
         if symbol_id in self.parameters:
             return Role.PARAMETER
+        if symbol_id in self.variables:
+            return Role.GENERATOR
         return None
+
+
+def shared_variable_sort(roles: VariableRoles) -> S.Sort:
+    """The one dense scalar sort shared by a generator-mode role set.
+
+    A multivariate request over the current region fragment needs every
+    generator to carry the same `RATIONAL` or `REAL` sort: the region
+    certificates only reason over dense rational/real coordinates, and a mixed
+    generator sort would make the bridge's per-generator sort agreement check
+    meaningless.  This is the single rule `ProblemSpec` and `AlgebraRequest`
+    share; a role set with no generators is refused rather than returning a
+    vacuous sort.
+    """
+    if not roles.variables:
+        raise ValueError("a generator role set needs at least one variable")
+    sorts = roles.variable_sorts
+    if len(sorts) != len(roles.variables):
+        raise ValueError("variable sorts must match the generator roles")
+    if any(sort != sorts[0] for sort in sorts):
+        raise ValueError(
+            "every generator of one request needs the same sort"
+        )
+    if sorts[0] != S.RATIONAL and sorts[0] != S.REAL:
+        raise ValueError(
+            "generator sorts must be rational or real; the current region "
+            "fragment is dense"
+        )
+    return sorts[0]
 
 
 @dataclass(frozen=True, slots=True)
 class ProblemSpec:
     """A fixed problem statement.
 
-    `roles` fixes the target and parameter roles once.  `target`,
-    `parameters` and `parameter_mode` are derived views, not independently
-    constructible fields.
+    `roles` fixes the target, generator and parameter roles once.  `target`,
+    `variables`, `parameters` and `parameter_mode` are derived views, not
+    independently constructible fields.  This slice admits either a single
+    target role or an ordered, nonempty generator tuple; the two shapes are
+    mutually exclusive and generator roles do not combine with parameters.
 
     `externalizable` lists premises the request explicitly allows to remain
     outside the answer. A complete-set request may not externalize anything:
@@ -300,16 +387,23 @@ class ProblemSpec:
     `interpretation_requirement` is the language-owned interpretation an algebra
     problem requires.  It must be `None` for a function problem, and
     `ProblemBuilt`/`ExecutionRequest` require it to match the resolved
-    `AlgebraRequest`.  `ProblemSpec` itself never imports `semantics`.
+    `AlgebraRequest`.  A generator problem cannot require the parameter-family
+    interpretation: this slice has no multivariate parameter assembly, so
+    accepting the claim would misdescribe the request.  `ProblemSpec` itself
+    never imports `semantics`.
 
     `domain_requirement` is the language-level domain binding.  A problem with a
-    target role fixes both the coefficient range and the allowed value domain;
-    the value domain is the same sort-to-domain mapping `AlgebraRequest`
-    exposes, so a problem and its resolved parent cannot disagree.  A function
-    problem fixes `coefficient=None` and real values: function equality is
-    real-valued in this fragment and has no coefficient structure.  A core or
-    utility problem without a target or function input leaves the requirement
-    `None`; the resolved parent, when one exists, stays in `AlgebraRequest`.
+    target role or with generator roles fixes both the coefficient range and
+    the allowed value domain; the value domain is the same sort-to-domain
+    mapping `AlgebraRequest` exposes, so a problem and its resolved parent
+    cannot disagree.  A generator-mode problem requires all generator sorts to
+    be identical and dense (`RATIONAL`/`REAL`); `shared_variable_sort` is the
+    single rule the problem and its algebra request share.  A function problem
+    fixes `coefficient=None` and real values: function equality is real-valued
+    in this fragment and has no coefficient structure.  A core or utility
+    problem without a target, generator roles or function input leaves the
+    requirement `None`; the resolved parent, when one exists, stays in
+    `AlgebraRequest`.
 
     Every free variable of `region` and of each `externalizable` premise must be
     bound by an input binding, a role, or a function parameter, and its sort must
@@ -392,6 +486,14 @@ class ProblemSpec:
                 "a problem interpretation requirement must be an "
                 "InterpretationRequirement or None"
             )
+        if self.roles.variables and (
+            self.interpretation_requirement
+            is InterpretationRequirement.PARAMETER_FAMILY
+        ):
+            raise ValueError(
+                "a generator problem cannot require a parameter-family "
+                "interpretation"
+            )
         if any(
             not isinstance(item, Proposition)
             for item in self.externalizable
@@ -418,6 +520,10 @@ class ProblemSpec:
                 "problem function inputs must be FunctionValue values"
             )
         if self.function_inputs:
+            if self.roles.variables:
+                raise ValueError(
+                    "a function problem cannot carry generator roles"
+                )
             if self.roles.target is not None:
                 raise ValueError(
                     "a function problem has no scalar target"
@@ -471,6 +577,22 @@ class ProblemSpec:
                     "the problem value domain does not match the target sort"
                 )
             return
+        if self.roles.variables:
+            if requirement is None:
+                raise ValueError(
+                    "a generator problem needs a domain requirement"
+                )
+            if requirement.coefficient is None:
+                raise ValueError(
+                    "a generator problem needs a coefficient domain"
+                )
+            sort = shared_variable_sort(self.roles)
+            if requirement.values != value_domain_of_sort(sort):
+                raise ValueError(
+                    "the problem value domain does not match the generator "
+                    "sort"
+                )
+            return
         if self.function_inputs:
             if requirement is None:
                 raise ValueError(
@@ -487,8 +609,8 @@ class ProblemSpec:
             return
         if requirement is not None:
             raise ValueError(
-                "a problem without a target or function inputs cannot carry a "
-                "domain requirement"
+                "a problem without a target, generator roles or function "
+                "inputs cannot carry a domain requirement"
             )
 
     def _check_region_bindings(self) -> None:
@@ -537,6 +659,22 @@ class ProblemSpec:
                     )
                 bind(symbol, sort)
 
+        variables = self.roles.variables
+        variable_sorts = self.roles.variable_sorts
+        if variables:
+            if len(variable_sorts) != len(variables):
+                raise ValueError(
+                    "the variable role sorts must match the generator roles"
+                )
+            for symbol, sort in zip(variables, variable_sorts):
+                previous = known.get(symbol)
+                if previous is not None and previous != sort:
+                    raise ValueError(
+                        "a generator role sort does not match the input "
+                        "binding"
+                    )
+                bind(symbol, sort)
+
         for value in self.function_inputs:
             for parameter in value.parameters:
                 previous = known.get(parameter.symbol)
@@ -581,6 +719,16 @@ class ProblemSpec:
         return self.roles.parameters
 
     @property
+    def variables(self) -> tuple[SymbolId, ...]:
+        """The ordered generator roles fixed by this problem."""
+        return self.roles.variables
+
+    @property
+    def variable_sorts(self) -> tuple[S.Sort, ...]:
+        """The generator sorts fixed by this problem."""
+        return self.roles.variable_sorts
+
+    @property
     def parameter_mode(self) -> ParameterMode:
         """The parameter promise fixed by this problem."""
         return self.roles.parameter_mode
@@ -601,5 +749,6 @@ __all__ = [
     "Role",
     "ValueDomain",
     "VariableRoles",
+    "shared_variable_sort",
     "value_domain_of_sort",
 ]

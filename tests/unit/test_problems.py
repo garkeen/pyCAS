@@ -6,6 +6,7 @@ import pytest
 from support import (
     MapEnvironment,
     head_app,
+    multivariate_setup,
     proposition_in,
     runtime_proposition,
     typed_in,
@@ -30,6 +31,7 @@ from cas.language.problems import (
     ResultLanguage,
     ValueDomain,
     VariableRoles,
+    shared_variable_sort,
     value_domain_of_sort,
 )
 from cas.language.signatures import StructuralHead
@@ -58,6 +60,8 @@ def specification(runtime=None, **overrides) -> ProblemSpec:
     world = overrides.pop("world", None)
     target_sort = overrides.pop("target_sort", None)
     parameter_sorts = overrides.pop("parameter_sorts", ())
+    variables = overrides.pop("variables", ())
+    variable_sorts = overrides.pop("variable_sorts", ())
     inputs = overrides.pop("inputs", None)
     function_inputs = overrides.pop("function_inputs", ())
     domain_requirement = overrides.pop("domain_requirement", _MISSING)
@@ -95,6 +99,11 @@ def specification(runtime=None, **overrides) -> ProblemSpec:
             domain_requirement = DomainRequirement(
                 None, ValueDomain.REAL
             )
+        elif variables:
+            domain_requirement = DomainRequirement(
+                ValueDomain.RATIONAL,
+                value_domain_of_sort(variable_sorts[0]),
+            )
         else:
             domain_requirement = None
     values = dict(
@@ -107,6 +116,8 @@ def specification(runtime=None, **overrides) -> ProblemSpec:
             world,
             target_sort,
             parameter_sorts,
+            variables,
+            variable_sorts,
         ),
         region=None,
         result_language=ResultLanguage.EXPRESSION,
@@ -578,3 +589,233 @@ def test_a_problem_region_with_a_bound_dense_symbol_is_admitted(runtime):
         region=condition,
     )
     assert problem.region is condition
+
+
+def generator_inputs(runtime, setup, index=0):
+    symbol = setup.symbols[index]
+    return (
+        typed_in(
+            runtime.frames,
+            setup.frame,
+            runtime.signature,
+            T.symbol(symbol, runtime.table.name_of(symbol)),
+        ),
+    )
+
+
+def test_a_generator_problem_binds_ordered_generators(runtime):
+    setup = multivariate_setup(runtime)
+    problem = specification(
+        runtime,
+        operation="groebner_basis",
+        variables=setup.symbols,
+        variable_sorts=(S.REAL, S.REAL),
+        inputs=generator_inputs(runtime, setup),
+    )
+    assert problem.target is None
+    assert problem.variables == setup.symbols
+    assert problem.variable_sorts == (S.REAL, S.REAL)
+    assert problem.domain_requirement == DomainRequirement(
+        ValueDomain.RATIONAL, ValueDomain.REAL
+    )
+
+
+def test_a_generator_problem_needs_a_domain_requirement(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="domain requirement"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            domain_requirement=None,
+        )
+
+
+def test_a_generator_problem_needs_a_coefficient_domain(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="coefficient domain"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            domain_requirement=DomainRequirement(None, ValueDomain.REAL),
+        )
+
+
+def test_a_generator_problem_value_domain_must_match_the_generator_sort(
+    runtime,
+):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="value domain"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            domain_requirement=DomainRequirement(
+                ValueDomain.RATIONAL, ValueDomain.INTEGER
+            ),
+        )
+
+
+def test_a_generator_problem_needs_one_shared_dense_sort(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="same sort"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.RATIONAL),
+            inputs=generator_inputs(runtime, setup),
+        )
+    with pytest.raises(ValueError, match="dense"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.INTEGER, S.INTEGER),
+            inputs=generator_inputs(runtime, setup),
+        )
+
+
+def test_a_generator_problem_cannot_require_a_parameter_family(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="parameter-family"):
+        specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            interpretation_requirement=(
+                InterpretationRequirement.PARAMETER_FAMILY
+            ),
+        )
+    for requirement in (
+        InterpretationRequirement.FORMAL,
+        InterpretationRequirement.EMBEDDED,
+    ):
+        problem = specification(
+            runtime,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            interpretation_requirement=requirement,
+        )
+        assert problem.interpretation_requirement is requirement
+
+
+def test_a_function_problem_cannot_carry_generator_roles(runtime):
+    setup = multivariate_setup(runtime)
+    domain = runtime_proposition(runtime, T.TRUE)
+    value = function_value(runtime, domain)
+    with pytest.raises(ValueError, match="generator roles"):
+        specification(
+            runtime,
+            operation="compare_functions",
+            result_language=ResultLanguage.PROPOSITION,
+            variables=setup.symbols,
+            variable_sorts=(S.REAL, S.REAL),
+            inputs=generator_inputs(runtime, setup),
+            function_inputs=(value,),
+        )
+
+
+def test_a_generator_role_sort_must_match_the_input_binding(runtime):
+    setup = multivariate_setup(runtime)
+    with pytest.raises(ValueError, match="generator role sort"):
+        specification(
+            runtime,
+            variables=(setup.symbols[0],),
+            variable_sorts=(S.RATIONAL,),
+            inputs=generator_inputs(runtime, setup),
+            domain_requirement=DomainRequirement(
+                ValueDomain.RATIONAL, ValueDomain.RATIONAL
+            ),
+        )
+
+
+def test_a_generator_problem_region_binds_its_generators(runtime):
+    setup = multivariate_setup(runtime)
+    x = T.symbol(setup.symbols[0], runtime.table.name_of(setup.symbols[0]))
+    condition = proposition_in(
+        runtime.frames,
+        setup.frame,
+        runtime.signature,
+        head_app(runtime.signature, StructuralHead.GT, x, T.number(0)),
+    )
+    problem = specification(
+        runtime,
+        variables=setup.symbols,
+        variable_sorts=(S.REAL, S.REAL),
+        inputs=generator_inputs(runtime, setup),
+        region=condition,
+    )
+    assert problem.region is condition
+
+    extra = runtime.table.intern("z")
+    child = runtime.frames.create(
+        setup.frame,
+        declarations=(Declaration(extra, "z", S.REAL),),
+    )
+    foreign_condition = proposition_in(
+        runtime.frames,
+        child.id,
+        runtime.signature,
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            T.symbol(extra, "z"),
+            T.number(0),
+        ),
+    )
+    with pytest.raises(ValueError, match="not bound"):
+        specification(
+            runtime,
+            variables=(setup.symbols[0],),
+            variable_sorts=(S.REAL,),
+            inputs=generator_inputs(runtime, setup),
+            region=foreign_condition,
+        )
+
+
+def test_the_shared_variable_sort_requires_one_dense_generator_sort():
+    empty = VariableRoles(
+        None, (), ParameterMode.SPECIFIED_VALUES, WorldId(0)
+    )
+    with pytest.raises(ValueError, match="at least one variable"):
+        shared_variable_sort(empty)
+    mixed = VariableRoles(
+        None,
+        (),
+        ParameterMode.SPECIFIED_VALUES,
+        WorldId(0),
+        None,
+        (),
+        (SymbolId(1), SymbolId(2)),
+        (S.REAL, S.RATIONAL),
+    )
+    with pytest.raises(ValueError, match="same sort"):
+        shared_variable_sort(mixed)
+    nondense = VariableRoles(
+        None,
+        (),
+        ParameterMode.SPECIFIED_VALUES,
+        WorldId(0),
+        None,
+        (),
+        (SymbolId(1),),
+        (S.INTEGER,),
+    )
+    with pytest.raises(ValueError, match="dense"):
+        shared_variable_sort(nondense)
+    rational = VariableRoles(
+        None,
+        (),
+        ParameterMode.SPECIFIED_VALUES,
+        WorldId(0),
+        None,
+        (),
+        (SymbolId(1), SymbolId(2)),
+        (S.RATIONAL, S.RATIONAL),
+    )
+    assert shared_variable_sort(rational) == S.RATIONAL

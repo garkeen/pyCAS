@@ -26,11 +26,13 @@ from typing import TYPE_CHECKING, Any
 from cas.algebra.parents import Parent
 from cas.algebra.protocols import CoefficientRing, GeneratorRing
 from cas.foundation.ids import SymbolId
+from cas.language import sorts as S
 from cas.language.problems import (
     InterpretationRequirement,
     ParameterMode,
     ValueDomain,
     VariableRoles,
+    shared_variable_sort,
     value_domain_of_sort,
 )
 from cas.semantics.differential import DifferentialStructure
@@ -76,9 +78,18 @@ class AlgebraRequest:
     `coefficient_domain` is the language-level coefficient range this request
     was assembled for.  It is declared data, not inferred by sniffing the
     parent: a Q-based assembly states `RATIONAL`, a Z-based one `INTEGER`.  The
-    allowed value domain is derived from the target sort through the same
-    language mapping `ProblemSpec` uses, so a fixed problem and its resolved
-    request cannot disagree about either side of the domain binding.
+    allowed value domain is derived from the target sort, or from the single
+    shared generator sort in generator mode, through the same language mapping
+    `ProblemSpec` uses, so a fixed problem and its resolved request cannot
+    disagree about either side of the domain binding.
+
+    A request has exactly one of two role shapes in this slice.  Target mode
+    fixes one target symbol and its sort; generator mode fixes an ordered,
+    nonempty generator tuple with identical dense sorts and binds no target.
+    Generator mode is the multivariate shape: the request's `target` property
+    has no value there and raises instead of inventing a symbol.  Formal
+    parameters remain a target-mode feature; generator mode refuses a parameter
+    ring, declared parameters and the parameter-family interpretation.
     """
 
     coefficient: Parent[Any]
@@ -106,11 +117,25 @@ class AlgebraRequest:
                 "an algebra request needs a world-scoped role set"
             )
         if self.roles.target is None:
-            raise ValueError("an algebra request needs a target role")
-        target_sort = self.roles.target_sort
-        if target_sort is None:
-            raise ValueError("an algebra request needs a target sort")
-        value_domain_of_sort(target_sort)
+            if not self.roles.variables:
+                raise ValueError(
+                    "an algebra request needs a target role or generator roles"
+                )
+            if self.roles.parameters or self.parameter_ring is not None:
+                raise ValueError(
+                    "a generator algebra request cannot declare parameters"
+                )
+            shared_variable_sort(self.roles)
+            if self.interpretation is Interpretation.PARAMETER_FAMILY:
+                raise ValueError(
+                    "a generator algebra request cannot use a "
+                    "parameter-family interpretation"
+                )
+        else:
+            target_sort = self.roles.target_sort
+            if target_sort is None:
+                raise ValueError("an algebra request needs a target sort")
+            value_domain_of_sort(target_sort)
         if self.roles.parameters and (
             len(self.roles.parameter_sorts) != len(self.roles.parameters)
         ):
@@ -158,16 +183,32 @@ class AlgebraRequest:
 
     @property
     def target(self) -> SymbolId:
-        """The target role fixed by this request."""
+        """The target role fixed by this request.
+
+        A generator-mode request has no single target; asking for one is a
+        caller error and raises instead of returning an arbitrary generator.
+        """
         target = self.roles.target
         if target is None:
-            raise AssertionError("an algebra request has no target")
+            raise ValueError(
+                "a generator-mode algebra request has no target role"
+            )
         return target
 
     @property
     def parameters(self) -> tuple[SymbolId, ...]:
         """The parameter roles fixed by this request."""
         return self.roles.parameters
+
+    @property
+    def variables(self) -> tuple[SymbolId, ...]:
+        """The ordered generator roles fixed by this request."""
+        return self.roles.variables
+
+    @property
+    def variable_sorts(self) -> tuple[S.Sort, ...]:
+        """The generator sorts fixed by this request."""
+        return self.roles.variable_sorts
 
     @property
     def parameter_mode(self) -> ParameterMode:
@@ -181,11 +222,15 @@ class AlgebraRequest:
 
     @property
     def value_domain(self) -> ValueDomain:
-        """The allowed value domain derived from the target sort."""
+        """The allowed value domain derived from the role sorts."""
         target_sort = self.roles.target_sort
-        if target_sort is None:
-            raise AssertionError("an algebra request has no target sort")
-        return value_domain_of_sort(target_sort)
+        if target_sort is not None:
+            return value_domain_of_sort(target_sort)
+        if self.roles.variables:
+            return value_domain_of_sort(shared_variable_sort(self.roles))
+        raise ValueError(
+            "an algebra request has no target or generator sort"
+        )
 
     def role_of(self, symbol_id: SymbolId) -> "Role | None":
         """The role of `symbol_id` in this request, if it has one."""

@@ -505,10 +505,6 @@ class Candidate:
                 raise ValueError(
                     "the candidate algebra roles do not match its problem"
                 )
-            if self.algebra.target != self.problem.target:
-                raise ValueError(
-                    "the candidate algebra target does not match its problem"
-                )
         if not isinstance(self.state, CandidateState):
             raise TypeError("a candidate needs a CandidateState")
         if not isinstance(self.applicability, CandidateApplicability):

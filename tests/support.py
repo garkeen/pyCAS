@@ -7,8 +7,12 @@ validation that production code performs.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
+from cas.algebra.parents import Parent, ParentRegistry, ParentSpec
+from cas.algebra.polynomial import MonomialOrder, Polynomial, PolynomialRing
 from cas.foundation.ids import FrameId, SymbolId, WorldId
 from cas.kernel.commit import (
     ValidatedCommitBatch,
@@ -21,11 +25,16 @@ from cas.language import propositions as Pr
 from cas.language import sorts as S
 from cas.language import typing as Ty
 from cas.language.declarations import DeclarationSet
+from cas.language.problems import ParameterMode, VariableRoles
 from cas.language.signatures import LanguageSignature, StructuralHead
 from cas.semantics import elaborate
-from cas.semantics.bridge import Rendered, ViewBuilt
-from cas.semantics.frames import FrameSorts, FrameStore
-from cas.semantics.request import AlgebraRequest
+from cas.semantics.bridge import (
+    MultivariatePolynomialBridge,
+    Rendered,
+    ViewBuilt,
+)
+from cas.semantics.frames import Declaration, FrameSorts, FrameStore
+from cas.semantics.request import AlgebraRequest, Interpretation
 from cas.syntax import term as T
 
 if TYPE_CHECKING:
@@ -48,6 +57,127 @@ class MapEnvironment:
     def bound_sort(self, index: int) -> S.Sort | None:
         del index
         return None
+
+
+class InconsistentSortEnvironment:
+    """Return a scalar sort during inference and a function sort afterwards.
+
+    A well-typed scalar expression cannot have a non-scalar free symbol.  The
+    bridge still defends that invariant, so this environment issues the one
+    sealed typed expression that exercises the refusal without forging it.
+    """
+
+    def __init__(self, symbol_id, scalar, binding):
+        self._symbol_id = symbol_id
+        self._scalar = scalar
+        self._binding = binding
+        self._calls = 0
+
+    def sort_of(self, symbol_id):
+        if symbol_id != self._symbol_id:
+            return None
+        self._calls += 1
+        return self._scalar if self._calls == 1 else self._binding
+
+    def bound_sort(self, index):
+        del index
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class MultivariateSetup:
+    """An assembled Q[x_1, ..., x_n] view for the multivariate bridge tests."""
+
+    frame: FrameId
+    ring: PolynomialRing[Fraction]
+    parent: Parent[Polynomial[Fraction]]
+    bridge: MultivariatePolynomialBridge[Fraction]
+    request: AlgebraRequest
+    symbols: tuple[SymbolId, ...]
+
+
+def multivariate_setup(
+    runtime: "Runtime",
+    names: tuple[str, ...] = ("x", "y"),
+    *,
+    extra_sorts: tuple[S.Sort, ...] = (),
+    request_sorts: tuple[S.Sort, ...] | None = None,
+    order: MonomialOrder = MonomialOrder.LEX,
+) -> MultivariateSetup:
+    """Assemble one multivariate view whose symbols are declared in a frame.
+
+    `names[0]` must be the runtime's own variable: it is already declared in
+    the root frame, so the child frame only adds the extra names.  `extra_sorts`
+    declares each extra symbol and defaults to `REAL`; `request_sorts` overrides
+    the sorts the request claims for all generators, which lets a test build a
+    deliberately inconsistent request without forging a `VariableRoles` value.
+    """
+    symbols = tuple(runtime.table.intern(name) for name in names)
+    if not symbols:
+        raise ValueError("a multivariate setup needs at least one name")
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("multivariate setup names must be distinct")
+    if symbols[0] != runtime.variable:
+        raise ValueError(
+            "the first multivariate setup name must be the runtime variable"
+        )
+    extras = symbols[1:]
+    declared = (
+        tuple(extra_sorts)
+        if extra_sorts
+        else tuple(S.REAL for _ in extras)
+    )
+    if len(declared) != len(extras):
+        raise ValueError("one extra sort per extra generator is required")
+    frame = (
+        runtime.frame
+        if not extras
+        else runtime.frames.create(
+            runtime.frame.id,
+            declarations=tuple(
+                Declaration(symbol, runtime.table.name_of(symbol), sort)
+                for symbol, sort in zip(extras, declared)
+            ),
+        )
+    )
+    frame_sorts = (S.REAL,) + declared
+    sorts = frame_sorts if request_sorts is None else tuple(request_sorts)
+    ring = PolynomialRing(symbols, runtime.ring.coefficients, order)
+    registry = ParentRegistry()
+    parent = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=runtime.request.coefficient.spec,
+            generators=symbols,
+            options=(("monomial_order", order.value),),
+        ),
+        ring,
+    )
+    bridge = MultivariatePolynomialBridge(
+        ring,
+        parent,
+        runtime.world.id,
+        runtime.signature,
+        runtime.table.name_of,
+        T.number,
+    )
+    request = AlgebraRequest(
+        coefficient=runtime.request.coefficient,
+        coefficient_domain=runtime.request.coefficient_domain,
+        parameter_ring=None,
+        roles=VariableRoles(
+            None,
+            (),
+            ParameterMode.SPECIFIED_VALUES,
+            runtime.world.id,
+            None,
+            (),
+            symbols,
+            sorts,
+        ),
+        interpretation=Interpretation.FORMAL,
+    )
+    return MultivariateSetup(frame.id, ring, parent, bridge, request, symbols)
 
 
 def structural(signature: LanguageSignature, head: StructuralHead) -> T.SymbolRef:

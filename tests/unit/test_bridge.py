@@ -1,13 +1,27 @@
 """Term/algebra bridge: explicit fragments, regions and refusals."""
 
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
-from support import admitted, head_app, render_value, structural, view_of
+from support import (
+    InconsistentSortEnvironment,
+    admitted,
+    head_app,
+    multivariate_setup,
+    render_value,
+    structural,
+    typed_in,
+    view_of,
+)
 
 from cas.algebra.integers import IntegerRing
 from cas.algebra.parents import ParentRegistry, ParentSpec
-from cas.algebra.polynomial import PolynomialRing, UnivariatePolynomialRing
+from cas.algebra.polynomial import (
+    MonomialOrder,
+    PolynomialRing,
+    UnivariatePolynomialRing,
+)
 from cas.algebra.rational import RationalFunctionField
 from cas.algebra.rationals import RationalField
 from cas.foundation.ids import FrameId
@@ -16,21 +30,30 @@ from cas.language import typing as Ty
 from cas.language.meaning import MeaningKey
 from cas.language.problems import (
     ParameterMode,
+    Role,
     ValueDomain,
     VariableRoles,
 )
 from cas.language.signatures import LanguageSignature, StructuralHead
-from cas.runtime.bootstrap import bootstrap
+from cas.runtime.bootstrap import (
+    bootstrap,
+    bootstrap_elementary,
+    bootstrap_parameterized,
+)
 from cas.semantics.bridge import (
+    AlgebraView,
     ConversionWitness,
     RationalFunctionBridge,
     Rendered,
     RenderRefused,
     SimplePolynomialBridge,
+    SymbolBinding,
     ViewBuilt,
     ViewRefused,
+    _issue_view,
+    typed_view,
 )
-from cas.semantics.frames import FrameSorts
+from cas.semantics.frames import Declaration, FrameSorts
 from cas.semantics.request import AlgebraRequest, Interpretation
 from cas.syntax import term as T
 
@@ -445,3 +468,298 @@ def test_an_undefined_factor_cannot_disappear_during_projection(runtime):
         outcome = admitted(runtime, source)
         assert isinstance(outcome, ViewRefused), outcome
         assert "defined_zero_power" in outcome.missing
+
+
+def _multivariate_symbol(runtime, setup, index: int) -> T.SymbolRef:
+    symbol = setup.symbols[index]
+    return T.symbol(symbol, runtime.table.name_of(symbol))
+
+
+def _multi_admitted(runtime, setup, term, *, request=None):
+    return admitted(
+        runtime,
+        term,
+        frame=setup.frame,
+        bridge=setup.bridge,
+        request=setup.request if request is None else request,
+    )
+
+
+def _multi_view(runtime, setup, term):
+    outcome = _multi_admitted(runtime, setup, term)
+    assert isinstance(outcome, ViewBuilt), outcome
+    return outcome.view
+
+
+def test_the_multivariate_bridge_maps_the_generators_in_ring_order(runtime):
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    y = _multivariate_symbol(runtime, setup, 1)
+    view = _multi_view(
+        runtime, setup, plus(runtime, times(runtime, x, y), T.number(2))
+    )
+    assert setup.ring.equal(
+        view.value,
+        setup.ring.add(
+            setup.ring.monomial((1, 1), Fraction(1)),
+            setup.ring.constant(Fraction(2)),
+        ),
+    )
+    assert view.generators_for(Role.GENERATOR) == setup.symbols
+    assert view.symbol_for(Role.TARGET, 0) is None
+    assert view.interpretation is Interpretation.FORMAL
+    assert view.witness == ConversionWitness.representation_isomorphism()
+    assert view.source_domain is None
+    assert view.valid_on is None
+
+
+def test_the_multivariate_bridge_round_trips_sums_products_and_powers(
+    runtime,
+):
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    y = _multivariate_symbol(runtime, setup, 1)
+    term = plus(
+        runtime,
+        power(runtime, x, T.number(2)),
+        times(runtime, T.number(3), x, y),
+        power(runtime, y, T.number(3)),
+    )
+    view = _multi_view(runtime, setup, term)
+    rendered = setup.bridge.render(view, view.value)
+    assert isinstance(rendered, Rendered)
+    round_trip = _multi_view(runtime, setup, rendered.term)
+    assert setup.ring.equal(round_trip.value, view.value)
+
+
+def test_the_multivariate_bridge_renders_through_its_generator_bindings(
+    runtime,
+):
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    y = _multivariate_symbol(runtime, setup, 1)
+    view = _multi_view(runtime, setup, plus(runtime, x, y))
+    product = setup.ring.mul(
+        setup.ring.generator(0), setup.ring.generator(1)
+    )
+    assert setup.bridge.render(view, product) == Rendered(
+        times(runtime, x, y)
+    )
+    assert setup.bridge.render(view, setup.ring.zero()) == Rendered(
+        T.number(0)
+    )
+
+
+def test_multivariate_rendering_requires_generator_bindings(runtime):
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    typed = Ty.typed(
+        x,
+        runtime.signature,
+        FrameSorts(runtime.frames, setup.frame),
+        runtime.frame.meaning,
+    )
+    assert isinstance(typed, Ty.TypedExpr)
+    view = _issue_view(
+        typed,
+        setup.parent,
+        setup.ring.generator(0),
+        (SymbolBinding(setup.symbols[0], Role.TARGET, 0),),
+        Interpretation.FORMAL,
+        ConversionWitness.representation_isomorphism(),
+        None,
+        None,
+        signature=runtime.signature,
+    )
+    assert isinstance(view, AlgebraView)
+    with pytest.raises(ValueError, match="generators"):
+        setup.bridge.render(view, setup.ring.one())
+
+
+def test_the_multivariate_bridge_refuses_a_target_request(runtime):
+    setup = multivariate_setup(runtime)
+    outcome = _multi_admitted(
+        runtime, setup, T.number(1), request=runtime.request
+    )
+    assert isinstance(outcome, ViewRefused)
+    assert "target_role" in outcome.missing
+
+
+def test_a_target_polynomial_bridge_refuses_a_generator_request(runtime):
+    setup = multivariate_setup(runtime)
+    typed = typed_in(
+        runtime.frames,
+        runtime.frame.id,
+        runtime.signature,
+        x_term(runtime),
+    )
+    outcome = runtime.bridge.to_view(typed, setup.request)
+    assert isinstance(outcome, ViewRefused)
+    assert "target_role" in outcome.missing
+
+
+def test_a_rational_bridge_refuses_a_generator_request(runtime):
+    setup = multivariate_setup(runtime)
+    typed = typed_in(
+        runtime.frames,
+        runtime.frame.id,
+        runtime.signature,
+        x_term(runtime),
+    )
+    outcome = rational_bridge(runtime).to_view(typed, setup.request)
+    assert isinstance(outcome, ViewRefused)
+    assert "target_role" in outcome.missing
+
+
+def test_a_parameter_bridge_refuses_a_generator_request():
+    runtime = bootstrap_parameterized()
+    setup = multivariate_setup(runtime)
+    typed = typed_in(
+        runtime.frames,
+        runtime.frame.id,
+        runtime.signature,
+        T.symbol(runtime.variable, "x"),
+    )
+    outcome = runtime.bridge.to_view(typed, setup.request)
+    assert isinstance(outcome, ViewRefused)
+    assert "target_role" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_a_parameter_request(runtime):
+    setup = multivariate_setup(runtime)
+    parameter = runtime.table.intern("p")
+    parameter_ring = PolynomialRing((parameter,), runtime.ring.coefficients)
+    registry = ParentRegistry()
+    parameter_parent = registry.intern(
+        ParentSpec(
+            "polynomial",
+            base=runtime.request.coefficient.spec,
+            generators=(parameter,),
+            options=(("monomial_order", MonomialOrder.LEX.value),),
+        ),
+        parameter_ring,
+    )
+    request = AlgebraRequest(
+        runtime.request.coefficient,
+        ValueDomain.RATIONAL,
+        parameter_parent,
+        VariableRoles(
+            runtime.variable,
+            (parameter,),
+            ParameterMode.GENERIC_PARAMETERS,
+            runtime.world.id,
+            S.REAL,
+            (S.REAL,),
+        ),
+        Interpretation.PARAMETER_FAMILY,
+    )
+    assert request.roles.parameters == (parameter,)
+    outcome = _multi_admitted(runtime, setup, T.number(1), request=request)
+    assert isinstance(outcome, ViewRefused)
+    assert "target_role" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_another_generator_order(runtime):
+    setup = multivariate_setup(runtime)
+    roles = replace(
+        setup.request.roles,
+        variables=tuple(reversed(setup.symbols)),
+        variable_sorts=(S.REAL, S.REAL),
+    )
+    request = replace(setup.request, roles=roles)
+    outcome = _multi_admitted(runtime, setup, T.number(1), request=request)
+    assert isinstance(outcome, ViewRefused)
+    assert "generator_roles" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_a_variable_sort_mismatch(runtime):
+    setup = multivariate_setup(
+        runtime, request_sorts=(S.RATIONAL, S.RATIONAL)
+    )
+    x = _multivariate_symbol(runtime, setup, 0)
+    outcome = _multi_admitted(runtime, setup, x)
+    assert isinstance(outcome, ViewRefused)
+    assert "variable_sort" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_an_unbound_symbol(runtime):
+    setup = multivariate_setup(runtime)
+    extra = runtime.table.intern("z")
+    child = runtime.frames.create(
+        setup.frame,
+        declarations=(Declaration(extra, "z", S.REAL),),
+    )
+    outcome = admitted(
+        runtime,
+        T.symbol(extra, "z"),
+        frame=child.id,
+        bridge=setup.bridge,
+        request=setup.request,
+    )
+    assert isinstance(outcome, ViewRefused)
+    assert "symbol_mapping" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_a_foreign_world_source(runtime):
+    setup = multivariate_setup(runtime)
+    foreign = bootstrap()
+    typed = Ty.typed(
+        T.symbol(foreign.variable, "x"),
+        runtime.signature,
+        FrameSorts(foreign.frames, foreign.frame.id),
+        foreign.frame.meaning,
+    )
+    assert isinstance(typed, Ty.TypedExpr)
+    outcome = setup.bridge.to_view(typed, setup.request)
+    assert isinstance(outcome, ViewRefused)
+    assert "world_identity" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_a_non_scalar_free_symbol(runtime):
+    setup = multivariate_setup(runtime)
+    extra = runtime.table.intern("multi_function")
+    environment = InconsistentSortEnvironment(
+        extra, S.REAL, S.FunctionSort((S.REAL,), S.REAL)
+    )
+    typed = Ty.typed(
+        T.symbol(extra, "multi_function"),
+        runtime.signature,
+        environment,
+        runtime.frame.meaning,
+    )
+    assert isinstance(typed, Ty.TypedExpr)
+    outcome = setup.bridge.to_view(typed, setup.request)
+    assert isinstance(outcome, ViewRefused)
+    assert "scalar_symbol" in outcome.missing
+
+
+def test_the_multivariate_bridge_refuses_outside_its_fragment():
+    runtime = bootstrap_elementary()
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    sine = T.app(T.symbol(runtime.table.intern("sin"), "sin"), x)
+    for term, missing in (
+        (power(runtime, x, T.number(-1)), "nonnegative_power"),
+        (sine, "polynomial_representation"),
+        (power(runtime, x, T.number(0)), "defined_zero_power"),
+        (T.TRUE, "scalar_source"),
+    ):
+        outcome = _multi_admitted(runtime, setup, term)
+        assert isinstance(outcome, ViewRefused), outcome
+        assert missing in outcome.missing
+
+
+def test_typed_view_admits_a_multivariate_view(runtime):
+    setup = multivariate_setup(runtime)
+    x = _multivariate_symbol(runtime, setup, 0)
+    outcome = typed_view(
+        setup.bridge,
+        plus(runtime, x, T.number(1)),
+        runtime.frames,
+        setup.frame,
+        runtime.signature,
+        setup.request,
+    )
+    assert isinstance(outcome, AlgebraView), outcome
+    assert outcome.generators_for(Role.GENERATOR) == setup.symbols
+    assert outcome.interpretation is Interpretation.FORMAL
