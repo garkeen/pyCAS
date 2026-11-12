@@ -69,6 +69,8 @@ _HELP = """commands:
   diff [@LABEL]         differentiate the focused or named expression
   integrate [@LABEL]    integrate a polynomial in the focused or named expression
   hermite [@LABEL]      reduce the repeated denominator of a rational function
+  integrate_log [@LABEL]
+                        integrate a rational function's logarithmic part
   solve [sound] [@LABEL]
                         solve a linear polynomial as a finite set
   gcd @A @B             compute the monic polynomial gcd
@@ -327,6 +329,8 @@ class Session:
             return self._integrate(argument)
         if command == "hermite":
             return self._hermite(argument)
+        if command == "integrate_log":
+            return self._integrate_log(argument)
         if command == "solve":
             return self._solve(argument)
         if command == "gcd":
@@ -521,6 +525,20 @@ class Session:
     def _hermite(self, argument: str) -> str:
         source = self._resolve(argument, "hermite")
         result = self.workspace.hermite_reduce(
+            source, self._runtime.variable
+        )
+        if result.status in (
+            OperationStatus.VERIFIED,
+            OperationStatus.CONDITIONAL,
+        ):
+            assert result.result is not None
+            self._register(result.result, self._choose_label(None))
+            return self._success_line(result)
+        return self._report(result)
+
+    def _integrate_log(self, argument: str) -> str:
+        source = self._resolve(argument, "integrate_log")
+        result = self.workspace.integrate_rational_logarithmic(
             source, self._runtime.variable
         )
         if result.status in (

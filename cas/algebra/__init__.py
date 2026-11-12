@@ -59,7 +59,7 @@ operation.  A public `Z[x]` factorization entry with unit/multiplicity output,
 multivariate gcd/factorization, algebraic extensions and A3 are still not
 implemented; A2 is not complete.
 
-The I0-L0/L1 slice in `logarithmic_integration` adds the rational-residue
+The I0-L0/L1/L2/L3 slice in `logarithmic_integration` adds the rational-residue
 logarithmic part of a `Q(x)` integral: `residue_polynomial` computes
 `Res_x(B, A - y*B')` exactly in a private `Q(y)` tower, and
 `rational_log_integral` divides out the polynomial part, reuses the existing
@@ -69,8 +69,11 @@ logarithm terms with rational coefficients.  An irreducible residue factor of
 degree at least two is refused with `rational_residues` and
 `algebraic_logarithmic_part`, and no partial result is returned.  This is a
 public low-level API with exact contracts and property tests; the
-specification/checker, operation, bootstrap, workspace and REPL wiring are not
-built in this batch.  The fragment is rational-residue-only, and full I0
-(algebraic residues, RootSum representations and logarithm branch handling)
-remains open.
+`HasRationalLogAntiderivative` specification and independent checker, the
+`integrate_rational_logarithmic` operation, the elementary bootstrap,
+workspace helper and REPL `integrate_log` are now wired end to end for the
+fixed default `Q[x]` view.  `bootstrap` and the parameterized assemblies do not
+intern the predicate or register the operation.  The fragment is
+rational-residue-only, and full I0 (algebraic residues, RootSum
+representations, real-log branches and the Risch tower) remains open.
 """
