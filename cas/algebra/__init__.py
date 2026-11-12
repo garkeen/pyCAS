@@ -58,4 +58,19 @@ parameterized assembly does not intern `HasFactorization` or register the
 operation.  A public `Z[x]` factorization entry with unit/multiplicity output,
 multivariate gcd/factorization, algebraic extensions and A3 are still not
 implemented; A2 is not complete.
+
+The I0-L0/L1 slice in `logarithmic_integration` adds the rational-residue
+logarithmic part of a `Q(x)` integral: `residue_polynomial` computes
+`Res_x(B, A - y*B')` exactly in a private `Q(y)` tower, and
+`rational_log_integral` divides out the polynomial part, reuses the existing
+Hermite reduction, factors the residue polynomial over `Q`, and returns a
+`RationalLogIntegral` of a rational-function part and monic squarefree
+logarithm terms with rational coefficients.  An irreducible residue factor of
+degree at least two is refused with `rational_residues` and
+`algebraic_logarithmic_part`, and no partial result is returned.  This is a
+public low-level API with exact contracts and property tests; the
+specification/checker, operation, bootstrap, workspace and REPL wiring are not
+built in this batch.  The fragment is rational-residue-only, and full I0
+(algebraic residues, RootSum representations and logarithm branch handling)
+remains open.
 """
