@@ -77,6 +77,7 @@ _HELP = """commands:
                         count distinct real roots in the open interval (A,B)
   isolate_roots [@LABEL]
                         isolate all distinct real roots as open rational intervals
+  factor [@LABEL]       factor the focused or named Q[x] polynomial into irreducibles
   groebner_basis @A @B [@C ...]
                         compute the reduced Q[x,y] LEX Groebner basis as a Set
   specialize [@LABEL] a=VALUE ...
@@ -336,6 +337,8 @@ class Session:
             return self._root_count(argument)
         if command == "isolate_roots":
             return self._isolate_roots(argument)
+        if command == "factor":
+            return self._factor(argument)
         if command == "groebner_basis":
             return self._groebner_basis(argument)
         if command == "declare":
@@ -618,6 +621,26 @@ class Session:
         """Isolate every distinct real root of the focused or named object."""
         source = self._resolve(argument, "isolate_roots")
         result = self.workspace.isolate_roots(
+            source, self._runtime.variable
+        )
+        if result.status in (
+            OperationStatus.VERIFIED,
+            OperationStatus.CONDITIONAL,
+        ):
+            assert result.result is not None
+            self._register(result.result, self._choose_label(None))
+            return self._success_line(result)
+        return self._report(result)
+
+    def _factor(self, argument: str) -> str:
+        """Factor the focused or named polynomial over the fixed Q[x] view.
+
+        The visible result is the already-factored product built by the
+        operation; the structured unit and factor set are recorded with the
+        same result object.
+        """
+        source = self._resolve(argument, "factor")
+        result = self.workspace.factor_polynomial(
             source, self._runtime.variable
         )
         if result.status in (
