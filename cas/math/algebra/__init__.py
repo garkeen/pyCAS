@@ -1,5 +1,13 @@
 """Polynomial algebra operations and their independent checkers."""
 
+from cas.math.algebra.factorization_checker import FactorizationChecker
+from cas.math.algebra.factorization_specification import (
+    FactorizationCertificate,
+    FactorizationClaim,
+    FactorizationVocabulary,
+    HenselIrreducibilityWitness,
+    has_factorization,
+)
 from cas.math.algebra.gcd_checker import PolynomialGcdChecker
 from cas.math.algebra.gcd_operation import PolynomialGcdOperation
 from cas.math.algebra.gcd_specification import (
@@ -26,9 +34,14 @@ from cas.math.algebra.root_count_specification import (
 )
 
 __all__ = [
+    "FactorizationCertificate",
+    "FactorizationChecker",
+    "FactorizationClaim",
+    "FactorizationVocabulary",
     "GcdCertificate",
     "GcdClaim",
     "GcdVocabulary",
+    "HenselIrreducibilityWitness",
     "PolynomialGcdChecker",
     "PolynomialGcdOperation",
     "ResultantCertificate",
@@ -41,6 +54,7 @@ __all__ = [
     "RootCountClaim",
     "RootCountOperation",
     "RootCountVocabulary",
+    "has_factorization",
     "has_gcd",
     "has_resultant",
     "has_root_count",
