@@ -176,6 +176,13 @@ def test_elementary_bootstrap_registers_rational_logarithmic_integration():
     log_symbol = runtime.table.lookup("log")
     assert log_symbol is not None
     assert operation.vocabulary.log_symbol is log_symbol
+    semantics = operation.vocabulary.semantics
+    assert semantics is not None
+    assert semantics.library is runtime.elementary
+    assert semantics.function.symbol is log_symbol
+    assert semantics.function.name == "log"
+    assert semantics.basis == runtime.elementary.basis
+    assert operation.log_semantics is semantics
     assert runtime.signature.operator_of(log_symbol) == OperatorSignature(
         (S.REAL,), S.REAL
     )
@@ -185,6 +192,7 @@ def test_elementary_bootstrap_registers_rational_logarithmic_integration():
     spec = runtime.store.checkers.spec(checker_id)
     assert spec is not None
     assert isinstance(spec.checker, LogarithmicIntegrationChecker)
+    assert spec.checker.semantics is semantics
     assert spec.accepted_problem_kinds == frozenset(
         {"integrate_rational_logarithmic"}
     )
@@ -196,7 +204,7 @@ def test_elementary_bootstrap_registers_rational_logarithmic_integration():
         "1",
         RationalLogAntiderivativeCertificate,
     )
-    assert spec.trusted_dependencies == ()
+    assert spec.trusted_dependencies == (runtime.elementary.basis,)
     assert spec.requires_problem
     assert operation.views[0].field is spec.checker.field
 

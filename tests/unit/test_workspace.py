@@ -519,15 +519,16 @@ def test_a_task_from_a_later_revision_is_not_visible_after_undo(runtime):
     assert workspace.tasks() == (first.task,)
 
 
-def test_a_cancelled_task_is_not_revived_by_check_or_edit(runtime):
+def test_a_cancelled_task_is_not_revived_by_check_or_edit():
+    runtime = bootstrap_elementary()
     workspace = new_workspace(runtime)
-    source = workspace.intake(source_term(runtime), "source")
-    region = _region_above_zero(runtime)
+    source = workspace.intake(
+        parse("sqrt(x)", runtime.table, runtime.signature), "source"
+    )
     conditional = workspace.apply(
         "differentiate",
         (source,),
         target=runtime.variable,
-        region=region,
     )
     assert conditional.status is OperationStatus.CONDITIONAL
     assert conditional.task is not None
@@ -888,7 +889,7 @@ def test_a_failed_workspace_record_rolls_back_the_kernel(runtime, monkeypatch):
     assert workspace.revision is before_revision
 
 
-def test_a_conditional_result_is_conditional_and_not_completed(runtime):
+def test_a_conditional_result_is_closed_by_the_same_problem_region(runtime):
     workspace = new_workspace(runtime)
     source = workspace.intake(source_term(runtime), "source")
     region = runtime_proposition(
@@ -914,7 +915,7 @@ def test_a_conditional_result_is_conditional_and_not_completed(runtime):
     )
     assert result.verifications[0].condition == region
     assert result.task is not None
-    assert result.task.state is TaskState.PARTIALLY_SOLVED
+    assert result.task.state is TaskState.COMPLETED
 
 
 def test_a_later_deferred_check_does_not_downgrade_a_verified_task(

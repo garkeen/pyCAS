@@ -32,7 +32,10 @@ from cas.language.functions import FunctionValue
 from cas.language.problems import Coverage, ParameterMode, ProblemSpec
 from cas.language.propositions import Proposition
 from cas.language.roles import CandidateRole
+from cas.language.signatures import LanguageSignature
+from cas.language.typing import SortEnvironment
 from cas.operations.protocols import StructuredResult
+from cas.semantics.conditions import is_subregion
 from cas.semantics.frames import Declaration, Definition
 from cas.semantics.request import AlgebraRequest
 from cas.semantics.specialization import GenericResult
@@ -723,6 +726,48 @@ def _candidate_supports_completion(
     return candidate.coverage is CandidateCoverage.COMPLETE
 
 
+def _result_condition_closed(
+    problem: ProblemSpec,
+    condition: Proposition,
+    signature: LanguageSignature | None,
+    environment: SortEnvironment | None,
+) -> bool:
+    """Whether the fixed problem region discharges one result region.
+
+    A result region is not an externalizable premise (§18.1): it may only be
+    closed by the region the user fixed in the problem.  The exact `TRUE`
+    condition is closed everywhere.  Without a signature (a direct test) only
+    exact proposition equality can discharge the condition; with a signature the
+    shared restricted implication proves `problem.region` inside `condition`.
+    An undecided inclusion is not closed.
+    """
+    if condition.term == T.TRUE:
+        return True
+    if signature is not None and (
+        is_subregion(
+            T.TRUE,
+            condition.term,
+            signature,
+            environment,
+        )
+        is True
+    ):
+        return True
+    if problem.region is None:
+        return False
+    if signature is None:
+        return condition == problem.region
+    return (
+        is_subregion(
+            problem.region.term,
+            condition.term,
+            signature,
+            environment,
+        )
+        is True
+    )
+
+
 def derive_task_state(
     problem: ProblemSpec,
     candidates: tuple[Candidate, ...],
@@ -731,6 +776,8 @@ def derive_task_state(
     attempts: tuple[ExecutionAttempt, ...],
     *,
     cancelled: bool = False,
+    signature: LanguageSignature | None = None,
+    environment: SortEnvironment | None = None,
 ) -> TaskState:
     """Derive the user-visible task state from records and the fixed request.
 
@@ -745,15 +792,20 @@ def derive_task_state(
     - a supporting candidate must also satisfy the request's parameter promise:
       a generic answer does not complete an all-parameter request, and a
       partial answer does not complete a complete-set request;
-    - met coverage with only unconditional supporting links is `COMPLETED`;
-    - met coverage with an open condition is `COMPLETED_CONDITIONAL` only when
-      the problem allows unresolved premises and every open condition is one
-      of its explicit externalizable premises; otherwise it is
-      `PARTIALLY_SOLVED`;
-    - unmet coverage is `PARTIALLY_SOLVED`.
+    - met coverage with no open condition is `COMPLETED`;
+    - an open *result region* is closed only by the fixed `problem.region`: the
+      condition is closed when the problem region is proved inside the result
+      region.  A result region is never an externalizable premise, so an
+      unclosed result region leaves the task `PARTIALLY_SOLVED`;
+    - an open *kernel obligation* is `COMPLETED_CONDITIONAL` only when the
+      problem allows unresolved premises and every obligation is one of its
+      explicit externalizable premises; otherwise the task is
+      `PARTIALLY_SOLVED`.
 
     The function only consumes the values passed in; it does not read the
-    workspace or trust a state stored by the searcher.
+    workspace or trust a state stored by the searcher.  `signature` and
+    `environment` are the shared condition fragment used to close a result
+    region against the fixed problem region.
     """
     if cancelled or any(
         attempt.state is ExecutionState.CANCELLED for attempt in attempts
@@ -780,19 +832,26 @@ def derive_task_state(
     )
     if not coverage_support:
         return TaskState.PARTIALLY_SOLVED
-    open_conditions = tuple(
-        condition
+    open_results = tuple(
+        link.condition
         for link in coverage_support
-        for condition in (
-            (() if link.condition is None else (link.condition,))
-            + link.obligations
+        if link.condition is not None
+        and not _result_condition_closed(
+            problem, link.condition, signature, environment
         )
     )
-    if not open_conditions:
+    if open_results:
+        return TaskState.PARTIALLY_SOLVED
+    open_obligations = tuple(
+        obligation
+        for link in coverage_support
+        for obligation in link.obligations
+    )
+    if not open_obligations:
         return TaskState.COMPLETED
     if problem.allows_unresolved() and all(
-        condition in problem.externalizable
-        for condition in open_conditions
+        obligation in problem.externalizable
+        for obligation in open_obligations
     ):
         return TaskState.COMPLETED_CONDITIONAL
     return TaskState.PARTIALLY_SOLVED

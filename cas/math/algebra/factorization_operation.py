@@ -19,7 +19,12 @@ leading coefficient) and multiplicities.
 The structured result is exactly the certificate's unit and factor set under
 the names ``unit`` and ``factors``; the visible result is the product built by
 `factorization_product_term`.  Budget exhaustion or a fragment gap is a
-structured `ProposalUnsupported` and never a partial factorization.
+structured `ProposalUnsupported` and never a partial factorization.  The
+budget bounds prime trials, Hensel precision, Zassenhaus subset visits,
+candidate division tests and the nested Berlekamp work; the independent
+checker has matching default enumeration and precision bounds, so the default
+assembly never accepts a certificate beyond the resource envelope that
+produced it.
 
 This slice fixes the default ``Q[x]`` view only.  It publishes no multivariate
 factorization, no public ``Z[x]`` entry with unit/multiplicity output and no

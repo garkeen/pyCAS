@@ -2086,7 +2086,7 @@ CompletedConditional 只接受原请求允许外置的前提；必须分类的�
 
 Blocked 与 PartiallySolved 的分界是“有没有任何已验证规格”；CompletedConditional 与 Completed 的分界是“未闭合义务是否都落在请求允许的外置集合内”。
 
-实现切片（2026-11-10，`externalizable` 正向路径）：`derive_task_state` 继续把已验证/条件链接的 `condition` 与 `obligations` 作为开放条件；只有全部开放条件都等于固定 `ProblemSpec.externalizable` 中的显式前提时才派生 `COMPLETED_CONDITIONAL`，无开放条件仍为 `COMPLETED`，否则为 `PARTIALLY_SOLVED`。proposal 的 `result_region` 进入 `VerificationLink.condition`，它是工作流条件，不写成 kernel obligation；无条件验证结果不会因为请求允许某些外置前提而变成 `COMPLETED_CONDITIONAL`。当前比较是命题意义相等（同 term、同 meaning 环境），跨 frame 的前提弱化、超过两情形的条件合并与一般条件证明合并仍未建；本切片不声称完整 §18.1。
+实现切片（2026-11-10，`externalizable` 正向路径；2026-11-12 结果区域闭合修正）：`derive_task_state` 把已验证/条件链接的结果区域（`VerificationLink.condition`）与 kernel obligations 分开；结果区域只能由固定 `ProblemSpec.region` 证明包含来闭合（`TRUE` 直接闭合），即使它出现在 `externalizable` 中也不闭合；只有全部未闭合 kernel obligations 都属于显式 `externalizable` 集时才派生 `COMPLETED_CONDITIONAL`，无开放条件仍为 `COMPLETED`，否则为 `PARTIALLY_SOLVED`。proposal 的 `result_region` 进入 `VerificationLink.condition`，它是工作流条件，不写成 kernel obligation。当前比较使用共享条件片段的 `is_subregion`（带 sort environment）；跨 frame 的前提弱化、超过两情形的条件合并与一般条件证明合并仍未建；本切片不声称完整 §18.1。
 
 ### 18.2 Candidate 状态
 
@@ -3764,7 +3764,7 @@ checker 的结果应绑定原问题，而不是只证明证书自行声明的另
 
 实现切片（2026-11-10，候选代数快照）：`Candidate.algebra` 固定候选被提出时的预装配 `AlgebraRequest`，workspace `_apply` 保存 `execution.algebra`，`edit_candidate` 清除证书时保留，`_candidate_proposal` 原样提交；`check_candidate`/`decide_candidate` 因此把同一 target/parameter/interpretation/differential 快照交给 kernel，而不是重新选择一个视图。固定请求 checker 通过 `context_algebra_mismatch` 统一消费 `VerificationContext.algebra`，按对象同一性比较；函数问题没有代数视图，`FunctionEqualityChecker` 拒绝 algebra 快照，核心逻辑规则不要求 algebra。缺失/不同由 checker 报 `InvalidEvidence`，不是 `Refuted`。该切片不替代完整 §32.7 数据流、跨 frame `externalizable` 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入或结果语言覆盖。
 
-实现切片（2026-11-10，`externalizable` 正向路径）：workspace 在 operation 返回固定问题后，用请求的显式 `externalizable` 集替换该问题的集合，并让同一问题对象贯穿 `ExecutionRequest`、候选、提交与任务；operation 自己构造的集合不成为第二权威。`run_task` 传入任务的集合，`_same_problem` 精确比较；不匹配的执行被记录为 blocked，而不是悄悄运行另一个问题。checker 仍只核验规格与候选；proposal 的 `result_region` 作为 `VerificationLink.condition` 参与任务完成性派生，不伪造 kernel obligation。`COMPLETED_CONDITIONAL` 只在全部开放条件都属于该显式集时成立；跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系与结果语言覆盖仍未建。
+实现切片（2026-11-10，`externalizable` 正向路径；2026-11-12 修正）：workspace 在 operation 返回固定问题后，用请求的显式 `externalizable` 集替换该问题的集合，并让同一问题对象贯穿 `ExecutionRequest`、候选、提交与任务；operation 自己构造的集合不成为第二权威。`run_task` 传入任务的集合，`_same_problem` 精确比较；不匹配的执行被记录为 blocked，而不是悄悄运行另一个问题。checker 仍只核验规格与候选；proposal 的 `result_region` 作为 `VerificationLink.condition` 由固定 `problem.region` 闭合，不伪造 kernel obligation，也不能被移入 `externalizable` 冒充完整覆盖。`COMPLETED_CONDITIONAL` 只在全部未闭合 kernel obligations 都属于该显式集时成立；跨 frame 前提弱化、注册 `Covers` 规格/checker、嵌入/实嵌入、参数关系与结果语言覆盖仍未建。
 
 证书结构校验不等于数学核验；Refuted 必须确实否定所请求规格。区域未证明等价、载荷形状不同、格式不合法，只能产生对应失败，不能伪造否证。
 
@@ -3776,7 +3776,7 @@ workflow 先构造对象/候选/事件/revision 的暂存记录，关联暂存�
 
 数学核验不持有长时间的发布锁。并发结果仍属于启动时的输入和语义快照，不强行挂到用户后来切换的焦点。缓存与工作区旁路关联也必须服从 revision 可见性，不能在 undo 后悄悄复用未来事件。
 
-实现切片（2026-11-10，`externalizable` 正向路径）：条件结果的 `result_region` 走工作流条件通道而非 kernel obligation；`derive_task_state` 把链接条件与 kernel obligations 一起列为开放条件，并只在固定 `ProblemSpec.externalizable` 显式允许全部开放条件时给出 `COMPLETED_CONDITIONAL`。无条件验证结果保持 `COMPLETED`；不属于显式集的开放条件保持 `PARTIALLY_SOLVED`。该切片不改变 kernel 的条件处理策略，也不声称一般条件证明合并、跨 frame 前提弱化或完整 §32.8 数据流。
+实现切片（2026-11-10，`externalizable` 正向路径；2026-11-12 修正）：条件结果的 `result_region` 走工作流条件通道而非 kernel obligation；`derive_task_state` 只用固定 `ProblemSpec.region` 证明包含来闭合结果区域（`TRUE` 直接闭合），结果区域不能外置；只有未闭合 kernel obligations 全部属于 `ProblemSpec.externalizable` 时给出 `COMPLETED_CONDITIONAL`。无条件验证结果保持 `COMPLETED`；未闭合结果区域或不属显式集的义务保持 `PARTIALLY_SOLVED`。该切片不改变 kernel 的条件处理策略，也不声称一般条件证明合并、跨 frame 前提弱化或完整 §32.8 数据流。
 
 ### 32.9 手动积分的完整数据流
 

@@ -81,10 +81,10 @@ pipeline.  ``residue_polynomial`` requires a monic squarefree denominator ``B``,
 ``deg(A) < deg(B)`` and ``gcd(A, B) = 1``.  Inputs outside these preconditions
 raise ``LogarithmicIntegrationFragmentError`` with precise ``missing`` tokens.
 
-``max_degree`` bounds the input denominator degree and the denominator degree
-of a direct residue-polynomial request; it is resource control, not
-mathematical data.  The nested ``FactorizationBudget`` is passed unchanged to
-the factorization search.  Factorization budget exhaustion is re-raised as
+``max_degree`` bounds the input rational function's numerator and denominator
+degree and the denominator degree of a direct residue-polynomial request; it is
+resource control, not mathematical data.  The nested ``FactorizationBudget`` is
+passed unchanged to the factorization search.  Factorization budget exhaustion is re-raised as
 ``LogarithmicIntegrationBudgetError`` with the original ``missing`` tokens.
 No exhaustion path returns a partial integral.
 
@@ -142,9 +142,10 @@ _ALGEBRAIC_LOGARITHMIC_PART_MISSING = frozenset(
 class LogarithmicIntegrationBudget:
     """Resource limits for the rational-residue logarithmic part.
 
-    ``max_degree`` bounds the input denominator degree (and the denominator
-    degree of a direct ``residue_polynomial`` request).  ``factorization`` is
-    passed unchanged to the ``Q[y]`` factorization of the residue polynomial.
+    ``max_degree`` bounds the input rational function's numerator and
+    denominator degree (and the denominator degree of a direct
+    ``residue_polynomial`` request).  ``factorization`` is passed unchanged to
+    the ``Q[y]`` factorization of the residue polynomial.
     Both are resource control, not mathematical data; booleans are rejected
     and the nested budget must be a ``FactorizationBudget``.
     """
@@ -254,7 +255,9 @@ class RationalLogIntegral:
     The record claims no algebraic or irrational residue.  Log terms are sorted
     by ``(coefficient, argument structural key)``; their coefficients are
     distinct, their arguments share one ``Q[x]`` ring and are pairwise coprime,
-    and ``polynomial_part`` belongs to the same field.
+    and ``polynomial_part`` belongs to the same field.  ``polynomial_part`` is
+    the non-logarithmic rational part; Hermite reduction may give it a
+    nonconstant denominator, so it need not be a polynomial.
     """
 
     polynomial_part: RationalFunction[Fraction]
@@ -575,10 +578,10 @@ def rational_log_integral(
 
     Inputs with a non-rational residue raise
     ``LogarithmicIntegrationFragmentError`` with
-    ``{"rational_residues", "algebraic_logarithmic_part"}``; a denominator
-    degree above ``budget.max_degree`` or an exhausted factorization budget
-    raises ``LogarithmicIntegrationBudgetError``.  Neither path returns a
-    partial record.
+    ``{"rational_residues", "algebraic_logarithmic_part"}``; a numerator or
+    denominator degree above ``budget.max_degree`` or an exhausted
+    factorization budget raises ``LogarithmicIntegrationBudgetError``.  Neither
+    path returns a partial record.
     """
     if not isinstance(budget, LogarithmicIntegrationBudget):
         raise TypeError("a logarithmic-integration budget is required")
@@ -594,9 +597,15 @@ def rational_log_integral(
             "the value belongs to another rational-function field",
             missing=_FIELD_OWNERSHIP_MISSING,
         )
-    if ring.degree(value.denominator, 0) > budget.max_degree:
+    if (
+        max(
+            ring.degree(value.numerator, 0),
+            ring.degree(value.denominator, 0),
+        )
+        > budget.max_degree
+    ):
         raise LogarithmicIntegrationBudgetError(
-            "the input denominator degree exceeds the "
+            "the input numerator or denominator degree exceeds the "
             "logarithmic-integration budget",
             missing=_MAX_DEGREE_MISSING,
         )

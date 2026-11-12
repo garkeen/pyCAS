@@ -468,6 +468,7 @@ def test_factorization_budget_validation():
     budget = FactorizationBudget()
     assert budget.max_prime_trials > 0
     assert budget.max_hensel_precision > 0
+    assert budget.max_recombination_subsets > 0
     assert budget.max_recombination_tests > 0
     assert isinstance(budget.modular, ModularBudget)
     with pytest.raises(ValueError):
@@ -475,11 +476,17 @@ def test_factorization_budget_validation():
     with pytest.raises(ValueError):
         FactorizationBudget(max_hensel_precision=-1)
     with pytest.raises(ValueError):
+        FactorizationBudget(max_recombination_subsets=-1)
+    with pytest.raises(ValueError):
         FactorizationBudget(max_recombination_tests=-1)
     with pytest.raises(TypeError):
         FactorizationBudget(max_prime_trials=True)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         FactorizationBudget(max_hensel_precision=2.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        FactorizationBudget(max_recombination_subsets=True)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        FactorizationBudget(max_recombination_subsets=2.0)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         FactorizationBudget(max_recombination_tests=True)  # type: ignore[arg-type]
     with pytest.raises(TypeError):

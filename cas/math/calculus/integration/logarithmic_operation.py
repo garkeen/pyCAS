@@ -26,11 +26,13 @@ Region and refusal boundary
 
 The rational bridge fixes each source's denominator-nonzero region.  The
 proposal states the conjunction of the source's and polynomial part's
-definedness regions with ``Gt(g_i, 0)`` for every logarithm argument: a
-logarithm is never globally valid in this fragment, so a log-bearing result
-always carries its positivity conditions.  A restricted problem region is
-admitted only when the restricted condition logic proves it inside that
-conjunction; an undecided inclusion is `GUARDED`, never assumed.
+definedness regions with the declared logarithm domain instantiated at every
+logarithm argument: a logarithm is never globally valid in this fragment, so a
+log-bearing result always carries those conditions.  The domain is read from
+the admitted `FunctionSymbol` (`LogFunctionSemantics`), not rebuilt as a
+hardcoded comparison.  A restricted problem region is admitted only when the
+restricted condition logic proves it inside that conjunction; an undecided
+inclusion is `GUARDED`, never assumed.
 
 Inputs whose residue polynomial has an irreducible factor of degree at least
 two leave the fragment: the operation returns a structured `ProposalUnsupported`
@@ -48,7 +50,7 @@ complete integral exists.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 
 from cas.algebra.logarithmic_integration import (
@@ -66,14 +68,16 @@ from cas.language.problems import (
     ResultLanguage,
 )
 from cas.language.roles import CandidateRole
-from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.language.signatures import LanguageSignature
 from cas.math.calculus.differentiation.problem import expression_problem
 from cas.math.calculus.integration.logarithmic_specification import (
+    LogFunctionSemantics,
     RationalLogAntiderivativeCertificate,
     RationalLogVocabulary,
     has_rational_log_antiderivative,
     rational_log_antiderivative_term,
     rational_log_term_set,
+    require_log_semantics,
 )
 from cas.math.calculus.integration.rational_view import (
     RationalFunctionView,
@@ -120,7 +124,7 @@ from cas.semantics.bridge import (
     typed_view,
 )
 from cas.semantics.conditions import and_all, is_subregion
-from cas.semantics.frames import FrameStore
+from cas.semantics.frames import FrameSorts, FrameStore
 from cas.syntax import term as T
 
 _CAPABILITY_REQUIREMENTS: CapabilityRequirements = frozenset(
@@ -146,12 +150,21 @@ class LogarithmicIntegrationOperation:
     problem_kind: str = "integrate_rational_logarithmic"
     specification_kind: str = "HasRationalLogAntiderivative"
     checker_bindings: tuple[CheckerBinding, ...] = ()
+    log_semantics: LogFunctionSemantics = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.budget, LogarithmicIntegrationBudget):
             raise TypeError(
                 "a rational-logarithmic operation needs a "
                 "LogarithmicIntegrationBudget"
+            )
+        semantics = require_log_semantics(self.vocabulary)
+        if semantics.function.symbol != self.vocabulary.log_symbol:
+            raise ValueError(
+                "the declared logarithm semantics does not match the "
+                "vocabulary"
             )
         if not self.views:
             raise ValueError(
@@ -166,6 +179,7 @@ class LogarithmicIntegrationOperation:
             raise ValueError(
                 "the default target has no rational-logarithmic view"
             )
+        object.__setattr__(self, "log_semantics", semantics)
         object.__setattr__(
             self,
             "checker_bindings",
@@ -413,13 +427,14 @@ class LogarithmicIntegrationOperation:
                 conditions.append(item.term)
         for rendered_argument in rendered_arguments:
             conditions.append(
-                T.app(
-                    self.signature.head_term(StructuralHead.GT),
-                    rendered_argument,
-                    T.number(0),
+                self.log_semantics.domain(
+                    rendered_argument, self.signature
                 )
             )
-        combined = and_all(self.signature, *conditions)
+        environment = FrameSorts(self.frames, request.frame)
+        combined = and_all(
+            self.signature, *conditions, environment=environment
+        )
         region: Pr.Proposition | None
         if combined == T.TRUE:
             region = None
@@ -439,7 +454,10 @@ class LogarithmicIntegrationOperation:
         region_term = T.TRUE if region is None else region.term
         if problem.region is not None:
             covered = is_subregion(
-                problem.region.term, region_term, self.signature
+                problem.region.term,
+                region_term,
+                self.signature,
+                environment,
             )
             if covered is not True:
                 return ProposalUnsupported(

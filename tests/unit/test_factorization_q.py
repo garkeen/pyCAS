@@ -202,6 +202,48 @@ def test_factor_primitive_integer_finds_small_factor_when_large_exceeds_half():
     assert ring.equal(integer_product(ring, factors), value)
 
 
+def test_factor_primitive_integer_finds_a_degree_five_factor_via_complement():
+    ring = integer_ring()
+    generator = ring.generator(0)
+    cubic = ring.add(
+        ring.sub(ring.pow(generator, 3), generator), ring.constant(-1)
+    )
+    quintic = ring.add(
+        ring.sub(ring.pow(generator, 5), generator), ring.constant(-1)
+    )
+    value = ring.mul(cubic, quintic)
+    assert ring.degree(value, 0) == 8
+    factors = factor_primitive_integer(ring, value)
+    assert [ring.degree(factor, 0) for factor in factors] == [3, 5]
+    assert ring.equal(factors[0], cubic)
+    assert ring.equal(factors[1], quintic)
+    assert ring.equal(integer_product(ring, factors), value)
+
+
+def test_factor_primitive_integer_does_not_enumerate_supersets_above_half():
+    ring = integer_ring()
+    # This irreducible degree-six polynomial is squarefree modulo 2, 3 and 5
+    # and factors modulo 7 into lifted degrees (1, 1, 1, 1, 2).  Only subset
+    # sizes 1..3 can fit under half (3), and the bounded enumeration generates
+    # exactly C(5,1) + C(5,2) + C(5,3) = 25 subsets.  Charging the supersets of
+    # size 4 and 5 would exhaust a budget of 25 before the proof completes.
+    value = integer_polynomial(ring, [-83, -56, -17, 42, 57, 98, 1])
+    factors = factor_primitive_integer(
+        ring,
+        value,
+        FactorizationBudget(max_recombination_subsets=25),
+    )
+    assert len(factors) == 1
+    assert ring.equal(factors[0], value)
+    with pytest.raises(FactorizationBudgetError) as exhausted:
+        factor_primitive_integer(
+            ring,
+            value,
+            FactorizationBudget(max_recombination_subsets=24),
+        )
+    assert "factorization_budget" in exhausted.value.missing
+
+
 def test_factor_primitive_integer_supports_characteristic_two():
     ring = integer_ring()
     value = integer_polynomial(ring, [2, 3, 1])
@@ -288,6 +330,13 @@ def test_factor_primitive_integer_budget_exhaustion_returns_no_partial():
             FactorizationBudget(max_recombination_tests=0),
         )
     assert "factorization_budget" in recombination.value.missing
+    with pytest.raises(FactorizationBudgetError) as subsets:
+        factor_primitive_integer(
+            ring,
+            value,
+            FactorizationBudget(max_recombination_subsets=0),
+        )
+    assert "factorization_budget" in subsets.value.missing
     with pytest.raises(FactorizationBudgetError) as primes:
         factor_primitive_integer(
             ring,

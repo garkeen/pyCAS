@@ -8,6 +8,7 @@ from logarithmic_support import (
     LogBundle,
     LogSetup,
     check_bundle,
+    checker,
     full_context,
     generator,
     linear_factor,
@@ -33,6 +34,7 @@ from cas.kernel.evidence import (
     Verified,
 )
 from cas.language import sorts as S
+from cas.language.decisions import Reason
 from cas.language.problems import (
     Coverage,
     ParameterMode,
@@ -43,9 +45,11 @@ from cas.language.problems import (
 from cas.language.roles import CandidateRole
 from cas.language.signatures import StructuralHead
 from cas.math.calculus.integration.logarithmic_checker import (
+    LogarithmicIntegrationCheckBudget,
     LogarithmicIntegrationChecker,
 )
 from cas.math.calculus.integration.logarithmic_specification import (
+    RationalLogVocabulary,
     parse_rational_log_terms,
     rational_log_term_set,
 )
@@ -606,8 +610,13 @@ def test_a_claim_region_outside_the_polynomial_part_domain_is_guarded(runtime):
         polynomial(setup, ((0, Fraction(1)),)),
         denominator,
     )
-    initial = search_bundle(setup, value)
-    polynomial_part = view_of(setup, initial.polynomial_part).value
+    # The part has an extra pole at x = 2 that the positive-region conditions
+    # do not rule out; coverage of the part domain must be refused.
+    polynomial_part = rational(
+        setup,
+        polynomial(setup, ((0, Fraction(1)),)),
+        monic_product(setup, (-2, 1)),
+    )
     source_term = render(setup, value)
     source_view = view_of(setup, source_term)
     conditions = tuple(
@@ -961,3 +970,120 @@ def test_the_checker_rejects_a_wrong_logarithm_operator(runtime):
             runtime.frames,
             runtime.request,
         )
+def test_the_checker_requires_declared_log_semantics(runtime):
+    setup = log_setup(runtime)
+    bare = RationalLogVocabulary(
+        setup.vocabulary.symbol,
+        setup.vocabulary.name,
+        setup.vocabulary.log_symbol,
+        setup.vocabulary.log_name,
+    )
+    with pytest.raises(ValueError):
+        LogarithmicIntegrationChecker(
+            setup.bridge,
+            setup.signature,
+            bare,
+            runtime.frames,
+            runtime.request,
+        )
+
+
+def test_the_checker_is_bound_to_the_declared_log_semantics(runtime):
+    setup = log_setup(runtime)
+    assert checker(setup).semantics is setup.semantics
+    assert checker(setup).semantics.function.symbol == (
+        setup.vocabulary.log_symbol
+    )
+
+
+def test_the_checker_budget_rejects_bool_and_negative_limits():
+    for kwargs in (
+        {"max_degree": True},
+        {"max_log_terms": True},
+        {"max_degree": -1},
+        {"max_log_terms": -1},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            LogarithmicIntegrationCheckBudget(**kwargs)  # type: ignore[arg-type]
+
+
+def budgeted_checker(
+    setup: LogSetup, **kwargs: int
+) -> LogarithmicIntegrationChecker:
+    runtime = setup.runtime
+    return LogarithmicIntegrationChecker(
+        setup.bridge,
+        setup.signature,
+        setup.vocabulary,
+        runtime.frames,
+        runtime.request,
+        budget=LogarithmicIntegrationCheckBudget(**kwargs),
+    )
+
+
+def test_an_over_degree_source_returns_budget(runtime):
+    setup = log_setup(runtime)
+    bundle = search_bundle(
+        setup, source_polynomial(setup, ((3, Fraction(1)),))
+    )
+    outcome = check_bundle(
+        setup,
+        bundle,
+        checker_override=budgeted_checker(setup, max_degree=2),
+    )
+    assert isinstance(outcome, Unverified), outcome
+    assert outcome.reason is Reason.BUDGET
+    assert outcome.missing == frozenset(
+        {"logarithmic_integration_degree"}
+    )
+
+
+def test_too_many_log_terms_returns_budget(runtime):
+    setup = log_setup(runtime)
+    value = rational(
+        setup,
+        polynomial(setup, ((0, Fraction(1)),)),
+        x_squared_minus_one(setup),
+    )
+    bundle = search_bundle(setup, value)
+    outcome = check_bundle(
+        setup,
+        bundle,
+        checker_override=budgeted_checker(setup, max_log_terms=1),
+    )
+    assert isinstance(outcome, Unverified), outcome
+    assert outcome.reason is Reason.BUDGET
+    assert outcome.missing == frozenset(
+        {"logarithmic_integration_terms"}
+    )
+
+
+def test_the_checker_allows_one_antiderivative_degree_increment(runtime):
+    setup = log_setup(runtime)
+    bundle = search_bundle(
+        setup, source_polynomial(setup, ((2, Fraction(1)),))
+    )
+    outcome = check_bundle(
+        setup,
+        bundle,
+        checker_override=budgeted_checker(setup, max_degree=2),
+    )
+    assert isinstance(outcome, Verified), outcome
+
+
+def test_the_checker_budget_still_admits_a_valid_claim(runtime):
+    setup = log_setup(runtime)
+    value = rational(
+        setup,
+        polynomial(setup, ((0, Fraction(1)),)),
+        x_squared_minus_one(setup),
+    )
+    bundle = search_bundle(setup, value)
+    outcome = check_bundle(
+        setup,
+        bundle,
+        checker_override=budgeted_checker(
+            setup, max_degree=2, max_log_terms=2
+        ),
+    )
+    assert isinstance(outcome, Verified), outcome

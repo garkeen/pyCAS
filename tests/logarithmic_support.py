@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
-from support import proposition_in, typed_in, verification_context
+from support import (
+    elementary_basis,
+    proposition_in,
+    typed_in,
+    verification_context,
+)
 
 from cas.algebra.logarithmic_integration import rational_log_integral
 from cas.algebra.parents import ParentRegistry, ParentSpec
@@ -40,7 +45,6 @@ from cas.language.roles import CandidateRole
 from cas.language.signatures import (
     LanguageSignature,
     OperatorSignature,
-    StructuralHead,
 )
 from cas.math.calculus.integration.logarithmic_checker import (
     LogarithmicIntegrationChecker,
@@ -49,6 +53,7 @@ from cas.math.calculus.integration.logarithmic_operation import (
     LogarithmicIntegrationOperation,
 )
 from cas.math.calculus.integration.logarithmic_specification import (
+    LogFunctionSemantics,
     RationalLogAntiderivativeCertificate,
     RationalLogVocabulary,
     has_rational_log_antiderivative,
@@ -58,6 +63,10 @@ from cas.math.calculus.integration.logarithmic_specification import (
 from cas.math.calculus.integration.rational_view import (
     RationalFunctionView,
 )
+from cas.math.elementary.declarations import (
+    build_elementary,
+    default_elementary_declarations,
+)
 from cas.semantics.bridge import (
     AlgebraView,
     RationalFunctionBridge,
@@ -65,6 +74,7 @@ from cas.semantics.bridge import (
     typed_view,
 )
 from cas.semantics.conditions import and_all
+from cas.semantics.frames import FrameSorts
 from cas.semantics.request import AlgebraRequest
 from cas.syntax import term as T
 
@@ -78,6 +88,7 @@ class LogSetup:
     frame: FrameId
     signature: LanguageSignature
     vocabulary: RationalLogVocabulary
+    semantics: LogFunctionSemantics
     bridge: RationalFunctionBridge[Fraction]
     request: AlgebraRequest
 
@@ -101,11 +112,24 @@ def log_setup(runtime: "Runtime") -> LogSetup:
     """Extend the runtime language with the rational-log predicate and log."""
     predicate = runtime.table.intern("HasRationalLogAntiderivative")
     log_symbol = runtime.table.intern("log")
+    library = runtime.elementary
+    if library is None:
+        declarations = default_elementary_declarations()
+        library = build_elementary(
+            runtime.table.intern,
+            declarations,
+            reserved=frozenset({"x", "y", "HasDerivative"}),
+            basis=elementary_basis(declarations, runtime.world.id),
+        )
+    log_function = library.function_for(log_symbol)
+    assert log_function is not None
+    semantics = LogFunctionSemantics(library, log_function)
     vocabulary = RationalLogVocabulary(
         predicate,
         "HasRationalLogAntiderivative",
         log_symbol,
         "log",
+        semantics,
     )
     operators = dict(runtime.signature.operators)
     operators[predicate] = vocabulary.signature
@@ -140,6 +164,7 @@ def log_setup(runtime: "Runtime") -> LogSetup:
         runtime.frame.id,
         signature,
         vocabulary,
+        semantics,
         bridge,
         runtime.request,
     )
@@ -252,7 +277,10 @@ def logarithmic_operation(
 def full_context(setup: LogSetup) -> VerificationContext:
     """A context with both the decision and definedness services."""
     runtime = setup.runtime
-    decision = DecisionService(setup.signature)
+    decision = DecisionService(
+        setup.signature,
+        FrameSorts(runtime.frames, setup.frame),
+    )
     return VerificationContext(
         runtime.world.id,
         setup.frame,
@@ -280,11 +308,7 @@ def honest_region(
                 conditions.append(region.term)
     for argument in arguments:
         conditions.append(
-            T.app(
-                setup.signature.head_term(StructuralHead.GT),
-                argument,
-                T.number(0),
-            )
+            setup.semantics.domain(argument, setup.signature)
         )
     return proposition_in(
         setup.runtime.frames,

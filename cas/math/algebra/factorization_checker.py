@@ -37,15 +37,18 @@ Verification order
     its independent view equals that product.  The radical must be squarefree.
 11. A witness is required exactly when some claimed base has degree at least
     two.
-12. The Hensel/Mignotte witness is proved independently: the prime is proven
-    prime, ``p**k > 2*B`` for the Landau/Mignotte coefficient bound of the
-    primitive radical, ``p`` does not divide the leading coefficient, the
-    radical is squarefree modulo ``p``, the lifted factors are monic
-    nonconstant integer polynomials with coefficients in ``[0, p**k)``, their
-    degrees sum to the radical degree, each is irreducible modulo ``p``, they
-    are pairwise distinct, and ``R == a*prod(G_i) (mod p**k)``.
+12. The Hensel/Mignotte witness is proved independently: the witness precision
+    is within the checker's precision budget (checked before ``p**k`` is
+    evaluated), the prime is proven prime, ``p**k > 2*B`` for the
+    Landau/Mignotte coefficient bound of the primitive radical, ``p`` does not
+    divide the leading coefficient, the radical is squarefree modulo ``p``, the
+    lifted factors are monic nonconstant integer polynomials with coefficients
+    in ``[0, p**k)``, their degrees sum to the radical degree, each is
+    irreducible modulo ``p``, they are pairwise distinct, and
+    ``R == a*prod(G_i) (mod p**k)``.
 13. Each claimed nonlinear factor is proved irreducible by the complete
-    Zassenhaus subset/leading-divisor enumeration below.
+    Zassenhaus subset/leading-divisor enumeration below, bounded by both the
+    generated subset budget and the candidate-division budget.
 14. Only then is the single conclusion reported as verified.
 
 Why the witness proves a complete modular factorization
@@ -75,11 +78,42 @@ some subset ``S`` of the ``G_i``; the true factor is the symmetric residue of
 ``b * prod_{i in S} G_i`` for one positive divisor ``b`` of ``L``, and its
 positive primitive part is exactly that integer factor.  The checker enumerates
 every positive divisor of ``L`` and every subset whose total lifted degree is
-at most ``deg(H)//2``.  An exact division of ``H`` by a candidate refutes
-irreducibility; the absence of a successful division after the complete
-enumeration proves irreducibility.  Each candidate division test spends one
-unit of the pair budget.  Exhaustion reports `Unverified(BUDGET)` with
-``{"factorization_irreducibility_budget"}`` and never a partial proof.
+at most ``deg(H)//2``.  The largest subset size is the number of smallest
+lifted degrees whose sum fits under ``deg(H)//2``
+(``max_subset_size_within_degree``); larger sizes are never generated, and the
+full lifted set is excluded because a proper factor has a nonempty complement.
+An exact division of ``H`` by a candidate refutes irreducibility; the absence
+of a successful division after the complete enumeration proves irreducibility.
+Each generated subset spends one subset visit and each candidate division test
+spends one pair test; both budgets are independent.  Exhaustion reports
+`Unverified(BUDGET)` with ``{"factorization_irreducibility_budget"}`` and never
+a partial proof.
+
+Witness precision
+-----------------
+
+`HenselIrreducibilityWitness` is structural data and only requires a positive
+precision.  The checker has an explicit precision budget (default ``1 << 12``,
+the search's default ``FactorizationBudget.max_hensel_precision``) and rejects
+a larger precision with `Unverified(BUDGET, {"hensel_precision"})` *before*
+evaluating ``p**k``.  A caller that configures the search with a different
+precision budget must configure the checker with the same bound; the default
+assembly keeps them equal.  The kernel certificate schema bounds the
+certificate node and depth count for normal commits; the precision budget is
+the additional numerical guard that a structural witness needs.
+
+Resource boundary
+-----------------
+
+The ``lifted`` tuple is certificate data and the kernel `CertificateSchema`
+bounds its node and depth count for normal commits.  The checker's subset and
+pair budgets bound its recombination work even for direct calls that bypass the
+kernel.  The positive-divisor enumeration is exact trial division of the
+source's leading coefficient, the same enumerator the proposing operation must
+run to build an honest certificate; it gets no second numeric cap, because
+that would be a separate budget authority able to reject a certificate the
+operation legitimately produced.  Direct checker callers are expected to
+supply certificates inside the kernel schema's size envelope.
 
 Classification
 --------------
@@ -106,6 +140,7 @@ from cas.algebra.integer_polynomial import (
     congruent_mod,
     integer_divisors,
     integer_primitive_form,
+    max_subset_size_within_degree,
     positive_primitive_part,
     symmetric_residue,
 )
@@ -167,6 +202,20 @@ from cas.syntax import term as T
 _IRREDUCIBILITY_BUDGET_MISSING = frozenset(
     {"factorization_irreducibility_budget"}
 )
+_HENSEL_PRECISION_MISSING = frozenset({"hensel_precision"})
+_DEFAULT_WITNESS_PRECISION = 1 << 12
+_DEFAULT_IRREDUCIBILITY_SUBSET_BUDGET = 1_000_000
+
+
+def _nonnegative_budget(value: object, label: str) -> int:
+    """Validate one nonnegative integer resource limit."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(
+            f"the {label} must be an int (bool is not accepted)"
+        )
+    if value < 0:
+        raise ValueError(f"the {label} must be nonnegative")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,14 +229,21 @@ class _HenselContext:
 
 @dataclass(slots=True)
 class _IrreducibilityCounter:
-    """The remaining candidate/exact-division tests."""
+    """The remaining subset visits and candidate/exact-division tests."""
 
-    remaining: int
+    remaining_subsets: int
+    remaining_tests: int
+
+    def visit(self) -> bool:
+        if self.remaining_subsets <= 0:
+            return False
+        self.remaining_subsets -= 1
+        return True
 
     def spend(self) -> bool:
-        if self.remaining <= 0:
+        if self.remaining_tests <= 0:
             return False
-        self.remaining -= 1
+        self.remaining_tests -= 1
         return True
 
 
@@ -208,6 +264,10 @@ class FactorizationChecker:
         *,
         identifier: str = "algebra.factorization",
         irreducibility_pair_budget: int = 200_000,
+        irreducibility_subset_budget: int = (
+            _DEFAULT_IRREDUCIBILITY_SUBSET_BUDGET
+        ),
+        witness_precision_budget: int = _DEFAULT_WITNESS_PRECISION,
     ) -> None:
         if not identifier:
             raise ValueError("a checker needs an identifier")
@@ -270,17 +330,6 @@ class FactorizationChecker:
             raise ValueError(
                 "a factorization checker needs real values"
             )
-        if isinstance(irreducibility_pair_budget, bool) or not isinstance(
-            irreducibility_pair_budget, int
-        ):
-            raise TypeError(
-                "the irreducibility pair budget must be an int "
-                "(bool is not accepted)"
-            )
-        if irreducibility_pair_budget < 0:
-            raise ValueError(
-                "the irreducibility pair budget must be nonnegative"
-            )
         self.id = identifier
         self._ring = ring_q
         self._signature = signature
@@ -288,7 +337,15 @@ class FactorizationChecker:
         self._bridge = bridge
         self._frames = frames
         self._request = request
-        self._irreducibility_pair_budget = irreducibility_pair_budget
+        self._irreducibility_pair_budget = _nonnegative_budget(
+            irreducibility_pair_budget, "irreducibility pair budget"
+        )
+        self._irreducibility_subset_budget = _nonnegative_budget(
+            irreducibility_subset_budget, "irreducibility subset budget"
+        )
+        self._witness_precision_budget = _nonnegative_budget(
+            witness_precision_budget, "Hensel witness precision budget"
+        )
 
     def _view(
         self, term: T.Term, frame: FrameId
@@ -380,6 +437,12 @@ class FactorizationChecker:
         if not proven_prime:
             return InvalidEvidence(
                 "the Hensel witness prime is not a proven prime"
+            )
+        if witness.precision > self._witness_precision_budget:
+            return Unverified(
+                Reason.BUDGET,
+                "the Hensel witness precision exceeds the checker's budget",
+                missing=_HENSEL_PRECISION_MISSING,
             )
         modulus = prime**witness.precision
         bound = coefficient_bound(primitive)
@@ -544,12 +607,25 @@ class FactorizationChecker:
         )
         degree = ring_z.degree(primitive, 0)
         leading = ring_z.coefficient(primitive, (degree,))
-        divisors = integer_divisors(leading)
         degrees = tuple(
             ring_z.degree(value, 0) for value in context.lifted
         )
-        for size in range(len(degrees) + 1):
+        largest = min(
+            max_subset_size_within_degree(degrees, degree // 2),
+            len(degrees) - 1,
+        )
+        if largest == 0:
+            return None
+        divisors = integer_divisors(leading)
+        for size in range(1, largest + 1):
             for subset in combinations(range(len(degrees)), size):
+                if not counter.visit():
+                    return Unverified(
+                        Reason.BUDGET,
+                        "the irreducibility enumeration exhausted its "
+                        "subset budget",
+                        missing=_IRREDUCIBILITY_BUDGET_MISSING,
+                    )
                 if sum(degrees[index] for index in subset) > degree // 2:
                     continue
                 product = ring_z.one()
@@ -809,7 +885,8 @@ class FactorizationChecker:
         if isinstance(context, (InvalidEvidence, Unverified)):
             return context
         counter = _IrreducibilityCounter(
-            self._irreducibility_pair_budget
+            self._irreducibility_subset_budget,
+            self._irreducibility_pair_budget,
         )
         for factor_term, factor_value in nonlinear:
             outcome = self._check_irreducible(

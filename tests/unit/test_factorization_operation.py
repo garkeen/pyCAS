@@ -339,6 +339,7 @@ def test_zero_is_refused_by_the_proposal_without_a_partial_result(runtime):
     ("text", "budget"),
     [
         ("x^2 - 1", FactorizationBudget(max_prime_trials=0)),
+        ("x^2 - 1", FactorizationBudget(max_recombination_subsets=0)),
         (
             "x^2 - 3*x + 2",
             FactorizationBudget(max_recombination_tests=0),

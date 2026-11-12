@@ -91,7 +91,12 @@ from cas.operations.protocols import (
     blocked_problem,
 )
 from cas.semantics import elaborate
-from cas.semantics.frames import Declaration, Definition, Hypothesis
+from cas.semantics.frames import (
+    Declaration,
+    Definition,
+    FrameSorts,
+    Hypothesis,
+)
 from cas.semantics.regions import proved_subregion, region_from_proposition
 from cas.semantics.specialization import CoverageClaim, GenericResult
 from cas.syntax import binding as B
@@ -469,7 +474,17 @@ class Workspace:
                 task_id,
                 problem,
                 self.frame,
-                derive_task_state(problem, (), (), None, ()),
+                derive_task_state(
+                    problem,
+                    (),
+                    (),
+                    None,
+                    (),
+                    signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
+                ),
                 (),
                 label,
                 TaskOrigin.MANUAL,
@@ -568,6 +583,10 @@ class Workspace:
                     self._task_links(execution.candidates),
                     execution.blocker,
                     self._task_attempts(execution.attempts),
+                    signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
                 ),
                 parent=task.id,
             )
@@ -584,6 +603,10 @@ class Workspace:
                 self._task_links(candidates),
                 execution.blocker,
                 self._task_attempts(attempts),
+                signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
             )
             completed = manual_state in (
                 TaskState.COMPLETED,
@@ -656,6 +679,10 @@ class Workspace:
                     task.blocker,
                     self._task_attempts(task.attempts + (attempt.id,)),
                     cancelled=True,
+                    signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
                 ),
                 detail="cancelled by the user",
                 attempts=task.attempts + (attempt.id,),
@@ -726,6 +753,10 @@ class Workspace:
             self._task_links(task.candidates),
             blocker,
             self._task_attempts(attempts),
+            signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
         )
         completed = derived_state in (
             TaskState.COMPLETED,
@@ -853,6 +884,10 @@ class Workspace:
                     self._task_links(candidates, extra_candidates=(edited,)),
                     task.blocker,
                     self._task_attempts(task.attempts),
+                    signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
                 ),
                 candidates=candidates,
                 detail="candidate edited; certificate cleared",
@@ -1021,6 +1056,10 @@ class Workspace:
                 ),
                 blocker,
                 self._task_attempts(attempts),
+                signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
             )
             completed = derived_state in (
                 TaskState.COMPLETED,
@@ -2694,6 +2733,10 @@ class Workspace:
                 links,
                 commit_blocker,
                 (attempt,),
+                signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
             ),
             (candidate.id,),
             detail,
@@ -3973,7 +4016,17 @@ class Workspace:
             task_id,
             problem,
             self.frame,
-            derive_task_state(problem, (), (), blocker, ()),
+            derive_task_state(
+                problem,
+                (),
+                (),
+                blocker,
+                (),
+                signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
+            ),
             (),
             detail,
             TaskOrigin.MANUAL,
@@ -4058,7 +4111,17 @@ class Workspace:
             task_id,
             problem,
             self.frame,
-            derive_task_state(problem, (), (), blocker, (attempt,)),
+            derive_task_state(
+                problem,
+                (),
+                (),
+                blocker,
+                (attempt,),
+                signature=self._runtime.signature,
+                    environment=FrameSorts(
+                        self._runtime.frames, self.frame
+                    ),
+            ),
             (),
             detail,
             TaskOrigin.EXECUTION,

@@ -72,8 +72,11 @@ public low-level API with exact contracts and property tests; the
 `HasRationalLogAntiderivative` specification and independent checker, the
 `integrate_rational_logarithmic` operation, the elementary bootstrap,
 workspace helper and REPL `integrate_log` are now wired end to end for the
-fixed default `Q[x]` view.  `bootstrap` and the parameterized assemblies do not
-intern the predicate or register the operation.  The fragment is
-rational-residue-only, and full I0 (algebraic residues, RootSum
+fixed default `Q[x]` view.  The checker consumes the declared `log`
+`FunctionSymbol` domain and derivative law through `LogFunctionSemantics` and
+enforces a degree/log-term budget; the operation and checker reject a
+vocabulary without that declared semantics.  `bootstrap` and the parameterized
+assemblies do not intern the predicate or register the operation.  The
+fragment is rational-residue-only, and full I0 (algebraic residues, RootSum
 representations, real-log branches and the Risch tower) remains open.
 """

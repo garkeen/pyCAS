@@ -5,6 +5,33 @@ connectives. This module evaluates the ground fragment, normalizes conjunctions
 of one-atom comparisons into bounds, and decides a restricted implication
 relation by interval reasoning. All decisions are conservative: an unknown atom
 is never assumed true, and unrelated atoms never exchange information.
+
+The fragment also knows two exact facts about a term of the form
+``Power(base, 2)`` with a total base, and only for real order comparisons:
+
+* a square is nonnegative, so a comparison with a negative rational bound is
+  true for ``>`` and ``!=`` and false for ``<``, ``<=`` and ``=``;
+* a strictly positive lower bound ``base > L`` (or non-strict ``base >= L``
+  with ``L > 0``) gives a lower bound on the square, using exact rational
+  arithmetic.  This is the monotonicity of ``t -> t**2`` on the nonnegative
+  reals: ``base >= L >= 0`` implies ``base**2 >= L**2``.  A negative lower
+  bound gives no lower bound on the square and is never used to infer one.
+  Negative upper bounds are used symmetrically because ``base <= U <= 0``
+  implies ``base**2 >= U**2``.
+
+The square rule reads only the interval of the same base atom.  It does not
+combine different atoms and does not infer an upper bound on a square from a
+lower bound on its base.  Equality and disequality square facts require an
+ordered sort environment for the base; without one they are not inferred.  Order
+comparisons are already typed only over ordered sorts, so they may use the
+square rules without an environment.
+
+One structural order fact is independent of linear normalization: for the same
+two operands, the strict comparisons ``a < b`` and ``a > b`` imply ``a != b``
+(and the same with the operands exchanged).  Non-strict ``a <= b`` and
+``a >= b`` do not imply disequality, because equality is included.  The strict
+rule also covers compound atoms that the interval fragment keeps opaque.  It
+only produces the goal disequality, never another comparison.
 """
 
 from __future__ import annotations
@@ -12,12 +39,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from fractions import Fraction
 
+from cas.language import sorts as S
 from cas.language.numbers import exact_power
 from cas.language.signatures import (
     COMPARISON_HEADS,
     LanguageSignature,
     StructuralHead,
 )
+from cas.language.typing import SortEnvironment
 from cas.syntax import term as T
 
 _DUAL = {
@@ -78,16 +107,69 @@ def ground_value(
 def condition_truth(
     term: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
+    """Evaluate a condition exactly where the restricted fragment decides it.
+
+    Ground arithmetic and the square facts documented in the module docstring
+    are exact.  Boolean connectives are evaluated recursively so an exact
+    conjunct can be dropped from an otherwise undecided condition.  Equality
+    and disequality square facts need an ordered sort environment for the base;
+    order comparisons are typed only over ordered sorts.  Any other symbolic
+    comparison stays `None`; it is never assumed true or false.
+    """
     value = ground_value(term, signature)
-    return value if isinstance(value, bool) else None
+    if isinstance(value, bool):
+        return value
+    if _is_head(term, StructuralHead.AND, signature):
+        assert isinstance(term, T.Apply)
+        undecided = False
+        for argument in term.arguments:
+            argument_truth = condition_truth(
+                argument, signature, environment
+            )
+            if argument_truth is False:
+                return False
+            if argument_truth is None:
+                undecided = True
+        return None if undecided else True
+    if _is_head(term, StructuralHead.OR, signature):
+        assert isinstance(term, T.Apply)
+        undecided = False
+        for argument in term.arguments:
+            argument_truth = condition_truth(
+                argument, signature, environment
+            )
+            if argument_truth is True:
+                return True
+            if argument_truth is None:
+                undecided = True
+        return None if undecided else False
+    if _is_head(term, StructuralHead.NOT, signature):
+        assert isinstance(term, T.Apply)
+        operand = condition_truth(
+            term.arguments[0], signature, environment
+        )
+        return None if operand is None else not operand
+    if _is_head(term, StructuralHead.IMPLIES, signature):
+        assert isinstance(term, T.Apply)
+        return _implies_truth(
+            condition_truth(
+                term.arguments[0], signature, environment
+            ),
+            condition_truth(
+                term.arguments[1], signature, environment
+            ),
+        )
+    return _square_comparison_truth(term, signature, environment)
 
 
 def simplify(
     term: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> T.Term:
-    truth = condition_truth(term, signature)
+    truth = condition_truth(term, signature, environment)
     if truth is True:
         return T.TRUE
     if truth is False:
@@ -98,6 +180,7 @@ def simplify(
 def and_all(
     signature: LanguageSignature,
     *conditions: T.Term | None,
+    environment: SortEnvironment | None = None,
 ) -> T.Term:
     """A conjunction with exact folding, bound normalization and de-duplication."""
     flattened: list[T.Term] = []
@@ -118,7 +201,7 @@ def and_all(
     intervals: dict[T.Term, _Interval] = {}
     opaque: dict[T.Term, None] = {}
     for condition in flattened:
-        truth = condition_truth(condition, signature)
+        truth = condition_truth(condition, signature, environment)
         if truth is False:
             return T.FALSE
         if truth is True:
@@ -146,7 +229,13 @@ def and_all(
         terms = _interval_terms(value, intervals[value], signature)
         if terms is None:
             return T.FALSE
-        kept.extend(terms)
+        for term in terms:
+            truth = condition_truth(term, signature, environment)
+            if truth is False:
+                return T.FALSE
+            if truth is True:
+                continue
+            kept.append(term)
     if not kept:
         return T.TRUE
     if len(kept) == 1:
@@ -158,18 +247,25 @@ def implies(
     assumption: T.Term,
     goal: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
     """Whether `assumption` entails `goal` in the restricted condition logic."""
-    return _implies(_normalize_not(assumption, signature), _normalize_not(goal, signature), signature)
+    return _implies(
+        _normalize_not(assumption, signature),
+        _normalize_not(goal, signature),
+        signature,
+        environment,
+    )
 
 
 def equivalent(
     left: T.Term,
     right: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
-    forward = implies(left, right, signature)
-    backward = implies(right, left, signature)
+    forward = implies(left, right, signature, environment)
+    backward = implies(right, left, signature, environment)
     if forward is False or backward is False:
         return False
     if forward is True and backward is True:
@@ -181,6 +277,7 @@ def premises_proved(
     assumption: T.Term,
     premises: tuple[T.Term, ...],
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
     """Whether every premise follows from `assumption`.
 
@@ -192,7 +289,7 @@ def premises_proved(
     """
     undecided = False
     for premise in premises:
-        result = implies(assumption, premise, signature)
+        result = implies(assumption, premise, signature, environment)
         if result is False:
             return False
         if result is None:
@@ -203,6 +300,7 @@ def premises_proved(
 def condition_satisfiable(
     term: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
     """Whether the restricted condition logic proves the condition nonempty.
 
@@ -217,14 +315,16 @@ def condition_satisfiable(
     condition fragment.  It does not infer discreteness or a sort-dependent
     domain, so a caller that needs such reasoning must extend the fragment.
     """
-    truth = condition_truth(term, signature)
+    truth = condition_truth(term, signature, environment)
     if truth is not None:
         return truth
     normalized = _normalize_not(term, signature)
     intervals: dict[T.Term, _Interval] = {}
     undecided = False
     for conjunct in _conjuncts(normalized, signature):
-        conjunct_truth = condition_truth(conjunct, signature)
+        conjunct_truth = condition_truth(
+            conjunct, signature, environment
+        )
         if conjunct_truth is False:
             return False
         if conjunct_truth is True:
@@ -250,19 +350,28 @@ def condition_satisfiable(
 def is_empty_condition(
     term: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool:
     """Whether the restricted condition logic proves the region empty.
 
     Normalisation catches literal contradictions and one-atom linear
     contradictions (`x > 0 and x < 0`).  Unknown conditions are not empty.
     """
-    return condition_truth(and_all(signature, term), signature) is False
+    return (
+        condition_truth(
+            and_all(signature, term, environment=environment),
+            signature,
+            environment,
+        )
+        is False
+    )
 
 
 def is_subregion(
     subregion: T.Term,
     region: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None = None,
 ) -> bool | None:
     """Whether `subregion` is contained in `region`.
 
@@ -270,9 +379,9 @@ def is_subregion(
     a claim on the empty region is not an admitted mathematical claim.  `None`
     means the restricted logic cannot decide the inclusion.
     """
-    if is_empty_condition(subregion, signature):
+    if is_empty_condition(subregion, signature, environment):
         return False
-    return implies(subregion, region, signature)
+    return implies(subregion, region, signature, environment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,26 +744,79 @@ def _comparison_term(
     )
 
 
+def _ordering_excludes_equality(
+    assumption: T.Term,
+    goal: T.Term,
+    signature: LanguageSignature,
+    environment: SortEnvironment | None,
+) -> bool:
+    """Whether one strict order comparison proves the goal disequality.
+
+    In a linear order ``a < b`` and ``a > b`` imply ``a != b``; the same holds
+    with the operands exchanged.  Non-strict ``a <= b`` and ``a >= b`` include
+    equality and are deliberately not used.  The rule is structural and does
+    not require the two sides to normalize to a linear interval, so it also
+    covers total compound atoms that remain opaque to the interval fragment.
+    This structural rule requires total operands, and when a sort environment
+    is supplied it also requires their free symbols to be ordered.  It is not
+    used to derive any other comparison.
+    """
+    if not _is_head(goal, StructuralHead.NE, signature):
+        return False
+    if not isinstance(goal, T.Apply) or len(goal.arguments) != 2:
+        return False
+    if not isinstance(assumption, T.Apply) or not isinstance(
+        assumption.operator, T.SymbolRef
+    ):
+        return False
+    relation = signature.head_of(assumption.operator.symbol_id)
+    if relation not in (
+        StructuralHead.GT,
+        StructuralHead.LT,
+    ):
+        return False
+    if len(assumption.arguments) != 2:
+        return False
+    left, right = assumption.arguments
+    goal_left, goal_right = goal.arguments
+    if not all(
+        _is_total(argument, signature)
+        for argument in (left, right, goal_left, goal_right)
+    ):
+        return False
+    if environment is not None and not (
+        _ordered_square_base(left, environment)
+        and _ordered_square_base(right, environment)
+    ):
+        return False
+    return (left == goal_left and right == goal_right) or (
+        left == goal_right and right == goal_left
+    )
+
+
 def _implies(
     assumption: T.Term,
     goal: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None,
 ) -> bool | None:
     if assumption == goal:
         return True
-    assumption_truth = condition_truth(assumption, signature)
+    assumption_truth = condition_truth(
+        assumption, signature, environment
+    )
     if assumption_truth is False:
         return True
     if assumption_truth is True:
-        return _goal_only(goal, signature)
-    goal_truth = condition_truth(goal, signature)
+        return _goal_only(goal, signature, environment)
+    goal_truth = condition_truth(goal, signature, environment)
     if goal_truth is True:
         return True
 
     if _is_head(goal, StructuralHead.OR, signature):
         assert isinstance(goal, T.Apply)
         results = [
-            _implies(assumption, argument, signature)
+            _implies(assumption, argument, signature, environment)
             for argument in goal.arguments
         ]
         if any(result is True for result in results):
@@ -666,7 +828,7 @@ def _implies(
     if _is_head(goal, StructuralHead.AND, signature):
         assert isinstance(goal, T.Apply)
         results = [
-            _implies(assumption, argument, signature)
+            _implies(assumption, argument, signature, environment)
             for argument in goal.arguments
         ]
         if any(result is False for result in results):
@@ -678,7 +840,7 @@ def _implies(
     if _is_head(assumption, StructuralHead.OR, signature):
         assert isinstance(assumption, T.Apply)
         results = [
-            _implies(argument, goal, signature)
+            _implies(argument, goal, signature, environment)
             for argument in assumption.arguments
         ]
         if any(result is False for result in results):
@@ -688,6 +850,15 @@ def _implies(
         return None
 
     conjuncts = _conjuncts(assumption, signature)
+    if goal in conjuncts:
+        return True
+    if any(
+        _ordering_excludes_equality(
+            conjunct, goal, signature, environment
+        )
+        for conjunct in conjuncts
+    ):
+        return True
     intervals: dict[T.Term, _Interval] = {}
     opaque: set[T.Term] = set()
     for conjunct in conjuncts:
@@ -705,20 +876,41 @@ def _implies(
     target = _normalize_comparison(goal, signature)
     if target is None:
         return True if goal in opaque else None
+    direct = None
     interval = intervals.get(target.atom)
-    if interval is None:
-        return None
-    return _interval_implies(interval, target)
+    if interval is not None:
+        direct = _interval_implies(interval, target)
+        if direct is True:
+            return True
+    squared = _square_implies(
+        intervals, target, signature, environment
+    )
+    if squared is True:
+        return True
+    if direct is not None:
+        return direct
+    return squared
 
 
 def _goal_only(
     goal: T.Term,
     signature: LanguageSignature,
+    environment: SortEnvironment | None,
 ) -> bool | None:
-    truth = condition_truth(goal, signature)
-    if truth is True:
+    """Whether the fragment proves `goal` without assumptions.
+
+    The direct truth reading handles ground conditions and exact square facts.
+    A condition whose normalized conjunction is `TRUE` (for example
+    ``Ne(x^2 + 1, 0)``, whose interval bound is negative) is also proved
+    everywhere; an undecided or non-normalized condition stays `None`.
+    """
+    truth = condition_truth(goal, signature, environment)
+    if truth is not None:
+        return truth
+    normalized = and_all(signature, goal, environment=environment)
+    if normalized == T.TRUE:
         return True
-    if truth is False:
+    if normalized == T.FALSE:
         return False
     return None
 
@@ -737,6 +929,292 @@ def _conjuncts(
     return (term,)
 
 
+def _square_base(
+    term: T.Term,
+    signature: LanguageSignature,
+) -> T.Term | None:
+    """The total base of an exact ``Power(base, 2)`` term, or `None`.
+
+    Only the exact integer exponent 2 is recognised.  A partial base has no
+    global square fact because the power is undefined where the base is; the
+    fragment therefore leaves such a term opaque.
+    """
+    if not isinstance(term, T.Apply) or not isinstance(
+        term.operator, T.SymbolRef
+    ):
+        return None
+    if signature.head_of(term.operator.symbol_id) is not StructuralHead.POWER:
+        return None
+    if len(term.arguments) != 2:
+        return None
+    exponent = term.arguments[1]
+    if not isinstance(exponent, T.IntLit) or exponent.value != 2:
+        return None
+    base = term.arguments[0]
+    if not _is_total(base, signature):
+        return None
+    return base
+
+
+def _free_symbols(term: T.Term) -> tuple[T.SymbolRef, ...]:
+    """Every symbol occurrence in a term, without pretending it is bound."""
+    if isinstance(term, T.SymbolRef):
+        return (term,)
+    if isinstance(term, T.Apply):
+        return tuple(
+            symbol
+            for argument in term.arguments
+            for symbol in _free_symbols(argument)
+        )
+    return ()
+
+
+def _ordered_square_base(
+    base: T.Term,
+    environment: SortEnvironment | None,
+) -> bool:
+    """Whether equality/disequality square facts are valid for this base.
+
+    Equality and disequality are meaningful over unordered sorts (for example
+    the complex numbers), where a square need not be nonnegative.  The rule is
+    therefore enabled only when an explicit sort environment proves every free
+    symbol of the base ordered.  Order comparisons do not need this guard
+    because the typed language admits them only over ordered sorts.
+    """
+    if environment is None:
+        return False
+    symbols = _free_symbols(base)
+    if not symbols:
+        return True
+    for symbol in symbols:
+        sort = environment.sort_of(symbol.symbol_id)
+        if sort is None or not S.is_ordered(sort):
+            return False
+    return True
+
+
+def _square_comparison_truth(
+    term: T.Term,
+    signature: LanguageSignature,
+    environment: SortEnvironment | None,
+) -> bool | None:
+    """Exact square facts for one comparison without a base interval."""
+    if not isinstance(term, T.Apply) or not isinstance(
+        term.operator, T.SymbolRef
+    ):
+        return None
+    head = signature.head_of(term.operator.symbol_id)
+    if head not in COMPARISON_HEADS or len(term.arguments) != 2:
+        return None
+    left, right = term.arguments
+    left_base = _square_base(left, signature)
+    right_base = _square_base(right, signature)
+    if left_base is not None and right_base is None:
+        if environment is not None and not _ordered_square_base(
+            left_base, environment
+        ):
+            return None
+        if head in (StructuralHead.EQ, StructuralHead.NE) and not (
+            _ordered_square_base(left_base, environment)
+        ):
+            return None
+        bound = ground_value(right, signature)
+        if isinstance(bound, Fraction):
+            return _square_nonnegative_truth(head, bound)
+        return None
+    if right_base is not None and left_base is None:
+        relation = _FLIP[head]
+        if environment is not None and not _ordered_square_base(
+            right_base, environment
+        ):
+            return None
+        if relation in (StructuralHead.EQ, StructuralHead.NE) and not (
+            _ordered_square_base(right_base, environment)
+        ):
+            return None
+        bound = ground_value(left, signature)
+        if isinstance(bound, Fraction):
+            return _square_nonnegative_truth(relation, bound)
+        return None
+    return None
+
+
+def _square_nonnegative_truth(
+    relation: StructuralHead,
+    bound: Fraction,
+) -> bool | None:
+    """What a nonnegative square proves about a rational bound.
+
+    A square can equal zero and can be arbitrarily large, so only a negative
+    bound gives a strict conclusion.  `GT`/`GE` at zero stay unknown because the
+    base may be zero; `LT`/`LE` at zero stay unknown for the same reason.
+    """
+    if relation is StructuralHead.EQ:
+        return False if bound < 0 else None
+    if relation is StructuralHead.NE:
+        return True if bound < 0 else None
+    if relation is StructuralHead.LT:
+        return False if bound <= 0 else None
+    if relation is StructuralHead.LE:
+        return False if bound < 0 else None
+    if relation is StructuralHead.GT:
+        return True if bound < 0 else None
+    return True if bound <= 0 else None
+
+
+def _square_implies(
+    intervals: dict[T.Term, _Interval],
+    target: _Comparison,
+    signature: LanguageSignature,
+    environment: SortEnvironment | None,
+) -> bool | None:
+    """Prove a square-atom goal from the interval of the same base atom.
+
+    The target atom must be the exact square of a total base and the rule reads
+    only that base's own interval.  Equality and disequality square targets
+    require an ordered base environment; order targets are typed accordingly.
+    Exact rational arithmetic decides the square bounds; no other atom is
+    consulted.
+    """
+    base = _square_base(target.atom, signature)
+    if base is None:
+        return None
+    if environment is not None and not _ordered_square_base(
+        base, environment
+    ):
+        return None
+    if target.relation in (StructuralHead.EQ, StructuralHead.NE) and not (
+        _ordered_square_base(base, environment)
+    ):
+        return None
+    return _square_interval_implies(
+        intervals.get(base), target.relation, target.bound
+    )
+
+
+def _square_interval_implies(
+    interval: _Interval | None,
+    relation: StructuralHead,
+    bound: Fraction,
+) -> bool | None:
+    if interval is not None and interval.is_contradictory():
+        return True
+    if interval is not None:
+        if interval.equality is not None:
+            value = interval.equality
+            return _holds(value * value, relation, bound)
+        if (
+            interval.lower is not None
+            and interval.upper is not None
+            and interval.lower[0] == interval.upper[0]
+            and not interval.lower[1]
+            and not interval.upper[1]
+        ):
+            value = interval.lower[0]
+            return _holds(value * value, relation, bound)
+    fact = _square_nonnegative_truth(relation, bound)
+    if fact is not None:
+        return fact
+    if interval is None:
+        return None
+    lower = interval.lower
+    upper = interval.upper
+    if relation is StructuralHead.EQ:
+        if bound == 0 and _interval_excludes(interval, Fraction(0)):
+            return False
+        if lower is not None and _square_strictly_above(
+            lower[0], lower[1], bound
+        ):
+            return False
+        if upper is not None and upper[0] <= 0 and _square_upper_strictly_above(
+            upper[0], upper[1], bound
+        ):
+            return False
+        return None
+    if relation is StructuralHead.NE:
+        if bound == 0 and _interval_excludes(interval, Fraction(0)):
+            return True
+        if lower is not None and _square_strictly_above(
+            lower[0], lower[1], bound
+        ):
+            return True
+        if upper is not None and upper[0] <= 0 and _square_upper_strictly_above(
+            upper[0], upper[1], bound
+        ):
+            return True
+        return None
+    if relation is StructuralHead.GT:
+        if lower is not None and _square_strictly_above(
+            lower[0], lower[1], bound
+        ):
+            return True
+        if upper is not None and upper[0] <= 0 and _square_upper_strictly_above(
+            upper[0], upper[1], bound
+        ):
+            return True
+        return None
+    if relation is StructuralHead.GE:
+        if lower is not None and lower[0] > 0 and (
+            lower[0] * lower[0] >= bound
+        ):
+            return True
+        if upper is not None and upper[0] <= 0 and (
+            upper[0] * upper[0] >= bound
+        ):
+            return True
+        return None
+    if relation is StructuralHead.LT:
+        if lower is not None and lower[0] >= 0 and (
+            lower[0] * lower[0] >= bound
+        ) and (lower[1] or lower[0] * lower[0] > bound):
+            return False
+        if upper is not None and upper[0] <= 0 and (
+            upper[0] * upper[0] >= bound
+        ):
+            return False
+        return None
+    # LE
+    if lower is not None and _square_strictly_above(
+        lower[0], lower[1], bound
+    ):
+        return False
+    if upper is not None and upper[0] <= 0 and (
+        upper[0] * upper[0] > bound
+        or (upper[0] * upper[0] == bound and upper[1])
+    ):
+        return False
+    return None
+
+
+def _square_strictly_above(
+    value: Fraction,
+    strict: bool,
+    bound: Fraction,
+) -> bool:
+    """Whether ``base >= value`` (or ``> value``) forces ``base**2 > bound``."""
+    if value < 0:
+        return False
+    square = value * value
+    return square > bound or (square == bound and strict)
+
+
+def _square_upper_strictly_above(
+    value: Fraction,
+    strict: bool,
+    bound: Fraction,
+) -> bool:
+    """Whether ``base <= value <= 0`` (or ``< value``) forces ``base**2 > bound``.
+
+    The upper endpoint is nonpositive, so the order reverses under ``t -> t**2``:
+    ``base <= value`` means ``|base| >= |value|``.  A strict upper endpoint
+    makes the square inequality strict as well.
+    """
+    if value > 0:
+        return False
+    square = value * value
+    return square > bound or (square == bound and strict)
+
+
 def _interval_implies(
     interval: _Interval,
     goal: _Comparison,
@@ -749,12 +1227,16 @@ def _interval_implies(
         value = interval.equality
         return _holds(value, relation, bound)
     if relation is StructuralHead.EQ:
+        if bound in interval.disequalities:
+            return False
         if _interval_is_point(interval, bound):
             return True
         if _interval_excludes(interval, bound):
             return False
         return None
     if relation is StructuralHead.NE:
+        if bound in interval.disequalities:
+            return True
         if _interval_excludes(interval, bound):
             return True
         if _interval_is_point(interval, bound):

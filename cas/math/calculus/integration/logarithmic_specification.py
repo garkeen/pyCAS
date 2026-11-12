@@ -5,11 +5,14 @@ The predicate states that on region `U`, for the variable `x`,
     source = D(polynomial_part) + sum(coef_i * D(arg_i)/arg_i)
 
 and that `result` is the visible antiderivative expression assembled from the
-same polynomial part and logarithm terms.  The mathematical identity, the
-squarefree/coprime conditions on the arguments and the domain of the logarithm
-branches are re-proved by the independent checker in the next slice; this
-module only publishes the language-level claim shape, the certificate shape and
-the canonical encoding of the finite logarithm-term set.
+same polynomial part and logarithm terms.  `polynomial_part` is the
+non-logarithmic rational part (the Hermite `v` plus any polynomial
+antiderivative); despite the historical name it need not itself be a
+polynomial.  The mathematical identity, the squarefree/coprime conditions on
+the arguments and the domain of the logarithm branches are re-proved by the
+independent checker in the next slice; this module only publishes the
+language-level claim shape, the certificate shape and the canonical encoding of
+the finite logarithm-term set.
 
 Canonical encoding
 ------------------
@@ -33,8 +36,11 @@ polynomial part, appends the canonical log members in their set order and never
 performs a second algebraic normalization.
 
 The predicate symbol and the logarithm function symbol are supplied data, not
-hardcoded names.  This slice publishes no checker, operation, bootstrap,
-workflow or REPL entry and does not claim that I0 is complete.
+hardcoded names.  `LogFunctionSemantics` ties the checker and operation to the
+declared real-logarithm law: its domain and derivative factor are instantiated
+from the admitted `FunctionSymbol` of an `ElementaryLibrary`, never rebuilt by
+hand.  The completion slice of I0 (algebraic residues, RootSum, real branches
+and the Risch tower) remains open.
 """
 
 from __future__ import annotations
@@ -43,26 +49,190 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from cas.foundation.ids import SymbolId
+from cas.kernel.trust import BasisRef
 from cas.language import sorts as S
+from cas.language.declarations import (
+    DOMAIN_ARGUMENT,
+    Compare,
+    LawExpr,
+    Name,
+    Num,
+    Power,
+    numeric_value,
+)
 from cas.language.sets import set_members, set_term
 from cas.language.signatures import (
     LanguageSignature,
     OperatorSignature,
     StructuralHead,
 )
+from cas.math.elementary.declarations import (
+    ElementaryLibrary,
+    FunctionSymbol,
+)
 from cas.syntax import term as T
 
 LogTermEntry = tuple[Fraction, T.Term]
 
 
+def _is_positive_argument_condition(expression: LawExpr | None) -> bool:
+    """Whether the declaration is exactly ``u > 0``."""
+    return (
+        isinstance(expression, Compare)
+        and expression.operator == ">"
+        and isinstance(expression.left, Name)
+        and expression.left.name == DOMAIN_ARGUMENT
+        and isinstance(expression.right, Num)
+        and expression.right.value == 0
+    )
+
+
+def _is_inverse_argument_body(expression: LawExpr) -> bool:
+    """Whether the derivative body is exactly ``u^(-1)``.
+
+    The declaration parser represents the exponent as ``Negate(Num(1))``; the
+    exact numeric value is the authority, so both that canonical form and a
+    direct ``Num(-1)`` are accepted.
+    """
+    return (
+        isinstance(expression, Power)
+        and isinstance(expression.base, Name)
+        and expression.base.name == DOMAIN_ARGUMENT
+        and numeric_value(expression.exponent) == -1
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LogFunctionSemantics:
+    """The declared real-logarithm law consumed by the rational-integration slice.
+
+    The record is a structural view of one admitted `FunctionSymbol`, not a
+    second declaration source.  It accepts exactly the declaration fragment
+
+        log : Real -> Real on u > 0
+        derivative log(u) = u^(-1) on u > 0
+
+    so the rational-logarithmic fragment cannot attach itself to a different
+    ``log`` symbol or a different derivative law.  `domain` and
+    `derivative_factor` instantiate the declaration through
+    `ElementaryLibrary.instantiate`; the trusted basis, when present, is the
+    library's `BasisRef`.
+    """
+
+    library: ElementaryLibrary
+    function: FunctionSymbol
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.library, ElementaryLibrary):
+            raise TypeError(
+                "logarithm semantics need an elementary library"
+            )
+        if not isinstance(self.function, FunctionSymbol):
+            raise TypeError(
+                "logarithm semantics need the declared function symbol"
+            )
+        if self.library.function_for(self.function.symbol) != self.function:
+            raise ValueError(
+                "the logarithm function is not the library's admitted function"
+            )
+        if self.function.arguments != (S.REAL,):
+            raise ValueError(
+                "the logarithm declaration must take exactly one Real argument"
+            )
+        if self.function.result is not S.REAL:
+            raise ValueError(
+                "the logarithm declaration must return Real"
+            )
+        if not _is_positive_argument_condition(self.function.domain):
+            raise ValueError(
+                "the logarithm domain must be exactly `u > 0`"
+            )
+        law = self.function.law
+        if law is None:
+            raise ValueError(
+                "the logarithm declaration needs a derivative law"
+            )
+        if law.argument != DOMAIN_ARGUMENT:
+            raise ValueError(
+                "the logarithm derivative law must use the domain argument "
+                f"{DOMAIN_ARGUMENT!r}"
+            )
+        if not _is_positive_argument_condition(law.condition):
+            raise ValueError(
+                "the logarithm derivative law condition must be exactly "
+                "`u > 0`"
+            )
+        if not _is_inverse_argument_body(law.body):
+            raise ValueError(
+                "the logarithm derivative law body must be exactly `u^(-1)`"
+            )
+
+    @property
+    def symbol(self) -> SymbolId:
+        """The declared logarithm symbol."""
+        return self.function.symbol
+
+    @property
+    def name(self) -> str:
+        """The declared logarithm name."""
+        return self.function.name
+
+    @property
+    def basis(self) -> BasisRef | None:
+        """The library's trusted basis, or None when the library has none."""
+        return self.library.basis
+
+    def domain(
+        self, argument: T.Term, signature: LanguageSignature
+    ) -> T.Term:
+        """Instantiate the declared ``u > 0`` domain at `argument`."""
+        if not isinstance(argument, T.Term):
+            raise TypeError("a logarithm domain needs an argument term")
+        if not isinstance(signature, LanguageSignature):
+            raise TypeError("a logarithm domain needs a language signature")
+        assert self.function.domain is not None
+        return self.library.instantiate(
+            self.function.domain,
+            DOMAIN_ARGUMENT,
+            argument,
+            signature,
+        )
+
+    def derivative_factor(
+        self, argument: T.Term, signature: LanguageSignature
+    ) -> T.Term:
+        """Instantiate the declared derivative body ``u^(-1)`` at `argument`."""
+        if not isinstance(argument, T.Term):
+            raise TypeError(
+                "a logarithm derivative factor needs an argument term"
+            )
+        if not isinstance(signature, LanguageSignature):
+            raise TypeError(
+                "a logarithm derivative factor needs a language signature"
+            )
+        assert self.function.law is not None
+        return self.library.instantiate(
+            self.function.law.body,
+            DOMAIN_ARGUMENT,
+            argument,
+            signature,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RationalLogVocabulary:
-    """The predicate and logarithm symbols one world uses for this claim."""
+    """The predicate and logarithm symbols one world uses for this claim.
+
+    `semantics` is optional only because `_start` creates the vocabulary before
+    the elementary declaration library is built.  Checker and operation
+    construction require it; it must name the same function as `log_symbol`.
+    """
 
     symbol: SymbolId
     name: str
     log_symbol: SymbolId
     log_name: str
+    semantics: LogFunctionSemantics | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.symbol, bool) or not isinstance(self.symbol, int):
@@ -81,6 +251,21 @@ class RationalLogVocabulary:
             raise ValueError(
                 "the predicate and logarithm symbols must be distinct"
             )
+        if self.semantics is not None:
+            if not isinstance(self.semantics, LogFunctionSemantics):
+                raise TypeError(
+                    "a rational-log vocabulary needs log-function semantics"
+                )
+            if self.semantics.function.symbol != self.log_symbol:
+                raise ValueError(
+                    "the logarithm semantics does not name the vocabulary's "
+                    "log symbol"
+                )
+            if self.semantics.function.name != self.log_name:
+                raise ValueError(
+                    "the logarithm semantics does not name the vocabulary's "
+                    "log name"
+                )
 
     @property
     def signature(self) -> OperatorSignature:
@@ -101,6 +286,36 @@ class RationalLogVocabulary:
     def log_function(self) -> T.SymbolRef:
         """The term-level symbol of the declared logarithm function."""
         return T.symbol(self.log_symbol, self.log_name)
+
+
+def require_log_semantics(
+    vocabulary: RationalLogVocabulary,
+) -> LogFunctionSemantics:
+    """The vocabulary's declared logarithm semantics, or a precise refusal.
+
+    Checker and operation construction require the data-backed declaration; a
+    bare symbol pair is not enough to claim the real-logarithmic fragment.
+    """
+    if not isinstance(vocabulary, RationalLogVocabulary):
+        raise TypeError(
+            "a rational-log vocabulary is required for logarithm semantics"
+        )
+    semantics = vocabulary.semantics
+    if semantics is None:
+        raise ValueError(
+            "the rational-log vocabulary has no declared logarithm semantics"
+        )
+    if semantics.function.symbol != vocabulary.log_symbol:
+        raise ValueError(
+            "the declared logarithm semantics does not name the vocabulary's "
+            "log symbol"
+        )
+    if semantics.function.name != vocabulary.log_name:
+        raise ValueError(
+            "the declared logarithm semantics does not name the vocabulary's "
+            "log name"
+        )
+    return semantics
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +690,7 @@ def rational_log_antiderivative_term(
 
 
 __all__ = [
+    "LogFunctionSemantics",
     "LogTermEntry",
     "RationalLogAntiderivativeCertificate",
     "RationalLogAntiderivativeClaim",
@@ -486,4 +702,5 @@ __all__ = [
     "rational_log_antiderivative_term",
     "rational_log_term",
     "rational_log_term_set",
+    "require_log_semantics",
 ]

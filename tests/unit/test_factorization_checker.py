@@ -24,7 +24,10 @@ from support import (
     verification_context,
 )
 
-from cas.algebra.factorization import hensel_witness_for_radical
+from cas.algebra.factorization import (
+    FactorizationBudget,
+    hensel_witness_for_radical,
+)
 from cas.algebra.integer_polynomial import rational_polynomial_form
 from cas.algebra.polynomial import Polynomial, UnivariatePolynomialRing
 from cas.algebra.rationals import RationalField
@@ -35,6 +38,7 @@ from cas.kernel.evidence import (
     Unverified,
     Verified,
 )
+from cas.kernel.trust import CertificateSchema
 from cas.language import sorts as S
 from cas.language.decisions import Reason
 from cas.language.problems import (
@@ -874,6 +878,146 @@ def test_irreducibility_budget_exhaustion_is_unverified(runtime):
     )
 
 
+def test_a_witness_precision_above_the_checker_budget_is_unverified(runtime):
+    setup = factorization_setup(runtime)
+    bundle = valid_bundle(setup, x_fourth_plus_one(setup))
+    witness = bundle.certificate.irreducibility
+    assert witness is not None
+    # A structural witness only requires precision >= 1.  The checker must
+    # reject this before it evaluates prime**precision (1 << 40 bits would be
+    # far beyond any allocatable integer here).
+    claimed = make_bundle(
+        setup,
+        source=bundle.source,
+        unit=bundle.unit,
+        entries=bundle.entries,
+        witness=replace(witness, precision=1 << 40),
+    )
+    outcome = check_bundle(setup, claimed)
+    assert isinstance(outcome, Unverified), outcome
+    assert outcome.reason is Reason.BUDGET
+    assert outcome.missing == frozenset({"hensel_precision"})
+
+
+def test_the_default_witness_precision_budget_matches_the_search_budget(
+    runtime,
+):
+    setup = factorization_setup(runtime)
+    bundle = valid_bundle(setup, x_fourth_plus_one(setup))
+    witness = bundle.certificate.irreducibility
+    assert witness is not None
+    operation_precision = FactorizationBudget().max_hensel_precision
+    claimed = make_bundle(
+        setup,
+        source=bundle.source,
+        unit=bundle.unit,
+        entries=bundle.entries,
+        witness=replace(witness, precision=operation_precision + 1),
+    )
+    outcome = check_bundle(setup, claimed)
+    assert isinstance(outcome, Unverified), outcome
+    assert outcome.reason is Reason.BUDGET
+    assert outcome.missing == frozenset({"hensel_precision"})
+
+
+def test_a_witness_at_the_checker_precision_budget_still_verifies(runtime):
+    setup = factorization_setup(runtime)
+    bundle = valid_bundle(setup, x_fourth_plus_one(setup))
+    witness = bundle.certificate.irreducibility
+    assert witness is not None
+    at_limit = check_bundle(
+        setup,
+        bundle,
+        checker=make_checker(
+            setup, precision_budget=witness.precision
+        ),
+    )
+    assert isinstance(at_limit, Verified), at_limit
+    below = check_bundle(
+        setup,
+        bundle,
+        checker=make_checker(
+            setup, precision_budget=witness.precision - 1
+        ),
+    )
+    assert isinstance(below, Unverified), below
+    assert below.reason is Reason.BUDGET
+    assert below.missing == frozenset({"hensel_precision"})
+
+
+def test_a_quadratic_factor_with_many_lifted_factors_uses_the_degree_bound(
+    runtime,
+):
+    setup = factorization_setup(runtime)
+    actual_ring = ring(setup)
+    quadratic = actual_ring.add(
+        actual_ring.pow(generator(setup), 2), actual_ring.one()
+    )
+    linear_factors = tuple(
+        actual_ring.sub(
+            generator(setup), actual_ring.constant(Fraction(value))
+        )
+        for value in range(1, 17)
+    )
+    radical = quadratic
+    for factor in linear_factors:
+        radical = actual_ring.mul(radical, factor)
+    _lift, _values, _terms, witness = witness_for(setup, radical)
+    assert len(witness.lifted) == 17
+    bundle = make_bundle(
+        setup,
+        source=render(setup, radical),
+        unit=T.number(1),
+        entries=entries_of(
+            setup,
+            ((quadratic, 1),)
+            + tuple((factor, 1) for factor in linear_factors),
+        ),
+        witness=witness,
+    )
+    # deg(x^2 + 1) // 2 == 1, so only the 17 singleton subsets can fit.  The
+    # old all-subsets loop generated 2**17 - 1 additional supersets; charging
+    # them would exhaust a budget of exactly 17 before the proof completed.
+    verified = check_bundle(
+        setup,
+        bundle,
+        checker=make_checker(
+            setup, subset_budget=len(witness.lifted)
+        ),
+    )
+    assert isinstance(verified, Verified), verified
+    exhausted = check_bundle(
+        setup,
+        bundle,
+        checker=make_checker(
+            setup, subset_budget=len(witness.lifted) - 1
+        ),
+    )
+    assert isinstance(exhausted, Unverified), exhausted
+    assert exhausted.reason is Reason.BUDGET
+    assert exhausted.missing == frozenset(
+        {"factorization_irreducibility_budget"}
+    )
+
+
+def test_the_kernel_certificate_schema_bounds_the_witness(runtime):
+    setup = factorization_setup(runtime)
+    bundle = valid_bundle(setup, x_fourth_plus_one(setup))
+    witness = bundle.certificate.irreducibility
+    assert witness is not None
+    schema = CertificateSchema(
+        "factorization", "1", FactorizationCertificate
+    )
+    assert schema.within_budget(bundle.certificate)
+    inflated = replace(
+        bundle.certificate,
+        irreducibility=replace(
+            witness, lifted=witness.lifted * 4096
+        ),
+    )
+    assert not schema.within_budget(inflated)
+
+
 def test_a_wrong_problem_operation_is_invalid(runtime):
     setup = factorization_setup(runtime)
     bundle = valid_bundle(setup, x_squared_minus_one(setup))
@@ -1104,6 +1248,14 @@ def test_the_checker_validates_its_ring_request_and_budget(runtime):
         make_checker(setup, pair_budget=-1)
     with pytest.raises(TypeError):
         make_checker(setup, pair_budget=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        make_checker(setup, subset_budget=-1)
+    with pytest.raises(TypeError):
+        make_checker(setup, subset_budget=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        make_checker(setup, precision_budget=-1)
+    with pytest.raises(TypeError):
+        make_checker(setup, precision_budget=True)  # type: ignore[arg-type]
     heads = {
         symbol: head
         for symbol, head in setup.signature.heads.items()

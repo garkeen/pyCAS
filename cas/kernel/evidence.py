@@ -36,9 +36,9 @@ from cas.language.problems import (
 from cas.language.propositions import Proposition
 from cas.language.roles import CandidateRole
 from cas.language.signatures import LanguageSignature
-from cas.language.typing import TypedExpr
+from cas.language.typing import SortEnvironment, TypedExpr
 from cas.semantics import conditions
-from cas.semantics.frames import FrameStore
+from cas.semantics.frames import FrameSorts, FrameStore
 from cas.semantics.request import AlgebraRequest
 from cas.syntax import term as T
 
@@ -48,12 +48,15 @@ class DecisionService:
     """The context's decision interface for the current condition fragment.
 
     Every method delegates exactly to `cas.semantics.conditions` with this
-    service's language signature.  It proves only the restricted linear
-    condition logic; an undecidable implication stays `None` and is never
-    treated as true.
+    service's language signature and optional sort environment.  It proves only
+    the restricted condition logic (linear intervals plus exact square
+    nonnegativity and monotonicity); an undecidable implication stays `None`
+    and is never treated as true.  Equality/disequality square facts require
+    the environment to prove the base's free symbols ordered.
     """
 
     signature: LanguageSignature
+    environment: SortEnvironment | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.signature, LanguageSignature):
@@ -61,21 +64,29 @@ class DecisionService:
 
     def implies(self, assumption: T.Term, goal: T.Term) -> bool | None:
         """Whether the assumption entails the goal in the condition fragment."""
-        return conditions.implies(assumption, goal, self.signature)
+        return conditions.implies(
+            assumption, goal, self.signature, self.environment
+        )
 
     def equivalent(self, left: T.Term, right: T.Term) -> bool | None:
         """Whether two conditions are equivalent in the condition fragment."""
-        return conditions.equivalent(left, right, self.signature)
+        return conditions.equivalent(
+            left, right, self.signature, self.environment
+        )
 
     def is_subregion(
         self, subregion: T.Term, region: T.Term
     ) -> bool | None:
         """Whether the subregion is provably contained in the region."""
-        return conditions.is_subregion(subregion, region, self.signature)
+        return conditions.is_subregion(
+            subregion, region, self.signature, self.environment
+        )
 
     def is_empty(self, term: T.Term) -> bool:
         """Whether the condition fragment proves the region empty."""
-        return conditions.is_empty_condition(term, self.signature)
+        return conditions.is_empty_condition(
+            term, self.signature, self.environment
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,10 +246,12 @@ class DefinednessService:
             domain, frame
         ):
             return False
+        environment = FrameSorts(self.frames, frame)
         own = conditions.premises_proved(
             region.term,
             tuple(premise.term for premise in region.definedness),
             self.decision.signature,
+            environment,
         )
         if own is not True:
             return own
@@ -246,6 +259,7 @@ class DefinednessService:
             region.term,
             tuple(premise.term for premise in domain.definedness),
             self.decision.signature,
+            environment,
         )
         if goal is not True:
             return goal
@@ -573,6 +587,7 @@ def problem_mismatch(
                 problem_region,
                 region,
                 context.frames.world.language,
+                FrameSorts(context.frames, context.frame),
             )
         if covered is not True:
             return (

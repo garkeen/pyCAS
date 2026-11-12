@@ -305,6 +305,8 @@ def make_checker(
     setup: FactorizationSetup,
     *,
     pair_budget: int = 200_000,
+    subset_budget: int = 1_000_000,
+    precision_budget: int = 1 << 12,
 ) -> FactorizationChecker:
     runtime = setup.runtime
     return FactorizationChecker(
@@ -315,6 +317,8 @@ def make_checker(
         runtime.frames,
         runtime.request,
         irreducibility_pair_budget=pair_budget,
+        irreducibility_subset_budget=subset_budget,
+        witness_precision_budget=precision_budget,
     )
 
 

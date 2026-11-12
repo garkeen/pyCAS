@@ -94,7 +94,7 @@ def _sqrt_expression(workspace, runtime):
     )
 
 
-def test_a_manual_problem_with_an_externalizable_premise_completes_conditionally():
+def test_a_manual_problem_with_an_externalizable_premise_keeps_a_result_region_partial():
     runtime = bootstrap_elementary()
     workspace = new_workspace(runtime)
     source = _sqrt_expression(workspace, runtime)
@@ -114,12 +114,12 @@ def test_a_manual_problem_with_an_externalizable_premise_completes_conditionally
     assert result.verifications
     assert result.verifications[0].condition == premise
     assert result.task is not None
-    assert result.task.state is TaskState.COMPLETED_CONDITIONAL
+    assert result.task.state is TaskState.PARTIALLY_SOLVED
     assert result.task.problem.externalizable == (premise,)
-    assert workspace.task(task.id).state is TaskState.COMPLETED_CONDITIONAL
+    assert workspace.task(task.id).state is TaskState.PARTIALLY_SOLVED
 
 
-def test_checking_a_conditional_candidate_keeps_conditional_completion():
+def test_checking_a_conditional_candidate_keeps_a_result_region_partial():
     runtime = bootstrap_elementary()
     workspace = new_workspace(runtime)
     source = _sqrt_expression(workspace, runtime)
@@ -133,14 +133,14 @@ def test_checking_a_conditional_candidate_keeps_conditional_completion():
     result = workspace.run_task(task.id)
     assert result.candidate is not None
     assert result.task is not None
-    assert result.task.state is TaskState.COMPLETED_CONDITIONAL
+    assert result.task.state is TaskState.PARTIALLY_SOLVED
 
     checked = workspace.check_candidate(result.candidate.id)
     assert checked.status is OperationStatus.CONDITIONAL
     assert checked.verifications
     assert checked.verifications[0].condition == premise
     assert checked.task is not None
-    assert checked.task.state is TaskState.COMPLETED_CONDITIONAL
+    assert checked.task.state is TaskState.PARTIALLY_SOLVED
 
 
 @pytest.mark.parametrize("other_premise", [False, True])
@@ -217,7 +217,7 @@ def test_apply_carries_the_externalizable_set_into_candidate_and_task():
     assert result.candidate.problem.externalizable == (premise,)
     assert result.task is not None
     assert result.task.problem.externalizable == (premise,)
-    assert result.task.state is TaskState.COMPLETED_CONDITIONAL
+    assert result.task.state is TaskState.PARTIALLY_SOLVED
 
 
 def test_same_problem_rejects_a_rebuilt_externalizable_set():

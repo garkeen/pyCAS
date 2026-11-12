@@ -3,7 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from support import runtime_proposition, variable
+from support import head_app, runtime_proposition, variable
 
 from cas.foundation.ids import (
     CandidateId,
@@ -19,6 +19,7 @@ from cas.language.problems import (
     ParameterMode,
     VariableRoles,
 )
+from cas.language.signatures import StructuralHead
 from cas.syntax import term as T
 from cas.workflow.records import (
     Candidate,
@@ -90,6 +91,18 @@ def _link(
         coverage=problem.coverage if coverage is None else coverage,
         condition=condition,
         obligations=obligations,
+    )
+
+
+def _comparison(runtime, head, bound):
+    return runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            head,
+            variable(runtime),
+            T.number(bound),
+        ),
     )
 
 
@@ -214,8 +227,38 @@ def test_a_complete_set_link_completes_a_complete_set_request(runtime):
     )
 
 
-def test_an_allowed_open_condition_completes_conditionally(runtime):
+def test_a_result_region_proved_by_the_problem_region_completes(runtime):
+    condition = _comparison(runtime, StructuralHead.GT, 0)
+    region = _comparison(runtime, StructuralHead.GT, 1)
+    problem = replace(_problem(runtime), region=region)
+    candidate = _candidate(runtime, problem)
+    link = _link(runtime, problem, candidate, condition=condition)
+    assert (
+        derive_task_state(
+            problem,
+            (candidate,),
+            (link,),
+            None,
+            (),
+            signature=runtime.signature,
+        )
+        is TaskState.COMPLETED
+    )
+
+
+def test_a_true_result_condition_is_closed(runtime):
     condition = runtime_proposition(runtime, T.TRUE)
+    problem = _problem(runtime)
+    candidate = _candidate(runtime, problem)
+    link = _link(runtime, problem, candidate, condition=condition)
+    assert (
+        derive_task_state(problem, (candidate,), (link,), None, ())
+        is TaskState.COMPLETED
+    )
+
+
+def test_an_externalized_result_region_does_not_complete_the_task(runtime):
+    condition = _comparison(runtime, StructuralHead.GT, 0)
     problem = replace(
         _problem(runtime),
         externalizable=(condition,),
@@ -223,13 +266,37 @@ def test_an_allowed_open_condition_completes_conditionally(runtime):
     candidate = _candidate(runtime, problem)
     link = _link(runtime, problem, candidate, condition=condition)
     assert (
-        derive_task_state(problem, (candidate,), (link,), None, ())
-        is TaskState.COMPLETED_CONDITIONAL
+        derive_task_state(
+            problem,
+            (candidate,),
+            (link,),
+            None,
+            (),
+            signature=runtime.signature,
+        )
+        is TaskState.PARTIALLY_SOLVED
+    )
+
+
+def test_without_a_signature_only_exact_result_region_equality_closes(runtime):
+    condition = _comparison(runtime, StructuralHead.GT, 0)
+    region = _comparison(runtime, StructuralHead.GT, 1)
+    problem = replace(_problem(runtime), region=region)
+    candidate = _candidate(runtime, problem)
+    exact = _link(runtime, problem, candidate, condition=region)
+    weaker = _link(runtime, problem, candidate, condition=condition)
+    assert (
+        derive_task_state(problem, (candidate,), (exact,), None, ())
+        is TaskState.COMPLETED
+    )
+    assert (
+        derive_task_state(problem, (candidate,), (weaker,), None, ())
+        is TaskState.PARTIALLY_SOLVED
     )
 
 
 def test_a_disallowed_open_condition_leaves_the_task_partial(runtime):
-    condition = runtime_proposition(runtime, T.TRUE)
+    condition = _comparison(runtime, StructuralHead.GT, 0)
     problem = _problem(runtime)
     candidate = _candidate(runtime, problem)
     link = _link(runtime, problem, candidate, condition=condition)

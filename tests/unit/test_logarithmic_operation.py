@@ -46,6 +46,7 @@ from cas.math.calculus.integration.logarithmic_operation import (
 )
 from cas.math.calculus.integration.logarithmic_specification import (
     RationalLogAntiderivativeCertificate,
+    RationalLogVocabulary,
     parse_rational_log_antiderivative,
     rational_log_antiderivative_term,
     rational_log_term_set,
@@ -180,11 +181,7 @@ def expected_claim_region(
             if item is not None and item.term not in conditions:
                 conditions.append(item.term)
     for argument in arguments:
-        condition = T.app(
-            setup.signature.head_term(StructuralHead.GT),
-            argument,
-            T.number(0),
-        )
+        condition = setup.semantics.domain(argument, setup.signature)
         if condition not in conditions:
             conditions.append(condition)
     return and_all(setup.signature, *conditions)
@@ -578,3 +575,43 @@ def test_the_operation_validates_its_configuration(runtime) -> None:
             setup.runtime.table.name_of,
             runtime.table.intern("t"),
         )
+def test_the_operation_requires_declared_log_semantics(runtime) -> None:
+    setup = log_setup(runtime)
+    bare = RationalLogVocabulary(
+        setup.vocabulary.symbol,
+        setup.vocabulary.name,
+        setup.vocabulary.log_symbol,
+        setup.vocabulary.log_name,
+    )
+    with pytest.raises(ValueError):
+        LogarithmicIntegrationOperation(
+            setup.signature,
+            setup.runtime.frames,
+            bare,
+            (rational_view(setup),),
+            setup.runtime.table.name_of,
+            setup.runtime.variable,
+        )
+
+
+def test_the_operation_is_bound_to_the_declared_log_semantics(runtime) -> None:
+    setup = log_setup(runtime)
+    found = logarithmic_operation(setup)
+    assert found.log_semantics is setup.semantics
+    assert found.log_semantics.function.symbol == (
+        setup.vocabulary.log_symbol
+    )
+
+
+def test_the_proposal_uses_the_declared_logarithm_domain(runtime) -> None:
+    setup = log_setup(runtime)
+    found = logarithmic_operation(setup)
+    request = request_for(setup, source_term(setup, "1/x"))
+    proposed = proposal_of(found, request)
+    claim = parse_rational_log_antiderivative(
+        setup.vocabulary, proposed.proposal.specifications[0].term
+    )
+    assert claim is not None
+    assert claim.region == setup.semantics.domain(
+        variable(setup), setup.signature
+    )

@@ -36,6 +36,7 @@ from cas.math.calculus.integration.logarithmic_specification import (
 )
 from cas.runtime.bootstrap import bootstrap_elementary, new_workspace
 from cas.semantics.bridge import AlgebraView, typed_view
+from cas.semantics.frames import FrameSorts
 from cas.syntax import term as T
 from cas.workflow.records import OperationStatus
 
@@ -200,7 +201,10 @@ def test_a_tampered_component_is_not_verified_and_writes_nothing():
     assert isinstance(certificate, RationalLogAntiderivativeCertificate)
 
     view = found.views[0]
-    decision = DecisionService(runtime.signature)
+    decision = DecisionService(
+        runtime.signature,
+        FrameSorts(runtime.frames, runtime.frame.id),
+    )
     context = VerificationContext(
         runtime.world.id,
         runtime.frame.id,

@@ -127,6 +127,7 @@ from cas.math.calculus.integration.logarithmic_operation import (
     LogarithmicIntegrationOperation,
 )
 from cas.math.calculus.integration.logarithmic_specification import (
+    LogFunctionSemantics,
     RationalLogAntiderivativeCertificate,
     RationalLogVocabulary,
 )
@@ -338,7 +339,9 @@ def _start(
     not part of this slice.  ``include_rational_log`` interns the
     `HasRationalLogAntiderivative` predicate and the declared `log` function;
     only the elementary assembly turns it on, because only that assembly
-    registers the rational-logarithmic view, checker and operation.
+    registers the rational-logarithmic view, checker and operation.  The
+    vocabulary starts without `LogFunctionSemantics`;
+    `bootstrap_elementary` attaches it after the declaration library is built.
     """
     actual = SymbolTable() if table is None else table
     predicate = actual.intern("HasDerivative")
@@ -1659,6 +1662,24 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         reserved=frozenset({"x", "HasDerivative"}),
         basis=basis,
     )
+    log_function = library.function_for(rational_log_vocabulary.log_symbol)
+    if log_function is None:
+        raise ValueError(
+            "the elementary declaration library has no `log` function"
+        )
+    semantics = LogFunctionSemantics(library, log_function)
+    if semantics.basis is not basis:
+        raise ValueError(
+            "the logarithm semantics is not backed by the admitted "
+            "declaration basis"
+        )
+    rational_log_vocabulary = RationalLogVocabulary(
+        rational_log_vocabulary.symbol,
+        rational_log_vocabulary.name,
+        rational_log_vocabulary.log_symbol,
+        rational_log_vocabulary.log_name,
+        semantics,
+    )
     variable = table.intern("x")
     second = table.intern("y")
     declarations = (
@@ -1811,6 +1832,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             frozenset({"integrate_rational_logarithmic"}),
             frozenset({"HasRationalLogAntiderivative"}),
             frames.world.id,
+            trusted_dependencies=(basis,),
             requires_problem=True,
         ),
         hermite_checker.id: CheckerSpec(

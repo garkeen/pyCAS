@@ -355,6 +355,16 @@ def test_the_degree_budget_bounds_the_input_denominator():
     assert caught.value.missing == frozenset({"max_degree"})
 
 
+def test_the_degree_budget_bounds_the_input_numerator():
+    value = FIELD.fraction(
+        QX.monomial((2,), Fraction(1)), QX.one()
+    )
+    budget = LogarithmicIntegrationBudget(max_degree=1)
+    with pytest.raises(LogarithmicIntegrationBudgetError) as caught:
+        rational_log_integral(FIELD, value, budget)
+    assert caught.value.missing == frozenset({"max_degree"})
+
+
 def test_factorization_budget_exhaustion_preserves_the_missing_tokens():
     value = FIELD.fraction(
         QX.one(), poly(Fraction(-1), Fraction(0), Fraction(1))

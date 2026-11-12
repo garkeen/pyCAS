@@ -1,13 +1,21 @@
 """The `HasRationalLogAntiderivative` specification and canonical log terms."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import pytest
-from support import head_app
+from support import elementary_basis, head_app
 
 from cas.language import sorts as S
+from cas.language.declarations import (
+    Compare,
+    Name,
+    Negate,
+    Num,
+    Power,
+    Product,
+)
 from cas.language.sets import set_term
 from cas.language.signatures import (
     LanguageSignature,
@@ -15,6 +23,7 @@ from cas.language.signatures import (
     StructuralHead,
 )
 from cas.math.calculus.integration.logarithmic_specification import (
+    LogFunctionSemantics,
     RationalLogAntiderivativeCertificate,
     RationalLogAntiderivativeClaim,
     RationalLogVocabulary,
@@ -25,6 +34,13 @@ from cas.math.calculus.integration.logarithmic_specification import (
     rational_log_antiderivative_term,
     rational_log_term,
     rational_log_term_set,
+    require_log_semantics,
+)
+from cas.math.elementary.declarations import (
+    ElementaryLibrary,
+    FunctionSymbol,
+    build_elementary,
+    default_elementary_declarations,
 )
 from cas.syntax import term as T
 
@@ -588,3 +604,139 @@ def test_the_visible_result_requires_a_canonical_set(runtime):
         rational_log_antiderivative_term(
             setup.signature, T.number(0), T.number(0)
         )
+def declared_library(runtime):
+    declarations = default_elementary_declarations()
+    return build_elementary(
+        runtime.table.intern,
+        declarations,
+        reserved=frozenset({"x", "HasDerivative"}),
+        basis=elementary_basis(declarations, runtime.world.id),
+    )
+
+
+def declared_semantics(runtime):
+    library = declared_library(runtime)
+    function = library.functions["log"]
+    return library, LogFunctionSemantics(library, function)
+
+
+def with_function(
+    library: ElementaryLibrary, function: FunctionSymbol
+) -> ElementaryLibrary:
+    functions = dict(library.functions)
+    functions[function.name] = function
+    by_id = dict(library.functions_by_id)
+    by_id[function.symbol] = function
+    return replace(
+        library, functions=functions, functions_by_id=by_id
+    )
+
+
+def test_the_log_semantics_instantiate_the_declared_domain_and_factor(runtime):
+    library, semantics = declared_semantics(runtime)
+    argument = T.symbol(
+        runtime.variable, runtime.table.name_of(runtime.variable)
+    )
+    assert semantics.symbol == library.functions["log"].symbol
+    assert semantics.name == "log"
+    assert semantics.basis == library.basis
+    assert semantics.domain(argument, runtime.signature) == head_app(
+        runtime.signature,
+        StructuralHead.GT,
+        argument,
+        T.number(0),
+    )
+    assert semantics.derivative_factor(
+        argument, runtime.signature
+    ) == head_app(
+        runtime.signature,
+        StructuralHead.POWER,
+        argument,
+        T.number(-1),
+    )
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        Compare(">=", Name("u"), Num(Fraction(0))),
+        Compare("!=", Name("u"), Num(Fraction(0))),
+    ],
+)
+def test_log_semantics_reject_another_declared_domain(runtime, domain):
+    library, _ = declared_semantics(runtime)
+    function = library.functions["log"]
+    wrong = replace(function, domain=domain)
+    with pytest.raises(ValueError):
+        LogFunctionSemantics(with_function(library, wrong), wrong)
+
+
+def test_log_semantics_reject_another_derivative_body(runtime):
+    library, _ = declared_semantics(runtime)
+    function = library.functions["log"]
+    law = function.law
+    assert law is not None
+    wrong_law = replace(
+        law,
+        body=Product(
+            (
+                Num(Fraction(2)),
+                Power(Name("u"), Negate(Num(Fraction(1)))),
+            )
+        ),
+    )
+    wrong = replace(function, law=wrong_law)
+    with pytest.raises(ValueError):
+        LogFunctionSemantics(with_function(library, wrong), wrong)
+
+
+def test_log_semantics_require_the_library_function(runtime):
+    library, semantics = declared_semantics(runtime)
+    other = replace(
+        semantics.function,
+        symbol=runtime.table.intern("AnotherLog"),
+        name="AnotherLog",
+    )
+    with pytest.raises(ValueError):
+        LogFunctionSemantics(library, other)
+
+
+def test_the_vocabulary_semantics_must_match_its_log_symbol_and_name(runtime):
+    library, semantics = declared_semantics(runtime)
+    predicate = runtime.table.intern("Predicate")
+    with pytest.raises(ValueError):
+        RationalLogVocabulary(
+            predicate,
+            "Predicate",
+            runtime.table.intern("AnotherLog"),
+            "log",
+            semantics,
+        )
+    with pytest.raises(ValueError):
+        RationalLogVocabulary(
+            predicate,
+            "Predicate",
+            semantics.symbol,
+            "Log",
+            semantics,
+        )
+    with pytest.raises(TypeError):
+        RationalLogVocabulary(
+            predicate,
+            "Predicate",
+            semantics.symbol,
+            "log",
+            object(),  # type: ignore[arg-type]
+        )
+
+
+def test_a_bare_vocabulary_has_no_log_semantics(runtime):
+    predicate = runtime.table.intern("Predicate")
+    log_symbol = runtime.table.intern("log")
+    bare = RationalLogVocabulary(
+        predicate, "Predicate", log_symbol, "log"
+    )
+    with pytest.raises(ValueError):
+        require_log_semantics(bare)
+    with pytest.raises(TypeError):
+        require_log_semantics(object())  # type: ignore[arg-type]

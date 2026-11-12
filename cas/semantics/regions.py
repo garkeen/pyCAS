@@ -8,16 +8,17 @@ re-checks the mathematical claim in the restricted condition logic, so a
 forged or mismatched certificate is rejected even when its label looks valid.
 
 The restricted fragment is the one implemented in `cas.semantics.conditions`:
-ground truth, conjunctions of one-atom linear comparisons and interval
-inclusion.  Opaque, nonlinear, multi-atom, disjunctive and non-normalizable
-negated conditions are undecided, never treated as true or nonempty.  That
-fragment reasons about intervals in a dense linear order, so a certificate is
-issued or accepted only when every participating region records rational or
-real binding sorts.  An integer, complex, unknown or missing sort is not dense:
-the same interval may be empty over the integers (`0 < y < 1`), and a
-certificate over it would be unsound.  This is the region slice of
-`cas_v5_arch.md` §10.3 and the `Covers` specification of §12.2; it does not
-claim a general semialgebraic or discrete region algebra.
+ground truth, conjunctions of one-atom linear comparisons, interval inclusion,
+and exact nonnegativity/monotonicity facts for a term of the form
+``Power(base, 2)``.  Opaque, nonlinear, multi-atom, disjunctive and
+non-normalizable negated conditions are undecided, never treated as true or
+nonempty.  That fragment reasons about intervals in a dense linear order, so a
+certificate is issued or accepted only when every participating region records
+rational or real binding sorts.  An integer, complex, unknown or missing sort
+is not dense: the same interval may be empty over the integers
+(`0 < y < 1`), and a certificate over it would be unsound.  This is the region
+slice of `cas_v5_arch.md` §10.3 and the `Covers` specification of §12.2; it does
+not claim a general semialgebraic or discrete region algebra.
 """
 
 from __future__ import annotations

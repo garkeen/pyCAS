@@ -4,6 +4,7 @@ import pytest
 from support import head_app, variable
 
 from cas.foundation.ids import FrameId, SymbolId
+from cas.frontend import parse
 from cas.frontend.errors import SessionError
 from cas.frontend.session import Session
 from cas.language import sorts as S
@@ -54,6 +55,21 @@ def test_assume_creates_a_child_frame_and_a_hypothesis_judgment():
     inference = runtime.store.inference_of(result.judgment)
     assert inference.checker_id == "kernel.hypothesis"
     assert [event.operation for event in workspace.events()] == ["Assume"]
+
+
+def test_complex_square_equation_is_a_consistent_assumption():
+    runtime = bootstrap()
+    workspace = Workspace(runtime)
+    declared = workspace.declare("z", S.COMPLEX)
+    assert declared.status is OperationStatus.VERIFIED
+    equation = parse("z^2 = -1", runtime.table, runtime.signature)
+    result = workspace.assume(equation)
+    assert result.status is OperationStatus.VERIFIED
+    assert not runtime.store.consistency(workspace.frame).is_inconsistent()
+    assert T.FALSE not in tuple(
+        judgment.proposition.term
+        for judgment in runtime.store.judgments_visible(workspace.frame)
+    )
 
 
 def test_operations_use_the_current_assumption_frame():

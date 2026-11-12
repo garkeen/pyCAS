@@ -56,6 +56,7 @@ from cas.language.execution import (
 from cas.language.problems import ProblemSpec
 from cas.language.propositions import Proposition
 from cas.language.roles import CandidateRole
+from cas.semantics.frames import FrameSorts
 from cas.semantics.request import AlgebraRequest
 from cas.syntax import term as T
 
@@ -602,7 +603,10 @@ def validate_commit(
         if proposal.budget is not None
         else ExecutionBudget()
     )
-    decision = DecisionService(store.frames.world.language)
+    decision = DecisionService(
+        store.frames.world.language,
+        FrameSorts(store.frames, frame.id),
+    )
     context = VerificationContext(
         world=frame.world,
         frame=frame.id,

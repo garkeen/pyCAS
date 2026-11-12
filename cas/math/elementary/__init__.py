@@ -2,14 +2,20 @@
 
 from cas.math.elementary.declarations import (
     DEFAULT_DECLARATIONS,
+    ConstantSymbol,
+    DerivativeLaw,
     ElementaryLibrary,
+    FunctionSymbol,
     build_elementary,
     default_elementary_declarations,
 )
 
 __all__ = [
     "DEFAULT_DECLARATIONS",
+    "ConstantSymbol",
+    "DerivativeLaw",
     "ElementaryLibrary",
+    "FunctionSymbol",
     "build_elementary",
     "default_elementary_declarations",
 ]

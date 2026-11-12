@@ -11,6 +11,7 @@ from cas.algebra.integer_polynomial import (
     congruent_mod,
     integer_divisors,
     integer_primitive_form,
+    max_subset_size_within_degree,
     monic_rational_form,
     positive_primitive_part,
     rational_polynomial_form,
@@ -286,6 +287,31 @@ def test_integer_divisors_are_positive_and_ascending():
         integer_divisors(True)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         integer_divisors(12.0)  # type: ignore[arg-type]
+
+
+def test_max_subset_size_within_degree_uses_the_smallest_degrees():
+    # The minimum total degree of a k-element subset is the sum of the k
+    # smallest degrees, so k = 32 fits in 32 but k = 33 cannot.
+    assert max_subset_size_within_degree((1,) * 64, 32) == 32
+    assert max_subset_size_within_degree((1,) * 64, 31) == 31
+    # The order of the input degrees is irrelevant.
+    assert max_subset_size_within_degree((5, 1, 2), 3) == 2
+    assert max_subset_size_within_degree((2, 2, 2), 3) == 1
+    assert max_subset_size_within_degree((2, 2, 2), 4) == 2
+    assert max_subset_size_within_degree((5,), 4) == 0
+    assert max_subset_size_within_degree((), 0) == 0
+    with pytest.raises(ValueError):
+        max_subset_size_within_degree((0, 1), 3)
+    with pytest.raises(ValueError):
+        max_subset_size_within_degree((1, -1), 3)
+    with pytest.raises(ValueError):
+        max_subset_size_within_degree((1,), -1)
+    with pytest.raises(TypeError):
+        max_subset_size_within_degree((1, True), 3)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        max_subset_size_within_degree([1, 2], 3)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        max_subset_size_within_degree((1,), 3.0)  # type: ignore[arg-type]
 
 
 def test_congruent_mod_is_exact_coefficient_wise_divisibility():

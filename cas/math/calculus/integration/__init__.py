@@ -2,8 +2,10 @@
 
 The Hermite and rational-logarithmic operations share the request-local
 `RationalFunctionView` over the fixed default `Q[x]` representation.  The
-rational-logarithmic checker, operation, elementary bootstrap registration,
-workspace helper and REPL `integrate_log` are end-to-end; `bootstrap` and the
+rational-logarithmic checker and operation consume the declared `log`
+semantics (`LogFunctionSemantics`) and the checker has its own degree/term
+budget.  The checker, operation, elementary bootstrap registration, workspace
+helper and REPL `integrate_log` are end-to-end; `bootstrap` and the
 parameterized assemblies neither intern `HasRationalLogAntiderivative` nor
 register the operation.  Algebraic residues, RootSum representations and
 real-log branches remain outside the fragment, so I0 is not complete.
@@ -19,12 +21,14 @@ from cas.math.calculus.integration.hermite_specification import (
     HermiteVocabulary,
 )
 from cas.math.calculus.integration.logarithmic_checker import (
+    LogarithmicIntegrationCheckBudget,
     LogarithmicIntegrationChecker,
 )
 from cas.math.calculus.integration.logarithmic_operation import (
     LogarithmicIntegrationOperation,
 )
 from cas.math.calculus.integration.logarithmic_specification import (
+    LogFunctionSemantics,
     RationalLogAntiderivativeCertificate,
     RationalLogAntiderivativeClaim,
     RationalLogVocabulary,
@@ -35,6 +39,7 @@ from cas.math.calculus.integration.logarithmic_specification import (
     rational_log_antiderivative_term,
     rational_log_term,
     rational_log_term_set,
+    require_log_semantics,
 )
 from cas.math.calculus.integration.operation import IntegrationOperation
 from cas.math.calculus.integration.rational_view import RationalFunctionView
@@ -51,6 +56,8 @@ __all__ = [
     "HermiteVocabulary",
     "IntegrationOperation",
     "IntegrationView",
+    "LogFunctionSemantics",
+    "LogarithmicIntegrationCheckBudget",
     "LogarithmicIntegrationChecker",
     "LogarithmicIntegrationOperation",
     "PolynomialAntiderivativeService",
@@ -65,4 +72,5 @@ __all__ = [
     "rational_log_antiderivative_term",
     "rational_log_term",
     "rational_log_term_set",
+    "require_log_semantics",
 ]

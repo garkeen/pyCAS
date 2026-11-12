@@ -196,7 +196,7 @@ def test_a_non_rational_residue_is_ready_then_unsupported():
     assert runtime.store.stats() == before
 
 
-def test_externalizable_conditions_complete_a_logarithmic_task():
+def test_an_externalized_result_region_does_not_complete_a_logarithmic_task():
     runtime = bootstrap_elementary()
     workspace = new_workspace(runtime)
     first = source(workspace, runtime, "1/x")
@@ -221,7 +221,97 @@ def test_externalizable_conditions_complete_a_logarithmic_task():
     assert result.status is OperationStatus.CONDITIONAL, result.detail
     assert result.region is not None
     assert result.region == condition
-    assert workspace.tasks()[-1].state is TaskState.COMPLETED_CONDITIONAL
+    assert workspace.tasks()[-1].state is TaskState.PARTIALLY_SOLVED
+
+
+def test_a_positive_problem_region_completes_a_logarithmic_result():
+    runtime = bootstrap_elementary()
+    workspace = new_workspace(runtime)
+    first = source(workspace, runtime, "1/x")
+    region = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(0),
+        ),
+    )
+    result = workspace.apply(
+        "integrate_rational_logarithmic",
+        (first,),
+        target=runtime.variable,
+        region=region,
+    )
+    assert result.status in (
+        OperationStatus.VERIFIED,
+        OperationStatus.CONDITIONAL,
+    ), result.detail
+    assert result.result is not None
+    assert result.verifications
+    assert result.task is not None
+    assert result.task.state is TaskState.COMPLETED
+
+
+def test_a_weaker_result_region_is_closed_by_a_stronger_problem_region():
+    runtime = bootstrap_elementary()
+    workspace = new_workspace(runtime)
+    first = source(workspace, runtime, "1/x")
+    region = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(1),
+        ),
+    )
+    result = workspace.apply(
+        "integrate_rational_logarithmic",
+        (first,),
+        target=runtime.variable,
+        region=region,
+    )
+    assert result.status in (
+        OperationStatus.VERIFIED,
+        OperationStatus.CONDITIONAL,
+    ), result.detail
+    assert result.result is not None
+    assert result.region is not None
+    assert result.region.term != region.term
+    assert result.task is not None
+    assert result.task.state is TaskState.COMPLETED
+
+
+def test_a_quadratic_denominator_is_admitted_on_the_positive_region():
+    runtime = bootstrap_elementary()
+    workspace = new_workspace(runtime)
+    first = source(workspace, runtime, "1/(x^2-1)")
+    region = runtime_proposition(
+        runtime,
+        head_app(
+            runtime.signature,
+            StructuralHead.GT,
+            variable(runtime),
+            T.number(1),
+        ),
+    )
+    result = workspace.apply(
+        "integrate_rational_logarithmic",
+        (first,),
+        target=runtime.variable,
+        region=region,
+    )
+    assert result.status in (
+        OperationStatus.VERIFIED,
+        OperationStatus.CONDITIONAL,
+    ), result.detail
+    assert result.result is not None
+    assert result.candidate is not None
+    assert result.verifications
+    assert result.verifications[0].status is OperationStatus.VERIFIED
+    assert result.task is not None
+    assert result.task.state is TaskState.COMPLETED
 
 
 def test_check_and_decide_reverify_the_recorded_candidate():
@@ -317,3 +407,22 @@ def test_the_session_history_and_time_travel_keep_the_decomposition():
     assert session.execute("redo").startswith("redo: @E1 ")
     restored = session.workspace.structured_result(result)
     assert restored is structured
+def test_the_registered_operation_uses_the_declared_logarithm_domain():
+    runtime = bootstrap_elementary()
+    workspace = new_workspace(runtime)
+    first = source(workspace, runtime, "1/x")
+    result = workspace.integrate_rational_logarithmic(
+        first, runtime.variable
+    )
+    assert result.region is not None
+    semantics = operation(runtime).log_semantics
+    assert result.region.term == semantics.domain(
+        variable(runtime), runtime.signature
+    )
+    assert result.candidate is not None
+    claim = parse_rational_log_antiderivative(
+        operation(runtime).vocabulary,
+        result.candidate.specifications[0].term,
+    )
+    assert claim is not None
+    assert claim.region == result.region.term

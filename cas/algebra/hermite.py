@@ -36,7 +36,12 @@ class HermiteError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class HermiteReduction(Generic[E]):
-    """`value == D(polynomial_part) + remainder` with squarefree remainder."""
+    """`value == D(polynomial_part) + remainder` with squarefree remainder.
+
+    The historical field name `polynomial_part` denotes the non-logarithmic
+    rational part; repeated denominator factors make it a rational function,
+    not necessarily a polynomial.
+    """
 
     polynomial_part: RationalFunction[E]
     remainder: RationalFunction[E]

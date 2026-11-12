@@ -59,8 +59,12 @@ class ContradictionChecker:
                 "the contradiction rule proves false only",
             )
         propositions = self._frames.assumptions(request.frame)
+        environment = FrameSorts(self._frames, request.frame)
         if any(
-            condition_truth(proposition.term, self._signature) is False
+            condition_truth(
+                proposition.term, self._signature, environment
+            )
+            is False
             for proposition in propositions
         ):
             return Verified(tuple(request.conclusions))

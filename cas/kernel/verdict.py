@@ -44,6 +44,7 @@ from cas.kernel.trust import AxiomRef
 from cas.language.decisions import Blocker, Reason
 from cas.language.execution import BudgetTicket, ExecutionBudget
 from cas.language.propositions import Proposition
+from cas.semantics.frames import FrameSorts
 from cas.syntax import term as T
 
 _NOT_A_BOOLEAN = (
@@ -225,7 +226,10 @@ def _context_for(
         if proposal.budget is not None
         else ExecutionBudget()
     )
-    decision = DecisionService(store.frames.world.language)
+    decision = DecisionService(
+        store.frames.world.language,
+        FrameSorts(store.frames, frame_record.id),
+    )
     return VerificationContext(
         world=frame_record.world,
         frame=frame_record.id,

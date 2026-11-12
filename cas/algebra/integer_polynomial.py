@@ -53,6 +53,21 @@ Mignotte bound; the looser form is used deliberately so that the proof above
 does not depend on an unstated binomial-coefficient estimate.  For a nonzero
 constant, ``n = 0`` and ``B = |a_0| + 1``.
 
+Subset degree bound
+-------------------
+
+Zassenhaus recombination only needs subsets of the lifted modular factors whose
+total degree is at most half the degree of the polynomial being factored: a
+proper factor above half has a proper complement below half.  For positive
+lifted degrees ``d_1, ..., d_r`` the minimum total degree of a ``k``-element
+subset is the sum of the ``k`` smallest degrees, so the largest cardinality for
+which *some* subset can fit is obtained by sorting the degrees and accumulating
+that prefix until the next term would exceed the limit.
+``max_subset_size_within_degree`` implements this finite combinatorial bound.
+It performs no enumeration and proves nothing about a particular subset; the
+search and the independent checker still enumerate every feasible subset and
+verify each candidate by exact division.
+
 References: E. Landau, "Sur quelques théorèmes de M. Petrovitch" (1905), and
 M. Mignotte, "An inequality about factors of polynomials", *Mathematics of
 Computation* 28 (1974), 1153--1157, and *Mathematics for Computer Algebra*
@@ -341,6 +356,45 @@ def positive_primitive_part(
     return primitive
 
 
+def max_subset_size_within_degree(
+    degrees: tuple[int, ...],
+    degree_limit: int,
+) -> int:
+    """The largest subset cardinality whose degree sum can fit the limit.
+
+    ``degrees`` are the positive degrees of the lifted modular factors and
+    ``degree_limit`` is the maximum admissible total degree.  The minimum total
+    degree of a ``k``-element subset is the sum of the ``k`` smallest degrees,
+    so sorting the degrees and accumulating that prefix until the next term
+    exceeds the limit gives the largest ``k`` for which any subset can fit.
+    Returning ``0`` means that even the smallest degree exceeds the limit.
+
+    This is a finite degree bound, not a search: it decides which subset sizes
+    are worth generating and says nothing about whether a candidate divides.
+    A typical Zassenhaus caller uses ``degree_limit = degree // 2`` because a
+    proper factor above half has a proper complement below half.
+    """
+    if not isinstance(degrees, tuple):
+        raise TypeError("the lifted factor degrees must be a tuple")
+    for degree in degrees:
+        if isinstance(degree, bool) or not isinstance(degree, int):
+            raise TypeError("a lifted factor degree must be an integer")
+        if degree <= 0:
+            raise ValueError("a lifted factor degree must be positive")
+    if isinstance(degree_limit, bool) or not isinstance(degree_limit, int):
+        raise TypeError("a subset degree limit must be an integer")
+    if degree_limit < 0:
+        raise ValueError("a subset degree limit cannot be negative")
+    total = 0
+    size = 0
+    for degree in sorted(degrees):
+        total += degree
+        if total > degree_limit:
+            break
+        size += 1
+    return size
+
+
 def integer_divisors(value: int) -> tuple[int, ...]:
     """The positive divisors of ``value`` in ascending order.
 
@@ -398,6 +452,7 @@ __all__ = [
     "congruent_mod",
     "integer_divisors",
     "integer_primitive_form",
+    "max_subset_size_within_degree",
     "monic_rational_form",
     "positive_primitive_part",
     "rational_polynomial_form",
