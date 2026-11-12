@@ -44,9 +44,11 @@ monic rational factors with multiplicities, `factorization_key` fixes the
 deterministic factor order, and `FactorizationBudget.max_recombination_tests`
 bounds the recombination tests.  The `Factorization` record checks only the
 structural invariants and does not claim irreducibility.  This remains a public
-low-level API with exact contracts and property tests.  `HasFactorization`, an
-independent checker, operation, bootstrap, workflow/REPL wiring, a public
-`Z[x]` factorization entry with unit/multiplicity output, multivariate
+low-level API with exact contracts and property tests.  The `HasFactorization`
+specification and its independent checker live in the math layer
+(`cas.math.algebra.factorization_specification` and
+`factorization_checker`); an operation, bootstrap, workflow/REPL wiring, a
+public `Z[x]` factorization entry with unit/multiplicity output, multivariate
 gcd/factorization and algebraic extensions are not implemented; A2 is not
 complete.
 """

@@ -62,8 +62,9 @@ Algebraic Number Theory*, Chapter 3, for the Zassenhaus/Hensel pipeline that
 consumes such bounds.  Reference implementations: Maxima ``src/factor.lisp``
 and FriCAS ``src/algebra/gdpoly.spad``/``gaussfac.spad`` for the surrounding
 integer-factorization conventions.  This module does not factor ``Z[x]`` or
-``Q[x]`` and does not publish a judgment; Hensel lifting, recombination and
-the A2a2 checker remain pending.
+``Q[x]`` and does not publish a judgment; Hensel lifting and recombination live
+in ``cas.algebra.factorization``, and the independent ``HasFactorization``
+checker lives in ``cas.math.algebra.factorization_checker``.
 """
 
 from __future__ import annotations

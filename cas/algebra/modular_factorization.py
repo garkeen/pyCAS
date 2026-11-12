@@ -76,8 +76,9 @@ finite-field Berlekamp driver, together with ``cpber1``/``cpbg``) and FriCAS
 ``src/algebra/gdpoly.spad``/``gaussfac.spad`` for the surrounding polynomial
 and integer-factorization conventions.  Reference behavior is not a proof;
 the split identity and termination argument above are the local evidence.  The
-``Z[x]``/``Q[x]`` completion (Hensel lifting, recombination and an independent
-checker) is a later A2a2 slice.
+``Z[x]``/``Q[x]`` completion lives in ``cas.algebra.factorization`` and
+``cas.math.algebra.factorization_checker``; this module only owns the
+finite-field factorization.
 """
 
 from __future__ import annotations

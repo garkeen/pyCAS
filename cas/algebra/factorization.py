@@ -6,9 +6,10 @@ a prime power, ``factor_primitive_integer`` recombines the lifted factors into
 primitive irreducible integer factors (Zassenhaus), and
 ``factor_polynomial_over_q`` combines Yun's squarefree decomposition with the
 integer factorization into a monic factor record over ``Q[x]``.  The module
-publishes no ``HasFactorization`` specification, independent checker,
-operation, bootstrap, workflow or REPL command, and it does not claim that
-``A2`` is complete.
+publishes no ``HasFactorization`` specification or independent checker: those
+live in ``cas.math.algebra.factorization_specification`` and
+``cas.math.algebra.factorization_checker``.  It also publishes no operation,
+bootstrap, workflow or REPL command and does not claim that ``A2`` is complete.
 
 Linear Hensel lifting
 ---------------------
@@ -148,8 +149,10 @@ Reference implementations: FriCAS ``src/algebra/ghensel.spad``
 (``henselFact``); Maxima ``src/factor.lisp`` for the surrounding integer
 factorization entry points.  The reference implementations are used for
 algorithm structure only, not as a correctness proof.  The independent
-``HasFactorization`` specification, checker, operation, bootstrap, workflow and
-REPL are not implemented here; A2 is not complete.
+``HasFactorization`` specification and checker live in
+``cas.math.algebra.factorization_specification`` and
+``cas.math.algebra.factorization_checker``; the operation, bootstrap, workflow
+and REPL are not implemented here, and A2 is not complete.
 """
 
 from __future__ import annotations
@@ -286,15 +289,16 @@ class FactorizationBudgetError(FactorizationError):
 
 @dataclass(frozen=True, slots=True)
 class HenselLift:
-    """A lifted modular factorization consumed by the future checker.
+    """A lifted modular factorization produced by the search.
 
     ``prime`` is a proven 64-bit prime, ``precision`` is a positive integer,
     and ``lifted`` is a nonempty tuple of monic nonconstant integer polynomials
     owned by one univariate integer polynomial ring, with every coefficient in
     ``[0, prime**precision)``.  The record does not carry the polynomial it was
-    built from; the future checker reconstructs the congruence independently
-    from the candidate radical.  The constructor enforces the structural
-    invariants, so an illegal witness cannot be represented.
+    built from; the independent checker reconstructs the congruence
+    independently from the candidate radical and the witness terms.  The
+    constructor enforces the structural invariants, so an illegal witness
+    cannot be represented.
     """
 
     prime: int
@@ -359,10 +363,10 @@ class Factorization:
     ``unit`` is a nonzero rational and every factor entry pairs a distinct monic
     nonconstant rational polynomial with a positive multiplicity.  The record
     checks these structural invariants only; it does *not* claim that the
-    factors are irreducible.  That claim belongs to the search and the future
-    specification/checker contract, which must reconstruct the unit, product
-    and irreducibility evidence independently.  The constructor does not sort
-    the factors; deterministic operations use ``factorization_key``.
+    factors are irreducible.  That claim belongs to the search and the
+    specification/checker contract, which reconstructs the unit, product and
+    irreducibility evidence independently.  The constructor does not sort the
+    factors; deterministic operations use ``factorization_key``.
     """
 
     unit: Fraction
