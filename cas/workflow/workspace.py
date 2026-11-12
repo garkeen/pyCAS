@@ -2831,6 +2831,19 @@ class Workspace:
             coverage=Coverage.COMPLETE_SET,
         )
 
+    def factor_polynomial(
+        self,
+        source: Expression,
+        variable: SymbolId,
+    ) -> OperationResult:
+        """Client helper: factor one Q[x] polynomial into irreducibles."""
+        return self.apply(
+            "factor_polynomial",
+            (source,),
+            target=variable,
+            coverage=Coverage.ONE_VERIFIED,
+        )
+
     def groebner_basis(
         self,
         generators: tuple[Expression, ...],

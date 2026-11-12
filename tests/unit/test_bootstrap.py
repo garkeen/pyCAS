@@ -11,6 +11,13 @@ from cas.kernel.trust import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode, ResultLanguage, Role
 from cas.language.signatures import StructuralHead
+from cas.math.algebra.factorization_checker import FactorizationChecker
+from cas.math.algebra.factorization_operation import (
+    FactorizationOperation,
+)
+from cas.math.algebra.factorization_specification import (
+    FactorizationCertificate,
+)
 from cas.math.algebra.groebner_checker import GroebnerChecker
 from cas.math.algebra.groebner_operation import GroebnerOperation
 from cas.math.calculus.differentiation.certificate import (
@@ -106,6 +113,45 @@ def test_parameterized_bootstrap_has_no_groebner_operation():
     assert runtime.operations.get("groebner_basis") is None
     assert runtime.table.lookup("y") is None
     assert runtime.table.lookup("HasGroebnerBasis") is None
+
+
+def test_bootstrap_registers_the_qx_factorization_operation():
+    runtime = bootstrap()
+    operation = runtime.operations.get("factor_polynomial")
+    assert isinstance(operation, FactorizationOperation)
+    assert operation.ring is runtime.ring
+    assert operation.bridge is runtime.bridge
+    assert operation.request is runtime.request
+    assert operation.budget.max_prime_trials > 0
+    symbol = runtime.table.lookup("HasFactorization")
+    assert symbol is not None
+    assert runtime.signature.operator_of(symbol) is not None
+    spec = runtime.store.checkers.spec(operation.checker_id)
+    assert spec is not None
+    assert isinstance(spec.checker, FactorizationChecker)
+    assert spec.accepted_problem_kinds == frozenset(
+        {"factor_polynomial"}
+    )
+    assert spec.accepted_specification_kinds == frozenset(
+        {"HasFactorization"}
+    )
+    assert spec.certificate_schema.certificate_type is (
+        FactorizationCertificate
+    )
+    assert spec.requires_problem
+
+
+def test_parameterized_bootstrap_has_no_factorization_operation():
+    runtime = bootstrap_parameterized()
+    assert runtime.operations.get("factor_polynomial") is None
+    assert runtime.table.lookup("HasFactorization") is None
+
+
+def test_elementary_bootstrap_registers_factorization():
+    runtime = bootstrap_elementary()
+    operation = runtime.operations.get("factor_polynomial")
+    assert isinstance(operation, FactorizationOperation)
+    assert runtime.store.checkers.get(operation.checker_id) is not None
 
 
 def test_elementary_bootstrap_declares_y_and_registers_groebner():

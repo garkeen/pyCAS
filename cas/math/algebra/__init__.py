@@ -1,6 +1,9 @@
 """Polynomial algebra operations and their independent checkers."""
 
 from cas.math.algebra.factorization_checker import FactorizationChecker
+from cas.math.algebra.factorization_operation import (
+    FactorizationOperation,
+)
 from cas.math.algebra.factorization_specification import (
     FactorizationCertificate,
     FactorizationClaim,
@@ -37,6 +40,7 @@ __all__ = [
     "FactorizationCertificate",
     "FactorizationChecker",
     "FactorizationClaim",
+    "FactorizationOperation",
     "FactorizationVocabulary",
     "GcdCertificate",
     "GcdClaim",

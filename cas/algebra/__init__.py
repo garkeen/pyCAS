@@ -44,11 +44,18 @@ monic rational factors with multiplicities, `factorization_key` fixes the
 deterministic factor order, and `FactorizationBudget.max_recombination_tests`
 bounds the recombination tests.  The `Factorization` record checks only the
 structural invariants and does not claim irreducibility.  This remains a public
-low-level API with exact contracts and property tests.  The `HasFactorization`
-specification and its independent checker live in the math layer
-(`cas.math.algebra.factorization_specification` and
-`factorization_checker`); an operation, bootstrap, workflow/REPL wiring, a
-public `Z[x]` factorization entry with unit/multiplicity output, multivariate
-gcd/factorization and algebraic extensions are not implemented; A2 is not
-complete.
+low-level API with exact contracts and property tests.
+
+A2c registers that search end to end for the fixed default ``Q[x]`` view:
+`cas.math.algebra.factorization_operation` proposes `HasFactorization` with
+the search unit, the canonical encoded factor set, a `FactorizationCertificate`
+and the search-generated Hensel witness; `FactorizationChecker` independently
+re-proves the product, radical and irreducibility.  `bootstrap` and
+`bootstrap_elementary` install the checker and operation, the workspace
+publishes a `DECOMPOSITION`/`ONE_VERIFIED` result with the `unit`/`factors`
+structured components, and the REPL exposes `factor [@LABEL]`.  The
+parameterized assembly does not intern `HasFactorization` or register the
+operation.  A public `Z[x]` factorization entry with unit/multiplicity output,
+multivariate gcd/factorization, algebraic extensions and A3 are still not
+implemented; A2 is not complete.
 """

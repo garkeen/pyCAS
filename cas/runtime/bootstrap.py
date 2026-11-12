@@ -49,6 +49,14 @@ from cas.language import sorts as S
 from cas.language.declarations import DeclarationSet, build_language
 from cas.language.problems import ParameterMode, ValueDomain, VariableRoles
 from cas.language.signatures import LanguageSignature, StructuralHead
+from cas.math.algebra.factorization_checker import FactorizationChecker
+from cas.math.algebra.factorization_operation import (
+    FactorizationOperation,
+)
+from cas.math.algebra.factorization_specification import (
+    FactorizationCertificate,
+    FactorizationVocabulary,
+)
 from cas.math.algebra.gcd_checker import PolynomialGcdChecker
 from cas.math.algebra.gcd_operation import PolynomialGcdOperation
 from cas.math.algebra.gcd_specification import (
@@ -289,6 +297,7 @@ def _start(
     table: SymbolTable | None = None,
     declarations: DeclarationSet | None = None,
     include_groebner: bool = False,
+    include_factorization: bool = False,
 ) -> tuple[
     SymbolTable,
     DerivativeVocabulary,
@@ -302,6 +311,7 @@ def _start(
     LanguageSignature,
     FrameStore,
     GroebnerVocabulary | None,
+    FactorizationVocabulary | None,
 ]:
     """The common world and frame store every assembled runtime starts with.
 
@@ -311,6 +321,9 @@ def _start(
     ``include_groebner`` interns the `HasGroebnerBasis` predicate and its quoted
     order symbol; it is the only switch that makes those names part of the
     world, so assemblies without a Groebner view cannot parse the claim.
+    ``include_factorization`` interns the `HasFactorization` predicate; the
+    parameterized assembly leaves it off because ``Q(a)[x]`` factorization is
+    not part of this slice.
     """
     actual = SymbolTable() if table is None else table
     predicate = actual.intern("HasDerivative")
@@ -362,6 +375,12 @@ def _start(
             order_symbol,
             MonomialOrder.LEX,
         )
+    factorization_vocabulary: FactorizationVocabulary | None = None
+    if include_factorization:
+        factorization_symbol = actual.intern("HasFactorization")
+        factorization_vocabulary = FactorizationVocabulary(
+            factorization_symbol, "HasFactorization"
+        )
     extras = {
         predicate: vocabulary.signature,
         hermite_predicate: hermite_vocabulary.signature,
@@ -377,6 +396,10 @@ def _start(
     }
     if groebner_vocabulary is not None:
         extras[groebner_vocabulary.symbol] = groebner_vocabulary.signature
+    if factorization_vocabulary is not None:
+        extras[factorization_vocabulary.symbol] = (
+            factorization_vocabulary.signature
+        )
     signature = (
         standard_language(actual, operators=extras)
         if declarations is None
@@ -396,6 +419,7 @@ def _start(
         signature,
         FrameStore(world),
         groebner_vocabulary,
+        factorization_vocabulary,
     )
 
 
@@ -670,6 +694,45 @@ def _root_isolation_operation(
     )
 
 
+def _factorization_spec(
+    checker: Checker,
+    world: WorldId,
+) -> CheckerSpec:
+    """The trust registration for Q[x] factorization checkers."""
+    return CheckerSpec(
+        checker,
+        CertificateSchema(
+            "factorization", "1", FactorizationCertificate
+        ),
+        frozenset({"factor_polynomial"}),
+        frozenset({"HasFactorization"}),
+        world,
+        requires_problem=True,
+    )
+
+
+def _factorization_operation(
+    signature: LanguageSignature,
+    frames: FrameStore,
+    vocabulary: FactorizationVocabulary,
+    checker_id: str,
+    ring: UnivariatePolynomialRing[Fraction],
+    bridge: PolynomialBridge[Fraction],
+    name_of: Callable[[SymbolId], str],
+    request: AlgebraRequest,
+) -> FactorizationOperation:
+    return FactorizationOperation(
+        signature,
+        frames,
+        vocabulary,
+        checker_id,
+        ring,
+        bridge,
+        name_of,
+        request,
+    )
+
+
 def _groebner_spec(
     checker: Checker,
     world: WorldId,
@@ -843,8 +906,10 @@ def bootstrap() -> Runtime[Fraction]:
         signature,
         frames,
         groebner_vocabulary,
-    ) = _start(include_groebner=True)
+        factorization_vocabulary,
+    ) = _start(include_groebner=True, include_factorization=True)
     assert groebner_vocabulary is not None
+    assert factorization_vocabulary is not None
     variable = table.intern("x")
     second = table.intern("y")
     frame = frames.create(
@@ -932,6 +997,14 @@ def bootstrap() -> Runtime[Fraction]:
     root_isolation_checker = RootIsolationChecker(
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
+    factorization_checker = FactorizationChecker(
+        ring,
+        signature,
+        factorization_vocabulary,
+        bridge,
+        frames,
+        request,
+    )
     (
         groebner_checker,
         groebner_operation,
@@ -973,6 +1046,9 @@ def bootstrap() -> Runtime[Fraction]:
         ),
         root_isolation_checker.id: _root_isolation_spec(
             root_isolation_checker, frames.world.id
+        ),
+        factorization_checker.id: _factorization_spec(
+            factorization_checker, frames.world.id
         ),
         groebner_checker.id: _groebner_spec(
             groebner_checker, frames.world.id
@@ -1069,6 +1145,16 @@ def bootstrap() -> Runtime[Fraction]:
         bridge,
         request,
     )
+    factorization_operation = _factorization_operation(
+        signature,
+        frames,
+        factorization_vocabulary,
+        factorization_checker.id,
+        ring,
+        bridge,
+        table.name_of,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -1082,6 +1168,7 @@ def bootstrap() -> Runtime[Fraction]:
             root_count_operation.id: root_count_operation,
             root_isolation_operation.id: root_isolation_operation,
             groebner_operation.id: groebner_operation,
+            factorization_operation.id: factorization_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
@@ -1154,6 +1241,7 @@ def _assemble_parameterized(
         signature,
         frames,
         _groebner_vocabulary,
+        _factorization_vocabulary,
     ) = _start(include_groebner=False)
     variable = table.intern(target_name)
     parameter_ids = tuple(table.intern(name) for name in parameters)
@@ -1514,8 +1602,15 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         signature,
         frames,
         groebner_vocabulary,
-    ) = _start(table=table, declarations=source, include_groebner=True)
+        factorization_vocabulary,
+    ) = _start(
+        table=table,
+        declarations=source,
+        include_groebner=True,
+        include_factorization=True,
+    )
     assert groebner_vocabulary is not None
+    assert factorization_vocabulary is not None
     basis = BasisRef(
         source.name,
         BasisKind.DECLARATION_FILE,
@@ -1631,6 +1726,14 @@ def bootstrap_elementary() -> Runtime[Fraction]:
     root_isolation_checker = RootIsolationChecker(
         ring, signature, root_isolation_vocabulary, bridge, frames, request
     )
+    factorization_checker = FactorizationChecker(
+        ring,
+        signature,
+        factorization_vocabulary,
+        bridge,
+        frames,
+        request,
+    )
     (
         groebner_checker,
         groebner_operation,
@@ -1679,6 +1782,9 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         ),
         root_isolation_checker.id: _root_isolation_spec(
             root_isolation_checker, frames.world.id
+        ),
+        factorization_checker.id: _factorization_spec(
+            factorization_checker, frames.world.id
         ),
         groebner_checker.id: _groebner_spec(
             groebner_checker, frames.world.id
@@ -1788,6 +1894,16 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         bridge,
         request,
     )
+    factorization_operation = _factorization_operation(
+        signature,
+        frames,
+        factorization_vocabulary,
+        factorization_checker.id,
+        ring,
+        bridge,
+        table.name_of,
+        request,
+    )
     operations = OperationRegistry(
         {
             differentiation.id: differentiation,
@@ -1801,6 +1917,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             root_count_operation.id: root_count_operation,
             root_isolation_operation.id: root_isolation_operation,
             groebner_operation.id: groebner_operation,
+            factorization_operation.id: factorization_operation,
         },
         provided_capabilities=_POLYNOMIAL_RUNTIME_CAPABILITIES,
     )
