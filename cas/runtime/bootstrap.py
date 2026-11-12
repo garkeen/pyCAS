@@ -120,8 +120,18 @@ from cas.math.calculus.integration.hermite_specification import (
     HermiteCertificate,
     HermiteVocabulary,
 )
-from cas.math.calculus.integration.hermite_view import HermiteView
+from cas.math.calculus.integration.logarithmic_checker import (
+    LogarithmicIntegrationChecker,
+)
+from cas.math.calculus.integration.logarithmic_operation import (
+    LogarithmicIntegrationOperation,
+)
+from cas.math.calculus.integration.logarithmic_specification import (
+    RationalLogAntiderivativeCertificate,
+    RationalLogVocabulary,
+)
 from cas.math.calculus.integration.operation import IntegrationOperation
+from cas.math.calculus.integration.rational_view import RationalFunctionView
 from cas.math.calculus.integration.service import (
     PolynomialAntiderivativeService,
 )
@@ -298,6 +308,7 @@ def _start(
     declarations: DeclarationSet | None = None,
     include_groebner: bool = False,
     include_factorization: bool = False,
+    include_rational_log: bool = False,
 ) -> tuple[
     SymbolTable,
     DerivativeVocabulary,
@@ -312,6 +323,7 @@ def _start(
     FrameStore,
     GroebnerVocabulary | None,
     FactorizationVocabulary | None,
+    RationalLogVocabulary | None,
 ]:
     """The common world and frame store every assembled runtime starts with.
 
@@ -323,7 +335,10 @@ def _start(
     world, so assemblies without a Groebner view cannot parse the claim.
     ``include_factorization`` interns the `HasFactorization` predicate; the
     parameterized assembly leaves it off because ``Q(a)[x]`` factorization is
-    not part of this slice.
+    not part of this slice.  ``include_rational_log`` interns the
+    `HasRationalLogAntiderivative` predicate and the declared `log` function;
+    only the elementary assembly turns it on, because only that assembly
+    registers the rational-logarithmic view, checker and operation.
     """
     actual = SymbolTable() if table is None else table
     predicate = actual.intern("HasDerivative")
@@ -381,6 +396,16 @@ def _start(
         factorization_vocabulary = FactorizationVocabulary(
             factorization_symbol, "HasFactorization"
         )
+    rational_log_vocabulary: RationalLogVocabulary | None = None
+    if include_rational_log:
+        rational_log_symbol = actual.intern("HasRationalLogAntiderivative")
+        log_symbol = actual.intern("log")
+        rational_log_vocabulary = RationalLogVocabulary(
+            rational_log_symbol,
+            "HasRationalLogAntiderivative",
+            log_symbol,
+            "log",
+        )
     extras = {
         predicate: vocabulary.signature,
         hermite_predicate: hermite_vocabulary.signature,
@@ -399,6 +424,10 @@ def _start(
     if factorization_vocabulary is not None:
         extras[factorization_vocabulary.symbol] = (
             factorization_vocabulary.signature
+        )
+    if rational_log_vocabulary is not None:
+        extras[rational_log_vocabulary.symbol] = (
+            rational_log_vocabulary.signature
         )
     signature = (
         standard_language(actual, operators=extras)
@@ -420,6 +449,7 @@ def _start(
         FrameStore(world),
         groebner_vocabulary,
         factorization_vocabulary,
+        rational_log_vocabulary,
     )
 
 
@@ -907,6 +937,7 @@ def bootstrap() -> Runtime[Fraction]:
         frames,
         groebner_vocabulary,
         factorization_vocabulary,
+        _rational_log_vocabulary,
     ) = _start(include_groebner=True, include_factorization=True)
     assert groebner_vocabulary is not None
     assert factorization_vocabulary is not None
@@ -1079,7 +1110,7 @@ def bootstrap() -> Runtime[Fraction]:
         frames,
         hermite_vocabulary,
         (
-            HermiteView(
+            RationalFunctionView(
                 request,
                 hermite_field,
                 hermite_parent,
@@ -1242,6 +1273,7 @@ def _assemble_parameterized(
         frames,
         _groebner_vocabulary,
         _factorization_vocabulary,
+        _rational_log_vocabulary,
     ) = _start(include_groebner=False)
     variable = table.intern(target_name)
     parameter_ids = tuple(table.intern(name) for name in parameters)
@@ -1603,14 +1635,17 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         frames,
         groebner_vocabulary,
         factorization_vocabulary,
+        rational_log_vocabulary,
     ) = _start(
         table=table,
         declarations=source,
         include_groebner=True,
         include_factorization=True,
+        include_rational_log=True,
     )
     assert groebner_vocabulary is not None
     assert factorization_vocabulary is not None
+    assert rational_log_vocabulary is not None
     basis = BasisRef(
         source.name,
         BasisKind.DECLARATION_FILE,
@@ -1683,19 +1718,19 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         request,
         identifier="calculus.derivative.polynomial",
     )
-    hermite_field = RationalFunctionField(ring)
-    hermite_parent = registry.intern(
+    rational_field = RationalFunctionField(ring)
+    rational_parent = registry.intern(
         ParentSpec(
             "rational_function",
             base=parent.spec,
             generators=ring.generators,
             options=(),
         ),
-        hermite_field,
+        rational_field,
     )
-    hermite_bridge = RationalFunctionBridge(
-        hermite_field,
-        hermite_parent,
+    rational_bridge = RationalFunctionBridge(
+        rational_field,
+        rational_parent,
         frames.world.id,
         signature,
         frames,
@@ -1703,8 +1738,15 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         T.number,
     )
     hermite_checker = HermiteChecker(
-        hermite_bridge,
+        rational_bridge,
         hermite_vocabulary,
+        request,
+    )
+    log_checker = LogarithmicIntegrationChecker(
+        rational_bridge,
+        signature,
+        rational_log_vocabulary,
+        frames,
         request,
     )
     function_checker = FunctionEqualityChecker(
@@ -1758,6 +1800,18 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             polynomial_checker,
             frames.world.id,
             problem_kind="integrate",
+        ),
+        log_checker.id: CheckerSpec(
+            log_checker,
+            CertificateSchema(
+                "rational_log_antiderivative",
+                "1",
+                RationalLogAntiderivativeCertificate,
+            ),
+            frozenset({"integrate_rational_logarithmic"}),
+            frozenset({"HasRationalLogAntiderivative"}),
+            frames.world.id,
+            requires_problem=True,
         ),
         hermite_checker.id: CheckerSpec(
             hermite_checker,
@@ -1828,16 +1882,31 @@ def bootstrap_elementary() -> Runtime[Fraction]:
         frames,
         hermite_vocabulary,
         (
-            HermiteView(
+            RationalFunctionView(
                 request,
-                hermite_field,
-                hermite_parent,
-                hermite_bridge,
+                rational_field,
+                rational_parent,
+                rational_bridge,
                 hermite_checker.id,
             ),
         ),
         table.name_of,
         variable,
+    )
+    log_view = RationalFunctionView(
+        request,
+        rational_field,
+        rational_parent,
+        rational_bridge,
+        log_checker.id,
+    )
+    logarithmic = LogarithmicIntegrationOperation(
+        signature,
+        frames,
+        rational_log_vocabulary,
+        (log_view,),
+        table.name_of,
+        request.target,
     )
     function_extension, function_comparison = _function_operations(
         signature,
@@ -1909,6 +1978,7 @@ def bootstrap_elementary() -> Runtime[Fraction]:
             differentiation.id: differentiation,
             integration.id: integration,
             hermite.id: hermite,
+            logarithmic.id: logarithmic,
             function_extension.id: function_extension,
             function_comparison.id: function_comparison,
             solution.id: solution,

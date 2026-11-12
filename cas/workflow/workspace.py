@@ -2772,6 +2772,19 @@ class Workspace:
         """Client helper: assemble one rational Hermite-reduction request."""
         return self.apply("hermite_reduce", (source,), target=variable)
 
+    def integrate_rational_logarithmic(
+        self,
+        source: Expression,
+        variable: SymbolId,
+    ) -> OperationResult:
+        """Client helper: assemble one rational-logarithmic integration request."""
+        return self.apply(
+            "integrate_rational_logarithmic",
+            (source,),
+            target=variable,
+            coverage=Coverage.ONE_VERIFIED,
+        )
+
     def solve_linear(
         self,
         source: Expression,

@@ -10,7 +10,7 @@ from cas.foundation.ids import SymbolId
 from cas.kernel.trust import BasisKind, CertificateSchema
 from cas.language import sorts as S
 from cas.language.problems import ParameterMode, ResultLanguage, Role
-from cas.language.signatures import StructuralHead
+from cas.language.signatures import OperatorSignature, StructuralHead
 from cas.math.algebra.factorization_checker import FactorizationChecker
 from cas.math.algebra.factorization_operation import (
     FactorizationOperation,
@@ -22,6 +22,15 @@ from cas.math.algebra.groebner_checker import GroebnerChecker
 from cas.math.algebra.groebner_operation import GroebnerOperation
 from cas.math.calculus.differentiation.certificate import (
     DerivativeCertificate,
+)
+from cas.math.calculus.integration.logarithmic_checker import (
+    LogarithmicIntegrationChecker,
+)
+from cas.math.calculus.integration.logarithmic_operation import (
+    LogarithmicIntegrationOperation,
+)
+from cas.math.calculus.integration.logarithmic_specification import (
+    RationalLogAntiderivativeCertificate,
 )
 from cas.operations.capabilities import Capability
 from cas.operations.parameters import EMPTY_PARAMETER_SCHEMA
@@ -152,6 +161,51 @@ def test_elementary_bootstrap_registers_factorization():
     operation = runtime.operations.get("factor_polynomial")
     assert isinstance(operation, FactorizationOperation)
     assert runtime.store.checkers.get(operation.checker_id) is not None
+
+
+def test_elementary_bootstrap_registers_rational_logarithmic_integration():
+    runtime = bootstrap_elementary()
+    operation = runtime.operations.get("integrate_rational_logarithmic")
+    assert isinstance(operation, LogarithmicIntegrationOperation)
+    predicate = runtime.table.lookup("HasRationalLogAntiderivative")
+    assert predicate is not None
+    assert operation.vocabulary.symbol is predicate
+    assert runtime.signature.operator_of(predicate) == (
+        operation.vocabulary.signature
+    )
+    log_symbol = runtime.table.lookup("log")
+    assert log_symbol is not None
+    assert operation.vocabulary.log_symbol is log_symbol
+    assert runtime.signature.operator_of(log_symbol) == OperatorSignature(
+        (S.REAL,), S.REAL
+    )
+    assert len(operation.checker_bindings) == 1
+    checker_id = operation.checker_bindings[0].checker_id
+    assert checker_id == "calculus.integration.rational_logarithmic"
+    spec = runtime.store.checkers.spec(checker_id)
+    assert spec is not None
+    assert isinstance(spec.checker, LogarithmicIntegrationChecker)
+    assert spec.accepted_problem_kinds == frozenset(
+        {"integrate_rational_logarithmic"}
+    )
+    assert spec.accepted_specification_kinds == frozenset(
+        {"HasRationalLogAntiderivative"}
+    )
+    assert spec.certificate_schema == CertificateSchema(
+        "rational_log_antiderivative",
+        "1",
+        RationalLogAntiderivativeCertificate,
+    )
+    assert spec.trusted_dependencies == ()
+    assert spec.requires_problem
+    assert operation.views[0].field is spec.checker.field
+
+
+def test_non_elementary_assemblies_do_not_register_rational_logarithmic():
+    for runtime in (bootstrap(), bootstrap_parameterized()):
+        assert runtime.operations.get("integrate_rational_logarithmic") is None
+        assert runtime.table.lookup("HasRationalLogAntiderivative") is None
+        assert runtime.table.lookup("log") is None
 
 
 def test_elementary_bootstrap_declares_y_and_registers_groebner():

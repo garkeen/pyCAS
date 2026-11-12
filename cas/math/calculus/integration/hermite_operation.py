@@ -37,7 +37,7 @@ from cas.math.calculus.integration.hermite_specification import (
     HermiteVocabulary,
     has_hermite_reduction,
 )
-from cas.math.calculus.integration.hermite_view import HermiteView
+from cas.math.calculus.integration.rational_view import RationalFunctionView
 from cas.operations.capabilities import (
     Capability,
     CapabilityRequirements,
@@ -95,7 +95,7 @@ class HermiteReductionOperation:
     signature: LanguageSignature
     frames: FrameStore
     vocabulary: HermiteVocabulary
-    views: tuple[HermiteView[Any], ...]
+    views: tuple[RationalFunctionView[Any], ...]
     name_of: Callable[[SymbolId], str]
     default_target: SymbolId
     id: str = "hermite_reduce"
@@ -127,7 +127,9 @@ class HermiteReductionOperation:
             ),
         )
 
-    def view_for(self, target: SymbolId | None) -> HermiteView[Any] | None:
+    def view_for(
+        self, target: SymbolId | None
+    ) -> RationalFunctionView[Any] | None:
         if target is None:
             return None
         for view in self.views:

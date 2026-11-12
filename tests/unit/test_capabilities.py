@@ -62,6 +62,11 @@ from cas.runtime import (
             Capability.POLYNOMIAL_RING,
         ),
         (
+            bootstrap_elementary,
+            "integrate_rational_logarithmic",
+            Capability.RATIONAL_FUNCTION_FIELD,
+        ),
+        (
             bootstrap_parameterized,
             "specialize",
             Capability.GENERIC_RESULT,
